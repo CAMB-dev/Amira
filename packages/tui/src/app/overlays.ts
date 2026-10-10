@@ -1,5 +1,11 @@
 // Owns dialogs, full-screen viewers, waiting forms and their input and lifecycle.
-import { type AnyEvent, type EventMap, type FrontendView, isSubagentView } from "@amira/api"
+import {
+  type AnyEvent,
+  type EventMap,
+  type FrontendView,
+  isSubagentView,
+  type ToolDetailLevel,
+} from "@amira/api"
 import type { UiRequests } from "@amira/core"
 import type { InputEvent, RenderContext, Theme } from "@amira/tui-kit"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "../dialog.ts"
@@ -17,6 +23,7 @@ export interface OverlayManagerDeps {
   keys: Keybindings
   theme: Theme
   presenters?: PresenterSource
+  toolDetail?: () => ToolDetailLevel
   mode: "inline" | "fullscreen"
   env: Record<string, string | undefined>
   reaches: (spec: KeySpec) => boolean
@@ -58,6 +65,13 @@ export class OverlayManager {
     return !!(this.form || this.viewer)
   }
 
+  /** Without focus reports, only permission and question dialogs warrant an alert. */
+  get needsAttention(): boolean {
+    return this.dialogs.some(
+      (d) => d.request.source === "approval" || d.request.kind === "ask" || d.request.kind === "confirm",
+    )
+  }
+
   render(width: number, ctx: RenderContext): string[] {
     if (this.form) return this.form.render(width, ctx)
     const rows = this.viewer?.render(width, ctx) ?? []
@@ -90,6 +104,7 @@ export class OverlayManager {
     else {
       const next = new ExtensionViewer(definition, v.data, {
         keys,
+        toolDetail: this.deps.toolDetail,
         state: v.state,
         waiting: this.waitingTitles,
         onClose: () => this.viewer === next && this.closeView(),

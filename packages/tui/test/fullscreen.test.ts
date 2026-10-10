@@ -203,16 +203,16 @@ test("reads in a row become one Explored row, which unfolds to the calls", async
   terminal.send("go\r")
   await shows("Both read.")
   await idle()
-  expect(withoutClocks(view())).toContain("  └ Explored · Read a.ts, b.ts\n\n  Both read.")
+  expect(withoutClocks(view())).toContain("  └ Read 2 files (a.ts, b.ts)  ▸\n\n  Both read.")
   expect(view()).not.toContain("read a.ts")
-  // Selected, Enter shows each call under it.
+  // Selected, Enter replaces the folded row with each original call.
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
   await waitFor(() => /tool call \d+ of|Explored \d+ of/.test(view()), "the row selected")
   terminal.send("\r")
   await waitFor(() => view().includes("├ read a.ts"), "unfolded")
   expect(view()).toMatch(
-    /▌ {5}├ read a\.ts\n▌ {5}│ {2}✓ contents of a\.ts …\n▌ {5}└ read b\.ts\n▌ {8}✓ contents of b\.ts …/,
+    /▌ ├ read a\.ts\n▌ │ {2}✓ contents of a\.ts …\n▌ └ read b\.ts\n▌ {4}✓ contents of b\.ts …/,
   )
   terminal.send(ESC)
   terminal.send("\x03")
@@ -260,7 +260,9 @@ test("the conversation is drawn on the alternate screen and printed to the norma
     "Amira · mock/m1 · /work/proj",
     "@ files · ? keys",
     "",
+    "",
     "  › what is in a.ts?",
+    "",
     "",
     "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
     "",
@@ -431,7 +433,7 @@ test("sub-agents stay under their call, also running in the background after the
   // The turn is over; the sub-agent runs on right under its call, updated in place.
   await waitFor(
     () =>
-      / {2}└ launch {2}✓ Started in the background\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log/.test(
+      / {2}└ launch {2}✓ Started in the background\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log/.test(
         view(),
       ),
     "rows under the call",
@@ -445,7 +447,7 @@ test("sub-agents stay under their call, also running in the background after the
   // It ends in place: its end line stays under the call.
   await waitFor(
     () =>
-      / {2}└ launch {2}✓ Started in the background\n {5}├ ✓ Scan the logs · explorer · \d+\.\ds · 0 tok · scanned/.test(
+      / {2}└ launch {2}✓ Started in the background\n {5}└ ✓ Scan the logs · explorer · \d+\.\ds · 0 tok/.test(
         view(),
       ),
     "end line under the call",
@@ -504,21 +506,21 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await idle()
   await waitFor(
     () =>
-      / {2}└ flow {2}✓ Started in the background\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/3 agents/.test(
+      / {2}└ flow {2}✓ Started in the background\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/3 agents/.test(
         view(),
       ),
     "one line for the group under its call",
   )
   expect(view()).not.toContain("Scan api")
   group!.setStatus("Verify · 2/3 agents")
-  await waitFor(() => /├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Verify · 2\/3 agents/.test(view()), "the new status")
+  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Verify · 2\/3 agents/.test(view()), "the new status")
   release()
   await group!.ended()
   await bus.flush()
   // Its members never get rows of their own; the group's line stays with its last status.
   await waitFor(
     () =>
-      !/Scan (api|core|tui)/.test(view()) && /^ {5}├ ✓ workflow demo · Verify · 2\/3 agents$/m.test(view()),
+      !/Scan (api|core|tui)/.test(view()) && /^ {5}└ ✓ workflow demo · Verify · 2\/3 agents$/m.test(view()),
     "ended",
   )
   terminal.send("\x03")
@@ -1242,7 +1244,7 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   const { terminal, view, shows, screen, exited } = await setup([], { history })
   await shows("── resumed")
   const shown =
-    /── resumed s_[^\n]*─\n\n {2}› earlier question\n\n {2}Earlier answer\.\n\n {2}└ read old\.ts {2}✓ old contents/
+    /── resumed s_[^\n]*─\n\n\n {2}› earlier question\n\n\n {2}Earlier answer\.\n\n {2}└ read old\.ts {2}✓ old contents/
   expect(view()).toMatch(shown)
   terminal.send("\x03")
   await exited

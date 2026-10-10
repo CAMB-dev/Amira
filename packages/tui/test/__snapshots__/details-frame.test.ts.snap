@@ -1,0 +1,43 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`width-100 fullscreen details frames: verb groups and sticky prompt while scrolled: verb-grouped tree 1`] = `
+" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124k / 200k
+  › Polish the transcript details.…                                                          20:09
+  Transcript detail 16.
+
+  Transcript detail 17.
+
+  Transcript detail 18.
+
+  ├ Read 3 files (a.ts, b.ts, c.ts) · Searched 2 patterns (TODO, FIXME)  ▸
+  ├ edit a.ts  ✓ +0 -0
+  └ bash bun test  ✓ 412 pass (+1 line)
+     412 pass
+     0 fail
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ › Message Amira                                                                                  │
+╰────────────────────────────────────────────────────────────────────────────────── mock/m1 · ask ─╯
+ shift+tab mode  │  ctrl+o detail  │  ? keys"
+`;
+
+exports[`width-100 fullscreen details frames: verb groups and sticky prompt while scrolled: sticky while scrolled 1`] = `
+" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124k / 200k
+  › Polish the transcript details.…                                                          20:09
+  Transcript detail 15.
+
+  Transcript detail 16.
+
+  Transcript detail 17.
+
+  Transcript detail 18.
+
+  ├ Read 3 files (a.ts, b.ts, c.ts) · Searched 2 patterns (TODO, FIXME)  ▸
+  ├ edit a.ts  ✓ +0 -0
+  └ bash bun test  ✓ 412 pass (+1 line)
+  ↓ 2 rows below · Ctrl+End follows
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ › Message Amira                                                                                  │
+╰────────────────────────────────────────────────────────────────────────────────── mock/m1 · ask ─╯
+ shift+tab mode  │  ctrl+o detail  │  ? keys"
+`;

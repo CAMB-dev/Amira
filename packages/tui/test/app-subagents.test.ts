@@ -50,7 +50,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   const text = all()
   // Each one's rows became its end line, committed with the call right under its head, in order.
   expect(text).toMatch(
-    /^ {2}└ delegate {2}✓ trend is up \(\+1 line\) · \d+\.\ds\n {5}├ ✓ US market trend · explorer · \d+\.\ds · 4\.1k tok · trend is up\n {5}├ ✓ Add status bar test · coder · \d+\.\ds · 1\.2k tok · test added$/m,
+    /^ {2}└ delegate {2}✓ trend is up \(\+1 line\) · \d+\.\ds\n {5}├ ✓ US market trend · explorer · \d+\.\ds · 4\.1k tok\n {5}└ ✓ Add status bar test · coder · \d+\.\ds · 1\.2k tok$/m,
   )
   expect(text.match(/✓ US market trend ·/g)).toHaveLength(1)
   // Nothing is left of them in the live region below the transcript.
@@ -135,7 +135,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   // The child is done and so is its call, but both wait below the running slow call.
   await waitFor(
     () =>
-      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s\n {2}└ delegate {2}✓ child answer\n {5}└ ✓ Look around · explorer · \d+\.\ds · 0 tok · child answer/m.test(
+      /^ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s\n {2}└ delegate {2}✓ child answer\n {5}└ ✓ Look around · explorer · \d+\.\ds · 0 tok/m.test(
         live(),
       ),
     "held",
@@ -145,7 +145,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   await idle()
   const text = all()
   expect(text).toMatch(
-    /^ {2}├ slow big\.log {2}✓ slow result\n {2}└ delegate {2}✓ child answer\n {5}├ ✓ Look around · explorer · \d+\.\ds · 0 tok · child answer$/m,
+    /^ {2}├ slow big\.log {2}✓ slow result\n {2}└ delegate {2}✓ child answer\n {5}└ ✓ Look around · explorer · \d+\.\ds · 0 tok$/m,
   )
   expect(text.match(/✓ Look around ·/g)).toHaveLength(1)
   terminal.send("\x03")
@@ -179,7 +179,7 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /^ {2}├ delegate {2}✓ one\n {2}│ {2}├ ✓ First pass · explorer · \d+\.\ds · 0 tok · one\n {2}└ delegate {2}✓ two\n {5}├ ✓ Second pass · explorer · \d+\.\ds · 0 tok · two$/m,
+    /^ {2}├ delegate {2}✓ one\n {2}│ {2}└ ✓ First pass · explorer · \d+\.\ds · 0 tok\n {2}└ delegate {2}✓ two\n {5}└ ✓ Second pass · explorer · \d+\.\ds · 0 tok$/m,
   )
   terminal.send("\x03")
   await exited
@@ -208,7 +208,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await shows("all done")
   await idle()
   expect(all()).toMatch(
-    /^ {2}└ delegate {2}✓ outer done · \d+\.\ds\n {5}├ ✓ Outer task · explorer · \d+\.\ds · 0 tok · outer done\n {5}│ └ ✓ Inner check · explorer · \d+\.\ds · 0 tok · inner done$/m,
+    /^ {2}└ delegate {2}✓ outer done · \d+\.\ds\n {5}└ ✓ Outer task · explorer · \d+\.\ds · 0 tok\n {7}└ ✓ Inner check · explorer · \d+\.\ds · 0 tok$/m,
   )
   terminal.send("\x03")
   await exited
@@ -255,7 +255,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   await idle()
   await bus.flush()
   await waitFor(() => !live().includes("running in background"), "the rows gone")
-  expect(all()).toMatch(/└ ⊘ Stop me · explorer · \d+\.\ds · 0 tok · stopped/)
+  expect(all()).toMatch(/└ ⊘ Stop me · explorer · \d+\.\ds · 0 tok/)
   expect(all().match(/⊘ Stop me ·/g)).toHaveLength(1)
   // The survivor's notice (the agent extension's) reports it; no line of its own here.
   expect(all()).not.toContain("✓ Keep going ·")

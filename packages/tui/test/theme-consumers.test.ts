@@ -55,7 +55,7 @@ test("tool summaries use path and command tokens without changing their text", (
     expect(expanded[1]).toBe(`  ${theme.muted("│")}  ${theme.success("✓ done")}${theme.muted("")}`)
     const running = runningToolLines(theme, undefined, { ...call, startedAt: 0 }, 1000, "⠋", 80)
     expect(running[0]).toContain(style(summary))
-    expect(running[0]).toContain(theme.shimmer("⠋"))
+    expect(running[0]).toContain(theme.accent("⠋"))
     expect(visibleWidth(running[0]!)).toBe(80)
   }
 })

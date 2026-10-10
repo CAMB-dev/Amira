@@ -129,15 +129,14 @@ export class ToolBlock extends Block {
       const text = `${plural(own, "sub-agent")}${nested ? ` (+${nested} nested)` : ""}${running ? ` · ${running} running` : ""}`
       rows = [
         truncateToWidth(
-          `  ${theme.muted(glyphs.treeBranch)} ${running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(text)}`,
+          `  ${theme.muted(glyphs.treeLast)} ${running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(text)}`,
           treeWidth,
           glyphs.more,
         ),
       ]
     } else {
-      // Compact results live on the head; continuation results and output follow these rows.
-      // Only a nested sub-agent can close a level before the call's own continuation.
-      rows = treeRows(tree, now, treeWidth, theme, env.groups, false, env.spinner)
+      // The child tree closes independently of the call's own result/output continuation.
+      rows = treeRows(tree, now, treeWidth, theme, env.groups, true, env.spinner)
     }
     lines.splice(1, 0, ...nested(rows))
     return lines
@@ -217,7 +216,7 @@ export class ToolBlock extends Block {
 
 /**
  * Successful calls in a row that only looked around (read, searched, listed files), as one
- * row: "├ Explored · Read a.ts, b.ts · Search foo". Unfolded, each call under it.
+ * row: "├ Read 2 files (a.ts, b.ts)  ▸". Unfolded, each call and its full output.
  */
 export class ExploredBlock extends Block {
   readonly kind = "tool"
@@ -253,7 +252,7 @@ export class ExploredBlock extends Block {
     const calls = this.calls.map((b) => ({ call: b.finished(), presenter: env.presenters?.get(b.name) }))
     // Unfolded, each call shows as calls do now (all of it at the "full" level).
     const expanded = this.detail(env) === "full"
-    const each = env.detail === "full" ? "full" : "summary"
+    const each = expanded ? "full" : "summary"
     return exploredLines(env.theme, calls, expanded, each, env.width, opts)
   }
 
@@ -294,7 +293,9 @@ export class ExploredBlock extends Block {
 
 /** Whether a block can be part of an "Explored" row: an exploring call that succeeded, or such a row. */
 function explores(b: Block | undefined, env: BlockEnv): b is ToolBlock | ExploredBlock {
-  return b instanceof ExploredBlock || (b instanceof ToolBlock && b.exploration(env) !== undefined)
+  return b instanceof ExploredBlock
+    ? b.calls.every((call) => call.exploration(env) !== undefined)
+    : b instanceof ToolBlock && b.exploration(env) !== undefined
 }
 
 /**

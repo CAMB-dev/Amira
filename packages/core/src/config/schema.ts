@@ -268,6 +268,7 @@ const settings = object({
     themeVariant: oneOf("auto", "dark", "light"),
     colorDepth: oneOf("auto", "truecolor", "256", "16"),
     bell: boolean,
+    notify: oneOf("auto", "off"),
     title: boolean,
     progress: boolean,
     tokenSpeed: boolean,

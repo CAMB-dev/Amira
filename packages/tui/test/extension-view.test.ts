@@ -6,6 +6,7 @@ import {
   type ToolCallView,
   type ToolPresenter,
   textResult,
+  toolResultText,
   type ViewDefinition,
   type ViewLine,
 } from "@amira/api"
@@ -619,6 +620,72 @@ test("renderTool uses the current presenter, fallback and exact host styling in 
     const rendered = viewer.render(32, context)
     const fallback = finishedToolLines(theme, presenter, { ...call, name: "read" }, "full", 32)
     expect(rendered.slice(4, 4 + fallback.length)).toEqual(fallback)
+  }
+})
+
+test("renderTools groups only consecutive exploration and preserves exact host styles at each detail", () => {
+  const theme = { ...defaultTheme, ...surfaceTheme("dark") }
+  const context = { ...renderContext, theme, color: true, rows: 50 }
+  const entries = [
+    { name: "read", args: { path: "a.ts" }, result: textResult("first\nsecond") },
+    { name: "read", args: { path: "a.ts" }, result: textResult("first\nsecond") },
+    { name: "read", args: { path: "missing.ts" }, result: textResult("missing", true) },
+    {
+      name: "read",
+      args: { path: "blocked.ts" },
+      result: textResult("denied"),
+      rejected: "blocked" as const,
+    },
+    { name: "edit", args: { path: "a.ts" }, result: textResult("changed") },
+    { name: "bash", args: { command: "check" }, result: textResult("command result") },
+    { name: "list", args: { path: "src" }, result: textResult("paths") },
+    { name: "list", args: { path: "test" }, result: textResult("paths") },
+  ].map(({ name, ...call }) => ({ name, call: { ...call, text: toolResultText(call.result) } }))
+  const edit: ToolPresenter = {
+    result: () => "+1 -1",
+    body: () => [
+      { kind: "diff-remove", text: "old" },
+      { kind: "diff-add", text: "new" },
+    ],
+  }
+  let detail: "summary" | "full" | "collapsed" = "summary"
+  let lines: ViewLine[] = []
+  const viewer = new ExtensionViewer(
+    {
+      kind: "tools",
+      title: () => "Tools",
+      render: (_data, opts) => {
+        lines = opts.renderTools!(entries, opts.toolDetail!, { last: true })
+        return lines
+      },
+    },
+    {},
+    { toolDetail: () => detail, presenters: { get: (name) => (name === "edit" ? edit : undefined) } },
+  )
+  for (const level of ["summary", "full", "collapsed"] as const) {
+    detail = level
+    const rows = viewer.render(100, context)
+    const text = lines.map((line) => (line.kind === "segments" ? "" : line.text))
+    expect(rows.slice(2, 2 + lines.length).map(stripAnsi)).toEqual(text)
+    expect(text.every((row) => !row.includes("\x1b"))).toBe(true)
+    expect(text.join("\n")).toContain("✗ missing")
+    expect(text.join("\n")).toContain("⊘ denied")
+    expect(text.join("\n")).toContain("✓ command result")
+    expect(text.join("\n")).toContain("✓ +1 -1")
+    expect(rows.some((row) => row.includes(theme.error("✗ missing")))).toBe(true)
+    if (level === "full") {
+      expect(text.filter((row) => row === "  ├ read a.ts")).toHaveLength(2)
+      expect(text.join("\n")).not.toContain("▸")
+      expect(text.filter((row) => row.trim().endsWith("second"))).toHaveLength(2)
+    } else {
+      expect(text[0]).toBe("  ├ Read 2 files (a.ts)  ▸")
+      expect(text.at(-1)).toBe("  └ Listed 2 directories (src, test)  ▸")
+      expect(rows[2]).toContain(theme.muted("▸"))
+    }
+    if (level !== "collapsed") {
+      expect(text.join("\n")).toContain("- old")
+      expect(text.join("\n")).toContain("+ new")
+    }
   }
 })
 

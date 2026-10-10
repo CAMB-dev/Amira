@@ -71,6 +71,7 @@ test("the public API exports stay stable", async () => {
     "DEFAULT_TUI_COLOR_DEPTH",
     "DEFAULT_TUI_IMAGES",
     "DEFAULT_TUI_MODE",
+    "DEFAULT_TUI_NOTIFY",
     "DEFAULT_TUI_PROGRESS",
     "DEFAULT_TUI_REFLOW",
     "DEFAULT_TUI_SUBMIT_WHILE_WORKING",

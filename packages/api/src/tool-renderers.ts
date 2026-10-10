@@ -94,7 +94,7 @@ export interface ToolPresenter<A = Record<string, unknown>, D = unknown> {
   /**
    * For a tool that only looks around (reads a file, searches, lists files): what a call did.
    * Frontends may show successful calls of such tools in a row as one row, e.g.
-   * "Explored · Read a.ts, b.ts · Search foo"; a failed call keeps its own lines.
+   * "Read 2 files (a.ts, b.ts) · Searched 1 pattern (foo)  ▸"; failed calls keep their own lines.
    */
   explore?(args: A): ToolExploration | undefined
 }

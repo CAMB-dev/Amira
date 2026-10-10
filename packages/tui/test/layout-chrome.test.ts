@@ -1,6 +1,15 @@
 import { expect, spyOn, test } from "bun:test"
 import { textResult } from "@amira/api"
-import { bold, createTheme, defaultTheme, Editor, Spinner, stripAnsi, visibleWidth } from "@amira/tui-kit"
+import {
+  bold,
+  createTheme,
+  defaultTheme,
+  Editor,
+  Spinner,
+  stripAnsi,
+  surfaceTheme,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { createTurnActivity } from "../src/app/activity.ts"
 import { activityRow, shimmerLabel } from "../src/app/activity-row.ts"
@@ -21,7 +30,7 @@ const info = {
 
 test("header aligns workspace/title and cost/context at opposite edges", () => {
   const row = headerLine(info, 100, plain)
-  expect(row).toBe(` ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(35)}$0.42 │ 124k / 200k `)
+  expect(row).toBe(` ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(33)}$0.42  │  124k / 200k `)
   expect(visibleWidth(row)).toBe(100)
 })
 
@@ -73,7 +82,7 @@ const status = {
 test("turn status is one row with capitalized ellipsis label and right-aligned stats", () => {
   const row = activityRow(status, 100, plain)
   expect(row).toContain(" ⠋ Responding… 4.1s")
-  expect(row.endsWith("1m20s · ⇣12.4k · ~186 tok/s   esc stop ")).toBe(true)
+  expect(row.endsWith("1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop ")).toBe(true)
   expect(visibleWidth(row)).toBe(100)
   for (const width of [1, 12, 24, 40, 80])
     expect(visibleWidth(activityRow(status, width, plain))).toBeLessThanOrEqual(width)
@@ -163,7 +172,7 @@ test.each([100, 50])("a composed batch2 frame at %i columns keeps the chosen lay
     headerLine(info, width, plain),
     "",
     ...userLines(
-      { ...plain.theme, userBg: (text) => text },
+      { ...plain.theme, userBg: surfaceTheme("dark").userBg },
       {
         role: "user",
         content: [{ type: "text", text: "The status bar feels cramped, can you make it clearer?" }],
@@ -270,13 +279,16 @@ test("narrow status drops the step clock, then rate and tokens before cutting it
   expect(fifty).not.toContain("4.1s")
   expect(fifty).not.toContain("tok/s")
   expect(fifty).toContain("⇣12.4k")
-  expect(fifty).toEndWith("1m20s · ⇣12.4k   esc stop ")
+  expect(fifty).toEndWith("1m20s  ⇣12.4k   esc stop ")
   const forty = activityRow(status, 40, plain)
   expect(forty).toContain(" ⠋ Responding…")
   expect(forty).not.toContain("4.1s")
-  expect(forty).not.toContain("⇣")
-  expect(forty).toEndWith("1m20s   esc stop ")
-  for (const width of [40, 50]) expect(visibleWidth(activityRow(status, width, plain))).toBe(width)
+  expect(forty).toContain("⇣12.4k")
+  expect(forty).toEndWith("1m20s  ⇣12.4k   esc stop ")
+  const thirtyNine = activityRow(status, 39, plain)
+  expect(thirtyNine).not.toContain("⇣")
+  expect(thirtyNine).toEndWith("1m20s   esc stop ")
+  for (const width of [39, 40, 50]) expect(visibleWidth(activityRow(status, width, plain))).toBe(width)
 })
 
 test("status truncates the bare label before adding exactly one ellipsis", () => {

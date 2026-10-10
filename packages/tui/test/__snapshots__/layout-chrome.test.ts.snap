@@ -1,9 +1,11 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
-" ⎇ main*  ~/dev/Amira  ·  remember last model                                   $0.42 │ 124k / 200k 
+" ⎇ main*  ~/dev/Amira  ·  remember last model                                 $0.42  │  124k / 200k 
 
+                                                                                                    
   › The status bar feels cramped, can you make it clearer?                                   20:19  
+                                                                                                    
 
   ∴ Thought for 4.2s  Ctrl+O to expand
 
@@ -13,17 +15,19 @@ exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
   ├ Edited packages/tui/src/status-bar.ts  ✓ +12 / -3
   └ Ran bun test packages/tui  ✓ 412 pass · 3.1s
 
- ⠋ Responding… 4.1s                                          1m20s · ⇣12.4k · ~186 tok/s   esc stop 
+ ⠋ Responding… 4.1s                                         1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ › Message Amira                                                                                  │
 ╰─────────────────────────────────────────────────────────────────── claude-opus-5-5 (high) · ask ─╯"
 `;
 
 exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
-" ⎇ main*  ~/dev/Amira         $0.42 │ 124k / 200k 
+" ⎇ main*  ~/dev/Amira       $0.42  │  124k / 200k 
 
+                                                  
   › The status bar feels cramped, can      20:19  
     you make it clearer?                          
+                                                  
 
   ∴ Thought for 4.2s  Ctrl+O to expand
 
@@ -34,7 +38,7 @@ exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
   │  ✓ +12 / -3
   └ Ran bun test packages/tui  ✓ 412 pass · 3.1s
 
- ⠋ Responding…          1m20s · ⇣12.4k   esc stop 
+ ⠋ Responding…           1m20s  ⇣12.4k   esc stop 
 ╭────────────────────────────────────────────────╮
 │ › Message Amira                                │
 ╰───────────────── claude-opus-5-5 (high) · ask ─╯"

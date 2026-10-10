@@ -50,8 +50,11 @@ test("an edit: numbers in a gutter, changed lines on their color to the edge, ch
     "  40 + const gutter = 2",
     "  41   return lines",
   ])
-  // Context lines have no background; changed lines have theirs from the gutter to the edge.
-  expect(rows[0]).not.toContain("\x1b[48;")
+  // Context lines use the code surface; changed lines use their addition/removal surface.
+  expect(rows[0]!.startsWith("  \x1b[48;2;25;25;25m")).toBe(true)
+  expect(visibleWidth(rows[0]!)).toBe(44)
+  expect(rows[1]).toContain(dark.error("- "))
+  expect(rows[2]).toContain(dark.success("+ "))
   expect(rows[1]!.startsWith(`  ${RED}`)).toBe(true)
   expect(rows[2]!.startsWith(`  ${GREEN}`)).toBe(true)
   for (const r of rows.slice(1, 4)) {
@@ -64,7 +67,7 @@ test("an edit: numbers in a gutter, changed lines on their color to the edge, ch
   expect(rows[1]).not.toContain(RED_WORD)
   expect(rows[3]).not.toContain(GREEN_WORD)
   // The number is muted, on the line's color.
-  expect(rows[1]).toContain(`${RED}${dark.surfaceMuted!("39 ")}- const`)
+  expect(rows[1]).toContain(`${RED}${dark.surfaceMuted!("39 ")}${dark.error("- ")}const`)
 })
 
 test("paired lines mark the words that changed on both sides", () => {
@@ -189,7 +192,7 @@ test("a unified diff: content lines like headers stay in their hunk, a header's 
 
 test("with an unknown background, dark surfaces and secondary line numbers are used", () => {
   const rows = renderToolLines(edit, { ...defaultTheme, ...surfaceTheme(undefined) }, 44)
-  expect(rows[1]!.startsWith(`${RED}${dark.surfaceMuted!("39 ")}- const`)).toBe(true)
+  expect(rows[1]!.startsWith(`${RED}${dark.surfaceMuted!("39 ")}${dark.error("- ")}const`)).toBe(true)
 })
 
 test("a light terminal gets light backgrounds", () => {
