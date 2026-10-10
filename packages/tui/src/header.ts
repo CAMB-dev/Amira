@@ -34,12 +34,14 @@ export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext):
     contextStyle(ctx, info.used ?? 0, info.limit)(used) +
     (info.limit ? theme.muted(` / ${compactTokens(info.limit)}`) : "")
   const cost = info.cost ? theme.muted(info.cost) : ""
-  const divider = theme.dim(` ${glyphs.treePipe} `)
+  const divider = theme.dim(`  ${glyphs.treePipe}  `)
   let right = cost ? cost + divider + context : context
   if (visibleWidth(right) > width - 2) right = context
   if (visibleWidth(right) >= width) return truncateToWidth(right, width, glyphs.more)
   const room = Math.max(0, width - visibleWidth(right) - 3)
-  const branch = info.branch ? theme.muted(`${glyphs.branch} ${info.branch}${info.dirty ? "*" : ""}  `) : ""
+  const branch = info.branch
+    ? `${theme.muted(`${glyphs.branch} ${info.branch}`)}${info.dirty ? theme.warning("*") : ""}  `
+    : ""
   const cwd = theme.fg2(info.cwd)
   const title = info.title ? theme.muted(`  ${glyphs.separator}  ${displayTitle(info.title)}`) : ""
   let left = branch + cwd + title

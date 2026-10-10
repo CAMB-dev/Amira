@@ -20,6 +20,7 @@ exports[`the canonical theme glyph export includes the layout symbols 1`] = `
   "codeTop": "╭─",
   "dialogBar": "┃",
   "error": "✗",
+  "folded": "▸",
   "image": "🖼️",
   "info": "•",
   "interrupted": "⊘",

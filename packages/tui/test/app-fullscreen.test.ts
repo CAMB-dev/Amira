@@ -327,7 +327,7 @@ test("messages queued together are sent as one turn but shown one by one", async
   await shows("queued › two")
   await shows("second answer")
   await idle()
-  expect(all()).toMatch(/› one +\d{2}:\d{2}\n\n {2}› two +\d{2}:\d{2}/)
+  expect(all()).toMatch(/› one +\d{2}:\d{2}\n\n\n\n {2}› two +\d{2}:\d{2}/)
   expect(all()).not.toContain("  two")
   const prompts = agent.messages.filter((m) => m.role === "user")
   expect(prompts.length).toBe(2)
@@ -449,7 +449,7 @@ test("typing @ while the project is still listed shows a status row at once, the
 })
 
 for (const mode of ["fullscreen", "inline"] as const) {
-  test(`the terminal title keeps the folder beside the session title in ${mode} mode`, async () => {
+  test(`the terminal title uses the session title instead of the folder in ${mode} mode`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "amira-terminal-title-"))
     const session = SessionStore.create({ cwd: "/work/proj", dir })
     session.appendMessage(userMessage("history"))
@@ -461,17 +461,17 @@ for (const mode of ["fullscreen", "inline"] as const) {
       )
       bus.emit("workspace.changed", { cwd: "/work/proj", branch: "main" }, { sessionId: agent.sessionId })
       await waitFor(
-        () => screen.oscs.includes("0;Amira · proj · Database repair ⎇ main"),
-        "branch in the title",
+        () => screen.oscs.includes("0;Amira · Database repair"),
+        "session title without duplicate workspace details",
       )
       terminal.send("go\r")
       await shows("done")
       await idle()
       const oscs = screen.oscs
-      expect(oscs).toContain("0;● Amira · proj · Database repair ⎇ main")
+      expect(oscs).toContain("0;● Amira · Database repair")
       expect(oscs).toContain("9;4;3;0")
       expect(oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;0;0")
-      expect(oscs.filter((o) => o.startsWith("0;")).at(-1)).toBe("0;Amira · proj · Database repair ⎇ main")
+      expect(oscs.filter((o) => o.startsWith("0;")).at(-1)).toBe("0;Amira · Database repair")
       terminal.send("\x03")
       await exited
       // The title is handed back: the terminal's own, or the one saved on the title stack.
@@ -486,7 +486,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
 test("outside Windows Terminal and friends no progress is sent; settings turn title and bell off", async () => {
   const { terminal, screen, shows, idle, exited } = await setup([{ text: "done" }], {
     env: { TERM_PROGRAM: "iTerm.app" },
-    settings: { title: false, bell: false },
+    settings: { title: false, bell: false, notify: "off" },
   })
   terminal.send("\x1b[Ogo\r")
   await shows("done")
@@ -668,18 +668,18 @@ test("without built-ins the TUI leaves terminal title, progress and bell untouch
   expect(s.terminal.output).not.toContain("\x1b[22;0t")
 })
 
-test("a hidden question rings once and visibility changes retain paused progress without ringing", async () => {
+test("a hidden foreground question never rings and visibility changes retain paused progress", async () => {
   const s = await setup([], { env: { WT_SESSION: "1" } })
   s.terminal.send("\x1b[I?")
   await waitFor(() => s.live().includes("? Keys"), "key reference")
   const answer = s.host.ui.api("test").confirm("Hidden question", "Proceed?")
   await s.bus.flush()
-  expect(s.screen.bells).toBe(1)
+  expect(s.screen.bells).toBe(0)
   expect(s.screen.oscs.filter((o) => o.startsWith("9;4;")).at(-1)).toBe("9;4;4;100")
   s.terminal.send("\x1b[27u")
   await waitFor(() => s.live().includes("Hidden question"), "visible question")
   await s.bus.flush()
-  expect(s.screen.bells).toBe(1)
+  expect(s.screen.bells).toBe(0)
   s.terminal.send("\x1b[27u")
   await answer
   await s.bus.flush()

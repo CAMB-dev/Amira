@@ -70,6 +70,8 @@ const defaults = {
   interrupted: "⊘",
   /** Marks text left out. */
   more: "…",
+  /** Finished tool content available by unfolding. */
+  folded: "▸",
   /** The rule of separators such as the one after a resumed history. */
   rule: "─",
   /** Frame corners, also shared with tui-kit input boxes. */

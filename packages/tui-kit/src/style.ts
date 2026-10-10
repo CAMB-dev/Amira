@@ -357,7 +357,7 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     link: compose(underline, fg(p.path, blue)),
     linkUrl: fg(p.muted),
     quoteBar: fg(p.dim),
-    listMarker: fg(p.accent, cyan),
+    listMarker: fg(p.muted),
     rule: fg(p.dim),
     codeFrame: fg(p.dim),
     tableBorder: fg(p.dim),

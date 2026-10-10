@@ -367,11 +367,14 @@ test("a message on its band copies as its text without the fill or inter-block g
   pane.add(userBlock(message))
   pane.add(new ReplyBlock("The reply.", false, false))
   const rows = pane.render(e, 12)
-  // Only content rows belong to the band; the transcript supplies the single gap.
+  // Painted blank rows belong to the band; the transcript supplies one unpainted gap.
   const first = rowOf(rows, "first line")
+  const padding = `\x1b[48;5;236m${" ".repeat(40)}\x1b[49m`
+  expect(rows[first - 1]).toBe(padding)
   expect(stripAnsi(rows[first]!)).toBe(`  › first line${" ".repeat(26)}`)
   expect(stripAnsi(rows[first + 1]!)).toBe(`    second line${" ".repeat(25)}`)
-  expect(stripAnsi(rows[first + 2]!)).toBe("")
+  expect(rows[first + 2]).toBe(padding)
+  expect(rows[first + 3]).toBe("")
   pane.startDrag(first, 0)
   pane.dragTo(rowOf(rows, "The reply."), 100)
   expect(pane.selectedText()).toBe("first line\nsecond line\n\nThe reply.")

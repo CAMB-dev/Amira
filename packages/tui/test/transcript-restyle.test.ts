@@ -8,8 +8,10 @@ import {
   messageTimestamp,
   reasoningLines,
   rememberMessageTime,
+  timestampIn,
   timestampRoom,
   timestampRow,
+  userBandPaddingIn,
   userLines,
 } from "../src/format.ts"
 import { historyBlocks } from "../src/fullscreen/history-blocks.ts"
@@ -17,6 +19,7 @@ import { setGlyphs } from "../src/glyphs.ts"
 import { historyLines } from "../src/history.ts"
 import { Transcript } from "../src/transcript.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
+import { renderViewLines } from "../src/view-lines.ts"
 import { setup } from "./app-harness.ts"
 
 const at = new Date(2026, 9, 10, 20, 9).getTime()
@@ -59,12 +62,16 @@ test("clocks are local, zero-padded and fixed to 24-hour time", () => {
 test("the user band spans every cell with an inset accent prompt and one first-line clock", () => {
   const lines = userLines(banded, user, 40)
   const rows = lines.map(stripAnsi)
-  expect(rows).toHaveLength(2)
-  expect(rows[0]).toStartWith("  › Hello there.")
-  expect(rows[0]).toEndWith("20:09  ")
-  expect(rows[1]?.trimEnd()).toBe("    Next line.")
-  expect(lines[0]).toContain(banded.accent("›"))
-  expect(lines[0]).toContain(banded.muted("20:09"))
+  expect(rows).toHaveLength(4)
+  expect(userBandPaddingIn(lines)).toBe(1)
+  expect(lines[0]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
+  expect(lines[3]).toBe(lines[0])
+  expect(rows[1]).toStartWith("  › Hello there.")
+  expect(rows[1]).toEndWith("20:09  ")
+  expect(rows[2]?.trimEnd()).toBe("    Next line.")
+  expect(lines[1]).toContain(banded.accent("›"))
+  expect(lines[1]).toContain(banded.muted("20:09"))
+  expect(timestampIn(lines)).toEqual({ line: 1, text: "20:09", width: 24, to: 16 })
   expect(rows.filter((r) => r.includes("20:09"))).toHaveLength(1)
   for (const line of lines) expect(visibleWidth(line)).toBe(40)
 })
@@ -223,21 +230,122 @@ test("banded real blocks use exactly one transcript gap in inline and fullscreen
   const e = { ...env(40), theme: banded }
   const blocks = [userBlock(user), new ReplyBlock("Done.", false, false), userBlock(user)]
   const t = new Transcript()
-  const inline = blocks.flatMap((block) => t.block(block.kind, block.lines(e))).map(stripAnsi)
+  const inline = blocks.flatMap((block) => t.block(block.kind, block.lines(e)))
   const pane = new TranscriptPane()
   for (const block of blocks) pane.add(block)
-  const fullscreen = pane.render(e, 7).map(stripAnsi)
+  const fullscreen = pane.render(e, 11)
   const expected = [
+    " ".repeat(40),
     `  › Hello there.${" ".repeat(17)}20:09  `,
     `    Next line.${" ".repeat(26)}`,
+    " ".repeat(40),
     "",
     "  Done.",
     "",
+    " ".repeat(40),
     `  › Hello there.${" ".repeat(17)}20:09  `,
     `    Next line.${" ".repeat(26)}`,
+    " ".repeat(40),
   ]
-  expect(inline).toEqual(expected)
-  expect(fullscreen).toEqual(expected)
+  for (const rows of [inline, fullscreen]) {
+    expect(rows.map(stripAnsi)).toEqual(expected)
+    expect(rows.filter((row) => row === "")).toHaveLength(2)
+    expect(rows[4]).toBe("")
+    expect(rows[6]).toBe("")
+    for (const line of [0, 3, 7, 10]) expect(rows[line]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
+  }
+  pane.selectText({ block: blocks[0]!, line: 0, col: 8 }, { block: blocks[2]!, line: 3, col: 9 })
+  expect(pane.selectedText()).toBe("Hello there.\nNext line.\n\nDone.\n\nHello there.\nNext line.")
+})
+
+test("shared user rendering pads live, resumed and semantic view messages after their notes", () => {
+  const e = { ...env(40), theme: banded }
+  const message: UserMessage = {
+    role: "user",
+    content: [{ type: "text", text: "expanded command" }],
+    display: { text: "/review", note: "Loaded" },
+  }
+  const block = userBlock(message)
+  const pane = new TranscriptPane()
+  pane.add(block)
+  const history = historyBlocks([message], () => e, {
+    hyperlinks: false,
+    noticeBlock: () => {
+      throw new Error("unexpected notice")
+    },
+    sessionId: () => "s",
+    terminal: { columns: e.width },
+  })
+  const expected = [
+    " ".repeat(40),
+    `  › /review${" ".repeat(29)}`,
+    `    └ Loaded${" ".repeat(28)}`,
+    " ".repeat(40),
+  ]
+  for (const rows of [
+    userLines(banded, message, 40),
+    new Transcript().block("user", block.lines(e)),
+    pane.render(e, 4),
+    historyLines(banded, [message], { width: 40 }).slice(2),
+    history.flatMap((b) => b.lines(e)),
+    renderViewLines([{ kind: "user-message", text: "/review", note: "Loaded" }], banded, 40),
+  ]) {
+    expect(rows.map(stripAnsi)).toEqual(expected)
+    expect(rows[0]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
+    expect(rows.at(-1)).toBe(rows[0])
+  }
+})
+
+test("band padding is skipped by exact copy, text marking, word/line selection and partial drags", () => {
+  const block = userBlock(user)
+  const pane = new TranscriptPane()
+  const e = { ...env(40), theme: banded }
+  pane.add(block)
+  const lines = block.lines(e)
+  expect(block.copyRows(lines.map(stripAnsi), lines)).toEqual([
+    { from: 0, skip: true },
+    { from: 4, to: 16, exact: "Hello there." },
+    { from: 4 },
+    { from: 0, skip: true },
+  ])
+  expect(block.copyText()).toBe("Hello there.\nNext line.")
+  pane.render(e, 4)
+  pane.selectText({ block, line: 0, col: 8 }, { block, line: 3, col: 9 })
+  expect(pane.selectedText()).toBe("Hello there.\nNext line.")
+  const selected = pane.render(e, 4)
+  expect(selected[0]).toBe(lines[0])
+  expect(selected[3]).toBe(lines[3])
+  for (const line of [0, 3]) {
+    expect(pane.selectWord(line, 8)).toBe(false)
+    expect(pane.selectLine(line, 8)).toBe(false)
+  }
+  pane.startDrag(0, 8)
+  pane.dragTo(1, 8)
+  expect(pane.selectedText()).toBe("Hello")
+  expect(pane.render(e, 4)[0]).toBe(lines[0])
+  pane.endDrag()
+  pane.startDrag(3, 8)
+  pane.dragTo(2, 9)
+  expect(pane.selectedText()).toBe("line.")
+  expect(pane.render(e, 4)[3]).toBe(lines[3])
+  pane.endDrag()
+  pane.selectText({ block, line: 0, col: 1 }, { block, line: 0, col: 20 })
+  expect(pane.selectedText()).toBe("")
+  expect(pane.render(e, 4)[0]).toBe(lines[0])
+})
+
+test("band padding is not searchable text or an extra join after wrapped content", () => {
+  const pane = new TranscriptPane()
+  const e = { ...env(14), theme: banded }
+  pane.add(userBlock({ role: "user", content: [{ type: "text", text: "hello world" }] }))
+  const rows = pane.render(e, 4)
+  expect(rows.map((r) => stripAnsi(r).trimEnd())).toEqual(["", "  › hello", "    world", ""])
+  pane.find("hello world")
+  expect(pane.matchCount).toBe(1)
+  pane.find("world\n")
+  expect(pane.matchCount).toBe(0)
+  pane.find("\n")
+  expect(pane.matchCount).toBe(0)
 })
 
 test("copy trimming uses actual decoration, not content that happens to end in a clock", () => {
@@ -263,9 +371,9 @@ test("partial selections stop at actual timestamp metadata and respect wide disp
   const block = userBlock({ role: "user", content: [{ type: "text", text: "界界 20:19" }] }, at)
   const pane = new TranscriptPane()
   pane.add(block)
-  pane.render({ ...env(40), theme: banded }, 1)
+  pane.render({ ...env(40), theme: banded }, 3)
   const select = (from: number, to: number) => {
-    pane.selectText({ block, line: 0, col: from }, { block, line: 0, col: to })
+    pane.selectText({ block, line: 1, col: from }, { block, line: 1, col: to })
     return pane.selectedText()
   }
   expect(select(5, 7)).toBe("界界")

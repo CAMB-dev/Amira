@@ -1,5 +1,6 @@
 import type {
   CommandOutputLevel,
+  ToolDetailLevel,
   ToolLine,
   UiControl,
   UiState,
@@ -36,8 +37,16 @@ import {
   type Keybindings,
   viewScrollAction,
 } from "./keybindings.ts"
-import { finishedToolLines, type PresenterSource, runningToolLines } from "./tool-view.ts"
+import {
+  explorationOf,
+  exploredLines,
+  type FinishedCall,
+  finishedToolLines,
+  type PresenterSource,
+  runningToolLines,
+} from "./tool-view.ts"
 import { UiRuntime } from "./ui-runtime/runtime.ts"
+import { nextDetail } from "./verbose.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
 import { renderViewLines, viewTitle } from "./view-lines.ts"
 
@@ -71,6 +80,8 @@ export interface ExtensionViewerOptions {
   onPrint?: (text: string, level?: CommandOutputLevel) => void
   /** Presents finished calls with the same registry as the main transcript. */
   presenters?: PresenterSource
+  /** The transcript's current tool-output level, until changed within this view. */
+  toolDetail?: () => ToolDetailLevel
 }
 
 /** Lines of text that wrap to the width; the rest (code, diffs) are cut, as tool output is. */
@@ -130,6 +141,7 @@ export class ExtensionViewer implements Component {
   #data: unknown
   #opts: ExtensionViewerOptions
   #keys: Keybindings
+  #toolDetail: ToolDetailLevel | undefined
   #pages: ViewPage[]
   #mounted = false
   #opening = false
@@ -283,6 +295,12 @@ export class ExtensionViewer implements Component {
       if (this.#keys.is(e, "view.back") && !isTypingKey(e)) this.#answer(undefined)
       else if (isSubmitKey(e)) this.#answer(asking.input.value)
       else asking.input.handleInput(e)
+      this.#opts.requestRender?.()
+      return true
+    }
+    if (this.#keys.is(e, "tool-output")) {
+      this.#toolDetail = nextDetail(this.#toolDetail ?? this.#opts.toolDetail?.() ?? "summary")
+      this.#uiDirty = true
       this.#opts.requestRender?.()
       return true
     }
@@ -564,6 +582,30 @@ export class ExtensionViewer implements Component {
             options,
           ),
         ),
+      toolDetail: this.#toolDetail ?? this.#opts.toolDetail?.() ?? "summary",
+      renderTools: (calls, detail, options) => {
+        const rows: string[] = []
+        let run: { call: FinishedCall; presenter: ReturnType<PresenterSource["get"]> }[] = []
+        const flush = (last: boolean) => {
+          if (run.length > 1)
+            rows.push(...exploredLines(theme, run, detail === "full", detail, width, { last }))
+          else if (run[0])
+            rows.push(...finishedToolLines(theme, run[0].presenter, run[0].call, detail, width, { last }))
+          run = []
+        }
+        for (const [index, entry] of calls.entries()) {
+          const call = { ...entry.call, name: entry.name }
+          const presenter = this.#opts.presenters?.get(entry.name)
+          const last = index === calls.length - 1 && (options?.last ?? false)
+          if (explorationOf(presenter, call)) run.push({ call, presenter })
+          else {
+            flush(false)
+            rows.push(...finishedToolLines(theme, presenter, call, detail, width, { last }))
+          }
+        }
+        flush(options?.last ?? false)
+        return this.#hostRows(rows)
+      },
       renderRunningTool: (name, call, options) => {
         this.#animating = true
         return this.#hostRows(

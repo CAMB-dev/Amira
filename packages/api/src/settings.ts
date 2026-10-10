@@ -263,11 +263,13 @@ export interface TuiSettings {
    */
   colorDepth?: "auto" | "truecolor" | "256" | "16"
   /**
-   * Ring the bell when a turn ends or a dialog opens while the terminal is in the background
-   * (or, where the terminal does not report focus, after a long turn). See DEFAULT_TUI_BELL.
+   * Ring once per wait when a turn ends in the background or a dialog needs attention.
+   * With unknown focus, only permission/question dialogs alert. See DEFAULT_TUI_BELL.
    */
   bell?: boolean
-  /** Set the terminal title to the folder, session title when present, and branch, marked while working. See DEFAULT_TUI_TITLE. */
+  /** Desktop alerts in supported terminals, independently of the bell. See DEFAULT_TUI_NOTIFY. */
+  notify?: "auto" | "off"
+  /** Session title or cwd name: ● while running, ? while waiting; running updates at most once per second. See DEFAULT_TUI_TITLE. */
   title?: boolean
   /** Show work on the tab and taskbar progress indicator (OSC 9;4). See DEFAULT_TUI_PROGRESS. */
   progress?: boolean

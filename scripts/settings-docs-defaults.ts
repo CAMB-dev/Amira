@@ -66,6 +66,7 @@ export const settingsDefaults = {
   "tui.themeVariant": d.DEFAULT_TUI_THEME_VARIANT,
   "tui.colorDepth": d.DEFAULT_TUI_COLOR_DEPTH,
   "tui.bell": d.DEFAULT_TUI_BELL,
+  "tui.notify": d.DEFAULT_TUI_NOTIFY,
   "tui.title": d.DEFAULT_TUI_TITLE,
   "tui.progress": d.DEFAULT_TUI_PROGRESS,
   "tui.tokenSpeed": d.DEFAULT_TUI_TOKEN_SPEED,

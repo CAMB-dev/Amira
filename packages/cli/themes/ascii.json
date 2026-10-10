@@ -51,6 +51,7 @@
     "error": "x",
     "interrupted": "o",
     "more": ".",
+    "folded": ">",
     "pointer": ">",
     "search": "?",
     "searchPrompt": ">",
