@@ -8,7 +8,7 @@
  * `textWidth` (rows hanging under a warning start a cell further in) rather than assuming one
  * cell. A test checks both.
  */
-export const glyphs = {
+const defaults = {
   /** In front of the user's messages and echoed commands. */
   user: "›",
   /** Indents every row of the assistant's replies, setting them apart from everything else. */
@@ -66,6 +66,11 @@ export const glyphs = {
   more: "…",
   /** The rule of separators such as the one after a resumed history. */
   rule: "─",
+  /** Frame corners, also shared with tui-kit input boxes. */
+  boxTopLeft: "╭",
+  boxTopRight: "╮",
+  boxBottomLeft: "╰",
+  boxBottomRight: "╯",
   /** Before the selected row of a list (dialogs, completion lists), and a dialog's echo. */
   pointer: "❯",
   /** Starts the history search line, and sits between its label and the query. */
@@ -83,4 +88,14 @@ export const glyphs = {
   separator: "·",
 } as const
 
-export type Glyphs = typeof glyphs
+export type Glyphs = { -readonly [K in keyof typeof defaults]: string }
+
+/** Shared by the terminal UI's formatting helpers; one interactive UI owns these at a time. */
+export const glyphs: Glyphs = { ...defaults }
+
+/** Definitions are validated by the core registry; absent keys always reset to the defaults. */
+export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
+  for (const key of Object.keys(defaults) as (keyof Glyphs)[]) {
+    glyphs[key] = overrides[key] ?? defaults[key]
+  }
+}

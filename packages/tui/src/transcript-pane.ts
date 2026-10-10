@@ -2,6 +2,7 @@ import type { ToolDetailLevel } from "@amira/api"
 import { type ImagePlacement, stripAnsi, type Theme, truncateToWidth } from "@amira/tui-kit"
 import { setImageFallback } from "./blocks/base.ts"
 import { type Block, type BlockEnv, type CodeFrame, codeFrames, imagesIn, ReplyBlock } from "./blocks.ts"
+import { glyphs } from "./glyphs.ts"
 import { PaneFind } from "./pane/find.ts"
 import { PaneTextSelection } from "./pane/text-selection.ts"
 import { cellsOf, markCells, sliceCells } from "./text-selection.ts"
@@ -12,6 +13,8 @@ export { highlight } from "./pane/find.ts"
 /** Lines of a block drawn at one width, for one version of it. */
 interface Drawn {
   width: number
+  theme: Theme
+  glyphs: BlockEnv["glyphs"]
   version: number
   detail: ToolDetailLevel
   /** The most rows an image could take (0 without images), and the renderers of extensions. */
@@ -169,6 +172,12 @@ export class TranscriptPane {
   /** Notes a change to the conversation, shown as new output when scrolled up. */
   changed(): void {
     if (!this.following) this.unseen = true
+  }
+
+  /** Theme and glyph changes invalidate all widths, while retaining scroll and selection. */
+  invalidate(): void {
+    this.drawn = new WeakMap()
+    this.finder.invalidate()
   }
 
   /** A block's lines at the env's width. */
@@ -392,7 +401,7 @@ export class TranscriptPane {
   /** The code blocks of `block` (a reply's) as drawn now; none for other blocks. */
   codeBlocks(block: Block | undefined): CodeFrame[] {
     if (!(block instanceof ReplyBlock) || !this.env) return []
-    return codeFrames(this.plain(block, this.env))
+    return codeFrames(this.plain(block, this.env), this.env.glyphs, glyphs.assistant)
   }
 
   /** The selected code block of the selected reply, if one is. */
@@ -564,6 +573,8 @@ export class TranscriptPane {
     if (
       !d ||
       block.live ||
+      d.theme !== env.theme ||
+      d.glyphs !== env.glyphs ||
       d.version !== block.version ||
       d.detail !== env.detail ||
       d.imageRows !== imageRows
@@ -580,10 +591,12 @@ export class TranscriptPane {
     const fresh = block.live
       ? hit?.frame === this.frame
       : hit?.version === block.version && hit.detail === env.detail && hit.imageRows === imageRows
-    if (hit && fresh) return hit
+    if (hit && fresh && hit.theme === env.theme && hit.glyphs === env.glyphs) return hit
     const lines = block.lines(env)
     const d: Drawn = {
       width,
+      theme: env.theme,
+      glyphs: env.glyphs,
       version: block.version,
       detail: env.detail,
       imageRows,

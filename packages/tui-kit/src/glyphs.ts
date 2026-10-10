@@ -26,6 +26,11 @@ export interface Glyphs {
   tableColumn: string
   tableRule: string
   tableCross: string
+  /** Corners of input and widget frames; sides use codeSide and rules use rule. */
+  boxTopLeft: string
+  boxTopRight: string
+  boxBottomLeft: string
+  boxBottomRight: string
   /**
    * In front of an image's alt text where the image itself is not shown. 🖼 has no emoji
    * presentation of its own, so it measures one cell, but Windows Terminal draws it as a
@@ -47,5 +52,9 @@ export const defaultGlyphs: Glyphs = {
   tableColumn: "│",
   tableRule: "─",
   tableCross: "┼",
+  boxTopLeft: "╭",
+  boxTopRight: "╮",
+  boxBottomLeft: "╰",
+  boxBottomRight: "╯",
   image: "🖼\uFE0F",
 }

@@ -1,5 +1,6 @@
 import {
   defaultGlyphs,
+  type Glyphs,
   type ImageInput,
   type MarkdownNodes,
   MarkdownStream,
@@ -121,6 +122,8 @@ export class ReplyBlock extends Block {
   folded = false
   private stream: MarkdownStream | undefined
   private streamWidth = 0
+  private streamTheme: Theme | undefined
+  private streamGlyphs: BlockEnv["glyphs"]
   /** The images the stream was made to draw with, if any. */
   private streamImages: BlockImages | undefined
   private streamImageRows = 0
@@ -130,6 +133,9 @@ export class ReplyBlock extends Block {
   #streaming: boolean
   private lastImages: BlockImages | undefined
   private lastRenders: BlockRenders | undefined
+  /** The Markdown chrome and reply prefix used by the last rendering, for copying its rows. */
+  private lastGlyphs: Glyphs = defaultGlyphs
+  private lastAssistant = glyphs.assistant
   private alternatives = new ReplyAlternatives()
   /** What the stream was made with from the renderers: their generation, or -1 without them. */
   private streamRenders = -1
@@ -177,6 +183,8 @@ export class ReplyBlock extends Block {
   }
 
   lines(env: BlockEnv): string[] {
+    this.lastGlyphs = env.glyphs ?? defaultGlyphs
+    this.lastAssistant = glyphs.assistant
     const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
     // Folded, images are their alt text.
     const images = this.folded ? undefined : env.images
@@ -184,7 +192,7 @@ export class ReplyBlock extends Block {
     const renders = this.folded ? undefined : env.renders
     this.lastImages = images
     this.lastRenders = renders
-    const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks }
+    const opts: MarkdownStreamOptions = { hyperlinks: this.hyperlinks, glyphs: env.glyphs }
     if (images || renders?.renders.source) opts.nodes = this.nodes(env.theme, images, renders?.renders)
     const imageRows = images ? images.store.maxRows() : 0
     const generation = renders ? renders.renders.generation : -1
@@ -193,6 +201,8 @@ export class ReplyBlock extends Block {
       if (
         !this.stream ||
         this.streamWidth !== width ||
+        this.streamTheme !== env.theme ||
+        this.streamGlyphs !== env.glyphs ||
         this.streamImages !== images ||
         this.streamImageRows !== imageRows ||
         this.streamRenders !== generation
@@ -202,11 +212,18 @@ export class ReplyBlock extends Block {
         this.stream = new MarkdownStream(opts)
         this.stream.append(this.source)
         this.streamWidth = width
+        this.streamTheme = env.theme
+        this.streamGlyphs = env.glyphs
         this.streamImages = images
         this.streamImageRows = imageRows
         this.streamRenders = generation
       }
-      const ctx: RenderContext = { theme: env.theme, color: true, rows: Number.POSITIVE_INFINITY }
+      const ctx: RenderContext = {
+        theme: env.theme,
+        glyphs: env.glyphs,
+        color: true,
+        rows: Number.POSITIVE_INFINITY,
+      }
       rows = this.stream.render(width, ctx)
       while (rows.length && rows[rows.length - 1]!.trim() === "") rows = rows.slice(0, -1)
     } else {
@@ -350,10 +367,11 @@ export class ReplyBlock extends Block {
    * image copies as its alt text, once.
    */
   override copyRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
-    const indent = visibleWidth(glyphs.assistant)
+    const indent = visibleWidth(this.lastAssistant)
     const rows: CopyRow[] = plain.map(() => ({ from: indent }))
-    // A quote's bars are chrome too.
-    const bars = new RegExp(`^ {${indent}}((?:${defaultGlyphs.quoteBar} ?)+)`)
+    // A quote's bars are chrome too; both glyphs may contain regexp punctuation.
+    const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const bars = new RegExp(`^${escapeRe(this.lastAssistant)}((?:${escapeRe(this.lastGlyphs.quoteBar)} ?)+)`)
     for (const [i, p] of plain.entries()) {
       const m = bars.exec(p)
       if (m) rows[i] = { from: indent + visibleWidth(m[1]!) }
@@ -362,10 +380,10 @@ export class ReplyBlock extends Block {
     // Frames are matched to the fences of the source in order; one that matches none (a fence
     // the source is not read for, say in a nested list) copies row by row.
     let next = 0
-    for (const f of codeFrames(plain)) {
+    for (const f of codeFrames(plain, this.lastGlyphs, this.lastAssistant)) {
       rows[f.top] = { from: 0, skip: true }
       if (f.bottom !== undefined) rows[f.bottom] = { from: 0, skip: true }
-      const shown = f.rows.map((r) => plain[r]!.slice(f.col))
+      const shown = f.rows.map((r) => plain[r]!.slice(f.textCol ?? f.col))
       let at: number[] | undefined
       for (let q = next; q < fences.length && !at; q++) {
         at = linesOf(shown, fences[q]!.shown)
@@ -411,6 +429,7 @@ export class ReplyBlock extends Block {
     return replyRows(
       renderMarkdown(text, width, env.theme, {
         hyperlinks: this.hyperlinks,
+        glyphs: env.glyphs,
         nodes: this.nodes(env.theme, undefined, env.renders?.renders, true),
       }),
     )
@@ -422,19 +441,30 @@ export interface CodeFrame {
   top: number
   bottom?: number
   rows: number[]
+  /** Display cells before the code, for selection and copying. */
   col: number
+  /** Character offset before the code, only when it differs from the display column. */
+  textCol?: number
 }
 
 /** The frames of code blocks in rows of rendered Markdown (without styles). */
-export function codeFrames(plain: readonly string[]): CodeFrame[] {
-  const { codeTop, codeSide, codeBottom } = defaultGlyphs
+export function codeFrames(
+  plain: readonly string[],
+  markdownGlyphs: Glyphs = defaultGlyphs,
+  assistant = "",
+): CodeFrame[] {
+  const { codeTop, codeSide, codeBottom } = markdownGlyphs
   const out: CodeFrame[] = []
   for (let i = 0; i < plain.length; i++) {
-    const col = /^ */.exec(plain[i]!)![0].length
-    if (!plain[i]!.startsWith(codeTop, col)) continue
-    const frame: CodeFrame = { top: i, rows: [], col: col + visibleWidth(codeSide) + 1 }
+    const row = plain[i]!
+    const lead = assistant && row.startsWith(assistant) ? assistant.length : 0
+    const at = lead + /^ */.exec(row.slice(lead))![0].length
+    if (!row.startsWith(codeTop, at)) continue
+    const pad = row.slice(0, at)
+    const col = visibleWidth(pad) + visibleWidth(codeSide) + 1
+    const textCol = at + codeSide.length + 1
+    const frame: CodeFrame = { top: i, rows: [], col, ...(textCol !== col ? { textCol } : {}) }
     out.push(frame)
-    const pad = " ".repeat(col)
     while (i + 1 < plain.length) {
       const row = plain[i + 1]!
       if (row.startsWith(pad + codeBottom)) {

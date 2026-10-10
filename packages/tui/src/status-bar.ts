@@ -17,7 +17,7 @@ import { glyphs } from "./glyphs.ts"
  */
 export type StatusEntry = ResolvedStatusItem
 
-const SEPARATOR = ` ${glyphs.separator} `
+const separator = () => ` ${glyphs.separator} `
 
 /** Fewest cells a lone item is cut to (its start and "…"); with less room it is left out. */
 const MIN_CUT = 4
@@ -41,7 +41,7 @@ function toneStyle(tone: StatusTone, theme: Theme): StyleFn {
 
 /** Cells a side takes: its texts and the separators between them; 0 when it is empty. */
 const sideWidth = (xs: readonly StatusEntry[]) =>
-  xs.reduce((n, x, i) => n + visibleWidth(x.text) + (i ? SEPARATOR.length : 0), 0)
+  xs.reduce((n, x, i) => n + visibleWidth(x.text) + (i ? visibleWidth(separator()) : 0), 0)
 
 /**
  * The items that fit, in their order: while `fits` says no, the item with the lowest priority
@@ -74,7 +74,7 @@ function fitItems(
 
 function join(xs: readonly StatusEntry[], theme: Theme): string {
   const dim = themeToken(theme, "dim") ?? theme.muted
-  return xs.map((x) => toneStyle(x.tone, theme)(x.text)).join(dim(SEPARATOR))
+  return xs.map((x) => toneStyle(x.tone, theme)(x.text)).join(dim(separator()))
 }
 
 /**
@@ -93,13 +93,15 @@ export function statusBorder(items: readonly StatusEntry[], width: number, ctx: 
   const l = sideWidth(left)
   const r = sideWidth(right)
   const fill = width - 4 - (l ? l + 2 : 0) - (r ? r + 2 : 0)
-  if (fill < 1) return line(`╰${glyphs.rule.repeat(Math.max(0, width - 2))}╯`)
+  const bottomLeft = ctx.glyphs?.boxBottomLeft ?? "╰"
+  const bottomRight = ctx.glyphs?.boxBottomRight ?? "╯"
+  if (fill < 1) return line(`${bottomLeft}${glyphs.rule.repeat(Math.max(0, width - 2))}${bottomRight}`)
   return (
-    line(`╰${glyphs.rule}`) +
+    line(`${bottomLeft}${glyphs.rule}`) +
     (l ? ` ${join(left, theme)} ` : "") +
     line(glyphs.rule.repeat(fill)) +
     (r ? ` ${join(right, theme)} ` : "") +
-    line(`${glyphs.rule}╯`)
+    line(`${glyphs.rule}${bottomRight}`)
   )
 }
 

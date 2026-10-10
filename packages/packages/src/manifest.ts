@@ -21,6 +21,8 @@ export interface PackageManifest {
   extensions: string[]
   /** Skill directories, searched like settings `skills.dirs`. */
   skills: string[]
+  /** Theme JSON files, loaded after user and project themes. */
+  themes: string[]
   /** Top-level `amira <name>` commands: name to module default-exporting a PackageCommand. */
   commands: Record<string, string>
   /** Whether package.json lists dependencies that must be installed next to it. */
@@ -79,6 +81,7 @@ export function readManifest(dir: string): PackageManifest {
       commands[cmd] = within("commands", file)
     }
   }
+  const themes = paths("themes")
   const description = field("description")
   const deps = pkg?.dependencies
   return {
@@ -86,8 +89,9 @@ export function readManifest(dir: string): PackageManifest {
     version,
     ...(engine ? { engine } : {}),
     ...(typeof description === "string" ? { description } : {}),
-    extensions: paths("extensions") ?? defaultEntry(dir, !!cmds),
+    extensions: paths("extensions") ?? defaultEntry(dir, !!cmds || themes !== undefined),
     skills: paths("skills") ?? [],
+    themes: themes ?? [],
     commands,
     hasDependencies: isObject(deps) && Object.keys(deps).some((d) => !d.startsWith("@amira/")),
   }
@@ -99,13 +103,13 @@ export function engineMismatch(m: PackageManifest, apiVersion = API_VERSION): st
   return `${m.name} ${m.version} needs Amira extension API ${m.engine}; this Amira has ${apiVersion}`
 }
 
-/** A package made only of commands has no implicit extension. */
-function defaultEntry(dir: string, commandsOnly: boolean): string[] {
+/** Packages contributing commands or themes need no implicit extension. */
+function defaultEntry(dir: string, optional: boolean): string[] {
   for (const f of ["index.ts", "src/index.ts"]) {
     const abs = path.join(dir, f)
     if (existsSync(abs)) return [abs]
   }
-  if (commandsOnly) return []
+  if (optional) return []
   throw new PackageError(`${dir}: no "extensions" list, and neither index.ts nor src/index.ts exists`)
 }
 

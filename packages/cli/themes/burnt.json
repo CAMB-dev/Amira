@@ -1,0 +1,28 @@
+{
+  "name": "burnt",
+  "description": "Burnt orange accents with earthy syntax colors",
+  "dark": {
+    "accent": "#e5792f",
+    "heading1": "#ef9148",
+    "heading": "#d9a45c",
+    "path": "#e7a15e",
+    "command": "#efb574",
+    "shimmer": "#e5792f",
+    "shimmerEnd": "#f3c78a",
+    "keyword": "#ef9148",
+    "string": "#bbc58a",
+    "number": "#d9a45c"
+  },
+  "light": {
+    "accent": "#b8510f",
+    "heading1": "#a8470c",
+    "heading": "#94671f",
+    "path": "#94671f",
+    "command": "#87490c",
+    "shimmer": "#b8510f",
+    "shimmerEnd": "#7e4210",
+    "keyword": "#a8470c",
+    "string": "#576a25",
+    "number": "#94671f"
+  }
+}

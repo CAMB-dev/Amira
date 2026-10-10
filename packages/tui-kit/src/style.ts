@@ -16,7 +16,8 @@ import {
   nearest256,
   quantize,
 } from "./colors.ts"
-import { consoleHost, palettes, surfacePalette } from "./palette.ts"
+import type { Glyphs } from "./glyphs.ts"
+import { consoleHost, type Palette, palettes, surfacePalette } from "./palette.ts"
 
 export type StyleFn = (text: string) => string
 
@@ -240,6 +241,7 @@ export function surfaceTheme(
   detected?: Rgb,
   platform = "other",
   host: ReturnType<typeof consoleHost> = "other",
+  palette: Palette = palettes[background ?? "dark"],
 ): SurfaceTokens {
   if (depth === "16") {
     const [user, added, removed, addedWord, removedWord] =
@@ -257,7 +259,6 @@ export function surfaceTheme(
       surfaceMuted: background ? gray : plainText,
     }
   }
-  const palette = palettes[background ?? "dark"]
   const surfaces = surfacePalette(palette, detected, platform, host)
   const added = depth === "256" ? nearest256(surfaces.diffAddedBg, { dominant: "green" }) : undefined
   const removed = depth === "256" ? nearest256(surfaces.diffRemovedBg, { dominant: "red" }) : undefined
@@ -281,9 +282,19 @@ export function surfaceTheme(
   }
 }
 
-export type ThemeSetting = "auto" | "dark" | "light" | "terminal"
+/** A registry name or the legacy auto/dark/light/terminal selection. */
+export type ThemeSetting = string
+export type ThemeVariant = "auto" | "dark" | "light"
+/** Structural theme data; named definitions are resolved by the caller's registry. */
+export interface ThemeDefinition {
+  dark?: Partial<Palette> & { shimmer?: Hex; shimmerEnd?: Hex }
+  light?: Partial<Palette> & { shimmer?: Hex; shimmerEnd?: Hex }
+  glyphs?: Partial<Glyphs>
+}
 export interface ThemeOptions {
   theme?: ThemeSetting
+  themeVariant?: ThemeVariant
+  definition?: ThemeDefinition
   colorDepth?: ColorDepthSetting
   env?: Record<string, string | undefined>
   capabilities?: Partial<Capabilities>
@@ -292,7 +303,7 @@ export interface ThemeOptions {
   color?: boolean
 }
 
-/** Builds semantic styles once at startup. Never paints the terminal's base fg or bg. */
+/** Builds semantic styles for a selection. Never paints the terminal's base fg or bg. */
 export function createTheme(options: ThemeOptions = {}): Theme {
   const env = options.env ?? process.env
   if (options.color === false || !colorSupported(env)) return monoTheme
@@ -306,9 +317,16 @@ export function createTheme(options: ThemeOptions = {}): Theme {
   const background =
     options.theme === "dark" || options.theme === "light"
       ? options.theme
-      : (capabilities.background ??
-        (capabilities.backgroundRgb ? backgroundOf(capabilities.backgroundRgb) : backgroundFromEnv(env)))
-  const p = palettes[background ?? "dark"]
+      : options.themeVariant === "dark" || options.themeVariant === "light"
+        ? options.themeVariant
+        : (capabilities.background ??
+          (capabilities.backgroundRgb ? backgroundOf(capabilities.backgroundRgb) : backgroundFromEnv(env)))
+  // A missing variant falls back to the default of that variant, not the other palette.
+  const variant = background ?? "dark"
+  const overrides = options.definition?.[variant]
+  const p = { ...palettes[variant], ...overrides }
+  const shimmer = overrides?.shimmer ?? palettes[variant].accent
+  const shimmerEnd = overrides?.shimmerEnd ?? palettes[variant].heading1
   const fg = (hex: Hex, fallback = gray) => (depth === "16" ? fallback : sgr(quantize(hex, depth, 90), 39))
   const theme: Theme = {
     ...terminalTheme,
@@ -318,6 +336,7 @@ export function createTheme(options: ThemeOptions = {}): Theme {
       capabilities.backgroundRgb,
       options.platform ?? process.platform,
       consoleHost(env),
+      p,
     ),
     accent: fg(p.accent, cyan),
     muted: fg(p.muted),
@@ -346,10 +365,10 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     string: fg(p.string, green),
     number: fg(p.number, yellow),
     comment: fg(p.muted),
-    shimmer: fg(p.accent, cyan),
-    shimmerEnd: fg(p.heading1, blue),
+    shimmer: fg(shimmer, cyan),
+    shimmerEnd: fg(shimmerEnd, blue),
   }
-  for (let i = 0; i < 16; i++) theme[`shimmer${i}`] = fg(blend(p.accent, p.heading1, i / 15), cyan)
+  for (let i = 0; i < 16; i++) theme[`shimmer${i}`] = fg(blend(shimmer, shimmerEnd, i / 15), cyan)
   if (depth === "16") return theme
   const chipStyle = (background: Hex, fallback: number) => {
     const edge = sgr(quantize(background, depth, fallback - 10), 39)

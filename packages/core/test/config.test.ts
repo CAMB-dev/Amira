@@ -115,10 +115,13 @@ test("live token speed is a boolean setting that project files can override", ()
   )
 })
 
-test.each(["auto", "dark", "light", "terminal"])("TUI theme accepts %s", (theme) => {
-  const settings = { tui: { theme } }
-  expect(validateSettings(settings, "settings.json")).toEqual({ settings, warnings: [] })
-})
+test.each(["auto", "dark", "light", "terminal", "system", "Dark", "amber"])(
+  "TUI theme accepts %s",
+  (theme) => {
+    const settings = { tui: { theme } }
+    expect(validateSettings(settings, "settings.json")).toEqual({ settings, warnings: [] })
+  },
+)
 
 test.each(["auto", "truecolor", "256", "16"])("TUI color depth accepts %s", (colorDepth) => {
   const settings = { tui: { colorDepth } }
@@ -126,8 +129,6 @@ test.each(["auto", "truecolor", "256", "16"])("TUI color depth accepts %s", (col
 })
 
 test.each([
-  ["theme", "system"],
-  ["theme", "Dark"],
   ["theme", false],
   ["theme", null],
   ["colorDepth", "24"],
@@ -137,7 +138,7 @@ test.each([
   ["colorDepth", null],
 ] as const)("TUI %s rejects %j", (key, value) => {
   expect(() => validateSettings({ tui: { [key]: value } }, "settings.json")).toThrow(
-    `"tui.${key}" must be one of`,
+    `"tui.${key}" must be ${key === "theme" ? "a string" : "one of"}`,
   )
 })
 

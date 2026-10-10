@@ -35,7 +35,7 @@ export const CONFIRM_LABELS = {
   no: "No",
 } as const
 
-const OTHER_LABEL = `Other${glyphs.more}`
+const otherLabel = () => `Other${glyphs.more}`
 
 /** The "don't ask again" choice, saying how far it reaches when the asker says so. */
 const alwaysLabel = (always: boolean | string) =>
@@ -115,6 +115,7 @@ export class Dialog implements Component {
     readonly request: DialogRequest,
     private onDone: (answer: DialogAnswer) => void,
     private keys: Keybindings = defaultKeybindings(),
+    private selection: { changed?: (option: string) => void } = {},
   ) {
     this.#pages = pagesOf(request)
     if (request.kind === "select") this.#searchTexts = request.searchTexts?.map((s) => s.toLowerCase()) ?? []
@@ -202,6 +203,8 @@ export class Dialog implements Component {
     } else if (r.kind === "select" && e.type === "key" && e.text && !e.ctrl && !e.alt) {
       this.#setFilter(this.#filter + e.text)
     } else return false
+    const option = this.#choices()[page.selected]?.label
+    if (option !== undefined) this.selection.changed?.(option)
     return true
   }
 
@@ -221,6 +224,7 @@ export class Dialog implements Component {
     )
     const title = this.#titleRows(width, theme)
     const editor = this.#editor
+    editor?.setPrompt(`${glyphs.pointer} `)
     // The whole text, to see whether it fits with the title.
     if (editor) editor.maxRows = Number.POSITIVE_INFINITY
     const render = () =>
@@ -620,7 +624,7 @@ function pagesOf(r: DialogRequest): Page[] {
             { label: CONFIRM_LABELS.yes, value: true },
             ...(r.always ? [{ label: alwaysLabel(r.always), value: "always" as const }] : []),
             { label: CONFIRM_LABELS.no, value: false },
-            ...(r.other ? [{ label: OTHER_LABEL, other: true }] : []),
+            ...(r.other ? [{ label: otherLabel(), other: true }] : []),
           ],
           // Nothing preselected: an Enter typed before the dialog showed up does not answer it.
           { selected: -1 },
@@ -653,7 +657,7 @@ function pagesOf(r: DialogRequest): Page[] {
               label: o.label,
               ...(o.description ? { description: o.description } : {}),
             })),
-            { label: OTHER_LABEL, other: true },
+            { label: otherLabel(), other: true },
           ],
           { multi: q.multiSelect === true, ...(q.header ? { header: q.header } : {}) },
         ),

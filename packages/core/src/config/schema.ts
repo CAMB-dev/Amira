@@ -264,7 +264,8 @@ const settings = object({
   merge: object({ reviewThreshold: object({ lines: integer(0), files: integer(0) }) }),
   tui: object({
     mode: oneOf("fullscreen", "inline"),
-    theme: oneOf("auto", "dark", "light", "terminal"),
+    theme: string,
+    themeVariant: oneOf("auto", "dark", "light"),
     colorDepth: oneOf("auto", "truecolor", "256", "16"),
     bell: boolean,
     title: boolean,

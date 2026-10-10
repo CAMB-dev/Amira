@@ -641,8 +641,13 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.theme": {
     default: documentedDefault("tui.theme"),
-    en: '`"auto"` follows the terminal background (dark if unknown); `"dark"` and `"light"` choose a palette explicitly; `"terminal"` uses the terminal\'s own ANSI colors.',
-    zh: '`"auto"` 根据终端背景选择配色（无法判断时使用深色）；`"dark"` 和 `"light"` 分别指定深色和浅色配色；`"terminal"` 使用终端自身的 ANSI 颜色。',
+    en: 'A theme name, or `"auto"` for Amira following the terminal background (dark if unknown). `"dark"` and `"light"` select Amira explicitly; `"terminal"` uses the terminal\'s own ANSI colors. `/theme` previews and saves a named theme.',
+    zh: '主题名称，或 `"auto"`：Amira 根据终端背景选择配色（无法判断时使用深色）。`"dark"` 和 `"light"` 指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色。`/theme` 可预览并保存主题。',
+  },
+  "tui.themeVariant": {
+    default: documentedDefault("tui.themeVariant"),
+    en: 'For named themes, `"auto"` follows the terminal background; `"dark"` or `"light"` forces that variant. A missing variant uses the default Amira palette.',
+    zh: '命名主题的配色版本：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定版本。缺少的版本使用默认 Amira 配色。',
   },
   "tui.colorDepth": {
     default: documentedDefault("tui.colorDepth"),

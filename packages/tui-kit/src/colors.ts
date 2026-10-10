@@ -24,7 +24,8 @@ export function detectColorDepth(
 }
 
 export function channels(hex: Hex): [number, number, number] {
-  return [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as [number, number, number]
+  const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex
+  return [1, 3, 5].map((i) => Number.parseInt(full.slice(i, i + 2), 16)) as [number, number, number]
 }
 
 export function blend(a: Hex, b: Hex, amount: number): Hex {

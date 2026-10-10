@@ -14,14 +14,12 @@ import {
 import { type Agent, MODE_SUMMARY, parseCommandLine } from "@amira/core"
 import {
   chooseImageSupport,
-  createTheme,
   detectEnv,
   Editor,
   type EditorPart,
   ImageStore,
   type InputEvent,
   InputReader,
-  isColorEnabled,
   ProcessTerminal,
   Spinner,
   setupTerminalInput,
@@ -45,6 +43,7 @@ import {
   welcomeCard,
 } from "./app/startup.ts"
 import { interactiveTerminal } from "./app/terminal.ts"
+import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
@@ -84,15 +83,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     images: imageSetting !== "off",
     background: true,
   })
-  const theme =
-    opts.theme ??
-    createTheme({
-      theme: settings.theme,
-      colorDepth: settings.colorDepth,
-      env,
-      capabilities,
-      color: isColorEnabled(),
-    })
+  const themes = new RuntimeThemes(opts, env, capabilities)
+  let theme = themes.current.theme
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
@@ -113,7 +105,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     })
   const images = imageStore ? () => (providers!.size > 0 ? imageStore : undefined) : undefined
   // Nodes of replies extensions render, e.g. ```mermaid diagrams (D88).
-  const renders = new ReplyRenderers(opts.markdownRenderers, capabilities.background)
+  const renders = new ReplyRenderers(opts.markdownRenderers, themes.current.variant)
   const spinner = new Spinner()
   const activity = createTurnActivity()
   // Turn display state: provider tool rows and transient hint notes.
@@ -146,7 +138,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     env,
   )
   const editor = new Editor({
-    prompt: theme.accent("› "),
+    prompt: `${glyphs.user} `,
     placeholder: "Message Amira",
     onSubmit: (text, info) => submit(text, info.parts, info.display),
     foldPastes: FOLD_PASTES,
@@ -225,6 +217,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const host: ViewHost = {
     terminal,
     theme,
+    glyphs: themes.current.markdownGlyphs,
     capabilities,
     settings,
     presenters,
@@ -292,6 +285,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     openRewind: () => rewind.openRewind(),
     isCompacting: () => activity.compacting,
     interrupt: () => outbox.interrupt(),
+  })
+
+  themes.connect((selection) => {
+    theme = selection.theme
+    editor.setPrompt(`${glyphs.user} `)
+    renders.setTheme(selection.variant)
+    overlays.setTheme(theme)
+    view.setTheme(theme, selection.markdownGlyphs)
   })
 
   // Lifecycle: the exit result resolved by shutdown.
@@ -670,6 +671,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     off()
     offSwitch?.()
     offCommand?.()
+    offThemeCommand?.()
     clearTimeout(hintTimer)
     outbox.dispose()
     composer.dispose()
@@ -679,6 +681,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     noticeStrip.dispose()
     reader.stop()
     view.stop()
+    themes.dispose()
     unbindTerminal?.()
     termStatus.stop()
     if (terminal instanceof ProcessTerminal) terminal.stop()
@@ -789,13 +792,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const off = agent.bus.subscribe(onEvent)
   const offSwitch = commands?.onSwitch(followAgent)
   const offCommand = opts.registerCommand?.(detailCommand(() => detail, setDetail))
+  const offThemeCommand = opts.registerCommand?.(
+    themes.command({ overlays, keys, requestRender: () => view.requestRender() }),
+  )
   termStatus.start()
   const unbindTerminal = opts.bindTerminal?.(termStatus)
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
   view.banner(
-    `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${tildePath(agent.cwd, env)}`)}`,
+    (theme) =>
+      `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${tildePath(agent.cwd, env)}`)}`,
   )
   // Where to start: how to find the commands, the files, the skills and the keys.
   const helpKey = keys.label("help")
@@ -805,7 +812,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     commands && "$ skills",
     helpKey && `${helpKey} keys`,
   ].filter(Boolean)
-  view.banner(theme.muted(starts.join(` ${glyphs.separator} `)))
+  view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
   if (agent.messages.length) showSession(agent, false)
   for (const e of opts.startupEvents ?? []) onEvent(e)
   // With no provider yet, a welcome card with the steps to a first message replaces the notice.

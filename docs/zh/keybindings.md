@@ -171,7 +171,8 @@ VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 V
 | 设置 | 默认值 | 行为 |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` 使用 alternate screen，由 Amira 滚动、查找、折叠和复制，窗口改变时重绘，退出或崩溃时打印到普通屏幕；`"inline"` 将完成的输出留在终端滚动历史中。`--inline` 和 `--fullscreen` 优先 |
-| `tui.theme` | `"auto"` | `"auto"` 根据终端背景选择配色（无法判断时使用深色）；`"dark"` 和 `"light"` 分别指定深色和浅色配色；`"terminal"` 使用终端自身的 ANSI 颜色 |
+| `tui.theme` | `"auto"` | [主题名称](themes.md)，或 `"auto"` 根据终端背景选择（无法判断时使用深色）；`"dark"` 和 `"light"` 显式指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色 |
+| `tui.themeVariant` | `"auto"` | 命名主题的深浅：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定。缺少变体时使用所选外观的默认 Amira 配色 |
 | `tui.colorDepth` | `"auto"` | 颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。`"256"` 和 `"16"` 必须写成字符串，而不是数字 |
 | `tui.title` | `true` | 设置终端标题；会话有标题时为 `Amira · <folder> · <session title> ⎇ <branch>`，运行期间显示 `●`，退出时恢复旧标题。标题栏使用系统字体，输入框状态不使用部分终端字体缺少的 `⎇` |
 | `tui.progress` | `true` | 运行时显示终端标签或任务栏进度，对话框等待时显示暂停状态；使用 OSC 9;4，支持终端包括 Windows Terminal、ConEmu、VS Code、Ghostty |

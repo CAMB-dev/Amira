@@ -48,6 +48,11 @@ export class OverlayManager {
 
   constructor(private readonly deps: OverlayManagerDeps) {}
 
+  /** Echoes of existing dialogs use the theme active when they are answered or redrawn. */
+  setTheme(theme: Theme): void {
+    this.deps.theme = theme
+  }
+
   get hasFullscreen(): boolean {
     return !!(this.form || this.viewer)
   }
@@ -167,6 +172,21 @@ export class OverlayManager {
       this.deps.view().requestOverlayRender()
     if (this.form && (e.type === "ui.request" || e.type === "ui.resolved"))
       this.deps.view().requestOverlayRender()
+  }
+
+  /** A picker owned by the TUI, sharing focus and the waiting-form lifecycle with extension dialogs. */
+  openLocalDialog(dialog: Dialog): () => void {
+    this.dialogs.push(dialog)
+    this.waitingChanged("opened")
+    this.deps.view().requestRender()
+    return () => {
+      const at = this.dialogs.indexOf(dialog)
+      if (at === -1) return
+      this.dialogs.splice(at, 1)
+      this.openNextForm()
+      this.waitingChanged("resolved")
+      this.deps.view().requestRender()
+    }
   }
 
   onUiRequest(data: EventMap["ui.request"]) {

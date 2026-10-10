@@ -1,0 +1,28 @@
+{
+  "name": "lavender",
+  "description": "Soft violet accents with blue headings and warm paths",
+  "dark": {
+    "accent": "#a99cf0",
+    "heading1": "#bdb3f5",
+    "heading": "#8fb8ea",
+    "path": "#e2b07a",
+    "command": "#c4b9f5",
+    "shimmer": "#a99cf0",
+    "shimmerEnd": "#d9d1fa",
+    "keyword": "#b4a6ee",
+    "string": "#99cbbd",
+    "number": "#e2b07a"
+  },
+  "light": {
+    "accent": "#5848b8",
+    "heading1": "#4a3ca3",
+    "heading": "#2f6aa6",
+    "path": "#94601f",
+    "command": "#6250a6",
+    "shimmer": "#5848b8",
+    "shimmerEnd": "#3d2d8a",
+    "keyword": "#5848b8",
+    "string": "#2d7160",
+    "number": "#94601f"
+  }
+}

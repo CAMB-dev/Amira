@@ -1,0 +1,28 @@
+{
+  "name": "mono",
+  "description": "Neutral accents and syntax with colored status indicators",
+  "dark": {
+    "accent": "#e6e6e6",
+    "heading1": "#f2f2f2",
+    "heading": "#cfcfcf",
+    "path": "#bdbdbd",
+    "command": "#d9d9d9",
+    "shimmer": "#bdbdbd",
+    "shimmerEnd": "#f2f2f2",
+    "keyword": "#e6e6e6",
+    "string": "#bdbdbd",
+    "number": "#cfcfcf"
+  },
+  "light": {
+    "accent": "#111111",
+    "heading1": "#000000",
+    "heading": "#333333",
+    "path": "#444444",
+    "command": "#222222",
+    "shimmer": "#444444",
+    "shimmerEnd": "#000000",
+    "keyword": "#111111",
+    "string": "#444444",
+    "number": "#333333"
+  }
+}

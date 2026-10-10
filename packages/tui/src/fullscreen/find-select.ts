@@ -30,7 +30,7 @@ export interface FindSelectDeps {
 }
 
 export function createFindSelect(deps: FindSelectDeps) {
-  const { editorEmpty, env, keys, openSubagent, pane, render, showNote, terminal, theme } = deps
+  const { editorEmpty, env, keys, openSubagent, pane, render, showNote, terminal } = deps
   const findInput = new LineInput()
   let finding = false
 
@@ -41,6 +41,7 @@ export function createFindSelect(deps: FindSelectDeps) {
   }
 
   function findBar(width: number): string {
+    const theme = deps.theme
     const count = pane.matchCount
       ? `${pane.matchPosition}/${pane.matchCount}`
       : findInput.value
@@ -112,7 +113,7 @@ export function createFindSelect(deps: FindSelectDeps) {
           copy && { text: `${copy} copy`, priority: 4 },
           back && { text: `${back} back`, priority: 5 },
         ]
-    return theme.muted(fitHint(items, width))
+    return deps.theme.muted(fitHint(items, width))
   }
 
   /** Scrolling keys, in any state of the view. */

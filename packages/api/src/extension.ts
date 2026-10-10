@@ -18,6 +18,7 @@ import type { ServiceName, ServiceOf } from "./services.ts"
 import type { SettingsView } from "./settings.ts"
 import type { SkillDefinition } from "./skills.ts"
 import type { TerminalApi } from "./terminal.ts"
+import type { ThemeDefinition } from "./themes.ts"
 import type { ToolPresenter } from "./tool-renderers.ts"
 import type { ToolDefinition } from "./tools.ts"
 import type { StatusItem, UiApi } from "./ui.ts"
@@ -77,6 +78,11 @@ export interface ExtensionAPI {
    * extension.error and skipped, unless the skill sets `override: true`.
    */
   registerSkill(skill: SkillDefinition): () => void
+  /**
+   * Adds a named terminal theme. Invalid definitions are reported as notices and skipped;
+   * unknown keys are stripped. The last registration wins, and unloading restores the one below.
+   */
+  registerTheme(theme: ThemeDefinition): () => void
   /**
    * Claims lines the user sends before they reach the model (see InputHandler), e.g. `@name
    * text` while a swarm runs. The handler registered last is asked first.

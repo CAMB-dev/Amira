@@ -256,7 +256,8 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。 |  |
-| `tui.theme` | `"auto" \| "dark" \| "light" \| "terminal"` | `"auto"` | `"auto"` 根据终端背景选择配色（无法判断时使用深色）；`"dark"` 和 `"light"` 分别指定深色和浅色配色；`"terminal"` 使用终端自身的 ANSI 颜色。 |  |
+| `tui.theme` | `string` | `"auto"` | 主题名称，或 `"auto"`：Amira 根据终端背景选择配色（无法判断时使用深色）。`"dark"` 和 `"light"` 指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色。`/theme` 可预览并保存主题。 |  |
+| `tui.themeVariant` | `"auto" \| "dark" \| "light"` | `"auto"` | 命名主题的配色版本：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定版本。缺少的版本使用默认 Amira 配色。 |  |
 | `tui.colorDepth` | `"auto" \| "truecolor" \| "256" \| "16"` | `"auto"` | 颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。所有值均为字符串，包括 `"256"` 和 `"16"`。 |  |
 | `tui.bell` | `boolean` | `true` | 终端在后台时，轮次结束或弹出对话框时响铃。 |  |
 | `tui.title` | `boolean` | `true` | 把终端标题设为目录名、存在时的会话标题和分支名，工作中会加标记。 |  |

@@ -10,6 +10,7 @@ import type {
 import type {
   Capabilities,
   Component,
+  Glyphs,
   ImageStore,
   InputEvent,
   RenderContext,
@@ -46,6 +47,7 @@ export interface CallRef {
 export interface ViewHost {
   terminal: Terminal
   theme: Theme
+  glyphs?: Glyphs
   capabilities: Capabilities
   settings: TuiSettings
   presenters: PresenterSource | undefined
@@ -94,6 +96,8 @@ export interface TranscriptView {
   /** Draws the first frame, with what was added before it. */
   start(): void
   requestRender(): void
+  /** Replaces render styles and glyphs, invalidates cached rows, and repaints the active screen. */
+  setTheme(theme: Theme, glyphs: Glyphs): void
   /** Draws now; e.g. before a tool may block the event loop. */
   render(): void
   /** Clears the screen and draws it again (Ctrl+L). */
@@ -108,7 +112,7 @@ export interface TranscriptView {
   /** Leaves the terminal with the conversation in its normal screen; the UI is quitting. */
   stop(): void
 
-  banner(line: string): void
+  banner(line: string | ((theme: Theme) => string)): void
   user(message: UserMessage): void
   replyDelta(text: string): void
   /**

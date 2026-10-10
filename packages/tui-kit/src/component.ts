@@ -1,3 +1,4 @@
+import type { Glyphs } from "./glyphs.ts"
 import type { ImagePlacement } from "./images/screen.ts"
 import type { InputEvent } from "./keys.ts"
 import type { Theme } from "./style.ts"
@@ -7,6 +8,8 @@ export { CURSOR_MARKER } from "@amira/text-width"
 /** What a component needs to know to draw itself, handed down on every render. */
 export interface RenderContext {
   theme: Theme
+  /** Runtime Markdown symbols; omitted contexts use the standard glyphs. */
+  glyphs?: Glyphs
   /**
    * Whether colors reach the terminal. When false the renderer strips them, so components need
    * not check it; it is here for components that want another cue (bold, inverse) instead.
