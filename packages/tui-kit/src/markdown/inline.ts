@@ -5,12 +5,16 @@ import { mathRuns } from "./math-inline.ts"
 import { inlineMathAt, type MathCodeRange } from "./math-source.ts"
 
 /**
- * The Markdown tokens, and two a theme may add: `heading1`, the style of level 1 headings when
- * they should differ from level 2 (`heading` otherwise), and `codeTicks`, which, when set, draws
- * the backticks around inline code in its style (a theme without colors, where the code's own
- * style would not tell it apart).
+ * The Markdown tokens, with optional `heading1` for level 1 headings (`heading` otherwise),
+ * `codeTicks` to draw backticks around inline code without colors, and `path` for file links.
+ * A theme's `command` token supplies the inline `code` style when present.
  */
-export type MarkdownStyles = Record<MarkdownToken, StyleFn> & { heading1?: StyleFn; codeTicks?: StyleFn }
+export type MarkdownStyles = Record<MarkdownToken, StyleFn> & {
+  heading1?: StyleFn
+  codeTicks?: StyleFn
+  path?: StyleFn
+  codeBg?: StyleFn
+}
 
 /** The Markdown tokens of a theme, with `markdownTheme` filling in the ones it lacks. */
 export function markdownStyles(theme: Theme): MarkdownStyles {
@@ -18,6 +22,9 @@ export function markdownStyles(theme: Theme): MarkdownStyles {
   for (const k of Object.keys(markdownTheme) as MarkdownToken[]) out[k] = theme[k] ?? markdownTheme[k]
   if (theme.heading1) out.heading1 = theme.heading1
   if (theme.codeTicks) out.codeTicks = theme.codeTicks
+  if (theme.command) out.code = theme.command
+  if (theme.path) out.path = theme.path
+  if (theme.codeBg) out.codeBg = theme.codeBg
   return out
 }
 
@@ -132,6 +139,15 @@ const BARE_URL = /https?:\/\/[^\s<>`]+/y
 /** What goes on with a bare URL after its start. */
 const URL_REST = /[^\s<>`]*/y
 const AUTOLINK = /<(https?:\/\/[^\s<>]+)>/y
+
+/** Relative paths, file URLs and Windows drive paths, but not web URLs or fragment links. */
+function isFileLink(url: string): boolean {
+  return (
+    /^file:/i.test(url) ||
+    /^[a-z]:[\\/]/i.test(url) ||
+    (url !== "" && !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(url))
+  )
+}
 
 interface Scope {
   styles: StyleFn[]
@@ -291,13 +307,15 @@ function parse(s: string, start: number, end: number, scope: Scope, ctx: Context
       else if (link?.url !== undefined) {
         flush(i)
         if (link.open) mayOpen(i)
-        const linkStyles = [...scope.styles, opts.styles.link]
+        const path = isFileLink(link.url) ? opts.styles.path : undefined
+        const linkStyle = path ? compose(opts.styles.link, path) : opts.styles.link
+        const linkStyles = [...scope.styles, linkStyle]
         const inner: Scope = { styles: linkStyles, carry: `${scope.carry}[`, inLink: true }
         if (opts.hyperlinks) inner.link = link.url
         if (link.textEnd > i + 1 || ctx.lead) parse(s, i + 1, link.textEnd, inner, ctx)
         const text = s.slice(i + 1, link.textEnd)
         if (!opts.hyperlinks && text !== link.url) {
-          const url = styleOf([...scope.styles, opts.styles.linkUrl])
+          const url = styleOf([...scope.styles, path ?? opts.styles.linkUrl])
           const r = run(` (${link.url})`, link.end, url, scope, false)
           r.rest = { url: false, resume: link.end }
           out.push(r)

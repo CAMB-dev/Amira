@@ -25,7 +25,7 @@ test("Spinner advances frames and truncates to the width", () => {
 test("Spinner takes its theme from the render context", () => {
   const s = new Spinner({ label: "x", frames: ["a"] })
   expect(
-    s.render(20, { theme: { ...defaultTheme, accent: bold, muted: red }, color: true, rows: 24 }),
+    s.render(20, { theme: { ...defaultTheme, shimmer: bold, muted: red }, color: true, rows: 24 }),
   ).toEqual(["\x1b[1ma\x1b[22m \x1b[31mx\x1b[39m"])
 })
 

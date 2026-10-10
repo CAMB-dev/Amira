@@ -639,6 +639,16 @@ export const annotations: Record<string, Annotation> = {
     en: '`"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal\'s scrollback. `--inline` and `--fullscreen` win.',
     zh: '`"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。',
   },
+  "tui.theme": {
+    default: documentedDefault("tui.theme"),
+    en: '`"auto"` follows the terminal background (dark if unknown); `"dark"` and `"light"` choose a palette explicitly; `"terminal"` uses the terminal\'s own ANSI colors.',
+    zh: '`"auto"` 根据终端背景选择配色（无法判断时使用深色）；`"dark"` 和 `"light"` 分别指定深色和浅色配色；`"terminal"` 使用终端自身的 ANSI 颜色。',
+  },
+  "tui.colorDepth": {
+    default: documentedDefault("tui.colorDepth"),
+    en: 'Color depth: `"auto"` detects terminal support; `"truecolor"`, `"256"` and `"16"` override it. Values are strings, including `"256"` and `"16"`.',
+    zh: '颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。所有值均为字符串，包括 `"256"` 和 `"16"`。',
+  },
   "tui.bell": {
     default: documentedDefault("tui.bell"),
     en: "Ring the bell when a turn ends or a dialog opens while the terminal is in the background.",

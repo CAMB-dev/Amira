@@ -42,12 +42,14 @@ function styleOf(kind: ToolLine["kind"], theme: Theme): StyleFn {
       return theme.accent
     case "warning":
       return theme.warning
+    case "code":
+      return themeToken(theme, "fg2") ?? theme.muted
     case "text":
     // A diff's unchanged lines read as the code they are; its signs and numbers are muted.
     case "diff-context":
       return theme.text
     default:
-      // Output, file content and hunk gaps recede behind the conversation.
+      // Notes and hunk gaps recede behind the conversation.
       return theme.muted
   }
 }
@@ -135,7 +137,8 @@ export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, 
     const header = l.kind === "muted" && FILE_HEADER.test(text)
     const no = header ? "" : `${gutter ? `${" ".repeat(gutter)} ` : ""}${signed ? "  " : ""}`
     const row = truncateToWidth(`${indent}${no}${text}`, width, glyphs.more)
-    out.push(`${indent}${theme.muted(no)}${styleOf(l.kind, theme)(row.slice(indent.length + no.length))}`)
+    const style = header ? (themeToken(theme, "path") ?? theme.muted) : styleOf(l.kind, theme)
+    out.push(`${indent}${theme.muted(no)}${style(row.slice(indent.length + no.length))}`)
   })
   // Narrower than the indent and the gutter: cut, as the terminal would otherwise wrap them.
   return out.map((r) => (visibleWidth(r) > width ? truncateToWidth(r, Math.max(0, width)) : r))
