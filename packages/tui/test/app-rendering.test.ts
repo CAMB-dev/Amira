@@ -705,9 +705,9 @@ test("the right-aligned model stays in the border; workspace, cost and context f
       for (const row of live().split("\n")) expect(row.length).toBeLessThanOrEqual(cols)
       expect(line).toBe(cols === 12 ? "╰── m1 ·… ─╯" : `╰${"─".repeat(cols - 14)} m1 · auto ─╯`)
       const header = {
-        100: ` ⎇ feat/x*  /work/proj${" ".repeat(57)}$0.042 │ 109k / 128k`,
-        44: " ⎇ feat/x*  /work/proj $0.042 │ 109k / 128k",
-        34: " ⎇ feat/x*   $0.042 │ 109k / 128k",
+        100: ` ⎇ feat/x*  /work/proj${" ".repeat(55)}$0.042  │  109k / 128k`,
+        44: " ⎇ feat/x*  …/proj   $0.042  │  109k / 128k",
+        34: " ⎇ feat/x… $0.042  │  109k / 128k",
         12: " 109k / 128k",
       }[cols]!
       const rows = live().split("\n")

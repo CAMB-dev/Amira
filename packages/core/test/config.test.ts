@@ -44,6 +44,17 @@ const userFile = () => path.join(home, "settings.json")
 const projectFile = () => path.join(cwd, ".amira", "settings.json")
 const localFile = () => path.join(cwd, ".amira", "settings.local.json")
 
+test("terminal notifications accept auto/off independently of the bell", () => {
+  for (const notify of ["auto", "off"] as const) {
+    expect(validateSettings({ tui: { notify, bell: false } }, "settings.json")).toEqual({
+      settings: { tui: { notify, bell: false } },
+      warnings: [],
+    })
+  }
+  expect(() => validateSettings({ tui: { notify: true } }, "settings.json")).toThrow('"tui.notify"')
+  expect(() => validateSettings({ tui: { notify: "on" } }, "settings.json")).toThrow('"tui.notify"')
+})
+
 test("deep-merges objects and replaces arrays", () => {
   expect(deepMerge<object>({ a: { b: 1, c: [1, 2] }, d: 1 }, { a: { c: [3] }, e: 2 })).toEqual({
     a: { b: 1, c: [3] },

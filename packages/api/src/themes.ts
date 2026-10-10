@@ -89,6 +89,7 @@ export const DEFAULT_THEME_GLYPHS = Object.freeze({
   error: "✗",
   interrupted: "⊘",
   more: "…",
+  folded: "▸",
   pointer: "❯",
   search: "⌕",
   searchPrompt: "›",

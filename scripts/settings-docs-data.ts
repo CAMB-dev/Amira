@@ -636,8 +636,8 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.mode": {
     default: documentedDefault("tui.mode"),
-    en: '`"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal\'s scrollback. `--inline` and `--fullscreen` win.',
-    zh: '`"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。',
+    en: '`"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal\'s scrollback. `--inline` and `--fullscreen` win. Fullscreen pins live prompts below the header when scrolled away; resumed history has no sticky prompt.',
+    zh: '`"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。全屏模式下，本次输入的提示滚出视口后固定在标题栏下方；恢复的历史记录不显示固定提示。',
   },
   "tui.theme": {
     default: documentedDefault("tui.theme"),
@@ -656,13 +656,18 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.bell": {
     default: documentedDefault("tui.bell"),
-    en: "Ring the bell when a turn ends or a dialog opens while the terminal is in the background.",
-    zh: "终端在后台时，轮次结束或弹出对话框时响铃。",
+    en: "Ring once per wait when the terminal is unfocused and a turn ends or a dialog needs input. With unknown focus, completed turns never ring; only permission/question dialogs alert. Set to `false` to disable BEL; desktop alerts are controlled separately by `tui.notify`.",
+    zh: "终端失去焦点时，轮次结束或对话框需要输入，每次等待只响铃一次。焦点未知时，轮次结束从不响铃，仅权限或提问对话框提醒。设为 `false` 可关闭 BEL 响铃；桌面通知由 `tui.notify` 单独控制。",
+  },
+  "tui.notify": {
+    default: documentedDefault("tui.notify"),
+    en: '`"auto"` sends desktop alerts once per wait under the same focus rules as `tui.bell`: OSC 9 for iTerm2/Ghostty, OSC 777 for WezTerm, OSC 99 for kitty. Windows Terminal uses BEL/taskbar alerts only, not a desktop-notification OSC. Unknown terminals, dumb terminals and tmux/screen get no notification OSC. Terminal/OS notification settings still apply. `"off"` disables desktop alerts without changing the bell.',
+    zh: '`"auto"` 按 `tui.bell` 相同的焦点规则，每次等待发送一次桌面通知：iTerm2/Ghostty 使用 OSC 9，WezTerm 使用 OSC 777，kitty 使用 OSC 99。Windows Terminal 仅使用 BEL/任务栏提醒，不发送桌面通知 OSC。未知终端、dumb 终端及 tmux/screen 不发送通知 OSC。通知仍受终端和操作系统设置限制。`"off"` 关闭桌面通知，不影响响铃。',
   },
   "tui.title": {
     default: documentedDefault("tui.title"),
-    en: "Set the terminal title to the folder, session title when present, and branch, marked while working.",
-    zh: "把终端标题设为目录名、存在时的会话标题和分支名，工作中会加标记。",
+    en: "Set the title to `Amira · session title`, falling back to the cwd name when untitled. Markdown markers are stripped. `●` marks running work; `?` remains while a dialog is unanswered, even when focused; a background-completion marker clears on return. Waiting-state transitions and final status update immediately; other running-title updates occur at most once per second.",
+    zh: "标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；对话框未回答时，即使终端有焦点也保留 `?`；后台轮次结束的标记在返回终端后清除。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。",
   },
   "tui.progress": {
     default: documentedDefault("tui.progress"),

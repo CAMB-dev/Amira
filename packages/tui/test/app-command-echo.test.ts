@@ -11,8 +11,11 @@ test("commands use plain muted rows while actual model messages retain the user 
   const wrapped = commandEchoLines(theme, "/theme a long command line", 17).map(stripAnsi)
   expect(wrapped).toEqual(["  › /theme a long", "    command line"])
   const rows = userLines(theme, userMessage("Hello model"), 40)
-  expect(stripAnsi(rows[0]!)).toBe(`  › Hello model${" ".repeat(25)}`)
-  expect(rows[0]).toContain("\x1b[48;")
+  expect(rows).toHaveLength(3)
+  expect(rows[0]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
+  expect(stripAnsi(rows[1]!)).toBe(`  › Hello model${" ".repeat(25)}`)
+  expect(rows[1]).toContain("\x1b[48;")
+  expect(rows[2]).toBe(rows[0])
 })
 
 for (const mode of ["fullscreen", "inline"] as const) {

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { EventEnvelope, Message } from "@amira/api"
-import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import { bold, createTheme, defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
 import {
   bandRows,
@@ -12,6 +12,7 @@ import {
   subagentRows,
   summarizeArgs,
   treeLayout,
+  userBandPaddingIn,
   userLines,
 } from "../src/format.ts"
 import { historyLines, sessionBoundary, summaryLines } from "../src/history.ts"
@@ -62,17 +63,24 @@ function expectBand(rows: string[], width: number) {
   }
 }
 
-test("the user's message is on a full-width band without extra padding rows", () => {
+test("the user's message is on a full-width band with painted padding above and below", () => {
   const message = {
     role: "user" as const,
     content: [{ type: "text" as const, text: "帮我看看这个测试为什么挂了" }],
   }
   const rows = userLines(banded, message, 34)
   expectBand(rows, 34)
-  expect(plain(rows).map((r) => r.trimEnd())).toEqual(["  › 帮我看看这个测试为什么挂了"])
+  expect(userBandPaddingIn(rows)).toBe(1)
+  expect(plain(rows)).toEqual([
+    " ".repeat(34),
+    `  › 帮我看看这个测试为什么挂了${" ".repeat(4)}`,
+    " ".repeat(34),
+  ])
+  expect(rows[0]).toBe(`${BAND}${" ".repeat(34)}\x1b[49m`)
+  expect(rows[2]).toBe(rows[0])
   // The prompt symbol in the accent color, the text in the normal one.
-  expect(rows[0]).toBe(
-    `${BAND}  ${defaultTheme.accent("›")} 帮我看看这个测试为什么挂了${" ".repeat(4)}\x1b[49m`,
+  expect(rows[1]).toBe(
+    `${BAND}  ${bold(defaultTheme.accent("›"))} 帮我看看这个测试为什么挂了${" ".repeat(4)}\x1b[49m`,
   )
 })
 
@@ -85,7 +93,12 @@ test("wrapped rows, wide characters and the note line stay on the band, which ne
   for (const width of [12, 13, 20, 31]) {
     const rows = userLines(banded, message, width)
     expectBand(rows, width)
-    const text = plain(rows).map((r) => r.trimEnd())
+    expect(userBandPaddingIn(rows)).toBe(1)
+    expect(rows[0]).toBe(`${BAND}${" ".repeat(width)}\x1b[49m`)
+    expect(rows.at(-1)).toBe(rows[0])
+    const text = plain(rows)
+      .slice(1, -1)
+      .map((r) => r.trimEnd())
     expect(text[0]).toStartWith("  › ")
     expect(text.at(-1)).not.toBe("")
     // The note wraps under "└ " rather than being cut.
@@ -102,8 +115,22 @@ test("wrapped rows, wide characters and the note line stay on the band, which ne
 test("without the band token (NO_COLOR, or a theme without it) the message is as before", () => {
   const message = { role: "user" as const, content: [{ type: "text" as const, text: "hi there" }] }
   expect(userLines(defaultTheme, message, 20)).toEqual([`  ${defaultTheme.accent("›")} hi there`])
+  for (const theme of [
+    defaultTheme,
+    createTheme({ theme: "dark", env: { NO_COLOR: "1" } }),
+    createTheme({ theme: "dark", env: { TERM: "dumb" } }),
+    { ...defaultTheme, userBg: (text: string) => text },
+  ]) {
+    const rows = userLines(theme, message, 20)
+    expect(rows).toHaveLength(1)
+    expect(stripAnsi(rows[0]!).trimEnd()).toBe("  › hi there")
+    expect(userBandPaddingIn(rows)).toBe(0)
+    expect(rows[0]).not.toContain("\x1b[48;")
+  }
   // With no width to fill, as for notices waiting to be sent, there is no band either.
-  expect(plain(userLines(banded, message))).toEqual(["  › hi there"])
+  const rows = userLines(banded, message)
+  expect(plain(rows)).toEqual(["  › hi there"])
+  expect(userBandPaddingIn(rows)).toBe(0)
 })
 
 test("a command's echo stays plain and muted even with a banded theme", () => {
@@ -286,7 +313,7 @@ test("a resumed reply renders as Markdown inside the assistant's gutter", () => 
   expect(rows).toContain("  └ read a.ts  ✓ no output")
 })
 
-test("a sub-agent's end line says how it ended, its time, tokens and the start of its answer", () => {
+test("a sub-agent's compact end line keeps status and stats, not its result text", () => {
   const sub = {
     title: "US market trend",
     role: "explorer",
@@ -303,11 +330,9 @@ test("a sub-agent's end line says how it ended, its time, tokens and the start o
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("  └ ✓ US market trend · explorer · 41.0s · 12k tok · Found it in a.ts")
-  expect(line("error", "model failed")).toBe(
-    "  └ ✗ US market trend · explorer · 41.0s · 12k tok · model failed",
-  )
-  expect(line("aborted")).toBe("  └ ⊘ US market trend · explorer · 41.0s · 12k tok · stopped")
+  expect(line("done")).toBe("  └ ✓ US market trend · explorer · 41.0s · 12k tok")
+  expect(line("error", "model failed")).toBe("  └ ✗ US market trend · explorer · 41.0s · 12k tok")
+  expect(line("aborted")).toBe("  └ ⊘ US market trend · explorer · 41.0s · 12k tok")
 })
 
 test("nested sub-agents keep the tree lines of the levels above them", () => {
@@ -335,7 +360,7 @@ test("on a narrow screen a sub-agent's row cuts its title, keeping its role, tim
   expect(visibleWidth(row!)).toBeLessThanOrEqual(44)
 })
 
-test("a stopped sub-agent's end line says why", () => {
+test("a stopped sub-agent's compact end line omits its result note", () => {
   const sub = { title: "Scan", role: "explorer", depth: 1, tokens: 0 }
   const line = stripAnsi(
     subagentEndLine(
@@ -345,7 +370,7 @@ test("a stopped sub-agent's end line says why", () => {
       defaultTheme,
     ),
   )
-  expect(line).toEndWith("· turn limit reached")
+  expect(line).toBe("  └ ⊘ Scan · explorer · 3.0s · 0 tok")
 })
 
 test("a background sub-agent's notice marks how it ended and wraps under its marker", () => {

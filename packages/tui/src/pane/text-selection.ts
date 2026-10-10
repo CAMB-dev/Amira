@@ -1,6 +1,7 @@
 import type { ToolDetailLevel } from "@amira/api"
 import { visibleWidth } from "@amira/tui-kit"
 import type { Block, BlockEnv } from "../blocks.ts"
+import { userBandPaddingIn } from "../format.ts"
 import { markCells, selectionMarks, sliceCells, wordAt } from "../text-selection.ts"
 import type { PaneRow, TextPoint } from "../transcript-pane.ts"
 
@@ -61,7 +62,10 @@ export class PaneTextSelection {
   }
 
   row(r: PaneRow, env: BlockEnv) {
-    const range = this.rangeIn(r.block, r.line)
+    const lines = this.view.lines(r.block, env)
+    const padding = userBandPaddingIn(lines)
+    const skip = r.line >= 0 && (r.line < padding || r.line >= lines.length - padding)
+    const range = skip ? undefined : this.rangeIn(r.block, r.line)
     const marks = range && selectionMarks(env.theme)
     // A row selected to its end (and on, to the next) shows it with a marked cell after its
     // text, as terminals show a selected line break; so do blank rows in the selection.
@@ -150,7 +154,12 @@ export class PaneTextSelection {
   /** The cell at a row and column of the viewport in the last frame, if a row of text is there. */
   private hit(row: number, col: number): TextPoint | undefined {
     const r = this.view.layout()[row - this.view.padding()]
-    return r && r.line >= 0 && row >= this.view.padding() ? { ...r, col: Math.max(0, col) } : undefined
+    const env = this.view.env()
+    if (!r || r.line < 0 || row < this.view.padding() || !env) return undefined
+    const lines = this.view.lines(r.block, env)
+    const padding = userBandPaddingIn(lines)
+    if (r.line < padding || r.line >= lines.length - padding) return undefined
+    return { ...r, col: Math.max(0, col) }
   }
 
   /** Selects the word at a cell of the viewport. False when there is none (a blank row). */

@@ -476,7 +476,7 @@ test("a call that never ran appends its marked rejection without a trailing blan
   expect(head).toBe("  ├ nope  ⊘ Unknown tool")
 })
 
-test("successful exploring calls read as one row: what was done, in order, each target once", () => {
+test("successful exploring calls read as one row: what was done, in order, each call counted", () => {
   const calls = [
     { name: "read", args: { path: "a.ts" } },
     { name: "read", args: { path: "b.ts" } },
@@ -484,12 +484,12 @@ test("successful exploring calls read as one row: what was done, in order, each 
     { name: "read", args: { path: "a.ts" } },
   ].map((c) => ({ call: { ...c, result: textResult("x") }, presenter: builtinPresenters[c.name] }))
   expect(plain(exploredLines(theme, calls, false, "summary", 80))).toEqual([
-    "  ├ Explored · Read a.ts, b.ts · Search foo",
+    "  ├ Read 3 files (a.ts, b.ts) · Searched 1 pattern (foo)  ▸",
   ])
-  // Unfolded, each call under it.
+  // Unfolded, each call takes its original place without an extra summary row.
   const open = plain(exploredLines(theme, calls, true, "summary", 80))
-  expect(open[1]).toBe("  │   ├ read a.ts")
-  expect(open).toHaveLength(1 + 4 * 2)
+  expect(open[0]).toBe("  ├ read a.ts")
+  expect(open).toHaveLength(4 * 2)
   // A failed one is no exploring: it keeps its own lines.
   const failed = { name: "read", args: { path: "c.ts" }, result: textResult("gone", true) }
   expect(explorationOf(builtinPresenters.read, failed)).toBeUndefined()

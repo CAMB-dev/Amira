@@ -173,8 +173,8 @@ export function trackGroup(groups: SpawnGroups, e: AnyEvent): boolean {
 /**
  * Rows of a depth-first list of sub-agents, each closing its level ("└") when it is the last.
  * The members of a compact group (and theirs) are one row for the whole group, where its first
- * member would be. With `closeTop` false, only a nested row can close a level (a finished
- * call's result line comes after them).
+ * member would be. The legacy `closeTop` argument is retained for existing callers; child
+ * trees always close independently of their owning call's continuation.
  */
 export function treeRows(
   list: SubagentNode[],

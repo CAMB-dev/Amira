@@ -34,7 +34,7 @@ test("sub-agent trees put the spinner after each running arm and status before f
   expect(rows.map(stripAnsi)[1]).toMatch(/^ {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash cd src && ls$/)
   const end = { status: "done" as const, durationMs: 6000, tokens: 31_000 }
   expect(stripAnsi(subagentEndLine(sub, end, 100, defaultTheme))).toBe(
-    "  └ ✓ List and summarise files · explorer · 6.0s · 31k tok · (no answer)",
+    "  └ ✓ List and summarise files · explorer · 6.0s · 31k tok",
   )
   expect(
     stripAnsi(subagentEndLine(sub, { ...end, status: "error", error: "failed" }, 100, defaultTheme)),

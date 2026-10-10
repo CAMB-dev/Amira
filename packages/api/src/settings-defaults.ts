@@ -75,6 +75,7 @@ export const DEFAULT_TUI_THEME = "auto"
 export const DEFAULT_TUI_THEME_VARIANT = "auto"
 export const DEFAULT_TUI_COLOR_DEPTH = "auto"
 export const DEFAULT_TUI_BELL = true
+export const DEFAULT_TUI_NOTIFY = "auto"
 export const DEFAULT_TUI_TITLE = true
 export const DEFAULT_TUI_PROGRESS = true
 export const DEFAULT_TUI_TOKEN_SPEED = true

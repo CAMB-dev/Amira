@@ -2,6 +2,7 @@ import type { ToolDetailLevel } from "@amira/api"
 import { type ImagePlacement, stripAnsi, type Theme, truncateToWidth } from "@amira/tui-kit"
 import { setImageFallback } from "./blocks/base.ts"
 import { type Block, type BlockEnv, type CodeFrame, codeFrames, imagesIn, ReplyBlock } from "./blocks.ts"
+import { userBandPaddingIn } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { PaneFind } from "./pane/find.ts"
 import { PaneTextSelection } from "./pane/text-selection.ts"
@@ -328,6 +329,13 @@ export class TranscriptPane {
     this.moveTo(0, 0)
   }
 
+  /** Scrolls to the real first row of a prompt (the sticky copy is only chrome). */
+  toBlock(block: Block): void {
+    if (!this.env || block.index < 0) return
+    this.following = false
+    this.moveTo(block.index, this.gapBefore(block.index, this.env) ? 1 : 0)
+  }
+
   follow(): void {
     this.following = true
     this.unseen = false
@@ -612,11 +620,15 @@ export class TranscriptPane {
     const text = this.textSelection.row(r, env)
     if (r.line < 0) return text.end("")
     const code = r.block === this.selected ? this.selectedCode?.frame : undefined
+    const lines = this.lines(r.block, env)
+    const padding = userBandPaddingIn(lines)
     const selected =
       r.block === this.selected &&
+      r.line >= padding &&
+      r.line < lines.length - padding &&
       (!code ||
         (r.line >= code.top && r.line <= (code.bottom ?? code.rows[code.rows.length - 1] ?? code.top)))
-    let line = alt ?? this.lines(r.block, env)[r.line] ?? ""
+    let line = alt ?? lines[r.line] ?? ""
     if (text.mark) line = text.mark(line)
     else if (!selected) line = this.finder.highlightRow(r.block, r.line, line)
     return selected ? markGutter(line, env.theme) : line

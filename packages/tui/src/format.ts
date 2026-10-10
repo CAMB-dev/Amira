@@ -9,6 +9,7 @@ import {
   type UserMessage,
 } from "@amira/api"
 import {
+  bold,
   italic,
   RESET,
   Spinner,
@@ -78,6 +79,8 @@ export function timestampRoom(width: number, at: number | undefined): number {
 }
 
 interface TimestampDecoration {
+  /** Row carrying the clock, after any painted band padding. */
+  line: number
   /** Actual clock text and the cells added by its gap, text and trailing inset. */
   text: string
   width: number
@@ -86,6 +89,12 @@ interface TimestampDecoration {
 }
 
 const rowTimestamps = new WeakMap<readonly string[], TimestampDecoration>()
+const userBandPadding = new WeakMap<readonly string[], number>()
+
+/** Painted blank rows at each end of a real user band, not transcript gaps or sticky chrome. */
+export function userBandPaddingIn(lines: readonly string[]): number {
+  return userBandPadding.get(lines) ?? 0
+}
 
 /** Metadata exists only when a clock was actually appended to these rendered rows. */
 export function timestampIn(lines: readonly string[]): TimestampDecoration | undefined {
@@ -106,14 +115,17 @@ export function timestampRow(
   const cells = visibleWidth(text) + 2
   const gap = width - visibleWidth(row) - cells
   if (gap < 2) return row
-  record?.({ text, width: gap + cells, to: visibleWidth(row.trimEnd()) })
+  record?.({ line: 0, text, width: gap + cells, to: visibleWidth(row.trimEnd()) })
   return `${row}${" ".repeat(gap)}${theme.muted(text)}  `
 }
 
-/** Stamp the first rendered row, retaining the actual decoration for selection/copying. */
+/** Stamp the first content row, retaining the actual decoration for selection/copying. */
 export function stampRows(lines: string[], theme: Theme, width: number, at: number | undefined): string[] {
-  if (lines.length)
-    lines[0] = timestampRow(lines[0]!, theme, width, at, (stamp) => rowTimestamps.set(lines, stamp))
+  const line = userBandPaddingIn(lines)
+  if (lines[line] !== undefined)
+    lines[line] = timestampRow(lines[line]!, theme, width, at, (stamp) =>
+      rowTimestamps.set(lines, { ...stamp, line }),
+    )
   return lines
 }
 
@@ -138,8 +150,10 @@ export function userLines(
   const room = Math.max(1, width - inset - (bg ? 2 : 0))
   const firstRoom = Math.max(1, timestampRoom(width, at) - inset - (bg ? 2 : 0))
   const rows = Number.isFinite(width) ? wrapText(text, room, firstRoom) : text.split("\n")
-  const lines = rows.map((l, i) => `  ${theme.accent(i === 0 ? glyphs.user : " ")} ${l}`)
-  stampRows(lines, theme, width, at)
+  const lines = rows.map((l, i) => {
+    const prompt = theme.accent(i === 0 ? glyphs.user : " ")
+    return `  ${i === 0 && bg && bg(" ") !== " " ? bold(prompt) : prompt} ${l}`
+  })
   const note = message.display?.note
   const muted = (bg && themeToken(theme, "surfaceMuted")) || theme.muted
   // The note wraps under its text, past "└ ", rather than being cut at the band's edge.
@@ -148,6 +162,13 @@ export function userLines(
     for (const [i, r] of noteRows.entries())
       lines.push(`    ${i === 0 ? muted(glyphs.result) : " "} ${muted(r)}`)
   }
+  // Identity surface tokens (plain/custom themes) must not add invisible blank padding.
+  if (bg && bg(" ") !== " ") {
+    lines.unshift("")
+    lines.push("")
+    userBandPadding.set(lines, 1)
+  }
+  stampRows(lines, theme, width, at)
   return bg ? bandRows(lines, width, bg) : lines
 }
 
@@ -178,6 +199,8 @@ export function bandRows(rows: string[], width: number, bg: StyleFn): string[] {
   const lines = rows.map(fill)
   const stamp = timestampIn(rows)
   if (stamp) rowTimestamps.set(lines, stamp)
+  const padding = userBandPaddingIn(rows)
+  if (padding) userBandPadding.set(lines, padding)
   return lines
 }
 
@@ -350,14 +373,14 @@ export function treeIndent(depth: number, open: readonly boolean[] = []): string
 }
 
 /**
- * For each row of a depth-first list of sub-agents: the tree in front of it and whether it
- * closes its level. With `closeTop` false, only a nested row can close a level (a finished
- * call's result line comes after them).
+ * For each row of a depth-first list of sub-agents: its rails and whether it closes its level.
+ * Child trees close independently of their owning tool's output. The legacy second argument
+ * is kept for callers that used to leave the top level open before a tool result.
  */
-export function treeLayout(list: { depth: number }[], closeTop = true): { indent: string; last: boolean }[] {
+export function treeLayout(list: { depth: number }[], _closeTop = true): { indent: string; last: boolean }[] {
   const open: boolean[] = []
   return list.map((item, i) => {
-    const last = (closeTop || item.depth > 1) && isLastSibling(list, i)
+    const last = isLastSibling(list, i)
     const indent = treeIndent(item.depth, open)
     open.length = item.depth + 1
     open[item.depth] = !last
@@ -417,9 +440,8 @@ export function subagentRows(
 }
 
 /**
- * The line a sub-agent's rows become when it ends, committed under its call: how it ended,
- * its time and tokens, and the start of its answer (or why it failed or stopped). The answer
- * gives way first on a narrow screen, then the title.
+ * A finished child's compact row: status, title, role, time and tokens only. Its answer and
+ * failure details remain in its transcript and the parent's result, not an inline excerpt.
  */
 export function subagentEndLine(
   sub: SubagentLine,
@@ -444,15 +466,9 @@ export function subagentEndLine(
         : theme.muted(glyphs.subagentAborted)
   const s = glyphs.separator
   const stats = `${sub.role} ${s} ${formatDuration(end.durationMs)} ${s} ${compactTokens(end.tokens)} tok`
-  const said =
-    end.status === "error"
-      ? theme.error(oneLine(end.error ?? "failed"))
-      : end.status === "aborted"
-        ? theme.muted(oneLine(end.note ?? "") || "stopped")
-        : theme.muted(oneLine(sub.lastText ?? "") || "(no answer)")
   const lead = `${indent}${treeArm(last)} ${mark} `
-  const title = fitTitle(oneLine(sub.title), ` ${s} ${stats} ${s} …`, width - visibleWidth(lead))
-  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark} ${title} ${theme.muted(`${s} ${stats} ${s}`)} ${said}`
+  const title = fitTitle(oneLine(sub.title), ` ${s} ${stats}`, width - visibleWidth(lead))
+  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark} ${title} ${theme.muted(`${s} ${stats}`)}`
   return truncateToWidth(line, width, glyphs.more)
 }
 
