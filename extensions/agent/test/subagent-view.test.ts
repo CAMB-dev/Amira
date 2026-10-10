@@ -702,15 +702,17 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   expect(lines[0]).toMatch(/^◆ Check explorer · running · \d+s · 1\.5k tok · .+ 1 of 1$/)
   expect(lines[1]).toBe("task: task for the explorer")
   // Shared transcript rendering: one gap, closed tool groups, and inset reply text.
-  expect(lines.slice(3, 9)).toEqual([
+  expect(lines.slice(3, 11)).toEqual([
+    "",
     "  › task for the explorer",
+    "",
     "",
     "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
     "",
     "  Now waiting.",
     "",
   ])
-  expect(lines[9]).toMatch(/^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
+  expect(lines[11]).toMatch(/^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
   expect(s.view()).not.toContain("└ running")
   expect(s.view()).not.toContain("… working")
   expect(lines.at(-1)).toContain("following")
@@ -853,13 +855,19 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   expect(s.screen.lines.at(-1)).toContain("following")
   s.terminal.send("\x1b[5~") // PgUp
   await waitFor(() => !s.screen.lines.at(-1)!.includes("following"), "scrolled up")
-  expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 44 · /)
+  expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 46 · /)
   expect(s.view()).not.toContain("── done ──")
   s.terminal.send("\x1b[H") // Home
-  await waitFor(() => s.screen.lines[3] === "  › task for the explorer", "the top")
-  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 44 · /)
+  await waitFor(
+    () => s.screen.lines[3] === "" && s.screen.lines[4] === "  › task for the explorer",
+    "the top",
+  )
+  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 46 · /)
   s.terminal.send("\x1b[B") // ↓
-  await waitFor(() => s.screen.lines[3] === "" && s.screen.lines[4] === "  answer line 1", "one row down")
+  await waitFor(
+    () => s.screen.lines[3] === "  › task for the explorer" && s.screen.lines[4] === "",
+    "one row down",
+  )
   s.terminal.send("\x1b[F") // End
   await waitFor(() => s.screen.lines.at(-1)!.includes("following"), "the end")
   s.resize(70, 12)

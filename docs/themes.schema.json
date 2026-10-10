@@ -114,6 +114,7 @@
         "error": { "$ref": "#/$defs/glyph" },
         "interrupted": { "$ref": "#/$defs/glyph" },
         "more": { "$ref": "#/$defs/glyph" },
+        "folded": { "$ref": "#/$defs/glyph" },
         "pointer": { "$ref": "#/$defs/glyph" },
         "search": { "$ref": "#/$defs/glyph" },
         "searchPrompt": { "$ref": "#/$defs/glyph" },

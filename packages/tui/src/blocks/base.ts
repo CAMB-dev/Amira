@@ -9,7 +9,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { messageTimestamp, timestampIn, userLines, userText } from "../format.ts"
+import { messageTimestamp, timestampIn, userBandPaddingIn, userLines, userText } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import type { ReplyRenderers } from "../markdown-nodes.ts"
 import type { SpawnGroups, SubagentNode } from "../subagents.ts"
@@ -213,6 +213,8 @@ export class LinesBlock extends Block {
     private draw: (width: number, theme: Theme) => string[],
     private copy?: string,
     readonly timestamp?: number,
+    /** A real user prompt, not an origin notice or slash-command echo. */
+    readonly prompt?: string,
   ) {
     super()
   }
@@ -227,14 +229,28 @@ export class LinesBlock extends Block {
     return this.copy ?? ""
   }
 
+  /** The first text row of the real band; its painted padding is not a second prompt. */
+  get promptRow(): number {
+    return userBandPaddingIn(this.lastLines)
+  }
+
   override copyRows(plain: readonly string[], lines: readonly string[] = this.lastLines): CopyRow[] {
     if (this.kind !== "user" && this.kind !== "command") return chromeRows(plain)
     // A message or a command echo sits behind "› ", its rows lined up after it.
     const gutter = visibleWidth(glyphs.user) + 3
     const rows: CopyRow[] = gutterRows(plain, gutter)
+    const padding = userBandPaddingIn(lines)
+    for (let i = 0; i < padding; i++) {
+      rows[i] = { from: 0, skip: true }
+      rows[rows.length - 1 - i] = { from: 0, skip: true }
+    }
     const stamp = timestampIn(lines)
-    if (stamp && plain[0] !== undefined)
-      rows[0] = { from: gutter, to: stamp.to, exact: sliceCells(plain[0], gutter, stamp.to) }
+    if (stamp && plain[stamp.line] !== undefined)
+      rows[stamp.line] = {
+        from: gutter,
+        to: stamp.to,
+        exact: sliceCells(plain[stamp.line]!, gutter, stamp.to),
+      }
     return rows
   }
 }
@@ -289,7 +305,13 @@ export function fixedLine(kind: BlockKind, line: string): LinesBlock {
   return new LinesBlock(kind, (width) => wrapText(line, Math.max(1, width)), stripAnsi(line))
 }
 
-export function userBlock(message: UserMessage, at = messageTimestamp(message)): LinesBlock {
+export function userBlock(message: UserMessage, at = messageTimestamp(message), sticky = true): LinesBlock {
   const text = message.display?.text.trim() || userText(message)
-  return new LinesBlock("user", (width, theme) => userLines(theme, message, width, at), text, at)
+  return new LinesBlock(
+    "user",
+    (width, theme) => userLines(theme, message, width, at),
+    text,
+    at,
+    message.display?.origin || !sticky ? undefined : text,
+  )
 }

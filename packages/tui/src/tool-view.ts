@@ -64,7 +64,7 @@ export interface ToolViewOptions {
   outputLines?: number
   /** The last tool in its step/turn: close the branch and leave its continuation blank. */
   last?: boolean
-  /** An unfolded exploration keeps each result below its own head, even at summary detail. */
+  /** An unfolded exploration keeps each result below its own head. */
   expanded?: boolean
 }
 
@@ -470,11 +470,10 @@ export function runningToolLines(
   opts: Pick<ToolViewOptions, "last"> = {},
 ): string[] {
   const summary = callSummary(presenter, call.args)
-  const shimmer = themeToken(theme, "shimmer") ?? theme.accent
   const right = theme.muted(formatElapsed(now - call.startedAt))
   const head = headLine(
     theme,
-    `${treeHead(theme, opts.last)} ${shimmer(spinner)}`,
+    `${treeHead(theme, opts.last)} ${theme.accent(spinner)}`,
     call.name,
     summary,
     width,
@@ -511,53 +510,104 @@ export function heldToolLine(
   return finishedToolLines(theme, presenter, call, "collapsed", width, opts)[0]!
 }
 
-/**
- * What a finished call only looked around for (its presenter's `explore`), when it succeeded:
- * such calls in a row are shown as one "Explored" row. Undefined for any other call.
- */
+/** Built-in exploration without metadata, including provider-hosted and web tools. */
+function defaultExploration(call: FinishedCall): ToolExploration | undefined {
+  const verbs: Record<string, string> = {
+    read: "Read",
+    output_read: "Read",
+    grep: "Search",
+    search: "Search",
+    web_search: "Search",
+    glob: "Glob",
+    list: "List",
+    fetch: "Fetch",
+    web_fetch: "Fetch",
+  }
+  if (!Object.hasOwn(verbs, call.name)) return undefined
+  let verb = verbs[call.name]
+  if (!verb) return undefined
+  if (call.name === "web_search" && call.args.url && !call.args.query && !call.args.pattern) verb = "Fetch"
+  const keys =
+    verb === "Read"
+      ? ["path", "file_path", "filePath", "id"]
+      : verb === "Search"
+        ? ["pattern", "query"]
+        : verb === "Glob"
+          ? ["pattern"]
+          : verb === "List"
+            ? ["path"]
+            : ["url"]
+  const target = keys.map((key) => call.args[key]).find((value) => typeof value === "string")
+  if (typeof target !== "string" || !target.trim()) return undefined
+  const path = call.args.path ?? call.args.url
+  const where = (verb === "Search" || verb === "Glob") && typeof path === "string" ? ` in ${path}` : ""
+  return { verb, target: target + where }
+}
+
+/** Successful exploration only; a failure, interruption or rejection keeps its own rows. */
 export function explorationOf(
   presenter: ToolPresenter | undefined,
   call: FinishedCall,
 ): ToolExploration | undefined {
-  if (!presenter?.explore || outcomeOf(call) !== "done") return undefined
+  if (call.interrupted || outcomeOf(call) !== "done") return undefined
   try {
-    const e = presenter.explore(call.args)
-    return e && { verb: oneLine(e.verb), target: relativePaths(oneLine(e.target)) }
+    const e = presenter?.explore ? presenter.explore(call.args) : defaultExploration(call)
+    if (!e) return undefined
+    // Older glob presenters called finding paths "List"; keep glob and directory lists distinct.
+    const verb = call.name === "glob" && e.verb === "List" ? "Glob" : oneLine(e.verb)
+    const target = relativePaths(oneLine(e.target))
+    return verb && target ? { verb, target } : undefined
   } catch {
     return undefined
   }
 }
 
-/**
- * The one row of successful exploring calls in a row: `├ Explored · Read a.ts, b.ts · Search
- * foo`, what was done in the order it was first done, each target once.
- */
+/** Past-tense verbs and the things counted, rather than e.g. "1 searches". */
+const EXPLORATION_LABELS: Record<string, [string, string, string?]> = {
+  read: ["Read", "file"],
+  search: ["Searched", "pattern"],
+  glob: ["Globbed", "pattern"],
+  list: ["Listed", "directory", "directories"],
+  fetch: ["Fetched", "page"],
+}
+
+/** One counted row, in first-action order; counts are calls, with targets included when they fit. */
 export function exploredLine(
   theme: Theme,
   explored: ToolExploration[],
   width: number,
-  opts: Pick<ToolViewOptions, "last"> = {},
+  opts: Pick<ToolViewOptions, "last" | "expanded"> = {},
 ): string {
   const byVerb = new Map<string, string[]>()
   for (const e of explored) {
-    const targets = byVerb.get(e.verb) ?? []
-    if (!targets.includes(e.target)) targets.push(e.target)
-    byVerb.set(e.verb, targets)
+    const verb = Object.hasOwn(EXPLORATION_LABELS, e.verb.toLowerCase()) ? e.verb.toLowerCase() : e.verb
+    const targets = byVerb.get(verb) ?? []
+    targets.push(e.target)
+    byVerb.set(verb, targets)
   }
-  const s = ` ${glyphs.separator} `
+  const s = theme.muted(` ${glyphs.separator} `)
   const verbStyle = themeToken(theme, "fg2") ?? theme.text
   const targetStyle = themeToken(theme, "path") ?? theme.text
-  const what = [...byVerb]
-    .map(([verb, targets]) => `${verbStyle(verb)} ${targetStyle(targets.join(", "))}`)
-    .join(theme.muted(s))
-  const line = `  ${treeHead(theme, opts.last)} ${verbStyle("Explored")}${theme.muted(s)}${what}`
-  return truncateToWidth(line, width, glyphs.more)
+  const lead = `  ${treeHead(theme, opts.last)} `
+  const tail = opts.expanded ? "" : `  ${theme.muted(glyphs.folded)}`
+  const entries = [...byVerb].map(([verb, targets]) => {
+    const [label, noun, many] = Object.hasOwn(EXPLORATION_LABELS, verb)
+      ? EXPLORATION_LABELS[verb]!
+      : [verb, "target"]
+    return { count: verbStyle(`${label} ${plural(targets.length, noun, many)}`), targets }
+  })
+  const parts = entries.map((entry) => entry.count)
+  for (const [i, entry] of entries.entries()) {
+    const listed = `${entry.count} ${targetStyle(`(${[...new Set(entry.targets)].join(", ")})`)}`
+    const candidate = [...parts]
+    candidate[i] = listed
+    if (visibleWidth(lead + candidate.join(s) + tail) <= width) parts[i] = listed
+  }
+  const room = Math.max(0, width - visibleWidth(tail))
+  return truncateToWidth(truncateToWidth(lead + parts.join(s), room, glyphs.more) + tail, width, glyphs.more)
 }
 
-/**
- * Successful exploring calls in a row, as one block: the "Explored" row and, `expanded`, each
- * call under it as `detail` shows calls.
- */
+/** Successful exploring calls in a row: one folded row, or each call with its full result and output. */
 export function exploredLines(
   theme: Theme,
   calls: { call: FinishedCall; presenter: ToolPresenter | undefined }[],
@@ -567,18 +617,20 @@ export function exploredLines(
   opts: ToolViewOptions = {},
 ): string[] {
   const explored = calls.flatMap(({ call, presenter }) => explorationOf(presenter, call) ?? [])
-  const head = exploredLine(theme, explored, width, opts)
-  if (!expanded) return [head]
-  const continuation = `${treeContinuation(theme, opts.last)} `
-  const inner = Math.max(0, width - visibleWidth(continuation))
-  return [
-    head,
-    ...calls.flatMap(({ call, presenter }, i) =>
-      finishedToolLines(theme, presenter, call, detail, inner, {
+  // Do not hide a failed or otherwise ineligible call, even if a caller supplies one by mistake.
+  if (explored.length !== calls.length)
+    return calls.flatMap(({ call, presenter }, i) =>
+      finishedToolLines(theme, presenter, call, expanded ? "full" : detail, width, {
         ...opts,
-        expanded: true,
-        last: i === calls.length - 1,
-      }).map((line) => truncateToWidth(`${continuation}${line}`, width, glyphs.more)),
-    ),
-  ]
+        last: i === calls.length - 1 && opts.last,
+      }),
+    )
+  if (!expanded) return [exploredLine(theme, explored, width, opts)]
+  return calls.flatMap(({ call, presenter }, i) =>
+    finishedToolLines(theme, presenter, call, "full", width, {
+      ...opts,
+      expanded: true,
+      last: i === calls.length - 1 && opts.last,
+    }),
+  )
 }

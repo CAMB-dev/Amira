@@ -84,7 +84,7 @@ function summarizeArgs(args: Record<string, unknown>): string {
 }
 
 function toolLines(name: string, call: ToolCallView, opts: ViewRenderOptions, last: boolean): ViewLine[] {
-  if (opts.renderTool) return opts.renderTool(name, call, "summary", { last })
+  if (opts.renderTool) return opts.renderTool(name, call, opts.toolDetail ?? "summary", { last })
   const summary = summarizeArgs(call.args)
   const rows = call.text.trim().split("\n")
   const mark = call.rejected
@@ -161,9 +161,22 @@ function transcriptLines(
         )
       : [],
   )
+  let pending: { name: string; call: ToolCallView; last: boolean }[] = []
+  const flush = () => {
+    if (!pending.length) return
+    out.push(
+      ...(opts.renderTools?.(pending, opts.toolDetail ?? "summary", { last: pending.at(-1)!.last }) ??
+        pending.flatMap(({ name, call, last }) => toolLines(name, call, opts, last))),
+    )
+    pending = []
+  }
+  const finished = (name: string, call: ToolCallView, last: boolean) => {
+    pending.push({ name, call, last })
+  }
   let previous: "tool" | "reply" | "user" = "user"
   for (const [index, block] of blocks.entries()) {
     const kind = block.type === "text" ? "reply" : "tool"
+    if (kind === "reply") flush()
     if (kind !== "tool" || previous !== "tool") out.push({ kind: "text", text: "" })
     previous = kind
     const next = blocks[index + 1]
@@ -172,6 +185,7 @@ function transcriptLines(
       out.push(...replyLines(block.text, opts))
     } else if (block.type === "serverTool") {
       if (block.status === "running" && live(info)) {
+        flush()
         out.push(
           ...(opts.renderRunningTool?.(
             block.name,
@@ -184,24 +198,22 @@ function transcriptLines(
             },
           ]),
         )
-      } else out.push(...toolLines(block.name, serverToolView(block), opts, last))
+      } else finished(block.name, serverToolView(block), last)
     } else if (block.type === "toolCall") {
       const result = results.get(block.id)
       if (result) {
-        out.push(
-          ...toolLines(
-            block.name,
-            {
-              args: block.args,
-              result: { content: result.content, isError: result.isError },
-              text: toolResultText(result),
-              ...(result.rejected ? { rejected: result.rejected } : {}),
-            },
-            opts,
-            last,
-          ),
+        finished(
+          block.name,
+          {
+            args: block.args,
+            result: { content: result.content, isError: result.isError },
+            text: toolResultText(result),
+            ...(result.rejected ? { rejected: result.rejected } : {}),
+          },
+          last,
         )
       } else if (live(info)) {
+        flush()
         out.push(
           ...(opts.renderRunningTool?.(
             block.name,
@@ -215,25 +227,25 @@ function transcriptLines(
           ]),
         )
       } else {
-        out.push(
-          ...toolLines(
-            block.name,
-            {
-              args: block.args,
-              result: { content: [], isError: true },
-              text: "no result",
-              rejected: "aborted",
-            },
-            opts,
-            last,
-          ),
+        finished(
+          block.name,
+          {
+            args: block.args,
+            result: { content: [], isError: true },
+            text: "no result",
+            rejected: "aborted",
+          },
+          last,
         )
       }
-      if (block.name === "agent")
+      if (block.name === "agent") {
+        flush()
         for (const kid of callKids(rest, block))
           out.push(kidLine(kid, `  ${last ? " " : symbols.treePipe}  `))
+      }
     }
   }
+  flush()
   const tail = out.at(-1)
   if (tail?.kind !== "text" || tail.text !== "") out.push({ kind: "text", text: "" })
   for (const kid of rest) out.push(kidLine(kid, ""))

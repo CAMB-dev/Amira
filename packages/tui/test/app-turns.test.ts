@@ -30,7 +30,7 @@ const TIMESTAMP = "(?:[01]\\d|2[0-3]):[0-5]\\d"
 /** The whole activity row, including the step clock and right-side turn stats. */
 const activity = (label: string, hasOutput = true) =>
   new RegExp(
-    `^ ${SPINNER} ${label}… ${ELAPSED} +${ELAPSED}${hasOutput ? " · ⇣\\d+(?:\\.\\d+)?k? · ~\\d+ tok/s" : ""} {3}Esc stop$`,
+    `^ ${SPINNER} ${label}… ${ELAPSED} +${ELAPSED}${hasOutput ? " {2}⇣\\d+(?:\\.\\d+)?k? {2}· {2}~\\d+ tok/s" : ""} {3}Esc stop$`,
     "m",
   )
 
@@ -50,14 +50,16 @@ test("a conversation: user message, tool call and reply end up in the transcript
   expect(text).toMatch(/^ {2}└ read a\.ts {2}✓ contents of a\.ts \(\+2 lines\)$/m)
   expect(text.indexOf("  └ read")).toBeLessThan(text.indexOf("The file has three lines."))
   // One blank line between blocks, and the reply indented so it reads apart from the rest. The
-  // user's message has no padding rows on its band, only the gap between blocks.
+  // user's band has painted padding above and below, apart from each unpainted block gap.
   expect(withoutTimestamps(text)).toContain(
     [
       "Amira · mock/m1 · /work/proj",
       // Where to start, right under the banner.
       "@ files · ? keys",
       "",
+      "",
       "  › what is in a.ts?",
+      "",
       "",
       "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
       "",
@@ -397,10 +399,43 @@ test("successful reads in a row, over steps too, go to the scrollback as one Exp
   terminal.send("go\r")
   await shows("done")
   await idle()
-  expect(all()).toContain("  └ Explored · Read a.ts, b.ts, c.ts\n\n  done")
+  expect(all()).toContain("  └ Read 3 files (a.ts, b.ts, c.ts)  ▸\n\n  done")
   expect(all()).not.toContain("  └ read a.ts")
   terminal.send("\x03")
   await exited
+})
+
+test("Ctrl+O unfolds held exploration calls immediately in inline mode", async () => {
+  let release!: () => void
+  const until = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const s = await setup(
+    [
+      {
+        toolCalls: [
+          { name: "read", args: { path: "a.ts" } },
+          { name: "read", args: { path: "b.ts" } },
+        ],
+      },
+      { text: "done", hold: { chunks: 0, until } },
+    ],
+    { presenters: true },
+  )
+  try {
+    s.terminal.send("go\r")
+    await waitFor(() => s.live().includes("Read 2 files"), "folded exploration")
+    s.terminal.send("\x0f")
+    await waitFor(() => s.live().includes("read a.ts") && s.live().includes("read b.ts"), "expanded calls")
+    expect(s.live()).not.toContain("Read 2 files")
+    release()
+    await s.shows("done")
+    await s.idle()
+  } finally {
+    release()
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
 })
 
 test("a resumed session shows its thinking folded and marks a reply that was interrupted", async () => {
@@ -419,7 +454,7 @@ test("a resumed session shows its thinking folded and marks a reply that was int
     ],
   })
   await waitFor(() => all().includes("⊘ Interrupted"), "history")
-  expect(all()).toContain("› go\n\n  ∴ Thought\n\n  Half an ans\n\n⊘ Interrupted")
+  expect(all()).toContain("› go\n\n\n  ∴ Thought\n\n  Half an ans\n\n⊘ Interrupted")
   terminal.send("\x03")
   await exited
 })
@@ -449,8 +484,8 @@ test("a resumed session shows a boundary with its id, then its history like the 
     ],
   })
   await waitFor(() => all().includes("── resumed"), "history")
-  expect(all()).toContain(`── resumed ${agent.sessionId} ${"─".repeat(38)}\n\n  › count`)
-  expect(all()).toContain(["  › count", "", "  └ glob *.ts  ✓ 2 files", "", "  Two."].join("\n"))
+  expect(all()).toContain(`── resumed ${agent.sessionId} ${"─".repeat(38)}\n\n\n  › count`)
+  expect(all()).toContain(["  › count", "", "", "  └ glob *.ts  ✓ 2 files", "", "  Two."].join("\n"))
   terminal.send("\x03")
   await exited
 })
@@ -857,9 +892,9 @@ test("a Markdown reply streams block by block: every row once, in order, never c
   expect(text).toContain("╭─ ts")
   expect(text).toContain("▎ quoted")
   expect(text).toMatch(/col +│ other/)
-  // In the assistant's gutter, exactly one blank line from the prompt and between blocks.
+  // One painted padding row after the prompt, then one unpainted inter-block gap.
   expect(text.replace(/ +\d{2}:\d{2}(?=\n|$)/g, "")).toContain(
-    `› go\n\n  ${markers[0]} heading\n\n  Some bold`,
+    `› go\n\n\n  ${markers[0]} heading\n\n  Some bold`,
   )
   expect(text).toContain(`\n  ╭─ ts${"─".repeat(32)}╮\n  │ const`)
   expect(text).not.toMatch(/\n +\n/)

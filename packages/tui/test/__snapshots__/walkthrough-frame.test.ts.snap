@@ -3,7 +3,9 @@
 exports[`walkthrough frame at 100 columns 1`] = `
 " ⎇ main  ~/dev/Amira  ·  Fixing add Bug                                                  31k / 200k 
 
+                                                                                                    
   › Fix add and check the project.                                                           20:09  
+                                                                                                    
 
   ∴ Thought for 4.2s
 
@@ -28,7 +30,9 @@ exports[`walkthrough frame at 100 columns 1`] = `
 exports[`walkthrough frame at 50 columns 1`] = `
 " ⎇ main  ~/dev/Amira                   31k / 200k 
 
+                                                  
   › Fix add and check the project.         20:09  
+                                                  
 
   ∴ Thought for 4.2s
 

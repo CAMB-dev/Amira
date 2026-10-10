@@ -101,7 +101,8 @@ function cleanText(text: string): string {
  *
  * Diff lines get a gutter as wide as the largest line number (muted), their sign, and wrap
  * rather than being cut, their continued rows keeping the gutter. When the theme has the diff
- * surface colors, added and removed lines are on their background to the right edge, and in a
+ * surface colors, context uses the code surface and changed lines use their diff surface to
+ * the right edge, with success/error signs; in a
  * removed line followed by the added line that replaced it, the words that changed are on a
  * stronger one; otherwise they are colored as text, the signs saying what they are (so they
  * read without colors too). A hunk gap shows as "⋯" in the number column. Other lines take
@@ -188,7 +189,11 @@ function diffRows(l: ToolLine, text: string, sign: string, words: Range[], at: L
   const { theme, width, indent, gutter } = at
   const add = l.kind === "diff-add"
   const remove = l.kind === "diff-remove"
-  const bg = add ? themeToken(theme, "diffAddedBg") : remove ? themeToken(theme, "diffRemovedBg") : undefined
+  const bg = add
+    ? themeToken(theme, "diffAddedBg")
+    : remove
+      ? themeToken(theme, "diffRemovedBg")
+      : themeToken(theme, "codeBg")
   const wordBg = add
     ? themeToken(theme, "diffAddedWordBg")
     : remove
@@ -214,7 +219,7 @@ function diffRows(l: ToolLine, text: string, sign: string, words: Range[], at: L
     const used = pieceRow.reduce((n, p) => n + visibleWidth(p.text), 0)
     if (bg) {
       const body = pieceRow.map((p) => (p.word && wordBg ? wordBg(p.text) : p.text)).join("")
-      return `${indent}${bg(`${gut}${mark}${body}${" ".repeat(Math.max(0, room - used))}`)}`
+      return `${indent}${bg(`${gut}${r === 0 ? (add ? theme.success : remove ? theme.error : theme.muted)(mark) : mark}${body}${" ".repeat(Math.max(0, room - used))}`)}`
     }
     const body = pieceRow.map((p) => p.text).join("")
     return `${indent}${gut}${styleOf(l.kind, theme)(`${mark}${body}`)}`

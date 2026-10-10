@@ -1,4 +1,5 @@
 import { type MouseInput, modes, osc, type Terminal } from "@amira/tui-kit"
+import type { Block } from "../blocks/base.ts"
 import type { TranscriptPane } from "../transcript-pane.ts"
 
 /** Rows one notch of the mouse wheel scrolls. */
@@ -17,6 +18,7 @@ export interface MouseDeps {
   pane: TranscriptPane
   paneRows: () => number
   paneTop?: () => number
+  stickyPrompt?: () => Block | undefined
   requestRender: () => void
   showNote: (text: string) => void
   terminal: Terminal
@@ -97,6 +99,14 @@ export function createMouse(deps: MouseDeps) {
       // A click clears the selection and does nothing else: the keyboard stays with the input.
       stopDrag()
       pane.clearText()
+      const pinned = e.y === -1 ? deps.stickyPrompt?.() : undefined
+      if (pinned) {
+        armed = false
+        lastPress = undefined
+        pane.toBlock(pinned)
+        requestRender()
+        return true
+      }
       const now = Date.now()
       const again = near(lastPress) && now - lastPress!.at <= MULTI_CLICK_MS
       const count = again ? (lastPress!.count % 3) + 1 : 1

@@ -47,6 +47,14 @@ export interface ViewRenderOptions {
     detail: ToolDetailLevel,
     options?: { last?: boolean },
   ) => ViewLine[]
+  /** The host's current tool-output level; defaults to summary when absent. */
+  toolDetail?: ToolDetailLevel
+  /** Presents consecutive finished calls, grouping successful exploration at folded detail. */
+  renderTools?: (
+    calls: readonly { name: string; call: ToolCallView }[],
+    detail: ToolDetailLevel,
+    options?: { last?: boolean },
+  ) => ViewLine[]
   /** Running calls use the same tree, spinner and output renderer as the main transcript. */
   renderRunningTool?: (
     toolName: string,

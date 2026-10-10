@@ -135,6 +135,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       title: settings.title ?? DEFAULT_TUI_TITLE,
       progress: settings.progress ?? DEFAULT_TUI_PROGRESS,
       bell: settings.bell ?? DEFAULT_TUI_BELL,
+      notify: settings.notify,
     },
     env,
   )
@@ -226,7 +227,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     env,
     reaches,
     view: () => view,
-    emitWaiting: (data) => agent.bus.emit("ui.waiting", data, { sessionId: "host" }),
+    toolDetail: () => detail,
+    emitWaiting: (data) => {
+      termStatus.setWaiting(data.pending, overlays.needsAttention)
+      agent.bus.emit("ui.waiting", data, { sessionId: "host" })
+    },
     working: () => activity.working,
     interrupt: () => outbox.interrupt(),
     quitting: () => quitting,
@@ -369,6 +374,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       case "session.title":
         break
       case "turn.start": {
+        termStatus.setRunning(true)
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting, and takes held ones along.
         noticeStrip.turnStarted(prompt)
@@ -441,6 +447,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       }
       case "turn.end":
+        termStatus.setRunning(false, e.data.reason === "aborted")
         serverRows.clear()
         if (view.turnEnd()) turnShowedOutput = true
         activity.turnEnded()
@@ -671,6 +678,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
+    termStatus.setRunning(false, true)
     composer.cancelClipboard()
     outbox.reset()
     view.leaveSession()
@@ -724,6 +732,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.type === "focus") {
       if (e.focused !== focused) {
         focused = e.focused
+        termStatus.setFocused(focused)
         agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
       }
       return

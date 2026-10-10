@@ -1,5 +1,6 @@
 import { visibleWidth } from "@amira/tui-kit"
 import type { Block, BlockEnv } from "../blocks.ts"
+import { userBandPaddingIn } from "../format.ts"
 import { ESCAPE } from "../text-selection.ts"
 import type { Match, PaneRow } from "../transcript-pane.ts"
 
@@ -10,7 +11,7 @@ interface FindView {
   following(): boolean
   height(): number
   plain(block: Block, env: BlockEnv): string[]
-  drawing(block: Block, env: BlockEnv): object
+  drawing(block: Block, env: BlockEnv): { lines: readonly string[] }
   gapBefore(index: number, env: BlockEnv): boolean
   moveTo(index: number, offset: number): void
 }
@@ -122,7 +123,10 @@ export class PaneFind {
       const d = this.view.drawing(block, env)
       let found = this.found.get(d)
       if (found?.query !== q) {
-        found = { query: q, matches: findIn(block, this.view.plain(block, env), q, exact) }
+        found = {
+          query: q,
+          matches: findIn(block, this.view.plain(block, env), q, exact, userBandPaddingIn(d.lines)),
+        }
         this.found.set(d, found)
       }
       for (const match of found.matches) {
@@ -173,12 +177,19 @@ export class PaneFind {
 }
 
 /** The matches of `q` in a block's rows `plain`, as `runFind` finds them. */
-function findIn(block: Block, plain: readonly string[], q: string, exact: boolean): Match[][] {
+function findIn(
+  block: Block,
+  plain: readonly string[],
+  q: string,
+  exact: boolean,
+  padding: number,
+): Match[][] {
   let text = ""
   /** The line and column of each character of `text`; -1 for what joins lines. */
   const lineOf: number[] = []
   const colOf: number[] = []
-  for (let line = 0; line < plain.length; line++) {
+  // Painted breathing room is not text or a line break in the searchable message.
+  for (let line = padding; line < plain.length - padding; line++) {
     const raw = plain[line]!
     const start = raw.length - raw.trimStart().length
     const body = raw.slice(start).trimEnd()

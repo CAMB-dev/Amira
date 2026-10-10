@@ -112,12 +112,14 @@ test("the user's band fills the pane at every width, also while selected", () =>
     theme: { ...defaultTheme, ...surfaceTheme("light") },
   })
   for (const [width, expected] of [
-    [40, ["  › 看看 this test 🧪 please"]],
-    [17, ["  › 看看 this", "    test 🧪", "    please"]],
-    [11, ["  › 看看", "    this", "    test", "    🧪", "    pleas", "    e"]],
+    [40, ["", "  › 看看 this test 🧪 please", ""]],
+    [17, ["", "  › 看看 this", "    test 🧪", "    please", ""]],
+    [11, ["", "  › 看看", "    this", "    test", "    🧪", "    pleas", "    e", ""]],
   ] as const) {
     const rows = p.render(banded(width), 8).filter((r) => r !== "")
     expect(rows.map((r) => stripAnsi(r).trimEnd())).toEqual([...expected])
+    expect(rows[0]).toBe(`\x1b[48;2;232;230;225m${" ".repeat(width)}\x1b[49m`)
+    expect(rows.at(-1)).toBe(rows[0])
     for (const r of rows) {
       expect(r.startsWith("\x1b[48;2;232;230;225m")).toBe(true)
       expect(visibleWidth(r)).toBe(width)

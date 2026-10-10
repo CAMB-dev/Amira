@@ -233,7 +233,13 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const draw = (output: boolean) => {
       const calls: string[][] = []
       // The exploring calls held back, as the row they become.
-      if (exploring.length) calls.push(exploredRows(width, ctx.theme, "collapsed").slice(0, 1))
+      if (exploring.length && host.detail() === "full") {
+        for (const [i, { call, presenter }] of exploring.entries()) {
+          const last = i === exploring.length - 1 && exploring.at(-1)?.last
+          const rows = finishedToolLines(ctx.theme, presenter, call, "full", width, toolOptions(last))
+          calls.push(output ? rows : rows.slice(0, 1))
+        }
+      } else if (exploring.length) calls.push(exploredRows(width, ctx.theme, "collapsed").slice(0, 1))
       for (const c of live) {
         const presenter = presenters?.get(c.name)
         const head = c.end

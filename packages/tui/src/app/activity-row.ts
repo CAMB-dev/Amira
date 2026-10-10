@@ -1,4 +1,4 @@
-import { type RenderContext, themeToken, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { bold, type RenderContext, themeToken, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens, formatDuration } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { formatElapsed } from "../tool-view.ts"
@@ -52,8 +52,19 @@ export function activityRow(info: ActivityRowInfo, width: number, ctx: RenderCon
   }
   const rate = Math.round(info.rate)
   if (rate > 0) stats.push(theme.fg2(`~${rate} tok/s`))
+  const stop =
+    ctx.color && info.stop.endsWith(" stop")
+      ? bold(theme.fg2(info.stop.slice(0, -5))) + theme.muted(" stop")
+      : theme.muted(info.stop)
   const rightSide = () =>
-    stats.join(theme.dim(` ${glyphs.separator} `)) + (stats.length ? "   " : "") + theme.muted(info.stop)
+    stats
+      .map(
+        (text, i) =>
+          (i ? (i === 1 && info.tokens > 0 ? "  " : theme.dim(`  ${glyphs.separator}  `)) : "") + text,
+      )
+      .join("") +
+    (stats.length ? "   " : "") +
+    stop
   let right = rightSide()
   const fullLeft = () => visibleWidth(prefix) + visibleWidth(label + glyphs.more) + visibleWidth(step)
   const fits = () => fullLeft() + visibleWidth(right) + 2 <= width

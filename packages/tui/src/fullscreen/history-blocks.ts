@@ -36,7 +36,7 @@ export function historyBlocks(
       if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m), deps.compactionInfo?.(m)))
     } else if (m.role === "user") {
       replySeen = false
-      blocks.push(userBlock(m))
+      blocks.push(userBlock(m, messageTimestamp(m), false))
     } else if (m.role === "assistant") {
       // The sources the reply cited follow its last text, as they did live.
       const sources = replyCitations(m.content)
