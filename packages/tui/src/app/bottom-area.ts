@@ -1,11 +1,13 @@
 // Owns bottom-area layout: panels, activity, pending messages, input, status and hints.
 import type { Agent, PanelRegistry, StatusRegistry } from "@amira/core"
 import {
+  bold,
   type Component,
   type Editor,
   type RenderContext,
   type Spinner,
   Stack,
+  type Theme,
   truncateToWidth,
 } from "@amira/tui-kit"
 import type { CommandPopup } from "../command-popup.ts"
@@ -80,11 +82,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const agent = deps.agent()
     const items = deps.status
       .snapshot()
-      .filter(
-        (i) =>
-          !["context", "cost", "place"].includes(i.id) &&
-          !(i.id === "token-speed" && deps.activity().working),
-      )
+      .filter((i) => !["context", "cost", "place", "token-speed"].includes(i.id))
     const model = items.find((i) => i.id === "model")
     const thinking = agent.thinking.state(agent.model).thinking
     const fallback = agent.model.provider
@@ -204,7 +202,9 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         return [ctx.theme.muted(truncateToWidth(hintNote.text, width, glyphs.more))]
       }
       if (deps.view().capturing) return [""]
-      return [ctx.theme.muted(fitHint(inputHint(), width))]
+      return [
+        ` ${fitHint(inputHint(ctx.theme), Math.max(0, width - 1), ctx.theme.muted(`  ${glyphs.treePipe}  `))}`,
+      ]
     }),
   ])
 
@@ -240,37 +240,24 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
    * The few keys that matter now, the most useful first to stay as the line narrows; the key
    * reference (the help key) lists the rest.
    */
-  function inputHint(): HintItems {
-    const submitKey = keys.label("submit")
+  function inputHint(theme: Theme): HintItems {
+    const item = (key: string | undefined, label: string, priority: number) =>
+      key && { text: `${bold(theme.fg2(key.toLowerCase()))}${theme.muted(` ${label}`)}`, priority }
     const interruptKey = keys.label("interrupt")
-    // A /compact is a command too, but its hint below says "interrupt", as it always did.
-    if (deps.hasCancellable() && !deps.activity().compacting)
-      return [
-        submitKey && { text: `${submitKey} ${deps.activity().working ? enterDoes : "send"}`, priority: 5 },
-        interruptKey && { text: `${interruptKey} cancel command`, priority: 4 },
-      ]
-    if (deps.activity().working) {
-      // Esc stops the turn; with messages waiting it sends them at once, merged.
-      const waiting = deps.queued().length > 0 || deps.steering().length > 0
-      return [
-        submitKey && { text: `${submitKey} ${enterDoes}`, priority: 5 },
-        queueKey && { text: `${queueKey} ${otherWay(enterDoes)}`, priority: 3 },
-        interruptKey && { text: `${interruptKey} ${waiting ? "send queued" : "interrupt"}`, priority: 4 },
-        interruptKey && deps.canRewind() && { text: `${interruptKey} ${interruptKey} rewind`, priority: 1 },
-      ]
-    }
-    const helpKey = keys.label("help")
-    // Folded panels hide rows: say how to get them back.
-    const panelsKey = keys.label("panels.toggle")
+    const working = deps.activity().working
+    const cancellable = deps.hasCancellable() && !deps.activity().compacting
+    const waiting = deps.queued().length > 0 || deps.steering().length > 0
+    const stop = cancellable ? "cancel command" : waiting ? "send queued" : "stop"
     return [
-      panelsCollapsed && panelsShown && panelsKey && { text: `${panelsKey} unfold panels`, priority: 2 },
-      submitKey && { text: `${submitKey} send`, priority: 5 },
-      // A /compact runs without a turn; the interrupt key stops it too.
-      deps.activity().compacting && interruptKey && { text: `${interruptKey} interrupt`, priority: 4 },
-      // The help key only works on an empty input; with text, how to break a line matters more.
-      editor.isEmpty
-        ? helpKey && { text: `${helpKey} keys`, priority: 3 }
-        : newlineKey && { text: `${newlineKey} newline`, priority: 3 },
+      item(keys.label("permissions.mode"), "mode", 5),
+      (working || cancellable || deps.activity().compacting) && item(interruptKey, stop, 6),
+      item(keys.label("tool-output"), "detail", 5),
+      item(keys.label("help"), "keys", 5),
+      !editor.isEmpty && item(newlineKey, "newline", 1),
+      (working || cancellable) && item(keys.label("submit"), working ? enterDoes : "send", 4),
+      working && item(queueKey, otherWay(enterDoes), 3),
+      working && deps.canRewind() && item(interruptKey && `${interruptKey} ${interruptKey}`, "rewind", 2),
+      panelsCollapsed && panelsShown && item(keys.label("panels.toggle"), "unfold panels", 4),
     ]
   }
 

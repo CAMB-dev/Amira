@@ -3,6 +3,7 @@ import type { AssistantMessage, Message, ToolDetailLevel, UserMessage } from "@a
 import { FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
+import { localClock } from "../src/format.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
 import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
@@ -68,8 +69,8 @@ for (const mode of ["inline", "fullscreen"] as const) {
       view.replyEnd([])
       view.turnEnd()
       view.render()
-      expect(text().match(/20:09/g)).toHaveLength(2)
-      expect(text()).not.toContain("20:12")
+      expect(text().split(localClock(at)).slice(1)).toHaveLength(2)
+      expect(text()).not.toContain(localClock(at + 180_000))
       expect(
         text()
           .split("\n")
@@ -79,19 +80,23 @@ for (const mode of ["inline", "fullscreen"] as const) {
         text()
           .split("\n")
           .find((line) => line.includes("Later reply.")),
-      ).not.toMatch(/\d{2}:\d{2}/)
+      ).not.toMatch(/\d{1,2}:\d{2}/)
       view.user({ role: "user", content: [{ type: "text", text: "Next prompt." }] })
       view.replyDelta("Next turn.")
       view.replyEnd([])
       view.turnEnd()
       view.render()
-      expect(text().match(/20:12/g)).toHaveLength(2)
+      expect(
+        text()
+          .split(localClock(at + 180_000))
+          .slice(1),
+      ).toHaveLength(2)
     } finally {
       view.stop()
       clock.mockRestore()
     }
-    expect(screen.mainText.match(/20:09/g)).toHaveLength(2)
-    expect(screen.mainText.match(/20:12/g)).toHaveLength(2)
+    expect(screen.mainText.split(localClock(at)).slice(1)).toHaveLength(2)
+    expect(screen.mainText.split(localClock(at + 180_000)).slice(1)).toHaveLength(2)
   })
 
   for (const binding of [["ctrl+o"], ["ctrl+b"], []]) {
@@ -155,8 +160,8 @@ for (const mode of ["inline", "fullscreen"] as const) {
     try {
       view.openSession({ resumed: true }, messages, true)
       view.render()
-      expect(text().match(/20:09/g)).toHaveLength(2)
-      expect(text()).not.toContain("20:12")
+      expect(text().split(localClock(at)).slice(1)).toHaveLength(2)
+      expect(text()).not.toContain(localClock(at + 180_000))
       expect(
         text()
           .split("\n")

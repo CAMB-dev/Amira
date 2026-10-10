@@ -126,7 +126,12 @@ for (const mode of ["inline", "fullscreen"] as const) {
     const { agent, terminal, live, exited } = await setup([], { cols: 100, settings: { mode } })
     // Model and permission mode share a right-aligned label, including the default auto.
     await waitFor(() => /^╰─+ m1 · auto ─╯$/m.test(live()), "the status")
-    expect(live()).not.toContain(" mode ")
+    expect(
+      live()
+        .split("\n")
+        .find((row) => row.startsWith("╰")),
+    ).not.toContain(" mode ")
+    expect(live()).toContain("shift+tab mode")
     terminal.send("\x1b[Z")
     await waitFor(() => /^╰─+ m1 · edits ─╯$/m.test(live()), "edits in the border")
     expect(agent.permissions.mode).toBe("edits")

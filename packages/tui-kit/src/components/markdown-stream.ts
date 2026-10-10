@@ -39,6 +39,8 @@ const UNFINISHED =
 export interface MarkdownStreamOptions {
   /** Width of only the first rendered row; later rows use the render/take width. */
   firstRowWidth?: number
+  /** Show a heading's # markers in the theme's accent style. Defaults to false. */
+  headingMarkers?: boolean
   glyphs?: Glyphs
   /** Make links clickable with OSC 8. Defaults to what the terminal is known to support. */
   hyperlinks?: boolean
@@ -176,6 +178,7 @@ export class MarkdownStream implements Component {
   private readonly configuredGlyphs: Glyphs
   private readonly hyperlinks: boolean
   private readonly highlight: boolean
+  private readonly headingMarkers: boolean
   private readonly nodes: MarkdownNodes | undefined
   private state = newState()
   /** Text not processed yet: complete lines, then the partial line being written. */
@@ -196,6 +199,7 @@ export class MarkdownStream implements Component {
     this.glyphs = this.configuredGlyphs
     this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
     this.highlight = opts.highlight ?? true
+    this.headingMarkers = opts.headingMarkers ?? false
     const rowsFor = opts.imageRows
     this.nodes =
       opts.nodes ??
@@ -304,6 +308,7 @@ export class MarkdownStream implements Component {
       glyphs: this.glyphs,
       hyperlinks: this.hyperlinks,
       highlight: this.highlight,
+      ...(this.headingMarkers ? { headingMarker: this.theme.accent } : {}),
       refs: this.state.refs,
     }
     const nodes = this.nodes

@@ -93,6 +93,7 @@ function readRange(args: ReadParams): string | undefined {
 }
 
 export const readPresenter: ToolPresenter<ReadParams, ReadDetails> = {
+  verbs: { past: "Read", running: "Reading" },
   summary(args) {
     const range = readRange(args)
     return range ? `${str(args.path)} · ${range}` : str(args.path)
@@ -126,6 +127,7 @@ function editDiff(call: ToolCallView<EditParams, EditDetails>) {
 }
 
 export const editPresenter: ToolPresenter<EditParams, EditDetails> = {
+  verbs: { past: "Edited", running: "Editing" },
   summary: (args) => `${str(args.path)}${args.replace_all ? " · all" : ""}`,
   result(call) {
     if (call.result.isError) return undefined
@@ -138,6 +140,7 @@ export const editPresenter: ToolPresenter<EditParams, EditDetails> = {
 }
 
 export const writePresenter: ToolPresenter<WriteParams, WriteDetails> = {
+  verbs: { past: "Wrote", running: "Writing" },
   summary: (args) => str(args.path),
   result(call) {
     if (call.result.isError) return undefined
@@ -158,6 +161,7 @@ export const writePresenter: ToolPresenter<WriteParams, WriteDetails> = {
 }
 
 export const applyPatchPresenter: ToolPresenter<ApplyPatchParams, ApplyPatchDetails> = {
+  verbs: { past: "Patched", running: "Patching" },
   // The headers alone name the files, whether or not the rest of the patch parses.
   summary: (args) =>
     [...str(args.patch).matchAll(/^\*\*\* (?:Add|Delete|Update) File: (.+?)\s*$/gm)]
@@ -221,6 +225,7 @@ function backgroundOutput(text: string, d: BackgroundJobDetails): string {
 }
 
 export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJobDetails> = {
+  verbs: { past: "Ran", running: "Running" },
   summary: (args) => `${firstLine(str(args.command))}${args.background === true ? " · background" : ""}`,
   result(call) {
     const job = detailsOf<BackgroundJobDetails>(call, "jobId")
@@ -254,6 +259,7 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJ
 }
 
 export const grepPresenter: ToolPresenter<GrepParams, GrepDetails> = {
+  verbs: { past: "Searched", running: "Searching" },
   summary(args) {
     const where = args.path ? ` in ${str(args.path)}` : ""
     const glob = args.glob ? ` · ${str(args.glob)}` : ""
@@ -274,6 +280,7 @@ export const grepPresenter: ToolPresenter<GrepParams, GrepDetails> = {
 }
 
 export const globPresenter: ToolPresenter<GlobParams, GlobDetails> = {
+  verbs: { past: "Found", running: "Finding" },
   summary: (args) => `${str(args.pattern)}${args.path ? ` in ${str(args.path)}` : ""}`,
   result(call) {
     if (call.result.isError) return undefined
@@ -289,6 +296,7 @@ export const globPresenter: ToolPresenter<GlobParams, GlobDetails> = {
 }
 
 export const outputReadPresenter: ToolPresenter<OutputReadParams, unknown> = {
+  verbs: { past: "Read", running: "Reading" },
   summary(args) {
     const grep = args.grep ? ` · /${str(args.grep)}/${args.ignore_case ? "i" : ""}` : ""
     const from = Number.isInteger(args.offset) ? ` · from line ${args.offset}` : ""
@@ -303,6 +311,10 @@ export const outputReadPresenter: ToolPresenter<OutputReadParams, unknown> = {
   },
   body: (call, { detail }) => (detail === "full" && !call.result.isError ? readLines(call.text) : []),
   explore: (args) => ({ verb: "Read", target: str(args.id) }),
+}
+
+export const toolSearchPresenter: ToolPresenter = {
+  verbs: { past: "Loaded", running: "Loading" },
 }
 
 /** The presenters of the built-in tools, by tool name. */
@@ -320,4 +332,5 @@ export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   job_output: jobOutputPresenter,
   job_stop: jobStopPresenter,
   job_list: jobListPresenter,
+  tool_search: toolSearchPresenter,
 }

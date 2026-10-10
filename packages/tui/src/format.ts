@@ -53,10 +53,24 @@ export function summarizeArgs(args: Record<string, unknown>, max = 80): string {
 
 export { formatDuration, formatElapsed }
 
-/** Display times use the terminal's local clock, always in 24-hour HH:mm form. */
+/** Detect the system's clock preference once; missing locale data falls back to 12-hour. */
+const clockFormat = (() => {
+  try {
+    const cycle = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions().hourCycle
+    const hour12 = cycle ? cycle === "h11" || cycle === "h12" : true
+    return new Intl.DateTimeFormat(undefined, {
+      hour: hour12 ? "numeric" : "2-digit",
+      minute: "2-digit",
+      hour12,
+    })
+  } catch {
+    return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+  }
+})()
+
+/** Display times use the local timezone and the system locale's hour cycle. */
 export function localClock(at: number): string {
-  const date = new Date(at)
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`
+  return clockFormat.format(at).replace(/[\u00a0\u202f]/g, " ")
 }
 
 const storedClocks = new WeakMap<object, number>()
@@ -75,7 +89,9 @@ export function messageTimestamp(message: object): number | undefined {
 
 /** Leave two cells between content and the clock, and two at the right edge. */
 export function timestampRoom(width: number, at: number | undefined): number {
-  return at !== undefined && Number.isFinite(width) && width >= 16 ? width - 9 : width
+  return at !== undefined && Number.isFinite(width) && width >= 16
+    ? width - visibleWidth(localClock(at)) - 4
+    : width
 }
 
 interface TimestampDecoration {

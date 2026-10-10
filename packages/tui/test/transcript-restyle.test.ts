@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { type AssistantMessage, type Message, textResult, type UserMessage } from "@amira/api"
 import { defaultTheme, pendingBlock, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
@@ -23,6 +23,8 @@ import { renderViewLines } from "../src/view-lines.ts"
 import { setup } from "./app-harness.ts"
 
 const at = new Date(2026, 9, 10, 20, 9).getTime()
+const clock = localClock(at)
+const clockCells = visibleWidth(clock)
 const banded = { ...defaultTheme, ...surfaceTheme("dark") }
 const env = (width = 80): BlockEnv => ({
   theme: plain.theme,
@@ -50,9 +52,16 @@ const assistant: AssistantMessage & { timestamp: number } = {
   timestamp: at,
 }
 
-test("clocks are local, zero-padded and fixed to 24-hour time", () => {
-  expect(localClock(at)).toBe("20:09")
-  expect(localClock(new Date(2026, 9, 10, 0, 4).getTime())).toBe("00:04")
+test("clocks use the local timezone and system locale's hour cycle", () => {
+  const cycle = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions().hourCycle
+  const hour12 = cycle ? cycle === "h11" || cycle === "h12" : true
+  const expected = new Intl.DateTimeFormat(undefined, {
+    hour: hour12 ? "numeric" : "2-digit",
+    minute: "2-digit",
+    hour12,
+  })
+  for (const time of [at, new Date(2026, 9, 10, 0, 4).getTime()])
+    expect(localClock(time)).toBe(expected.format(time).replace(/[\u00a0\u202f]/g, " "))
   expect(messageTimestamp(user)).toBe(at)
   expect(messageTimestamp({ timestamp: 0 })).toBe(0)
   for (const message of [{}, { timestamp: "20:09" }, { timestamp: Number.NaN }])
@@ -67,12 +76,12 @@ test("the user band spans every cell with an inset accent prompt and one first-l
   expect(lines[0]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
   expect(lines[3]).toBe(lines[0])
   expect(rows[1]).toStartWith("  › Hello there.")
-  expect(rows[1]).toEndWith("20:09  ")
+  expect(rows[1]).toEndWith(`${clock}  `)
   expect(rows[2]?.trimEnd()).toBe("    Next line.")
   expect(lines[1]).toContain(banded.accent("›"))
-  expect(lines[1]).toContain(banded.muted("20:09"))
-  expect(timestampIn(lines)).toEqual({ line: 1, text: "20:09", width: 24, to: 16 })
-  expect(rows.filter((r) => r.includes("20:09"))).toHaveLength(1)
+  expect(lines[1]).toContain(banded.muted(clock))
+  expect(timestampIn(lines)).toEqual({ line: 1, text: clock, width: 24, to: 16 })
+  expect(rows.filter((r) => r.includes(clock))).toHaveLength(1)
   for (const line of lines) expect(visibleWidth(line)).toBe(40)
 })
 
@@ -80,7 +89,7 @@ test("narrow bands omit clocks rather than collide with or lose the prompt text"
   const message = { ...user, content: [{ type: "text" as const, text: "abcdef" }] }
   for (const width of [10, 12, 15]) {
     const rows = userLines(banded, message, width).map(stripAnsi)
-    expect(rows.join("")).not.toContain("20:09")
+    expect(rows.join("")).not.toContain(clock)
     expect(rows.map((r) => r.slice(4).trim()).join("")).toBe("abcdef")
     expect(rows.every((r) => visibleWidth(r) === width)).toBe(true)
   }
@@ -144,14 +153,14 @@ test("resumed inline and fullscreen transcripts use stored clocks, and never syn
     ]
   }
   for (const [i, rows] of render([user, assistant]).entries()) {
-    expect(rows.filter((r) => r.endsWith("20:09  "))).toHaveLength(2)
+    expect(rows.filter((r) => r.endsWith(`${clock}  `))).toHaveLength(2)
     expect(rows).toContain(i === 0 ? "  ∴ Thought" : "  ∴ Thought  Ctrl+O to expand")
     expect(rows.some((r) => r.trim() === "Second paragraph.")).toBe(true)
   }
   const { timestamp: _userTime, ...oldUser } = user
   const { timestamp: _replyTime, ...oldAssistant } = assistant
   for (const [i, rows] of render([oldUser, oldAssistant]).entries()) {
-    expect(rows.join("\n")).not.toMatch(/\d{2}:\d{2}/)
+    expect(rows.join("\n")).not.toMatch(/\d{1,2}:\d{2}/)
     expect(rows).toContain(i === 0 ? "  ∴ Thought" : "  ∴ Thought  Ctrl+O to expand")
   }
 })
@@ -162,8 +171,8 @@ test("the reply clock is on its first line only, and copies of whole rows exclud
   const lines = reply.lines(e)
   const rows = lines.map(stripAnsi)
   expect(rows[0]).toStartWith("  First paragraph.")
-  expect(rows[0]).toEndWith("20:09  ")
-  expect(rows.filter((r) => r.includes("20:09"))).toHaveLength(1)
+  expect(rows[0]).toEndWith(`${clock}  `)
+  expect(rows.filter((r) => r.includes(clock))).toHaveLength(1)
   expect(reply.printLines(e).map(stripAnsi)).toEqual(rows)
   expect(reply.copyRows(rows, lines)[0]?.exact).toBe("First paragraph.")
   const block = userBlock(user)
@@ -182,7 +191,7 @@ test("timestamp space belongs to just the first rendered row in live, printed an
     const reply = new ReplyBlock(text, streaming, false, at)
     for (const lines of [reply.lines(env(width)), reply.printLines(env(width))]) {
       const rows = lines.map(stripAnsi)
-      expect(rows[0]).toStartWith(`  ${"x".repeat(19)}`)
+      expect(rows[0]).toStartWith(`  ${"x".repeat(width - clockCells - 6)}`)
       expect(rows[1]).toBe(`  ${"x".repeat(28)}`)
       expect(rows).toContain(`  │ ${"z".repeat(25)}│`)
       expect(rows).toContain(`  │ z${" ".repeat(24)}│`)
@@ -207,14 +216,13 @@ for (const mode of ["inline", "fullscreen"] as const) {
       "\n\n```txt\n" +
       "z".repeat(26) +
       "\n```\n\n| title | second |\n| --- | --- |\n| abcdefghij | klmnop |"
+    const now = spyOn(Date, "now").mockReturnValue(at)
     const app = await setup([{ text }], { cols: 30, rows: 40, settings: { mode } })
     try {
       app.terminal.send("go\r")
       await app.idle()
       const rows = app.all().split("\n")
-      expect(rows.some((r) => new RegExp(`^  ${"x".repeat(19)}  \\d{2}:\\d{2}$`).test(r.trimEnd()))).toBe(
-        true,
-      )
+      expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(30 - clockCells - 6)}  ${clock}`)
       expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(28)}`)
       expect(rows).toContain(`  │ ${"z".repeat(25)}│`)
       expect(rows).toContain(`  │ z${" ".repeat(24)}│`)
@@ -222,6 +230,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     } finally {
       app.terminal.send("\x03")
       await app.exited
+      now.mockRestore()
     }
   })
 }
@@ -236,14 +245,14 @@ test("banded real blocks use exactly one transcript gap in inline and fullscreen
   const fullscreen = pane.render(e, 11)
   const expected = [
     " ".repeat(40),
-    `  › Hello there.${" ".repeat(17)}20:09  `,
+    `  › Hello there.${" ".repeat(22 - clockCells)}${clock}  `,
     `    Next line.${" ".repeat(26)}`,
     " ".repeat(40),
     "",
     "  Done.",
     "",
     " ".repeat(40),
-    `  › Hello there.${" ".repeat(17)}20:09  `,
+    `  › Hello there.${" ".repeat(22 - clockCells)}${clock}  `,
     `    Next line.${" ".repeat(26)}`,
     " ".repeat(40),
   ]
@@ -388,7 +397,7 @@ test("timestamp decoration preserves pending extension markers and oversized ext
   const extension = "x".repeat(100)
   expect(timestampRow(extension, defaultTheme, 80, at)).toBe(extension)
   expect(timestampRoom(80, undefined)).toBe(80)
-  expect(timestampRoom(80, at)).toBe(71)
+  expect(timestampRoom(80, at)).toBe(80 - clockCells - 4)
 })
 
 test("transcript and pane keep one blank between blocks and none between adjacent tool rows", () => {
@@ -413,7 +422,7 @@ test("stored entry clocks attach without changing message objects", () => {
   rememberMessageTime(message, at)
   expect(messageTimestamp(message)).toBe(at)
   expect(Object.keys(message)).toEqual(["role", "content"])
-  expect(userLines(plain.theme, message, 80)[0]).toEndWith("20:09  ")
+  expect(userLines(plain.theme, message, 80)[0]).toEndWith(`${clock}  `)
 })
 
 test("tool copies follow runtime ASCII arms and blank final continuations", () => {

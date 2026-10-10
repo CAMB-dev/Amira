@@ -737,7 +737,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   expect(main.split("all done").length).toBe(2)
   expect(main).not.toContain("◆ Check explorer running")
   // The live region is back: the editor box and the hint line.
-  expect(s.view()).toContain("Enter send")
+  expect(s.view()).toContain(" shift+tab mode  │  ctrl+o detail  │  ? keys")
   expect(s.view()).toContain("│ › Message Amira")
   expect(s.screen.altSwitches).toEqual([true, false])
   s.terminal.send("\x03")
@@ -904,7 +904,7 @@ test("←/→ and Tab switch between sub-agents; Ctrl+C closes the viewer instea
   await waitFor(() => s.screen.lines[0]!.startsWith("◆ Check explorer"), "Tab wraps around")
   s.terminal.send("\x03")
   await waitFor(() => !s.screen.inAltScreen, "closed by Ctrl+C")
-  expect(s.view()).toContain("Enter send")
+  expect(s.view()).toContain(" shift+tab mode  │  ctrl+o detail  │  ? keys")
   s.terminal.send("\x03")
   expect(await s.exited).toBe(0)
 })

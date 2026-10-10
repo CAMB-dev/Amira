@@ -241,7 +241,7 @@ test("a resumed call rejected at its approval prompt reads as it did live, not a
     "     ⊘ Tool call not approved: the user said no.",
   ])
   // A session stored before rejections were kept shows the failure as it always did.
-  expect(rows(messages())[0]).toBe("  └ bash npm publish")
+  expect(rows(messages())[0]).toBe("  └ Ran npm publish")
 })
 
 test("a resumed shell command shows as many output lines as tui.shellOutputLines says", () => {
@@ -269,9 +269,9 @@ test("a resumed shell command shows as many output lines as tui.shellOutputLines
       }),
     ).filter((r) => r.trim() && !r.startsWith("──"))
   // The presenter's own default: its last three lines.
-  expect(rows()).toEqual(["  └ bash ls  ✓ 4 lines", "     … 1 earlier line", "     b", "     c", "     d"])
-  expect(rows(1)).toEqual(["  └ bash ls  ✓ 4 lines", "     … 3 earlier lines", "     d"])
-  expect(rows(0)).toEqual(["  └ bash ls  ✓ 4 lines"])
+  expect(rows()).toEqual(["  └ Ran ls  ✓ 4 lines", "     … 1 earlier line", "     b", "     c", "     d"])
+  expect(rows(1)).toEqual(["  └ Ran ls  ✓ 4 lines", "     … 3 earlier lines", "     d"])
+  expect(rows(0)).toEqual(["  └ Ran ls  ✓ 4 lines"])
 })
 
 test("a resumed reply renders as Markdown inside the assistant's gutter", () => {
