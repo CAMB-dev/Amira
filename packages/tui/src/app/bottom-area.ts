@@ -46,6 +46,7 @@ export interface BottomAreaDeps {
   hasCancellable: () => boolean
   canRewind: () => boolean
   status: StatusRegistry
+  header?: (width: number, ctx: RenderContext) => string[]
   panels?: PanelRegistry
   editor: Editor
   keys: Keybindings
@@ -72,27 +73,33 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   const newlineKey = keys.label("newline", reaches)
   const queueKey = keys.label("queue")
   /**
-   * The status in the input's border: the extensions' items and, when it is not the default
-   * auto, the permission mode, next to the model.
+   * Extension status items and the right-aligned model/effort/mode label. Header facts
+   * and the running turn's rate stay out of the border, so each is shown only once.
    */
   const statusItems = (): StatusEntry[] => {
-    const mode = deps.agent().permissions.mode
-    const own: StatusEntry[] =
-      mode === "auto"
-        ? []
-        : [
-            {
-              id: "permissions.mode",
-              align: "left",
-              tone: mode === "plan" ? "warning" : "default",
-              priority: 35,
-              text: `${mode} mode`,
-            },
-          ]
-    const items = deps.status.snapshot()
-    // After the model, which extensions put first.
-    const at = items.findIndex((i) => i.id !== "model" && i.align === "left")
-    return at < 0 ? [...items, ...own] : [...items.slice(0, at), ...own, ...items.slice(at)]
+    const agent = deps.agent()
+    const items = deps.status
+      .snapshot()
+      .filter(
+        (i) =>
+          !["context", "cost", "place"].includes(i.id) &&
+          !(i.id === "token-speed" && deps.activity().working),
+      )
+    const model = items.find((i) => i.id === "model")
+    const thinking = agent.thinking.state(agent.model).thinking
+    const fallback = agent.model.provider
+      ? `${agent.model.id}${thinking ? ` (${thinking})` : ""}`
+      : "(no model)"
+    return [
+      ...items.filter((i) => i.id !== "model"),
+      {
+        id: "model",
+        align: "right",
+        tone: model?.tone ?? "accent",
+        priority: model?.priority ?? 40,
+        text: `${model?.text ?? fallback} ${glyphs.separator} ${agent.permissions.mode}`,
+      },
+    ]
   }
   const inputBox = new InputBox(editor, statusItems)
   /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
@@ -125,6 +132,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       .flatMap((rows, i) => (i > 0 && !collapsed ? ["", ...rows] : rows))
 
   const bottom = new Stack([
+    new View((width, ctx) => (deps.mode() === "inline" ? (deps.header?.(width, ctx) ?? []) : [])),
     // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
     // They give way to everything else under the transcript: folded, then cut, when rows are short.
     new View((width, ctx) => {
@@ -134,17 +142,6 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       panelsShown = lines.length > 0
       panelRows = panelsShown ? lines.length + 1 : 0
       return panelsShown ? [...lines, ""] : []
-    }),
-    // The activity line: a summary of the turn (what it does now, how long it has run, the
-    // tokens it wrote), and while the model thinks the last line of its reasoning. It shows for
-    // the whole turn; running tools are counted here and named on their own rows. How to
-    // interrupt is on the hint line.
-    new View((width, ctx) => {
-      return deps.activity().render(width, ctx, {
-        running: deps.view().runningTools,
-        waiting: deps.dialogs().length > 0,
-        spinner,
-      })
     }),
     new View((width, ctx) => [
       ...deps
@@ -160,6 +157,18 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         ctx.theme,
       ),
     ]),
+    // The activity line: a summary of the turn (what it does now, how long it has run, the
+    // tokens and live rate), lit by a travelling highlight. It shows for
+    // the whole turn; running tools are counted here and named on their own rows. How to
+    // interrupt stays on the row as well as the existing hint line.
+    new View((width, ctx) => {
+      return deps.activity().render(width, ctx, {
+        running: deps.view().runningTools,
+        waiting: deps.dialogs().length > 0,
+        spinner,
+        stop: `${keys.label("interrupt") ?? "esc"} stop`,
+      })
+    }),
     // The input box carries the status in its bottom border. A dialog takes the box's place;
     // the status then gets a line of its own under it.
     new View((width, ctx) => {

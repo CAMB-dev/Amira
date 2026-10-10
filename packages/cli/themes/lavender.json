@@ -7,8 +7,8 @@
     "heading": "#8fb8ea",
     "path": "#e2b07a",
     "command": "#c4b9f5",
-    "shimmer": "#a99cf0",
-    "shimmerEnd": "#d9d1fa",
+    "shimmer": "#d9d1fa",
+    "shimmerEnd": "#e5e0fc",
     "keyword": "#b4a6ee",
     "string": "#99cbbd",
     "number": "#e2b07a"
@@ -19,8 +19,8 @@
     "heading": "#2f6aa6",
     "path": "#94601f",
     "command": "#6250a6",
-    "shimmer": "#5848b8",
-    "shimmerEnd": "#3d2d8a",
+    "shimmer": "#392d7b",
+    "shimmerEnd": "#302468",
     "keyword": "#5848b8",
     "string": "#2d7160",
     "number": "#94601f"

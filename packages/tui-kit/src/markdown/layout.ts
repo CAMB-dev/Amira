@@ -41,9 +41,9 @@ export function toCells(runs: Run[]): Cell[] {
  * width, as code is shown. Each row is laid out from where it starts, never from earlier rows,
  * so dropping the rows before one leaves it unchanged.
  */
-export function wrapCells(cells: Cell[], width: number, words: boolean): Row[] {
+export function wrapCells(cells: Cell[], width: number, words: boolean, firstWidth = width): Row[] {
   const rows: Row[] = []
-  const max = Math.max(1, width)
+  let max = Math.max(1, firstWidth)
   let start = 0
   let used = 0
   let breakEnd = -1
@@ -59,6 +59,7 @@ export function wrapCells(cells: Cell[], width: number, words: boolean): Row[] {
         next = breakNext
       }
       rows.push({ start, end, next, stable: j < cells.length - 1 })
+      max = Math.max(1, width)
       start = next
       used = 0
       breakEnd = -1

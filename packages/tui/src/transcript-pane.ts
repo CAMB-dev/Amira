@@ -15,7 +15,7 @@ interface Drawn {
   width: number
   theme: Theme
   glyphs: BlockEnv["glyphs"]
-  version: number
+  version: ReturnType<Block["cacheVersion"]>
   detail: ToolDetailLevel
   /** The most rows an image could take (0 without images), and the renderers of extensions. */
   imageRows: string
@@ -575,7 +575,7 @@ export class TranscriptPane {
       block.live ||
       d.theme !== env.theme ||
       d.glyphs !== env.glyphs ||
-      d.version !== block.version ||
+      d.version !== block.cacheVersion(env) ||
       d.detail !== env.detail ||
       d.imageRows !== imageRows
     )
@@ -590,14 +590,14 @@ export class TranscriptPane {
     const imageRows = imageRowsOf(env)
     const fresh = block.live
       ? hit?.frame === this.frame
-      : hit?.version === block.version && hit.detail === env.detail && hit.imageRows === imageRows
+      : hit?.version === block.cacheVersion(env) && hit.detail === env.detail && hit.imageRows === imageRows
     if (hit && fresh && hit.theme === env.theme && hit.glyphs === env.glyphs) return hit
     const lines = block.lines(env)
     const d: Drawn = {
       width,
       theme: env.theme,
       glyphs: env.glyphs,
-      version: block.version,
+      version: block.cacheVersion(env),
       detail: env.detail,
       imageRows,
       frame: this.frame,

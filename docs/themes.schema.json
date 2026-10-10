@@ -56,7 +56,7 @@
     "glyph": {
       "type": "string",
       "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]+$",
-      "description": "Plain single-line text. The host checks display width against the default glyph; warning may differ."
+      "description": "Plain single-line text. The host checks display width against the default glyph; warning and tree branch/last glyphs may differ."
     },
     "glyphs": {
       "type": "object",
@@ -94,6 +94,9 @@
         "toolInvalid": { "$ref": "#/$defs/glyph" },
         "result": { "$ref": "#/$defs/glyph" },
         "treeBranch": { "$ref": "#/$defs/glyph" },
+        "treeLast": { "$ref": "#/$defs/glyph" },
+        "treePipe": { "$ref": "#/$defs/glyph" },
+        "turnOutput": { "$ref": "#/$defs/glyph" },
         "output": { "$ref": "#/$defs/glyph" },
         "subagent": { "$ref": "#/$defs/glyph" },
         "subagentDone": { "$ref": "#/$defs/glyph" },

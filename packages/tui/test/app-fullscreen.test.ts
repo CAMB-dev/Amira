@@ -54,8 +54,8 @@ test("inline: a blank line sets the conversation apart from the shell, above the
   // The cursor, where the shell's prompt goes, is a blank line under the last of it.
   expect(screen.lines[screen.y]).toBe("")
   expect(screen.lines[screen.y - 1]).toBe("")
-  // (The row between is the band behind the echo.)
-  expect(screen.lines[screen.y - 3]).toContain("/quit")
+  // No band padding: the echo is followed by exactly the two blank shell rows.
+  expect(screen.lines[screen.y - 2]).toBe("  › /quit")
 })
 
 test("inline: Alt+C copies the last reply; a key of the full-screen view says so once", async () => {
@@ -166,7 +166,7 @@ test("a diff review taller than the terminal keeps its title, options and keys i
   expect(live()).toContain("↑↓ move · Enter choose · Esc cancel")
   expect(live()).not.toContain("type to filter")
   // The running call that asked stays in view above it, and the frame fits the screen.
-  expect(rows.some((l) => l.startsWith("● review"))).toBe(true)
+  expect(rows.some((l) => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review +\d+s$/.test(l))).toBe(true)
   expect(rows[0]).not.toContain("line")
   terminal.send("1")
   await idle()
@@ -327,7 +327,7 @@ test("messages queued together are sent as one turn but shown one by one", async
   await shows("queued › two")
   await shows("second answer")
   await idle()
-  expect(all()).toContain("› one\n\n\n\n› two")
+  expect(all()).toMatch(/› one +\d{2}:\d{2}\n\n {2}› two +\d{2}:\d{2}/)
   expect(all()).not.toContain("  two")
   const prompts = agent.messages.filter((m) => m.role === "user")
   expect(prompts.length).toBe(2)
@@ -643,9 +643,9 @@ test("with tui.reflow off, a narrower terminal does not move up past the live re
     terminal.clearWrites()
     terminal.setSize(40, 20)
     await waitFor(() => terminal.writes.length > 0, "a frame")
-    // The caret is on the editor row, below the box's full-width top border and the blank row
-    // above the box: a re-wrapping terminal made that border two rows, one that does not left it one.
-    expect(terminal.writes[0]!).toContain(`\r\x1b[${reflow === "on" ? 3 : 2}A\x1b[J`)
+    // Above the editor are the box top, inline header and blank row. Reflow adds one
+    // row for each full-width header and border; without reflow all three stay one row.
+    expect(terminal.writes[0]!).toContain(`\r\x1b[${reflow === "on" ? 5 : 3}A\x1b[J`)
     terminal.send("\x03")
     await exited
   }

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import type { AssistantMessage, ToolDetailLevel } from "@amira/api"
 import { FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
@@ -44,6 +44,32 @@ function setup(mode: "inline" | "fullscreen", detail: ToolDetailLevel) {
 }
 
 for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: live clocks remain fixed and a streamed reply gets only one`, () => {
+    const at = new Date(2026, 9, 10, 20, 9).getTime()
+    const clock = spyOn(Date, "now").mockReturnValue(at)
+    const { view, screen, text } = setup(mode, "summary")
+    try {
+      view.user({ role: "user", content: [{ type: "text", text: "Prompt." }] })
+      view.reasoningDelta("Consider this.")
+      view.render()
+      expect(text()).toContain("Thinking")
+      clock.mockReturnValue(at + 4000)
+      view.replyDelta("First paragraph.\n\n")
+      view.render()
+      clock.mockReturnValue(at + 180_000)
+      view.replyDelta("Second paragraph.")
+      view.replyEnd([])
+      view.render()
+      expect(text().match(/20:09/g)).toHaveLength(3)
+      expect(text()).not.toContain("20:12")
+      expect(text()).toContain("Thought for 4s  ctrl+o to expand")
+    } finally {
+      view.stop()
+      clock.mockRestore()
+    }
+    expect(screen.mainText.match(/20:09/g)).toHaveLength(3)
+  })
+
   for (const detail of ["summary", "full"] as const) {
     test(`${mode} ${detail}: an empty reasoning delta never creates a thinking row`, () => {
       const { view, screen, text } = setup(mode, detail)

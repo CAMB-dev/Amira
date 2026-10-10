@@ -413,10 +413,10 @@ test("user-message lines use transcript wrapping, marker, note and background in
     expect(rows.slice(2 + expected.length, 2 + 2 * expected.length)).toEqual(expected)
     if (theme === monoTheme) {
       expect(expected.map(stripAnsi)).toEqual([
-        "› A task that wraps across",
-        "  several rows",
-        "  and a second line",
-        "  └ a display note",
+        "  › A task that wraps across",
+        "    several rows",
+        "    and a second line",
+        "    └ a display note",
       ])
     } else expect(expected[0]).not.toBe(stripAnsi(expected[0]!))
   }
@@ -435,8 +435,8 @@ test("semantic view text cannot inject terminal styling", () => {
   expect(rendered.join("\n")).not.toContain("\x1b[31m")
   const rows = rendered.map(stripAnsi)
   expect(rows[0]).toBe("Title row")
-  expect(rows[2]).toBe("› Task")
-  expect(rows[3]).toBe("  └ Note")
+  expect(rows[2]).toBe("  › Task")
+  expect(rows[3]).toBe("    └ Note")
   expect(rows.join("\n")).not.toContain("\x1b")
 })
 
@@ -594,8 +594,8 @@ test("renderTool uses the current presenter, fallback and exact host styling in 
   )
   const rows = viewer.render(60, context)
   const expected = finishedToolLines(theme, presenter, { ...call, name: "read" }, "full", 60)
-  expect(rows.slice(4, 4 + expected.length)).toEqual(expected)
-  expect(rows.slice(1, 3)).toEqual(
+  expect(rows.slice(3, 3 + expected.length)).toEqual(expected)
+  expect(rows.slice(1, 2)).toEqual(
     finishedToolLines(theme, presenter, { ...call, name: "read" }, "collapsed", 60),
   )
   const texts = plainLines.map((line) => {
@@ -631,8 +631,8 @@ test("renderTool in an open view uses the registry passed by the app", async () 
     },
   })
   s.terminal.send("/progress\r")
-  await waitFor(() => s.view().includes("└ presented result"), "the presenter")
-  expect(s.view()).toContain("● test from registry")
+  await waitFor(() => s.view().includes("  ├ test from registry  ✓ presented result"), "the presenter")
+  expect(s.view()).toContain("  ├ test from registry  ✓ presented result")
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "closed")
   s.terminal.send("\x03")

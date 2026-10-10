@@ -150,12 +150,16 @@ export class PaneFind {
    */
   private stamp(): string {
     let versions = 0
+    let visible = ""
+    const env = this.view.env()
     let live = false
     for (const b of this.view.blocks) {
-      versions += b.version
+      const revision = env ? b.cacheVersion(env) : b.version
+      if (typeof revision === "number") versions += revision
+      else visible += `${b.id}:${revision},`
       live ||= b.live
     }
-    return `${this.view.blocks.length}:${versions}:${live ? Math.floor(Date.now() / FIND_LIVE_MS) : ""}`
+    return `${this.view.blocks.length}:${versions}:${visible}:${live ? Math.floor(Date.now() / FIND_LIVE_MS) : ""}`
   }
 
   private jump(i: number): void {

@@ -37,6 +37,8 @@ const UNFINISHED =
   /(?:\x1b(?:\[[0-?]*[ -/]*|[\]P_^X][^\x07\x1b]*\x1b?|[ -/]*)?|\r)$/
 
 export interface MarkdownStreamOptions {
+  /** Width of only the first rendered row; later rows use the render/take width. */
+  firstRowWidth?: number
   glyphs?: Glyphs
   /** Make links clickable with OSC 8. Defaults to what the terminal is known to support. */
   hyperlinks?: boolean
@@ -165,6 +167,9 @@ interface Cut {
 export class MarkdownStream implements Component {
   /** Rows the text may take in the live region; set by the parent before each render. */
   maxRows = Number.POSITIVE_INFINITY
+  /** Mutable so a live view can set the first-row budget when its timestamp becomes known. */
+  firstRowWidth: number | undefined
+  private layoutRows = 0
   /** Rows committed to the scrollback since the text was last taken. */
   committedRows = 0
   private glyphs: Glyphs
@@ -186,6 +191,7 @@ export class MarkdownStream implements Component {
   private theme = defaultTheme
 
   constructor(opts: MarkdownStreamOptions = {}) {
+    this.firstRowWidth = opts.firstRowWidth
     this.configuredGlyphs = opts.glyphs ?? defaultGlyphs
     this.glyphs = this.configuredGlyphs
     this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
@@ -231,13 +237,17 @@ export class MarkdownStream implements Component {
     // Rows that cannot be committed now are shown live, so they get no image markers.
     const env = this.env(width, !!ctx.commit)
     const liveEnv = ctx.commit ? this.env(width, false) : env
-    const sink: Sink = ctx.commit
+    const output: Sink = ctx.commit
       ? (rows) => {
           ctx.commit!(rows)
           this.committedRows += rows.length
         }
       : (rows) => this.done.push(...rows)
-    if (ctx.commit && this.done.length) sink(this.done.splice(0))
+    const sink: Sink = (rows) => {
+      this.layoutRows += rows.length
+      output(rows)
+    }
+    if (ctx.commit && this.done.length) output(this.done.splice(0))
     this.processLines(env, sink)
     let live = this.live(liveEnv)
     if (ctx.commit && live.length > this.maxRows) {
@@ -266,7 +276,10 @@ export class MarkdownStream implements Component {
   take(width: number): string[] {
     const env = this.env(width)
     const rows = this.done
-    const sink: Sink = (r) => rows.push(...r)
+    const sink: Sink = (r) => {
+      this.layoutRows += r.length
+      rows.push(...r)
+    }
     if (this.src !== "" && !this.src.endsWith("\n")) this.src += "\n"
     this.processLines(env, sink, true)
     finish(this.state, env, sink)
@@ -278,6 +291,7 @@ export class MarkdownStream implements Component {
     this.done = []
     this.pending = ""
     this.committedRows = 0
+    this.layoutRows = 0
     return rows
   }
 
@@ -285,6 +299,7 @@ export class MarkdownStream implements Component {
   private env(width: number, commit = true): Env {
     const env: Env = {
       width: Math.max(1, width),
+      rowWidth: () => Math.max(1, this.layoutRows ? width : (this.firstRowWidth ?? width)),
       styles: markdownStyles(this.theme),
       glyphs: this.glyphs,
       hyperlinks: this.hyperlinks,
@@ -335,6 +350,11 @@ export class MarkdownStream implements Component {
   /** The rows of what is still open, as they would render if the text ended with `line`. */
   private live(env: Env, line = this.src): string[] {
     const rows: string[] = []
+    env = {
+      ...env,
+      rowWidth: () =>
+        Math.max(1, this.layoutRows + rows.length ? env.width : (this.firstRowWidth ?? env.width)),
+    }
     const sink: Sink = (r) => rows.push(...r)
     const s = cloneState(this.state)
     let through = this.codeThrough

@@ -21,6 +21,7 @@ import {
   themeToken,
   truncateToWidth,
   visibleWidth,
+  wrapText,
 } from "@amira/tui-kit"
 import { renderToolLines, terminalText } from "./diff-view.ts"
 import { formatDuration, formatElapsed, summarizeArgs } from "./format.ts"
@@ -61,6 +62,10 @@ export interface ToolViewOptions {
    * (tui.shellOutputLines); 0 shows none.
    */
   outputLines?: number
+  /** The last tool in its step/turn: close the branch and leave its continuation blank. */
+  last?: boolean
+  /** An unfolded exploration keeps each result below its own head, even at summary detail. */
+  expanded?: boolean
 }
 
 /** Most lines of a failure's body in `summary` detail: its start and its end. */
@@ -72,8 +77,20 @@ export const RUNNING_LINES = 3
 /** Output lines a successful shell command shows by default (the shellOutputLines default, kept equal to RUNNING_LINES by a test). */
 export const OUTPUT_LINES = DEFAULT_SHELL_OUTPUT_LINES
 
-/** Indent of a call's body, under the text of its result line. */
-const BODY_INDENT = "    "
+/** The tree rail continues beside results, wrapped diffs and live output until the last tool. */
+function treeHead(theme: Theme, last = false): string {
+  const arm = last ? glyphs.treeLast : glyphs.treeBranch
+  const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
+  return (themeToken(theme, "dim") ?? theme.muted)(arm + " ".repeat(cells - visibleWidth(arm)))
+}
+
+/** Internal rail prefix for a tool's sub-agent rows as well as its own output. */
+export function treeContinuation(theme: Theme, last = false): string {
+  const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
+  if (last) return " ".repeat(cells + 2)
+  const pipe = (themeToken(theme, "dim") ?? theme.muted)(glyphs.treePipe)
+  return `  ${pipe}${" ".repeat(Math.max(0, cells - visibleWidth(pipe)))}`
+}
 
 type Outcome = "done" | "failed" | "interrupted" | "blocked" | "unknownTool" | "invalidArgs"
 
@@ -82,15 +99,6 @@ function outcomeOf(call: FinishedCall): Outcome {
   if (call.rejected) return call.rejected
   if (call.result.isError) return call.interrupted ? "interrupted" : "failed"
   return "done"
-}
-
-const BULLETS: Record<Outcome, string> = {
-  done: glyphs.toolDone,
-  failed: glyphs.toolFailed,
-  interrupted: glyphs.toolInterrupted,
-  blocked: glyphs.toolBlocked,
-  unknownTool: glyphs.toolUnknown,
-  invalidArgs: glyphs.toolInvalid,
 }
 
 /** Calls a presenter's method; a missing method, a throw or undefined means the fallback. */
@@ -214,12 +222,13 @@ function nameLabel(theme: Theme, name: string, style: (s: string) => string): st
 /** The argument's semantic role, without coloring a tool's plain-text presenter output. */
 function summaryStyle(theme: Theme, args: Record<string, unknown>): StyleFn {
   if (typeof args.command === "string") return themeToken(theme, "command") ?? theme.text
-  if (typeof args.path === "string") return themeToken(theme, "path") ?? theme.text
+  if (["path", "file_path", "filePath"].some((key) => typeof args[key] === "string"))
+    return themeToken(theme, "path") ?? theme.text
   return theme.text
 }
 
 /**
- * `● name summary`, fitted to `width`, with `right` against the right edge when it fits. A
+ * `├ name summary`, fitted to `width`, with `right` against the right edge when it fits. A
  * summary too long is cut in its middle, so a path keeps its file name and a command its end.
  */
 function headLine(
@@ -230,15 +239,15 @@ function headLine(
   width: number,
   opts: { right?: string; muted?: boolean; nameStyle?: StyleFn; summaryStyle?: StyleFn } = {},
 ): string {
-  const label = nameLabel(theme, name, opts.nameStyle ?? theme.accent)
+  const label = nameLabel(theme, name, opts.nameStyle ?? themeToken(theme, "fg2") ?? theme.text)
   const right = opts.right ?? ""
   const reserved = right ? visibleWidth(right) + 1 : 0
   const fitsRight = right !== "" && width - reserved >= 12
-  const room = (fitsRight ? width - reserved : width) - visibleWidth(`${bullet} ${label} `)
+  const room = (fitsRight ? width - reserved : width) - visibleWidth(`  ${bullet} ${label} `)
   const shown = summary && room >= 8 ? clipMiddle(summary, room) : summary
   const style = opts.muted ? theme.muted : (opts.summaryStyle ?? theme.text)
   const text = shown ? ` ${style(shown)}` : ""
-  const left = `${bullet} ${label}${text}`
+  const left = `  ${bullet} ${label}${text}`
   if (!fitsRight) return truncateToWidth(left, width, glyphs.more)
   const cut = truncateToWidth(left, width - reserved, glyphs.more)
   return `${cut}${" ".repeat(Math.max(1, width - visibleWidth(cut) - visibleWidth(right)))}${right}`
@@ -276,18 +285,45 @@ function callView(call: FinishedCall): ToolCallView {
   }
 }
 
-/** A presenter's one-line result, or the generic one. */
+/** A presenter's result, or the generic one, keeping real line breaks. */
 function presentedResult(presenter: ToolPresenter | undefined, view: ToolCallView): string {
-  return oneLine(
-    attempt(presenter?.result && (() => presenter.result!(view)), () => fallbackPresenter.result(view)) ?? "",
-  )
+  const result =
+    attempt(presenter?.result && (() => presenter.result!(view)), () => fallbackPresenter.result(view)) ?? ""
+  return stripAnsi(String(result)).split(/\r?\n/).map(oneLine).join("\n").trim()
+}
+
+function outcomeMark(outcome: Outcome): string {
+  switch (outcome) {
+    case "done":
+      return glyphs.toolDone
+    case "failed":
+      return glyphs.toolFailed
+    case "interrupted":
+      return glyphs.toolInterrupted
+    case "blocked":
+      return glyphs.toolBlocked
+    case "unknownTool":
+      return glyphs.toolUnknown
+    case "invalidArgs":
+      return glyphs.toolInvalid
+  }
+}
+
+/** Only a standalone current mark counts, not an ASCII word beginning with e.g. "v". */
+function hasMark(result: string, mark: string): boolean {
+  return result === mark || result.startsWith(`${mark} `) || result.startsWith(`${mark}\n`)
+}
+
+function withoutMark(result: string, mark: string): string {
+  return hasMark(result, mark) ? result.slice(mark.length).trimStart() : result
 }
 
 /**
- * The committed lines of a finished call: its head, a result line and, as `detail` allows, a
- * body. A call that did not run to completion (interrupted, blocked, unknown, invalid) is
- * muted with its own marker rather than a failure's red cross; one interrupted while it ran
- * keeps what it had printed, as a failure does. A failure whose presenter shows nothing under
+ * The committed lines of a finished call: its head with a fitting compact result, otherwise
+ * continuation result rows, and, as `detail` allows, a body. A call that did not run to
+ * completion (interrupted, blocked, unknown, invalid) is
+ * muted rather than shown as a failure; one interrupted while it ran keeps what it had
+ * printed, as a failure does. A failure whose presenter shows nothing under
  * it shows its output.
  */
 export function finishedToolLines(
@@ -299,19 +335,15 @@ export function finishedToolLines(
   opts: ToolViewOptions = {},
 ): string[] {
   const outcome = outcomeOf(call)
+  const mark = outcomeMark(outcome)
   const view = callView(call)
   const summary = callSummary(presenter, call.args)
   const ran = outcome === "done" || outcome === "failed"
   // Interrupted while it ran (not before it started): what it printed so far still shows.
   const cutShort = outcome === "interrupted" && call.rejected !== "aborted" && view.text !== ""
-  const bullet =
-    outcome === "done"
-      ? theme.success(BULLETS.done)
-      : outcome === "failed"
-        ? theme.error(BULLETS.failed)
-        : theme.muted(BULLETS[outcome])
+  const continuation = treeContinuation(theme, opts.last)
   const out = [
-    headLine(theme, bullet, call.name, summary, width, {
+    headLine(theme, treeHead(theme, opts.last), call.name, summary, width, {
       muted: !ran,
       summaryStyle: summaryStyle(theme, call.args),
       ...(ran ? {} : { nameStyle: theme.muted }),
@@ -323,16 +355,16 @@ export function finishedToolLines(
   let saidResult = false
   if (outcome === "interrupted") {
     // What its presenter makes of it; without one, its output shows under it instead.
-    const said = cutShort && presenter?.result ? presentedResult(presenter, view) : ""
+    const said = cutShort && presenter?.result ? withoutMark(presentedResult(presenter, view), mark) : ""
     saidResult = said !== ""
     result = !said
       ? "interrupted"
       : said.startsWith("interrupted")
         ? said
         : `interrupted ${glyphs.separator} ${said}`
-  } else if (!ran) result = lines(view.text)[0] ?? outcome
+  } else if (!ran) result = lines(view.text).join("\n") || outcome
   else result = presentedResult(presenter, view)
-  const style = outcome === "failed" ? theme.error : theme.muted
+  const style = outcome === "done" ? theme.success : outcome === "failed" ? theme.error : theme.muted
   const approval =
     call.approval === "user"
       ? ` ${glyphs.separator} allowed by you`
@@ -344,25 +376,18 @@ export function finishedToolLines(
       ? ` ${glyphs.separator} ${formatDuration(call.durationMs)}`
       : ""
   }${approval}`
-  const prefix = `  ${theme.muted(glyphs.result)} `
-  const room = width - visibleWidth(prefix) - visibleWidth(time)
-  // Too narrow for the time as well: it goes, and the result is cut to what is left.
-  const row =
-    room >= 8
-      ? `${prefix}${style(truncateToWidth(result, room, glyphs.more))}${theme.muted(time)}`
-      : truncateToWidth(`${prefix}${style(result)}`, width, glyphs.more)
-  out.push(row)
-
+  const prefix = `${continuation}  `
+  const failed = outcome !== "done"
+  let body: ToolLine[] = []
   if ((ran || cutShort) && detail !== "collapsed") {
-    const failed = outcome !== "done"
     const bodyOpts = {
       detail,
-      width: width - BODY_INDENT.length,
+      width: Math.max(0, width - visibleWidth(prefix)),
       ...(opts.outputLines !== undefined ? { outputLines: opts.outputLines } : {}),
     }
     // Cut short with no result line of its own to say it: all its output is the body.
     const output = (): ToolLine[] => lines(view.text).map((text) => ({ kind: "code", text }))
-    let body =
+    body =
       cutShort && !saidResult
         ? output()
         : attempt(presenter?.body && (() => presenter.body!(view, bodyOpts)), () =>
@@ -373,9 +398,46 @@ export function finishedToolLines(
     if (failed && !body.length) body = cutShort ? output() : fallbackPresenter.body(view, bodyOpts)
     // A one-line output the result line already says (e.g. "Aborted by the user …") is not
     // said twice.
-    if (body.length === 1 && body[0]!.text.trim() === result.trim()) body = []
-    out.push(...renderToolLines(cutBody(body, detail, failed), theme, width, BODY_INDENT))
+    body = body.flatMap((line) => line.text.split(/\r?\n/).map((text) => ({ ...line, text })))
+    if (body.length === 1 && withoutMark(body[0]!.text.trim(), mark) === withoutMark(result.trim(), mark))
+      body = []
   }
+
+  const marked = hasMark(result, mark) ? result : `${mark}${result ? ` ${result}` : ""}`
+  const resultText = `${style(marked)}${theme.muted(time)}`
+  // A compact result may share the head even when output follows. Diff/output rows and
+  // multiline/expanded results retain their rails below; callers insert child rows at 1.
+  if (
+    detail !== "full" &&
+    !opts.expanded &&
+    !marked.includes("\n") &&
+    visibleWidth(out[0]!) + 2 + visibleWidth(resultText) <= width
+  ) {
+    out[0] = `${out[0]!}  ${resultText}`
+  } else {
+    const rows = wrapText(resultText, Math.max(1, width - visibleWidth(prefix)))
+    out.push(
+      ...cutBody(
+        rows.map((text) => ({ kind: "text", text })),
+        detail === "full" ? "full" : "summary",
+        failed,
+      ).map((line) =>
+        truncateToWidth(
+          `${prefix}${line.kind === "muted" ? theme.muted(line.text) : line.text}`,
+          width,
+          glyphs.more,
+        ),
+      ),
+    )
+  }
+  out.push(
+    ...renderToolLines(
+      cutBody(body, detail, failed),
+      theme,
+      Math.max(0, width - visibleWidth(continuation)),
+      "  ",
+    ).map((line) => truncateToWidth(`${continuation}${line}`, width, glyphs.more)),
+  )
   return out
 }
 
@@ -392,18 +454,26 @@ export function runningToolLines(
   now: number,
   spinner: string,
   width: number,
+  opts: Pick<ToolViewOptions, "last"> = {},
 ): string[] {
   const summary = callSummary(presenter, call.args)
   const shimmer = themeToken(theme, "shimmer") ?? theme.accent
-  const right = `${shimmer(spinner)} ${theme.muted(formatElapsed(now - call.startedAt))}`
-  const head = headLine(theme, theme.accent(glyphs.toolRunning), call.name, summary, width, {
-    right,
-    summaryStyle: summaryStyle(theme, call.args),
-  })
+  const right = theme.muted(formatElapsed(now - call.startedAt))
+  const head = headLine(
+    theme,
+    `${treeHead(theme, opts.last)} ${shimmer(spinner)}`,
+    call.name,
+    summary,
+    width,
+    {
+      right,
+      summaryStyle: summaryStyle(theme, call.args),
+    },
+  )
   const live = attempt(presenter?.running && (() => presenter.running!(call.args, call.partial)), () =>
     fallbackPresenter.running(call.args, call.partial),
   ).slice(-RUNNING_LINES)
-  const prefix = `  ${theme.muted(glyphs.output)} `
+  const prefix = `${treeContinuation(theme, opts.last)}  `
   const output = themeToken(theme, "fg2") ?? theme.muted
   return [
     head,
@@ -423,8 +493,9 @@ export function heldToolLine(
   presenter: ToolPresenter | undefined,
   call: FinishedCall,
   width: number,
+  opts: Pick<ToolViewOptions, "last"> = {},
 ): string {
-  return finishedToolLines(theme, presenter, call, "collapsed", width)[0]!
+  return finishedToolLines(theme, presenter, call, "collapsed", width, opts)[0]!
 }
 
 /**
@@ -445,10 +516,15 @@ export function explorationOf(
 }
 
 /**
- * The one row of successful exploring calls in a row: `● Explored · Read a.ts, b.ts · Search
+ * The one row of successful exploring calls in a row: `├ Explored · Read a.ts, b.ts · Search
  * foo`, what was done in the order it was first done, each target once.
  */
-export function exploredLine(theme: Theme, explored: ToolExploration[], width: number): string {
+export function exploredLine(
+  theme: Theme,
+  explored: ToolExploration[],
+  width: number,
+  opts: Pick<ToolViewOptions, "last"> = {},
+): string {
   const byVerb = new Map<string, string[]>()
   for (const e of explored) {
     const targets = byVerb.get(e.verb) ?? []
@@ -456,8 +532,12 @@ export function exploredLine(theme: Theme, explored: ToolExploration[], width: n
     byVerb.set(e.verb, targets)
   }
   const s = ` ${glyphs.separator} `
-  const what = [...byVerb].map(([verb, targets]) => `${verb} ${targets.join(", ")}`).join(s)
-  const line = `${theme.success(glyphs.toolDone)} ${theme.accent("Explored")}${theme.muted(s)}${theme.muted(what)}`
+  const verbStyle = themeToken(theme, "fg2") ?? theme.text
+  const targetStyle = themeToken(theme, "path") ?? theme.text
+  const what = [...byVerb]
+    .map(([verb, targets]) => `${verbStyle(verb)} ${targetStyle(targets.join(", "))}`)
+    .join(theme.muted(s))
+  const line = `  ${treeHead(theme, opts.last)} ${verbStyle("Explored")}${theme.muted(s)}${what}`
   return truncateToWidth(line, width, glyphs.more)
 }
 
@@ -474,13 +554,18 @@ export function exploredLines(
   opts: ToolViewOptions = {},
 ): string[] {
   const explored = calls.flatMap(({ call, presenter }) => explorationOf(presenter, call) ?? [])
-  const head = exploredLine(theme, explored, width)
+  const head = exploredLine(theme, explored, width, opts)
   if (!expanded) return [head]
-  const inner = Math.max(1, width - 2)
+  const continuation = `${treeContinuation(theme, opts.last)} `
+  const inner = Math.max(0, width - visibleWidth(continuation))
   return [
     head,
-    ...calls.flatMap(({ call, presenter }) =>
-      finishedToolLines(theme, presenter, call, detail, inner, opts).map((l) => `  ${l}`),
+    ...calls.flatMap(({ call, presenter }, i) =>
+      finishedToolLines(theme, presenter, call, detail, inner, {
+        ...opts,
+        expanded: true,
+        last: i === calls.length - 1,
+      }).map((line) => truncateToWidth(`${continuation}${line}`, width, glyphs.more)),
     ),
   ]
 }

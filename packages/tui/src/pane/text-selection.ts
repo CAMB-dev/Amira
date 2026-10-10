@@ -33,7 +33,7 @@ interface TextSelection {
    * Each block's version when it was taken, and for a block that changes by itself (`live`:
    * a reply streaming, a call running) the text of its rows then.
    */
-  texts: Map<Block, { version: number; text?: string }>
+  texts: Map<Block, { version: ReturnType<Block["cacheVersion"]>; text?: string }>
 }
 
 /** Orders two cells of the transcript. */
@@ -116,7 +116,10 @@ export class PaneTextSelection {
     this.text.blocks = this.view.blocks.slice(start.block.index, end.block.index + 1)
     // Only blocks that change by themselves keep their text: for the others, the version says.
     for (const b of this.text.blocks)
-      this.text.texts.set(b, { version: b.version, ...(b.live ? { text: this.textIn(b, env) } : {}) })
+      this.text.texts.set(b, {
+        version: b.cacheVersion(env),
+        ...(b.live ? { text: this.textIn(b, env) } : {}),
+      })
   }
 
   clearText(): void {
@@ -200,7 +203,13 @@ export class PaneTextSelection {
         const range = this.rangeIn(block, l)
         const row = rows[l] ?? { from: 0 }
         if (!range || row.skip || (row.repeats && last === l - 1)) continue
-        const text = row.text ?? sliceCells(plain[l]!, Math.max(range.from, row.from), range.to)
+        const text =
+          row.text ??
+          sliceCells(
+            plain[l]!,
+            Math.max(range.from, row.from),
+            Math.min(range.to, row.to ?? Number.POSITIVE_INFINITY),
+          )
         const whole = range.from <= row.from && range.to >= visibleWidth(plain[l]!)
         const prev = out[out.length - 1]
         if (row.joins && last === l - 1 && prev) {
@@ -275,14 +284,14 @@ export class PaneTextSelection {
       for (const b of blocks) {
         const was = t.texts.get(b)!
         if (was.text === undefined) {
-          if (b.version !== was.version) return false
+          if (b.cacheVersion(env) !== was.version) return false
           // It started changing by itself (a sub-agent of a finished call started).
           if (b.live) was.text = this.textIn(b, env)
           continue
         }
         // A live block (or one that just stopped: a reply that finished) by its text.
         if (this.textIn(b, env) !== was.text) return false
-        was.version = b.version
+        was.version = b.cacheVersion(env)
         if (!b.live) delete was.text
       }
       return true

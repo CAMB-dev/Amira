@@ -16,6 +16,7 @@ const OSC52_SAFE = 100_000
 export interface MouseDeps {
   pane: TranscriptPane
   paneRows: () => number
+  paneTop?: () => number
   requestRender: () => void
   showNote: (text: string) => void
   terminal: Terminal
@@ -89,6 +90,7 @@ export function createMouse(deps: MouseDeps) {
       return true
     }
     if (e.button !== "left") return true
+    e = { ...e, y: e.y - (deps.paneTop?.() ?? 0) }
     /** Near the last press: a column off still makes a double click. */
     const near = (p: typeof lastPress) => p !== undefined && p.y === e.y && Math.abs(p.x - e.x) <= 1
     if (e.action === "press") {
@@ -99,7 +101,7 @@ export function createMouse(deps: MouseDeps) {
       const again = near(lastPress) && now - lastPress!.at <= MULTI_CLICK_MS
       const count = again ? (lastPress!.count % 3) + 1 : 1
       lastPress = { x: e.x, y: e.y, at: now, count }
-      armed = e.y < paneRows()
+      armed = e.y >= 0 && e.y < paneRows()
       if (!armed) return true
       pane.select(undefined)
       if (count === 2) pane.selectWord(e.y, e.x)

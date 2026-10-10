@@ -84,7 +84,7 @@ test("a resumed history shows the search as a row and the sources as clickable l
   const lines = raw.map(stripAnsi)
   const row = lines.findIndex((l) => l.includes("web_search"))
   expect(lines[row]).toContain('"node lts · node current"')
-  expect(lines[row + 1]).toContain("1 source · provider search")
+  expect(lines[row]).toContain("  ✓ 1 source · provider search")
   const reply = lines.findIndex((l) => l.includes("v24 is the LTS."))
   expect(reply).toBeGreaterThan(row)
   expect(lines.slice(reply).some((l) => l.includes("Sources:"))).toBe(true)
