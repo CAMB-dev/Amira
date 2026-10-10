@@ -1,4 +1,5 @@
 import type { Component, RenderContext } from "../component.ts"
+import { themeToken } from "../style.ts"
 import { truncateToWidth } from "../width.ts"
 
 export interface SpinnerOptions {
@@ -46,7 +47,8 @@ export class Spinner implements Component {
   }
 
   render(width: number, { theme }: RenderContext): string[] {
-    const glyph = theme.accent(this.frames[this.frame] ?? "")
+    const shimmer = themeToken(theme, "shimmer") ?? theme.accent
+    const glyph = shimmer(this.frames[this.frame] ?? "")
     const text = this.label ? `${glyph} ${theme.muted(this.label)}` : glyph
     return [truncateToWidth(text, width)]
   }

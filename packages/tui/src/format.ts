@@ -158,7 +158,8 @@ export function reasoningLines(
   width: number,
 ): string[] {
   const time = opts.durationMs === undefined ? "" : ` for ${formatElapsed(Math.max(1000, opts.durationMs))}`
-  const head = `${theme.muted(glyphs.thought)} ${theme.muted(opts.thinking ? "Thinking" : `Thought${time}`)}`
+  const thinking = themeToken(theme, "thinking") ?? theme.muted
+  const head = `${thinking(glyphs.thought)} ${thinking(opts.thinking ? "Thinking" : `Thought${time}`)}`
   const body = text.trim()
   const lines = [truncateToWidth(head, Math.max(1, width), glyphs.more)]
   if (!opts.expanded || !body) return lines

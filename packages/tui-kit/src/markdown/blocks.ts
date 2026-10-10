@@ -189,7 +189,8 @@ const pad = (n: number) => " ".repeat(Math.max(0, n))
 
 /** A row of a code block's frame at `col`, cut to the width. */
 function frameRow(col: number, text: string, env: Env): string {
-  return truncateToWidth(pad(col) + env.styles.codeFrame(text), env.width, "…")
+  const row = truncateToWidth(pad(col) + env.styles.codeFrame(text), env.width, "…")
+  return env.styles.codeBg ? env.styles.codeBg(row) : row
 }
 
 /** The environment with the state's reference definitions. */
@@ -677,7 +678,8 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
   const layout = wrapCells(cells, room, !lr.code)
   const rows = layout.map((r, i) => {
     const head = i === 0 ? prefix : rest
-    return r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
+    const row = r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
+    return lr.code && env.styles.codeBg ? env.styles.codeBg(row) : row
   })
   return { rows, cells, runs, layout, carry: carry ?? "", open, mathOpen }
 }

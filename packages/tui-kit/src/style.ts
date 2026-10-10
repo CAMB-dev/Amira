@@ -1,4 +1,22 @@
 import { sgrAttributes, sgrGroup } from "@amira/text-width"
+import {
+  type Background,
+  backgroundFromEnv,
+  backgroundOf,
+  type Capabilities,
+  type Rgb,
+} from "./capabilities.ts"
+import {
+  blend,
+  type ColorDepth,
+  type ColorDepthSetting,
+  type ColorHint,
+  detectColorDepth,
+  type Hex,
+  nearest256,
+  quantize,
+} from "./colors.ts"
+import { consoleHost, palettes, surfacePalette } from "./palette.ts"
 
 export type StyleFn = (text: string) => string
 
@@ -63,6 +81,14 @@ export interface Theme {
   warning: StyleFn
   /** Borders and rules, such as the frame around the input box. */
   border: StyleFn
+  path: StyleFn
+  command: StyleFn
+  fg2: StyleFn
+  dim: StyleFn
+  borderFocused: StyleFn
+  thinking: StyleFn
+  /** The first gradient stop; shimmerEnd and shimmer0…shimmer15 expose quantized steps. */
+  shimmer: StyleFn
   [token: string]: StyleFn
 }
 
@@ -70,7 +96,7 @@ export interface Theme {
  * Tokens for rendered Markdown (`MarkdownStream`), part of `defaultTheme`. A theme that leaves
  * one out gets the value from here.
  */
-export const markdownTheme = {
+const ansiMarkdownTheme = {
   heading: compose(bold, cyan),
   /** Headings of level 3 and deeper. */
   subheading: bold,
@@ -99,7 +125,7 @@ export const markdownTheme = {
   comment: gray,
 } satisfies Record<string, StyleFn>
 
-export type MarkdownToken = keyof typeof markdownTheme
+export type MarkdownToken = keyof typeof ansiMarkdownTheme
 
 /** Half-block ends use the body's background as their foreground, leaving the outside clear. */
 function chip(foreground: number, background: number): StyleFn {
@@ -108,7 +134,8 @@ function chip(foreground: number, background: number): StyleFn {
   return (text) => edge("▐") + body(text) + edge("▌")
 }
 
-export const defaultTheme: Theme = {
+/** Original ANSI foregrounds, for the terminal theme and depth-16 fallback. */
+export const terminalTheme: Theme = {
   text: (s) => s,
   accent: cyan,
   muted: gray,
@@ -116,6 +143,14 @@ export const defaultTheme: Theme = {
   success: green,
   warning: yellow,
   border: gray,
+  path: blue,
+  command: magenta,
+  fg2: (s) => s,
+  dim: gray,
+  borderFocused: cyan,
+  thinking: gray,
+  shimmer: cyan,
+  shimmerEnd: blue,
   /** Chip foregrounds are explicit so their filled labels work on dark and light terminals. */
   chipNeutral: chip(231, 240),
   chipInfo: chip(231, 24),
@@ -125,7 +160,7 @@ export const defaultTheme: Theme = {
   chipAccent: chip(231, 54),
   /** Text selected with the mouse, as in a full-screen transcript. */
   selection: inverse,
-  ...markdownTheme,
+  ...ansiMarkdownTheme,
 }
 
 const plainText: StyleFn = (s) => s
@@ -144,6 +179,14 @@ export const monoTheme: Theme = {
   success: plainText,
   warning: bold,
   border: dim,
+  path: underline,
+  command: plainText,
+  fg2: plainText,
+  dim,
+  borderFocused: bold,
+  thinking: dim,
+  shimmer: bold,
+  shimmerEnd: bold,
   selection: inverse,
   heading: bold,
   heading1: compose(bold, underline),
@@ -178,6 +221,8 @@ export const monoTheme: Theme = {
 export interface SurfaceTokens {
   /** Behind the user's messages, the width of the screen. */
   userBg: StyleFn
+  /** Behind fenced code blocks. */
+  codeBg?: StyleFn
   /** Behind added and removed diff lines. */
   diffAddedBg: StyleFn
   diffRemovedBg: StyleFn
@@ -188,29 +233,141 @@ export interface SurfaceTokens {
   surfaceMuted: StyleFn
 }
 
-/**
- * Surface colors for a dark or light background, from the 256-color palette, which every
- * terminal with colors has: subtle on the background they are for, with the default text
- * readable on them. For an unknown background, mid tones that the default text of either kind
- * (white on dark, black on light) still reads on, at the cost of being less subtle.
- */
-export function surfaceTheme(background: "dark" | "light" | undefined): SurfaceTokens {
-  const [user, added, removed, addedWord, removedWord] =
-    background === "dark"
-      ? [236, 22, 52, 28, 88]
-      : background === "light"
-        ? [254, 194, 224, 157, 217]
-        : [242, 65, 131, 71, 167]
+/** Palette surfaces, quantized once with the foreground tokens. Unknown backgrounds use dark. */
+export function surfaceTheme(
+  background: Background | undefined,
+  depth: ColorDepth = "truecolor",
+  detected?: Rgb,
+  platform = "other",
+  host: ReturnType<typeof consoleHost> = "other",
+): SurfaceTokens {
+  if (depth === "16") {
+    const [user, added, removed, addedWord, removedWord] =
+      background === "dark"
+        ? [236, 22, 52, 28, 88]
+        : background === "light"
+          ? [254, 194, 224, 157, 217]
+          : [242, 65, 131, 71, 167]
+    return {
+      userBg: bg256(user),
+      diffAddedBg: bg256(added),
+      diffRemovedBg: bg256(removed),
+      diffAddedWordBg: bg256(addedWord),
+      diffRemovedWordBg: bg256(removedWord),
+      surfaceMuted: background ? gray : plainText,
+    }
+  }
+  const palette = palettes[background ?? "dark"]
+  const surfaces = surfacePalette(palette, detected, platform, host)
+  const added = depth === "256" ? nearest256(surfaces.diffAddedBg, { dominant: "green" }) : undefined
+  const removed = depth === "256" ? nearest256(surfaces.diffRemovedBg, { dominant: "red" }) : undefined
+  const bg = (name: keyof typeof surfaces, fallback: number) => {
+    const hint: ColorHint | undefined = name.startsWith("diff")
+      ? {
+          dominant: name.includes("Added") ? "green" : "red",
+          strongerThan: name.includes("Word") ? (name.includes("Added") ? added : removed) : undefined,
+        }
+      : undefined
+    return sgr(quantize(surfaces[name], depth, fallback, true, hint), 49)
+  }
   return {
-    userBg: bg256(user),
-    diffAddedBg: bg256(added),
-    diffRemovedBg: bg256(removed),
-    diffAddedWordBg: bg256(addedWord),
-    diffRemovedWordBg: bg256(removedWord),
-    // The mid tones leave too little contrast for gray text: it is drawn as normal text there.
-    surfaceMuted: background ? gray : (s) => s,
+    userBg: bg("userBg", background === "light" ? 47 : 40),
+    codeBg: bg("codeBg", background === "light" ? 47 : 40),
+    diffAddedBg: bg("diffAddedBg", 42),
+    diffRemovedBg: bg("diffRemovedBg", 41),
+    diffAddedWordBg: bg("diffAddedWordBg", 102),
+    diffRemovedWordBg: bg("diffRemovedWordBg", 101),
+    surfaceMuted: sgr(quantize(palette.fg2, depth, 90), 39),
   }
 }
+
+export type ThemeSetting = "auto" | "dark" | "light" | "terminal"
+export interface ThemeOptions {
+  theme?: ThemeSetting
+  colorDepth?: ColorDepthSetting
+  env?: Record<string, string | undefined>
+  capabilities?: Partial<Capabilities>
+  platform?: string
+  /** Renderers may disable colour independently of the environment. */
+  color?: boolean
+}
+
+/** Builds semantic styles once at startup. Never paints the terminal's base fg or bg. */
+export function createTheme(options: ThemeOptions = {}): Theme {
+  const env = options.env ?? process.env
+  if (options.color === false || !colorSupported(env)) return monoTheme
+  const capabilities = options.capabilities ?? {}
+  const depth =
+    options.theme === "terminal"
+      ? "16"
+      : options.colorDepth && options.colorDepth !== "auto"
+        ? options.colorDepth
+        : detectColorDepth(env, capabilities)
+  const background =
+    options.theme === "dark" || options.theme === "light"
+      ? options.theme
+      : (capabilities.background ??
+        (capabilities.backgroundRgb ? backgroundOf(capabilities.backgroundRgb) : backgroundFromEnv(env)))
+  const p = palettes[background ?? "dark"]
+  const fg = (hex: Hex, fallback = gray) => (depth === "16" ? fallback : sgr(quantize(hex, depth, 90), 39))
+  const theme: Theme = {
+    ...terminalTheme,
+    ...surfaceTheme(
+      background,
+      depth,
+      capabilities.backgroundRgb,
+      options.platform ?? process.platform,
+      consoleHost(env),
+    ),
+    accent: fg(p.accent, cyan),
+    muted: fg(p.muted),
+    error: fg(p.error, red),
+    success: fg(p.success, green),
+    warning: fg(p.warning, yellow),
+    border: fg(p.border),
+    path: fg(p.path, blue),
+    command: fg(p.command, magenta),
+    fg2: fg(p.fg2, plainText),
+    dim: fg(p.dim),
+    borderFocused: fg(p.borderFocused, cyan),
+    thinking: fg(p.thinking),
+    heading1: depth === "16" ? ansiMarkdownTheme.heading : compose(bold, fg(p.heading1)),
+    heading: depth === "16" ? ansiMarkdownTheme.heading : compose(bold, fg(p.heading)),
+    subheading: depth === "16" ? bold : compose(bold, fg(p.fg2)),
+    code: fg(p.command, magenta),
+    link: compose(underline, fg(p.path, blue)),
+    linkUrl: fg(p.muted),
+    quoteBar: fg(p.dim),
+    listMarker: fg(p.accent, cyan),
+    rule: fg(p.dim),
+    codeFrame: fg(p.dim),
+    tableBorder: fg(p.dim),
+    keyword: fg(p.keyword, blue),
+    string: fg(p.string, green),
+    number: fg(p.number, yellow),
+    comment: fg(p.muted),
+    shimmer: fg(p.accent, cyan),
+    shimmerEnd: fg(p.heading1, blue),
+  }
+  for (let i = 0; i < 16; i++) theme[`shimmer${i}`] = fg(blend(p.accent, p.heading1, i / 15), cyan)
+  if (depth === "16") return theme
+  const chipStyle = (background: Hex, fallback: number) => {
+    const edge = sgr(quantize(background, depth, fallback - 10), 39)
+    const body = compose(sgr(quantize(background, depth, fallback, true), 49), fg(p.bg, black))
+    return (text: string) => edge("▐") + body(text) + edge("▌")
+  }
+  theme.chipNeutral = chipStyle(p.fg2, 47)
+  theme.chipInfo = chipStyle(p.heading1, 44)
+  theme.chipSuccess = chipStyle(p.success, 42)
+  theme.chipWarning = chipStyle(p.warning, 43)
+  theme.chipDanger = chipStyle(p.error, 41)
+  theme.chipAccent = chipStyle(p.accent, 46)
+  return theme
+}
+
+/** Safe ANSI defaults; palette colours and surfaces require createTheme at startup. */
+export const defaultTheme: Theme = { ...terminalTheme }
+export const markdownTheme = ansiMarkdownTheme
 
 /** A token of `theme` that it may not have, such as the surface colors. */
 export function themeToken(theme: Theme, name: string): StyleFn | undefined {

@@ -115,6 +115,45 @@ test("live token speed is a boolean setting that project files can override", ()
   )
 })
 
+test.each(["auto", "dark", "light", "terminal"])("TUI theme accepts %s", (theme) => {
+  const settings = { tui: { theme } }
+  expect(validateSettings(settings, "settings.json")).toEqual({ settings, warnings: [] })
+})
+
+test.each(["auto", "truecolor", "256", "16"])("TUI color depth accepts %s", (colorDepth) => {
+  const settings = { tui: { colorDepth } }
+  expect(validateSettings(settings, "settings.json")).toEqual({ settings, warnings: [] })
+})
+
+test.each([
+  ["theme", "system"],
+  ["theme", "Dark"],
+  ["theme", false],
+  ["theme", null],
+  ["colorDepth", "24"],
+  ["colorDepth", 256],
+  ["colorDepth", 16],
+  ["colorDepth", false],
+  ["colorDepth", null],
+] as const)("TUI %s rejects %j", (key, value) => {
+  expect(() => validateSettings({ tui: { [key]: value } }, "settings.json")).toThrow(
+    `"tui.${key}" must be one of`,
+  )
+})
+
+test("TUI appearance settings merge by key and project files can override them", () => {
+  expect(validateSettings({ tui: {} }, "settings.json")).toEqual({
+    settings: { tui: {} },
+    warnings: [],
+  })
+  put(userFile(), { tui: { theme: "dark", colorDepth: "truecolor" } })
+  put(projectFile(), { tui: { theme: "light" } })
+  put(localFile(), { tui: { colorDepth: "16" } })
+  const result = loadSettings({ cwd, home })
+  expect(result.warnings).toEqual([])
+  expect(result.settings.tui).toEqual({ theme: "light", colorDepth: "16" })
+})
+
 test("server-side compaction and its layout are settings; a project file cannot turn it on", () => {
   put(userFile(), {
     providers: {

@@ -12,10 +12,10 @@ import { MAX_DIFF_LINE_ROWS, parseUnifiedDiff, renderToolLines } from "../src/di
 import { wordDiff } from "../src/word-diff.ts"
 
 const dark = { ...defaultTheme, ...surfaceTheme("dark") }
-const RED = "\x1b[48;5;52m"
-const GREEN = "\x1b[48;5;22m"
-const RED_WORD = "\x1b[48;5;88m"
-const GREEN_WORD = "\x1b[48;5;28m"
+const RED = "\x1b[48;2;71;20;26m"
+const GREEN = "\x1b[48;2;15;58;18m"
+const RED_WORD = "\x1b[48;2;102;33;42m"
+const GREEN_WORD = "\x1b[48;2;23;85;28m"
 const OFF = "\x1b[49m"
 
 const edit: ToolLine[] = diffToolLines([
@@ -64,7 +64,7 @@ test("an edit: numbers in a gutter, changed lines on their color to the edge, ch
   expect(rows[1]).not.toContain(RED_WORD)
   expect(rows[3]).not.toContain(GREEN_WORD)
   // The number is muted, on the line's color.
-  expect(rows[1]).toContain(`${RED}${defaultTheme.muted("39 ")}- const`)
+  expect(rows[1]).toContain(`${RED}${dark.surfaceMuted!("39 ")}- const`)
 })
 
 test("paired lines mark the words that changed on both sides", () => {
@@ -187,14 +187,14 @@ test("a unified diff: content lines like headers stay in their hunk, a header's 
   expect(stripAnsi(renderToolLines(lines, defaultTheme, 40)[2]!)).toBe(" ⋯   select")
 })
 
-test("with an unknown background, line numbers on a changed line are drawn as normal text", () => {
+test("with an unknown background, dark surfaces and secondary line numbers are used", () => {
   const rows = renderToolLines(edit, { ...defaultTheme, ...surfaceTheme(undefined) }, 44)
-  expect(rows[1]!.startsWith("\x1b[48;5;131m39 - const")).toBe(true)
+  expect(rows[1]!.startsWith(`${RED}${dark.surfaceMuted!("39 ")}- const`)).toBe(true)
 })
 
 test("a light terminal gets light backgrounds", () => {
   const rows = renderToolLines(edit, { ...defaultTheme, ...surfaceTheme("light") }, 44)
-  expect(rows[1]!.startsWith("\x1b[48;5;224m")).toBe(true)
-  expect(rows[2]!.startsWith("\x1b[48;5;194m")).toBe(true)
-  expect(rows[2]).toContain("\x1b[48;5;157m")
+  expect(rows[1]!.startsWith("\x1b[48;2;246;213;216m")).toBe(true)
+  expect(rows[2]!.startsWith("\x1b[48;2;214;240;207m")).toBe(true)
+  expect(rows[2]).toContain("\x1b[48;2;188;229;177m")
 })

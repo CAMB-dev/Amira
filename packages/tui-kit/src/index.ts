@@ -15,6 +15,7 @@ export {
   supportsHyperlinks,
   type TerminalEnv,
 } from "./capabilities.ts"
+export { type ColorDepth, type ColorDepthSetting, detectColorDepth } from "./colors.ts"
 export { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 export { Box, type BoxOptions } from "./components/box.ts"
 export {
@@ -95,6 +96,7 @@ export {
   bold,
   colorSupported,
   compose,
+  createTheme,
   cyan,
   defaultTheme,
   dim,
@@ -117,6 +119,9 @@ export {
   stripColors,
   surfaceTheme,
   type Theme,
+  type ThemeOptions,
+  type ThemeSetting,
+  terminalTheme,
   themeToken,
   underline,
   white,

@@ -115,7 +115,7 @@ test("the user's band fills the pane at every width, also while selected", () =>
     const rows = p.render(banded(width), 8).filter((r) => r !== "")
     expect(rows.length).toBeGreaterThanOrEqual(3)
     for (const r of rows) {
-      expect(r.startsWith("\x1b[48;5;254m")).toBe(true)
+      expect(r.startsWith("\x1b[48;2;232;230;225m")).toBe(true)
       expect(visibleWidth(r)).toBe(width)
     }
   }

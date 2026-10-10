@@ -45,7 +45,7 @@ test("the user's message wraps under its prompt symbol, not to the first column"
 })
 
 const banded = { ...defaultTheme, ...surfaceTheme("dark") }
-const BAND = "\x1b[48;5;236m"
+const BAND = "\x1b[48;2;32;32;32m"
 
 /** Each row is on the band from the first cell to exactly the last one. */
 function expectBand(rows: string[], width: number) {
@@ -108,7 +108,7 @@ test("without the band token (NO_COLOR, or a theme without it) the message is as
 test("a command's echo is on the band too, muted", () => {
   const rows = commandEchoLines(banded, "/status", 20)
   expectBand(rows, 20)
-  expect(rows[1]).toBe(`${BAND}${defaultTheme.muted("› /status")}${" ".repeat(11)}\x1b[49m`)
+  expect(rows[1]).toBe(`${BAND}${banded.surfaceMuted!("› /status")}${" ".repeat(11)}\x1b[49m`)
   expect(commandEchoLines(defaultTheme, "/status", 20)).toEqual([defaultTheme.muted("› /status")])
   expect(bandRows(["abc"], 2, banded.userBg).map(visibleWidth)).toEqual([2, 2, 2])
 })
@@ -125,10 +125,10 @@ test("a wrapped echo keeps the band after the reset that ends its style on a row
   }
 })
 
-test("with an unknown background, muted text on the band is drawn as normal text", () => {
+test("with an unknown background, the dark band and secondary text are used", () => {
   const unknown = { ...defaultTheme, ...surfaceTheme(undefined) }
   const rows = commandEchoLines(unknown, "/status", 20)
-  expect(rows[1]).toBe(`\x1b[48;5;242m› /status${" ".repeat(11)}\x1b[49m`)
+  expect(rows[1]).toBe(`${BAND}\x1b[38;2;189;189;189m› /status\x1b[39m${" ".repeat(11)}\x1b[49m`)
 })
 
 test("a resumed history starts at a boundary naming the session, then the transcript's blocks and presenters", () => {

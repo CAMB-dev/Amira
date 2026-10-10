@@ -52,6 +52,13 @@ test("custom and older themes without chip tokens fall back to thin-bar labels",
     warning: plain,
     error: plain,
     border: plain,
+    path: plain,
+    command: plain,
+    fg2: plain,
+    dim: plain,
+    borderFocused: plain,
+    thinking: plain,
+    shimmer: plain,
   }
   for (const tone of tones) expect(segmentText([{ kind: "chip", text: "x", tone }], theme)).toBe("▏x▕")
   expect(segmentText(chip(""), theme)).toBe("▏▕")
