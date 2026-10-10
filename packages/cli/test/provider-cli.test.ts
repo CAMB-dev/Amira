@@ -1,5 +1,5 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: Catalog URL placeholders are literal fixtures.
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -8,6 +8,9 @@ import { UsageError } from "../src/args.ts"
 import type { CatalogCacheOptions } from "../src/catalog.ts"
 import { lineDialogs, runProviderAdminCommand } from "../src/provider-cli.ts"
 import catalogFixture from "./fixtures/provider-catalog.json" with { type: "json" }
+
+// A full add/edit dialog takes ~4s alone; a loaded machine exceeds the 5s default.
+setDefaultTimeout(30_000)
 
 let home: string
 let cwd: string
