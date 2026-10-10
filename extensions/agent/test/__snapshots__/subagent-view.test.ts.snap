@@ -1,0 +1,24 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`restyled viewer frame uses the main transcript renderers and keeps its own chrome 1`] = `
+"◆ Child a · running · 5s · 1.6k tok · $0.0123 · explorer · a              1 of 2
+task: Task a
+────────────────────────────────────────────────────────────────────────────────
+  › Task a
+
+  └ read a.ts  ✓ contents of a.ts (+2 lines)
+
+  Now waiting.
+
+  └ ⠋ wait                                                                    0s
+
+
+
+
+
+
+
+
+
+following · ←→ switch · x stop · p print · Esc close"
+`;

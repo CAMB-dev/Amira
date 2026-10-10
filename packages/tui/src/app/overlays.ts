@@ -38,6 +38,7 @@ export class OverlayManager {
    */
   private viewer: ExtensionViewer | KeyReference | undefined
   private viewerTimer: ReturnType<typeof setInterval> | undefined
+  private viewerInterval = 1000
   /**
    * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
    * `form` is set. A form waits while an inline dialog or the viewer is up, and inline dialogs
@@ -58,7 +59,10 @@ export class OverlayManager {
   }
 
   render(width: number, ctx: RenderContext): string[] {
-    return this.form ? this.form.render(width, ctx) : (this.viewer?.render(width, ctx) ?? [])
+    if (this.form) return this.form.render(width, ctx)
+    const rows = this.viewer?.render(width, ctx) ?? []
+    this.syncViewerTimer()
+    return rows
   }
 
   waitingChanged(change: EventMap["ui.waiting"]["change"]) {
@@ -125,8 +129,18 @@ export class OverlayManager {
     if (next instanceof ExtensionViewer) next.mount()
     if (this.viewer !== next) return
     this.deps.view().openOverlay(next instanceof ExtensionViewer)
-    if (!this.viewerTimer) this.viewerTimer = setInterval(() => this.deps.view().requestOverlayRender(), 1000)
+    this.syncViewerTimer()
     this.waitingChanged("visibility")
+  }
+
+  /** Reuse the overlay timer: ordinary views keep their 1s refresh, running tools use 80ms. */
+  private syncViewerTimer() {
+    if (!this.viewer) return
+    const interval = this.viewer instanceof ExtensionViewer && this.viewer.animating ? 80 : 1000
+    if (this.viewerTimer && this.viewerInterval === interval) return
+    clearInterval(this.viewerTimer)
+    this.viewerInterval = interval
+    this.viewerTimer = setInterval(() => this.deps.view().requestOverlayRender(), interval)
   }
 
   private closeView() {

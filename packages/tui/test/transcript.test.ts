@@ -7,25 +7,25 @@ test("one blank line between blocks, none between the tool calls of a step or a 
   const t = new Transcript()
   const out = [
     ...t.block("banner", ["Amira"]),
-    ...t.block("user", ["› hi"]),
-    ...t.block("tool", ["● read a"]),
-    ...t.block("tool", ["● read b"]),
+    ...t.block("user", ["  › hi"]),
+    ...t.block("tool", ["  ├ read a  ✓ contents of a"]),
+    ...t.block("tool", ["  └ read b  ✓ contents of b"]),
     ...t.block("assistant", ["  reply"]),
-    ...t.block("command", ["› /status"]),
+    ...t.block("command", ["  › /status"]),
     ...t.block("command-output", ["  └ ok"]),
     ...t.block("notice", ["• note"]),
   ]
   expect(out).toEqual([
     "Amira",
     "",
-    "› hi",
+    "  › hi",
     "",
-    "● read a",
-    "● read b",
+    "  ├ read a  ✓ contents of a",
+    "  └ read b  ✓ contents of b",
     "",
     "  reply",
     "",
-    "› /status",
+    "  › /status",
     "  └ ok",
     "",
     "• note",
@@ -34,7 +34,7 @@ test("one blank line between blocks, none between the tool calls of a step or a 
 
 test("a streamed block gets its gap once, however many pieces it is committed in", () => {
   const t = new Transcript()
-  t.block("user", ["› go"])
+  t.block("user", ["  › go"])
   expect(t.gapBefore("assistant")).toBe(true)
   expect(t.continue("assistant", ["  row 1"])).toEqual(["", "  row 1"])
   expect(t.gapBefore("assistant")).toBe(false)
