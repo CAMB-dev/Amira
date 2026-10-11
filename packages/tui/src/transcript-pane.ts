@@ -109,6 +109,8 @@ export class TranscriptPane {
   private frame = 0
   private env: BlockEnv | undefined
   private height = 1
+  /** With variable chrome, only rendering can decide whether an anchor reaches the end. */
+  private dynamicHeight = false
   private readonly textSelection = new PaneTextSelection({
     blocks: this.blocks,
     env: () => this.env,
@@ -206,23 +208,39 @@ export class TranscriptPane {
   /**
    * The rows of the viewport, `height` of them: blank padding above content shorter than
    * that, then the blocks in view, the selected one marked and matches of the find bar
-   * highlighted.
+   * highlighted. `reserveTop` budgets nonselectable chrome from the candidate viewport;
+   * the resulting content height is also used by scrolling, selection and image placement.
    */
-  render(env: BlockEnv, height: number): string[] {
+  render(env: BlockEnv, height: number, reserveTop?: (layout: readonly PaneRow[]) => number): string[] {
     this.frame++
     this.env = env
-    this.height = Math.max(1, height)
+    const available = Math.max(1, height)
+    this.dynamicHeight = reserveTop !== undefined
+    this.height = available
     this.finder.refresh(env)
+    const contentHeight = (layout: readonly PaneRow[]) => Math.max(1, available - (reserveTop?.(layout) ?? 0))
     let rows: PaneRow[] | undefined
     if (!this.following) {
       const a = this.anchor
       if (a && a.block.index >= 0) {
-        rows = this.fill(a.block.index, a.offset, this.height)
+        // One extra row distinguishes an exact fit from content continuing below the view.
+        rows = this.fill(a.block.index, a.offset, available + 1)
+        this.height = contentHeight(rows)
+        if (this.dynamicHeight && rows.length <= this.height) this.follow()
+        rows = rows.slice(0, this.height)
         this.top = a
       }
       if (!rows || rows.length < this.height) this.follow()
     }
-    if (this.following) rows = this.fillTail(this.height)
+    if (this.following) {
+      // Try the largest tail first. Re-evaluate chrome as the top crosses a turn boundary;
+      // never pin an older prompt above a newer turn or hide a real visible prompt.
+      for (let tail = available; tail >= 1; tail--) {
+        rows = this.fillTail(tail)
+        this.height = contentHeight(rows)
+        if (rows.length <= this.height) break
+      }
+    }
     this.layout = rows!
     this.padding = this.height - this.layout.length
     this.textSelection.update(env)
@@ -744,7 +762,7 @@ export class TranscriptPane {
     // The rest from here fits: that is the end, which is followed.
     let below = -off
     for (let j = k; j < this.blocks.length && below <= this.height; j++) below += this.rowsOf(j, env)
-    if (below <= this.height) this.follow()
+    if (!this.dynamicHeight && below <= this.height) this.follow()
   }
 
   private reindex(from: number): void {

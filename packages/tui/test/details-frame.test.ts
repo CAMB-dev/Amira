@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test"
 import { textResult } from "@amira/api"
-import { Editor, FakeTerminal, key, Spinner, visibleWidth } from "@amira/tui-kit"
+import { defaultTheme, Editor, FakeTerminal, key, Spinner, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
-import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { localClock, rememberMessageTime } from "../src/format.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
@@ -17,8 +16,8 @@ const at = new Date(2026, 9, 10, 20, 9).getTime()
 test(
   "width-100 fullscreen details frames: verb groups and sticky prompt while scrolled",
   withSnapshotClock(() => {
-    const terminal = new FakeTerminal(100, 18)
-    const screen = new VirtualScreen(100, 18)
+    const terminal = new FakeTerminal(100, 30)
+    const screen = new VirtualScreen(100, 30)
     const write = terminal.write.bind(terminal)
     terminal.write = (data) => {
       write(data)
@@ -29,7 +28,7 @@ test(
     ])
     const view = createFullscreenView({
       terminal,
-      theme: plain.theme,
+      theme: { ...defaultTheme, ...surfaceTheme("dark") },
       capabilities: {
         win32InputMode: false,
         kittyKeyboard: true,
@@ -92,9 +91,12 @@ test(
       }
       view.turnEnd()
       view.render()
-      expect(screen.lines[1]).toBe(
-        `  › Polish the transcript details.…${" ".repeat(63 - visibleWidth(localClock(at)))}${localClock(at)}`,
+      expect(screen.lines[1]).toBe("")
+      expect(screen.lines[2]).toBe(
+        `  › Polish the transcript details.${" ".repeat(64 - visibleWidth(localClock(at)))}${localClock(at)}`,
       )
+      expect(screen.lines[3]).toBe("    Keep all output reachable.")
+      expect(screen.lines[4]).toBe("")
       expect(screen.lines.join("\n")).toContain("Read 3 files")
       expect(screen.lines.join("\n")).toContain("Searched 2 patterns")
       expect(screen.lines.join("\n")).not.toContain("Explored")
@@ -103,7 +105,8 @@ test(
       view.handleInput(key("up", { shift: true }))
       view.handleInput(key("up", { shift: true }))
       view.render()
-      expect(screen.lines[1]).toContain("Polish the transcript details.…")
+      expect(screen.lines[2]).toContain("Polish the transcript details.")
+      expect(screen.lines[3]).toContain("Keep all output reachable.")
       expect(screen.lines.join("\n")).toContain("2 rows below")
       expect(screen.lines.join("\n")).toMatchSnapshot("sticky while scrolled")
     } finally {

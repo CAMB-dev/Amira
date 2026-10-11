@@ -107,7 +107,7 @@ interface TimestampDecoration {
 const rowTimestamps = new WeakMap<readonly string[], TimestampDecoration>()
 const userBandPadding = new WeakMap<readonly string[], number>()
 
-/** Painted blank rows at each end of a real user band, not transcript gaps or sticky chrome. */
+/** Painted blank rows at each end of a user band, not transcript gaps. */
 export function userBandPaddingIn(lines: readonly string[]): number {
   return userBandPadding.get(lines) ?? 0
 }
@@ -155,6 +155,7 @@ export function userLines(
   message: UserMessage,
   width = Number.POSITIVE_INFINITY,
   at = messageTimestamp(message),
+  maxTextRows = Number.POSITIVE_INFINITY,
 ): string[] {
   // A notice (e.g. background sub-agents' results) shows as its short lines, not as typed text.
   if (message.display?.origin && message.display.text.trim())
@@ -165,7 +166,12 @@ export function userLines(
   const inset = visibleWidth(glyphs.user) + 3
   const room = Math.max(1, width - inset - (bg ? 2 : 0))
   const firstRoom = Math.max(1, timestampRoom(width, at) - inset - (bg ? 2 : 0))
-  const rows = Number.isFinite(width) ? wrapText(text, room, firstRoom) : text.split("\n")
+  let rows = Number.isFinite(width) ? wrapText(text, room, firstRoom) : text.split("\n")
+  if (rows.length > maxTextRows) {
+    rows = rows.slice(0, maxTextRows)
+    const last = rows.length - 1
+    rows[last] = truncateToWidth(rows[last]! + glyphs.more, last === 0 ? firstRoom : room, glyphs.more)
+  }
   const lines = rows.map((l, i) => {
     const prompt = theme.accent(i === 0 ? glyphs.user : " ")
     return `  ${i === 0 && bg && bg(" ") !== " " ? bold(prompt) : prompt} ${l}`

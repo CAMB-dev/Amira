@@ -53,8 +53,11 @@ const END = "\x1b[F"
 const CTRL_F = "\x06"
 const SHIFT_ENTER = "\x1b[13;2u"
 const WHEEL_UP = "\x1b[<64;5;5M"
-/** Full-screen workspace chrome occupies two rows above the transcript. */
+/** Full-screen workspace chrome occupies two rows above the unpinned transcript. */
 const PANE_TOP = 2
+/** These fixtures send one-line prompts: their sticky band adds two painted padding rows. */
+const paneTop = (screen: VirtualScreen) =>
+  screen.lines[PANE_TOP]!.startsWith("  › ") ? PANE_TOP + 2 : PANE_TOP
 /** Remove only a padded, valid 12- or 24-hour clock at the end of a row. */
 const withoutClocks = (text: string) =>
   text.replace(/ {2,}(?:(?:[01]\d|2[0-3]):[0-5]\d|(?:[1-9]|1[0-2]):[0-5]\d [AP]M) *$/gm, "")
@@ -928,19 +931,21 @@ test("a drag along the top row selects there; it scrolls up once it came back to
   terminal.send("go\r")
   await shows("item 30")
   await idle()
-  const top = screen.lines[PANE_TOP]!
+  const first = paneTop(screen)
+  expect(first).toBe(PANE_TOP + 2)
+  const top = screen.lines[first]!
   expect(top).toContain("item")
-  terminal.send(press(2, PANE_TOP) + drag(4, PANE_TOP) + drag(6, PANE_TOP))
+  terminal.send(press(2, first) + drag(4, first) + drag(6, first))
   // Nothing scrolls: the text of the top row is selected.
   await waitFor(() => terminal.output.includes("\x1b[7m"), "marked")
-  terminal.send(release(6, PANE_TOP))
+  terminal.send(release(6, first))
   await waitFor(() => clipboard(terminal.output) !== undefined, "copied")
-  expect(screen.lines[PANE_TOP]).toBe(top)
+  expect(screen.lines[first]).toBe(top)
   expect(clipboard(terminal.output)).toBe(top.slice(2, 7))
   // Started lower, a drag to the top row scrolls.
-  terminal.send(press(2, PANE_TOP + 3) + drag(2, PANE_TOP + 1) + drag(2, PANE_TOP))
-  await waitFor(() => screen.lines[PANE_TOP] !== top, "scrolled up")
-  terminal.send(release(2, PANE_TOP))
+  terminal.send(press(2, first + 3) + drag(2, first + 1) + drag(2, first))
+  await waitFor(() => screen.lines[first] !== top, "scrolled up")
+  terminal.send(release(2, first))
   terminal.send("\x03")
   await exited
 })
@@ -1455,7 +1460,7 @@ function expectedImageRows(screen: VirtualScreen, height = 6): number[] {
     start = top + 2
     end = Math.min(top + 1 + height, paneEnd - 1)
   } else if (bottom >= 0) {
-    start = Math.max(PANE_TOP, bottom - 1 - height)
+    start = Math.max(paneTop(screen), bottom - 1 - height)
     end = bottom - 2
   } else return []
   return Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
@@ -1547,7 +1552,7 @@ test("kitty: the image is sent once, placed as it scrolls, removed off screen an
   terminal.send(PAGE_UP)
   await waitFor(() => placed().length > 0, "the placement")
   const { id, pid } = placed()[0]!
-  expect(placed()[0]!.row).toBe(screen.lines.findIndex((row) => withoutClocks(row) === "  top") + 2)
+  expect(placed()[0]!.row).toBe(expectedImageRows(screen)[0]!)
   // A row at a time: the same placement, moved (or cropped by the terminal).
   terminal.send(SHIFT_DOWN)
   await Bun.sleep(30)
@@ -1670,7 +1675,7 @@ test("iTerm2 draws images whole: partly in view, the image is its alt text, to s
     terminal.send(SHIFT_UP)
     await Bun.sleep(25)
     const bottom = screen.lines.indexOf("  bottom")
-    if (bottom >= PANE_TOP + 2 && bottom < PANE_TOP + 7) {
+    if (bottom >= paneTop(screen) + 2 && bottom < paneTop(screen) + 7) {
       partial = true
       expect(imageRows(screen)).toEqual([])
       expect(view()).toContain("🖼️ chart (scroll to view)")

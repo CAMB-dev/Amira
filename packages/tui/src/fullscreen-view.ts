@@ -34,7 +34,7 @@ import { runningBoundary } from "./fullscreen/running-boundary.ts"
 import { createSubagentBlocks } from "./fullscreen/subagent-blocks.ts"
 import { glyphs } from "./glyphs.ts"
 import { sessionBoundary } from "./history.ts"
-import { stickyPrompt, stickyPromptLine } from "./pane/sticky-prompt.ts"
+import { stickyPrompt, stickyPromptLines } from "./pane/sticky-prompt.ts"
 import { OUTPUT_LINES } from "./tool-view.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { TranscriptPane } from "./transcript-pane.ts"
@@ -96,6 +96,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Rows of the transcript in the last frame, for mouse clicks. */
   let paneRows = 0
   let paneTop = 0
+  let pinned: LinesBlock | undefined
+  let pinnedRows = 0
 
   /**
    * Images of replies, drawn in the transcript where the terminal can (D83) while an image
@@ -160,17 +162,24 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.
     if (overlay) return host.overlay.render(width, ctx)
     const header = host.header?.(width, ctx) ?? []
-    // Reserve the existing header gap even when no prompt is pinned: transcript math stays fixed.
+    // The existing header gap is the first sticky row; only additional band rows cost space.
     if (header.length) header.push("")
     paneTop = header.length
     const barRows = findSelect.finding || pane.selected ? 1 : 0
     const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - barRows - paneTop)
     const bottom = host.bottom(width, ctx, budget)
-    paneRows = Math.max(1, ctx.rows - bottom.length - barRows - 1 - paneTop)
+    const available = Math.max(1, ctx.rows - bottom.length - barRows - 1 - paneTop)
     const frameEnv = env(width)
-    const rows = pane.render(frameEnv, paneRows)
-    const pinned = stickyPrompt(pane.blocks, pane.layout)
-    if (pinned && header.length) header[header.length - 1] = stickyPromptLine(pinned, frameEnv)
+    let sticky: string[] = []
+    const rows = pane.render(frameEnv, available, (layout) => {
+      pinned = header.length ? stickyPrompt(pane.blocks, layout) : undefined
+      sticky = pinned ? stickyPromptLines(pinned, frameEnv, available) : []
+      return Math.max(0, sticky.length - 1)
+    })
+    pinnedRows = sticky.length
+    if (pinnedRows) header.splice(header.length - 1, 1, ...sticky)
+    paneTop = header.length
+    paneRows = rows.length
     // Rendering refreshes matches as text streams in; the bar uses this frame's counts.
     const bar = findSelect.finding
       ? [findSelect.findBar(width)]
@@ -204,7 +213,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     pane,
     paneRows: () => paneRows,
     paneTop: () => paneTop,
-    stickyPrompt: () => (paneTop ? stickyPrompt(pane.blocks, pane.layout) : undefined),
+    stickyPrompt: () => pinned,
+    stickyRows: () => pinnedRows,
     requestRender: () => renderer.requestRender(),
     showNote: (text) => host.showNote(text),
     terminal,
