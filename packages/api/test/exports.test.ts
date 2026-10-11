@@ -13,7 +13,7 @@ import type {
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
   const actual = Object.keys(api).sort()
-  expect(api.API_VERSION).toBe("0.1.40")
+  expect(api.API_VERSION).toBe("0.1.41")
   expect(actual).toEqual([
     "API_VERSION",
     "ARTIFACT_HEADER",
