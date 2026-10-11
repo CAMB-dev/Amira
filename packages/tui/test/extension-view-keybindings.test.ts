@@ -197,7 +197,7 @@ test("extension-defined shortcuts take precedence over shared scroll keys", () =
 
 test("binding a shared scroll key to view.back warns about the view-scope conflict", () => {
   const { warnings } = parseKeybindings({ "view.back": "pageup" }, "keybindings.json", defaults)
-  expect(warnings).toEqual(['keybindings.json: PgUp is bound to both "view.back" and "scroll.page-up"'])
+  expect(warnings).toEqual(['keybindings.json: pgup is bound to both "view.back" and "scroll.page-up"'])
 })
 
 test("view hints and the key reference show the current host bindings", () => {
@@ -217,16 +217,16 @@ test("view hints and the key reference show the current host bindings", () => {
   )
   expect(warnings).toEqual([])
   const viewer = new ExtensionViewer(view, {}, { keys })
-  expect(stripAnsi(viewer.render(120, ctx).at(-1)!)).toBe("1–7 of 40 · kj F8 scroll · F6 close")
+  expect(stripAnsi(viewer.render(120, ctx).at(-1)!)).toBe("1–7 of 40 · kj f8 scroll · f6 close")
   const minimal = new ExtensionViewer({ ...view, hostKeys: "minimal" }, {}, { keys })
-  expect(stripAnsi(minimal.render(120, ctx).at(-1)!)).toBe("F6 close")
+  expect(stripAnsi(minimal.render(120, ctx).at(-1)!)).toBe("f6 close")
   const reference = new KeyReference(keys, { fullscreen: false, onClose: () => {} })
   const text = reference
     .render(180, { ...ctx, rows: 300 })
     .map(stripAnsi)
     .join("\n")
   expect(text).toContain("Extension views")
-  expect(text).toMatch(/F6 +.*view\.back/)
-  expect(text).toMatch(/F7 +.*view\.close/)
-  expect(text).toMatch(/F8 +.*scroll\.page-up/)
+  expect(text).toMatch(/f6 +.*view\.back/)
+  expect(text).toMatch(/f7 +.*view\.close/)
+  expect(text).toMatch(/f8 +.*scroll\.page-up/)
 })

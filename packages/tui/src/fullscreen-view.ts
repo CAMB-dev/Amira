@@ -75,8 +75,13 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Calls of the running step, in call order. */
   let stepCalls: ToolBlock[] = []
   let reply: ReplyBlock | undefined
-  /** Only the first nonempty reply block of a turn gets a clock. */
-  let replySeen = false
+  /** The first visible assistant row owns the turn's clock, even when it is not text. */
+  let assistantSeen = false
+  const firstAssistantTime = () => {
+    if (assistantSeen) return undefined
+    assistantSeen = true
+    return Date.now()
+  }
   /** The reasoning of the reply streaming now, while it thinks. */
   let reasoning: ReasoningBlock | undefined
   let overlay = false
@@ -264,7 +269,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   function clearTranscript(): void {
     settleStep()
     reply = undefined
-    replySeen = false
+    assistantSeen = false
     findSelect.closeFind()
     pane.clear((b) => b.kind === "banner")
     // The old session's calls and sub-agents are not shown under the new one.
@@ -345,21 +350,22 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           reply.finish()
           reply = undefined
         }
-        reasoning = new ReasoningBlock("", undefined, Date.now(), true)
+        reasoning = new ReasoningBlock("", undefined, Date.now(), true, firstAssistantTime())
         pane.add(reasoning)
       }
       reasoning.append(text)
       pane.changed()
     },
     replyDelta(text) {
+      // Empty deltas create no visible reply and cannot claim a clock or end thinking.
+      if (!reply && !text.trim()) return
       endReasoning()
       if (!reply) {
-        reply = new ReplyBlock("", true, host.hyperlinks, replySeen ? undefined : Date.now())
+        reply = new ReplyBlock("", true, host.hyperlinks, firstAssistantTime())
         pane.add(reply)
         markToolTrees()
       }
       reply.append(text)
-      if (reply.source.trim()) replySeen = true
       pane.changed()
     },
     replyEnd(calls) {
@@ -391,6 +397,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       }
       b.name = name
       b.args = args
+      if (!b.started) b.timestamp = firstAssistantTime()
       b.startedAt = at
       b.touch()
       markToolTrees()
@@ -405,6 +412,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     toolEnd(id, end) {
       const b = callBlocks.get(id)
       if (!b) return false
+      // A rejected call can become visible without ever starting.
+      if (!b.started) b.timestamp = firstAssistantTime()
       b.end = end
       b.touch()
       pane.changed()
@@ -414,7 +423,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       return true
     },
     turnEnd() {
-      replySeen = false
+      assistantSeen = false
       settleStep()
       subagents.tick()
       return false
@@ -453,7 +462,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       renderer.requestRender()
     },
     leaveSession() {
-      replySeen = false
+      assistantSeen = false
       settleStep()
       endReasoning()
       reply?.finish()

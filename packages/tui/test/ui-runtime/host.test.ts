@@ -276,7 +276,7 @@ test("waiting banners are sanitized and cannot displace the host footer", () => 
   )
   const lines = viewer.render(80, context)
   expect(lines).toHaveLength(context.rows)
-  expect(stripAnsi(lines.at(-1)!)).toContain("Esc close")
+  expect(stripAnsi(lines.at(-1)!)).toContain("esc close")
   expect(lines.join("\n")).not.toContain("\x1b[2J")
   expect(stripAnsi(lines[0]!)).toContain("Question next line")
 })

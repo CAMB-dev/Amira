@@ -55,7 +55,7 @@ test("built-in heads use bold text verbs while targets keep their semantic token
     const live = runningToolLines(theme, presenter, { name, args, startedAt: 0 }, 0, "⠋", 100)[0]!
     expect(live).toContain(bold(theme.text(running)))
     expect(live).toContain(style(target))
-    expect(stripAnsi(live)).toStartWith(`  ├ ⠋ ${running} ${target}`)
+    expect(stripAnsi(live)).toStartWith(`  ⠋ ${running} ${target}`)
     const failed = finishedToolLines(
       theme,
       presenter,
@@ -81,7 +81,7 @@ test("bundled web heads use search and fetch verbs while preserving queries and 
     }
     const live = runningToolLines(theme, presenter, { name, args, startedAt: 0 }, 0, "⠋", 100)[0]!
     expect(live).toContain(bold(theme.text(running)))
-    expect(stripAnsi(live)).toStartWith(`  ├ ⠋ ${running} ${target}`)
+    expect(stripAnsi(live)).toStartWith(`  ⠋ ${running} ${target}`)
   }
 })
 
@@ -116,7 +116,7 @@ test("extension and MCP presenters without verbs keep the existing name fallback
     const call = { name: name!, args: {}, result: textResult("ok") }
     expect(show(presenter, call)).toEqual([`  ├ ${label} target  ✓ ok`])
     const running = plain(runningToolLines(theme, presenter, { ...call, startedAt: 0 }, 0, "⠋", 100))[0]!
-    expect(running).toStartWith(`  ├ ⠋ ${label} target`)
+    expect(running).toStartWith(`  ⠋ ${label} target`)
   }
 })
 
@@ -447,7 +447,7 @@ test("a presenter that throws falls back to the generic presentation", () => {
   ])
 })
 
-test("finished and running lines fit the width, the running one with spinner after the tree and time on the right", () => {
+test("finished and running lines fit the width, the running spinner replaces the tree and keeps time on the right", () => {
   const long = { command: "x".repeat(300) }
   const done = finishedToolLines(
     theme,
@@ -467,7 +467,7 @@ test("finished and running lines fit the width, the running one with spinner aft
       40,
     ),
   )
-  expect(running).toEqual([`  ├ ⠋ bash bun test${" ".repeat(18)}12s`, "  │  b", "  │  c", "  │  d"])
+  expect(running).toEqual([`  ⠋ bash bun test${" ".repeat(20)}12s`, "    │ b", "    │ c", "    │ d"])
   const narrow = runningToolLines(theme, undefined, { name: "bash", args: long, startedAt: 0 }, 0, "⠋", 30)
   expect(narrow.every((l) => visibleWidth(l) <= 30)).toBe(true)
 })
@@ -519,7 +519,7 @@ test("progress output rewritten with carriage returns shows as the terminal left
       40,
     ),
   )
-  expect(running.slice(1)).toEqual(["  │  99%", "  │  a   b", "  │  ax"])
+  expect(running.slice(1)).toEqual(["    │ 99%", "    │ a   b", "    │ ax"])
 })
 
 test("on a narrow screen the result and time wrap under the head without exceeding the width", () => {
@@ -684,8 +684,8 @@ test("tool trees close their last sibling and continue beside wrapped diffs in U
           { last: true },
         ),
       )
-      expect(running[0]).toStartWith(`  ${last} * bash make`)
-      expect(running[1]).toBe(`${branch === "├" ? "     " : "      "}output`)
+      expect(running[0]).toStartWith("  * bash make")
+      expect(running[1]).toBe(`    ${pipe} output`)
     }
   } finally {
     setGlyphs(before)

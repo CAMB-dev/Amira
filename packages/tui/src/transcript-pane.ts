@@ -1,12 +1,21 @@
 import type { ToolDetailLevel } from "@amira/api"
 import { type ImagePlacement, stripAnsi, type Theme, truncateToWidth } from "@amira/tui-kit"
 import { setImageFallback } from "./blocks/base.ts"
-import { type Block, type BlockEnv, type CodeFrame, codeFrames, imagesIn, ReplyBlock } from "./blocks.ts"
+import {
+  type Block,
+  type BlockEnv,
+  type CodeFrame,
+  codeFrames,
+  imagesIn,
+  ReplyBlock,
+  ToolBlock,
+} from "./blocks.ts"
 import { userBandPaddingIn } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { PaneFind } from "./pane/find.ts"
 import { PaneTextSelection } from "./pane/text-selection.ts"
 import { cellsOf, markCells, sliceCells } from "./text-selection.ts"
+import { runningOutputLimit } from "./tool-view.ts"
 import { gapBetween } from "./transcript.ts"
 
 export { highlight } from "./pane/find.ts"
@@ -18,6 +27,7 @@ interface Drawn {
   glyphs: BlockEnv["glyphs"]
   version: ReturnType<Block["cacheVersion"]>
   detail: ToolDetailLevel
+  liveOutputLines?: number
   /** The most rows an image could take (0 without images), and the renderers of extensions. */
   imageRows: string
   /** The frame it was drawn in, for live blocks, which are drawn once per frame. */
@@ -287,7 +297,8 @@ export class TranscriptPane {
     const { images: _, ...text } = env
     for (const b of this.blocks) {
       let lines: string[]
-      if (b.refolded && b.kind !== "reasoning") lines = b.printLines(text)
+      if ((b instanceof ToolBlock && !b.end) || (b.refolded && b.kind !== "reasoning"))
+        lines = b.printLines(text)
       else if (b instanceof ReplyBlock) {
         // Laid out without images (none is loaded for it), unless its lines as shown have none.
         const shown = this.cached(b, env)
@@ -592,6 +603,10 @@ export class TranscriptPane {
   }
 
   private draw(block: Block, env: BlockEnv): Drawn {
+    if (block instanceof ToolBlock && !block.end) {
+      const streaming = this.blocks.filter((b) => b instanceof ToolBlock && b.started && !b.end && b.partial)
+      env = { ...env, liveOutputLines: runningOutputLimit(streaming.indexOf(block), streaming.length) }
+    }
     const width = env.width
     const list = this.drawn.get(block) ?? []
     const hit = list.find((d) => d.width === width)
@@ -599,7 +614,14 @@ export class TranscriptPane {
     const fresh = block.live
       ? hit?.frame === this.frame
       : hit?.version === block.cacheVersion(env) && hit.detail === env.detail && hit.imageRows === imageRows
-    if (hit && fresh && hit.theme === env.theme && hit.glyphs === env.glyphs) return hit
+    if (
+      hit &&
+      fresh &&
+      hit.theme === env.theme &&
+      hit.glyphs === env.glyphs &&
+      hit.liveOutputLines === env.liveOutputLines
+    )
+      return hit
     const lines = block.lines(env)
     const d: Drawn = {
       width,
@@ -607,6 +629,7 @@ export class TranscriptPane {
       glyphs: env.glyphs,
       version: block.cacheVersion(env),
       detail: env.detail,
+      liveOutputLines: env.liveOutputLines,
       imageRows,
       frame: this.frame,
       lines,

@@ -57,6 +57,7 @@ import {
   finishedToolLines,
   heldToolLine,
   OUTPUT_LINES,
+  runningOutputLimit,
   runningToolLines,
   treeContinuation,
 } from "./tool-view.ts"
@@ -103,7 +104,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const toolCalls = new ToolCalls()
   let stepIds: string[] = []
   const isLastTool = (id: string) => stepIds.at(-1) === id
-  /** A reply's clock is fixed at its first delta, and committed only with its first row. */
+  /** The first visible assistant row owns the turn's clock, even when it is not text. */
+  let assistantSeen = false
+  const firstAssistantTime = () => {
+    if (assistantSeen) return undefined
+    assistantSeen = true
+    return Date.now()
+  }
+  const toolTimes = new Map<string, number>()
+  /** A reply's clock is fixed at its first nonempty delta, and committed with its first row. */
   let replyAt: number | undefined
   let replyStamped = false
   const replyWidth = (width: number) => {
@@ -171,23 +180,33 @@ export function createInlineView(host: ViewHost): TranscriptView {
   /** A system notice fitted to the terminal. */
   const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, terminal.columns)
   /** How finished calls show besides the detail level: the user's settings. */
-  const toolOptions = (last = false) => ({
+  const toolOptions = (last = false, timestamp?: number) => ({
     outputLines: host.settings.shellOutputLines ?? OUTPUT_LINES,
     last,
+    timestamp,
   })
 
   /**
    * Successful calls in a row that only looked around (read, grep, glob), held back from the
    * scrollback so that they go as one "Explored" row once something else comes.
    */
-  let exploring: { call: FinishedCall; presenter: ToolPresenter | undefined; last: boolean }[] = []
+  let exploring: {
+    call: FinishedCall
+    presenter: ToolPresenter | undefined
+    last: boolean
+    timestamp?: number
+  }[] = []
   /** The held exploring calls as they will be committed: one call as itself, more as one row. */
   const exploredRows = (width: number, t: Theme, detail: ToolDetailLevel) => {
+    const opts = toolOptions(
+      exploring.at(-1)?.last,
+      exploring.find((entry) => entry.timestamp !== undefined)?.timestamp,
+    )
     if (exploring.length === 1) {
       const [{ call, presenter }] = exploring as [(typeof exploring)[number]]
-      return finishedToolLines(t, presenter, call, detail, width, toolOptions(exploring.at(-1)?.last))
+      return finishedToolLines(t, presenter, call, detail, width, opts)
     }
-    return exploredLines(t, exploring, detail === "full", detail, width, toolOptions(exploring.at(-1)?.last))
+    return exploredLines(t, exploring, detail === "full", detail, width, opts)
   }
   function flushExplored(): void {
     if (!exploring.length) return
@@ -197,17 +216,17 @@ export function createInlineView(host: ViewHost): TranscriptView {
   }
 
   /** The reasoning of the reply streaming now: its text and when it started. */
-  let thought: { text: string; startedAt: number } | undefined
+  let thought: { text: string; startedAt: number; timestamp?: number } | undefined
   /** Commits the reasoning, once the reply goes on: "∴ Thought for 12s", its text at "full". */
   function commitThought(): boolean {
     if (!thought) return false
-    const { text, startedAt } = thought
+    const { text, startedAt, timestamp } = thought
     thought = undefined
     const expanded = host.detail() === "full"
     const lines = reasoningLines(
       theme,
       text,
-      { durationMs: Date.now() - startedAt, expanded },
+      { durationMs: Date.now() - startedAt, expanded, timestamp },
       terminal.columns,
     )
     commitBlock("reasoning", lines)
@@ -238,13 +257,21 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const gap =
       separated && !exploring.length && runningAt === 0 ? [] : transcript.gapBefore("tool") ? [""] : []
     const now = Date.now()
+    const streamingCalls = live.filter((call) => !call.end && call.partial)
     const draw = (output: boolean) => {
       const calls: string[][] = []
       // The exploring calls held back, as the row they become.
       if (exploring.length && host.detail() === "full") {
-        for (const [i, { call, presenter }] of exploring.entries()) {
+        for (const [i, { call, presenter, timestamp }] of exploring.entries()) {
           const last = i === exploring.length - 1 && exploring.at(-1)?.last
-          const rows = finishedToolLines(ctx.theme, presenter, call, "full", width, toolOptions(last))
+          const rows = finishedToolLines(
+            ctx.theme,
+            presenter,
+            call,
+            "full",
+            width,
+            toolOptions(last, timestamp),
+          )
           calls.push(output ? rows : rows.slice(0, 1))
         }
       } else if (exploring.length) calls.push(exploredRows(width, ctx.theme, "collapsed").slice(0, 1))
@@ -252,10 +279,12 @@ export function createInlineView(host: ViewHost): TranscriptView {
         const boundary =
           separated && i === runningAt ? ["", ctx.theme.muted(`  ${glyphs.rule.repeat(3)}`), ""] : []
         const presenter = presenters?.get(c.name)
+        const opts = toolOptions(isLastTool(c.id), toolTimes.get(c.id))
         const head = c.end
-          ? [heldToolLine(ctx.theme, presenter, finished(c), width, { last: isLastTool(c.id) })]
+          ? [heldToolLine(ctx.theme, presenter, finished(c), width, opts)]
           : runningToolLines(ctx.theme, presenter, c, now, host.spinner.glyph, width, {
-              last: isLastTool(c.id),
+              ...opts,
+              liveOutputLines: runningOutputLimit(streamingCalls.indexOf(c), streamingCalls.length),
             })
         calls.push([
           ...boundary,
@@ -353,6 +382,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
             thought.text,
             {
               thinking: true,
+              timestamp: thought.timestamp,
               expanded: host.detail() === "full",
               expandKey: host.detail() === "summary" ? host.keys.label("tool-output") : undefined,
             },
@@ -440,9 +470,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
       }
       const presenter = presenters?.get(c.name)
       const call = finished(c)
+      const timestamp = toolTimes.get(c.id)
+      toolTimes.delete(c.id)
       // A call that only looked around waits for the next one: a run of them is one row.
       if (!tree.length && explorationOf(presenter, call)) {
-        exploring.push({ call, presenter, last: isLastTool(c.id) })
+        exploring.push({ call, presenter, last: isLastTool(c.id), timestamp })
         continue
       }
       const lines = finishedToolLines(
@@ -451,7 +483,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
         call,
         host.detail(),
         terminal.columns,
-        toolOptions(isLastTool(c.id)),
+        toolOptions(isLastTool(c.id), timestamp),
       )
       lines.splice(1, 0, ...ends)
       commitBlock("tool", lines)
@@ -600,18 +632,18 @@ export function createInlineView(host: ViewHost): TranscriptView {
     user: (m) =>
       commitBlock("user", userLines(theme, m, terminal.columns, messageTimestamp(m) ?? Date.now())),
     replyDelta(text) {
-      if (thought && !text.trim()) return
+      if (!text.trim() && (thought || !assistantSeen)) return
       flushDialog()
       // The reply goes on: what it thought, and the calls held before it, go first.
       commitThought()
       flushExplored()
-      if (text.trim() && !replyStamped) replyAt ??= Date.now()
+      if (text.trim() && !assistantSeen) replyAt = firstAssistantTime()
       streaming.append(text)
     },
     reasoningDelta(text) {
       if (!text) return
       flushDialog()
-      thought ??= { text: "", startedAt: Date.now() }
+      thought ??= { text: "", startedAt: Date.now(), timestamp: firstAssistantTime() }
       thought.text += text
       renderer.requestRender()
     },
@@ -633,17 +665,21 @@ export function createInlineView(host: ViewHost): TranscriptView {
     toolStart(id, name, args, at) {
       flushDialog()
       if (!stepIds.includes(id)) stepIds.push(id)
+      const timestamp = firstAssistantTime()
+      if (timestamp !== undefined) toolTimes.set(id, timestamp)
       toolCalls.start(id, name, args, at)
       callNames.set(id, name)
     },
     toolUpdate: (id, partial) => toolCalls.update(id, partial),
     toolEnd: (id, end) => commitCalls(toolCalls.end(id, end)),
     turnEnd() {
-      replyAt = undefined
-      replyStamped = false
       const shown = commitCalls(toolCalls.flush())
       // A run of exploring calls ends with the turn.
       flushExplored()
+      assistantSeen = false
+      replyAt = undefined
+      replyStamped = false
+      toolTimes.clear()
       // Sub-agents of calls that never ended.
       settleSubagents()
       // Only calls with sub-agents still around need their names.
@@ -697,8 +733,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
       pendingDialog = undefined
       toolCalls.flush()
       thought = undefined
+      assistantSeen = false
       replyAt = undefined
       replyStamped = false
+      toolTimes.clear()
       flushExplored()
       settleSubagents()
       callNames.clear()

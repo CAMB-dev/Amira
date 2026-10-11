@@ -187,7 +187,7 @@ test.each([100, 50])(
       ...reasoningLines(
         plain.theme,
         "Move context into the header.",
-        { durationMs: 4200, expandKey: "Ctrl+O" },
+        { durationMs: 4200, expandKey: "ctrl+o" },
         width,
       ),
       "",

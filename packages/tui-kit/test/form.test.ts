@@ -122,6 +122,35 @@ function makeForm(over: Partial<FormOptions> = {}) {
 }
 
 describe("Form", () => {
+  test("all field hints use lower-case keys without lower-casing prose or buttons", () => {
+    for (const [type, lead] of [
+      ["text", "enter next"],
+      ["secret", "enter next"],
+      ["number", "enter next"],
+      ["select", "enter list · ←→ change"],
+      ["multiselect", "space toggle · type to filter · ctrl+a all"],
+      ["checkbox", "space toggle"],
+      ["textarea", "shift+enter newline · enter next"],
+      ["action", "enter run"],
+    ] as const) {
+      const form = new Form({
+        title: "Provider Settings",
+        description: "Keep This Prose",
+        fields: [{ id: "field", type, label: "Field Label" }],
+        onSubmit: () => {},
+        onCancel: () => {},
+      })
+      const rows = form.render(100, plain)
+      expect(rows.at(-1)).toBe(`${lead} · tab/↑↓ move · ctrl+s save · esc cancel`)
+      const text = rows.join("\n")
+      expect(text).toContain("Provider Settings")
+      expect(text).toContain("Keep This Prose")
+      expect(text).toContain("Field Label")
+      expect(text).toContain("[ Save ]")
+      expect(text).toContain("[ Cancel ]")
+    }
+  })
+
   test("Tab, Shift+Tab and ↑↓ walk the fields that show, then Save and Cancel", () => {
     const { form } = makeForm()
     const order: string[] = [form.focused]
@@ -161,6 +190,8 @@ describe("Form", () => {
     expect(form.values.mode).toBe("b")
     form.handleInput(key("enter"))
     expect(view()).toContain("❯ ● Beta")
+    expect(view().split("\n").at(-1)).toBe("↑↓ pick · type to filter · enter choose · esc clo…")
+    expect(view(40, 80).split("\n").at(-1)).toBe("↑↓ pick · type to filter · enter choose · esc close")
     type(form, "c")
     form.handleInput(key("enter"))
     expect(form.values.mode).toBe("c")
@@ -179,7 +210,7 @@ describe("Form", () => {
     form.handleInput(key("enter"))
     expect(form.values.tags).toEqual(["x", "y"])
     type(form, "zeta")
-    expect(view()).toContain("Enter adds it")
+    expect(view()).toContain("enter adds it")
     form.handleInput(key("enter"))
     expect(form.values.tags).toEqual(["x", "y", "zeta"])
     form.handleInput({ type: "paste", text: "p1, p2\np3" })
@@ -233,7 +264,8 @@ describe("Form", () => {
     form.setActionState("go", { running: true, text: "fetching" })
     form.handleInput(key("enter"))
     expect(log).toEqual(["action go"])
-    expect(view()).toContain("… fetching · Esc stops it")
+    expect(view()).toContain("… fetching · esc stops it")
+    expect(view().split("\n").at(-1)).toBe("esc stop · tab/↑↓ move · ctrl+s save")
     form.handleInput(key("escape"))
     expect(log).toEqual(["action go", "stop go"])
     form.setActionState("go", { running: false, text: "Found 2 models", tone: "success" })

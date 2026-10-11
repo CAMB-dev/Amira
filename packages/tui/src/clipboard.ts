@@ -2,6 +2,7 @@ import type { Message } from "@amira/api"
 import { isSummaryMessage } from "@amira/core"
 import { osc, type Terminal } from "@amira/tui-kit"
 import { compactTokens } from "./format.ts"
+import { keyLabel } from "./keybindings.ts"
 
 /**
  * Puts `text` on the clipboard (OSC 52) and says so in a note, naming `what` it was, with
@@ -13,7 +14,7 @@ export function copyToClipboard(
   text: string,
   what: string,
   showNote: (text: string) => void,
-  fallback = "Shift+drag selects text.",
+  fallback = `${keyLabel({ name: "drag", shift: true })} selects text.`,
 ): void {
   if (!text.trim()) {
     showNote(`Nothing to copy in ${what}.`)

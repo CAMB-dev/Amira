@@ -60,7 +60,7 @@ test("local picker footer keeps appearance discoverable when its header is trimm
     { kind: "select", requestId: "theme", title: "Theme", options: ["amira", "amber"] },
     () => {},
     undefined,
-    { header: () => "Appearance: [auto] / dark / light", footer: [{ text: "Tab appearance", priority: 6 }] },
+    { header: () => "Appearance: [auto] / dark / light", footer: [{ text: "tab appearance", priority: 6 }] },
   )
   for (const maxRows of [1, 2, 3]) {
     dialog.maxRows = maxRows
@@ -68,10 +68,37 @@ test("local picker footer keeps appearance discoverable when its header is trimm
       const rows = dialog.render(width, plain).map(stripAnsi)
       expect(rows).toHaveLength(maxRows)
       expect(rows.join("\n")).not.toContain("Appearance:")
-      expect(rows.at(-1)).toContain("Tab appearance")
+      expect(rows.at(-1)).toContain("tab appearance")
       expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true)
     }
   }
+})
+
+test("dialog footers format rebound and section keys without changing labels or prose", () => {
+  const keys = new Keybindings({
+    ...defaultKeys({ vscode: false }, "linux"),
+    "dialog.choose": ["ctrl+shift+f6"],
+    "dialog.cancel": ["alt+escape"],
+  })
+  const { dialog, answers, rows } = open(
+    {
+      kind: "select",
+      requestId: "labels",
+      title: "Choose a Saved Session",
+      options: ["Mixed Case Session"],
+      searchTexts: ["User Prose"],
+      sections: [{ at: 0, keys: [{ key: "d", label: "Delete Session" }] }],
+    },
+    keys,
+  )
+  const rendered = rows(160)
+  expect(rendered.join("\n")).toContain("Choose a Saved Session")
+  expect(rendered.join("\n")).toContain("Mixed Case Session")
+  expect(rendered.at(-1)).toBe(
+    "↑↓ move · type to filter · ctrl+shift+f6 choose · ctrl+d Delete Session · alt+esc cancel",
+  )
+  dialog.handleInput(key("f6", { ctrl: true, shift: true }))
+  expect(answers).toEqual(["Mixed Case Session"])
 })
 
 test("select highlights its initial option, and Enter keeps it", () => {
@@ -136,7 +163,7 @@ for (const width of [120, 60]) {
     const row = rendered.findIndex((s) => s.includes("s_b"))
     expect(rendered[row + 1]).toContain("数据库连接")
     expect(rendered.every((s) => visibleWidth(s) <= width)).toBe(true)
-    expect(rendered.join("\n")).toContain("Ctrl+d delete")
+    expect(rendered.join("\n")).toContain("ctrl+d delete")
     dialog.handleInput(key("d", { ctrl: true }))
     expect(answers).toEqual([{ option: "s_b Database repair", key: "d" }])
   })
@@ -208,7 +235,7 @@ test("every dialog is a block with a bar down its left, the question, the option
     "┃   No",
     "┃   Other…",
     "┃",
-    "┃ ↑↓ select · n no · Esc deny",
+    "┃ ↑↓ select · n no · esc deny",
   ])
   expect(ask().dialog.render(60, plain)).toEqual([
     "┃ 1/2 · Approach",
@@ -218,13 +245,13 @@ test("every dialog is a block with a bar down its left, the question, the option
     "┃   2 Patch                  Fix it in place",
     "┃   3 Other…",
     "┃",
-    "┃ ←→ question · ↑↓ move · Enter next · Esc cancel",
+    "┃ ←→ question · ↑↓ move · enter next · esc cancel",
   ])
   expect(open({ kind: "input", requestId: "i", title: "Name", placeholder: "your name" }).rows()).toEqual([
     "? Name",
     "❯ your name",
     "",
-    "Enter submit · Esc cancel",
+    "enter submit · esc cancel",
   ])
 })
 
@@ -236,7 +263,7 @@ test("a confirm starts with nothing selected: Enter and y do nothing until a cho
   expect(early.answers).toEqual([])
   early.press("down")
   expect(early.rows()[4]).toBe("❯ Yes")
-  expect(early.rows().at(-1)).toBe("↑↓ move · n no · Enter choose · Esc deny")
+  expect(early.rows().at(-1)).toBe("↑↓ move · n no · enter choose · esc deny")
   early.press("enter")
   expect(early.answers).toEqual([true])
   const no = approval()
@@ -247,7 +274,7 @@ test("a confirm starts with nothing selected: Enter and y do nothing until a cho
   expect(always.answers).toEqual(["always"])
   // A confirm without the extras offers yes and no only; ↑ first picks the last one.
   const plainConfirm = open({ kind: "confirm", requestId: "c", title: "Go?" })
-  expect(plainConfirm.rows()).toEqual(["? Go?", "", "  Yes", "  No", "", "↑↓ select · n no · Esc cancel"])
+  expect(plainConfirm.rows()).toEqual(["? Go?", "", "  Yes", "  No", "", "↑↓ select · n no · esc cancel"])
   plainConfirm.press("up", "enter")
   expect(plainConfirm.answers).toEqual([false])
 })
@@ -261,7 +288,7 @@ test("Other opens a text field in its row; Esc closes the field, then cancels th
     "❯ Type your answer",
     "",
   ])
-  expect(d.rows().at(-1)).toBe("Enter submit · Esc back")
+  expect(d.rows().at(-1)).toBe("enter submit · esc back")
   // y, n and digits are text in the field, and Enter on nothing typed does nothing.
   d.press("enter")
   d.type("no, use trash")
@@ -321,9 +348,9 @@ test("in a long list digits filter, so ids with digits can be found", () => {
 })
 
 test("only a select says it filters", () => {
-  expect(select(["a", "b"]).rows(80).at(-1)).toBe("↑↓ move · type to filter · Enter choose · Esc cancel")
+  expect(select(["a", "b"]).rows(80).at(-1)).toBe("↑↓ move · type to filter · enter choose · esc cancel")
   const { answers, type, rows } = review(3)
-  expect(rows(80).at(-1)).toBe("↑↓ move · Enter choose · Esc cancel")
+  expect(rows(80).at(-1)).toBe("↑↓ move · enter choose · esc cancel")
   // Letters do nothing in a review.
   type("m")
   expect(answers).toEqual([])
@@ -339,7 +366,7 @@ test("a diff review fits the rows it has: title, options and keys stay, the diff
     "❯ 1 merge",
     "  2 keep worktree",
     "  3 discard",
-    "↑↓ move · Enter choose · Esc cancel",
+    "↑↓ move · enter choose · esc cancel",
   ])
   // 7 rows for the diff: 3 from the start, a marker, 3 from the end.
   expect(lines.slice(1, 8)).toEqual([
@@ -368,7 +395,7 @@ test("a short diff is shown whole with room to breathe, and a tall terminal show
     "  2 keep worktree",
     "  3 discard",
     "",
-    "↑↓ move · Enter choose · Esc cancel",
+    "↑↓ move · enter choose · esc cancel",
   ])
   const long = review(54).dialog
   long.maxRows = 40
@@ -380,7 +407,7 @@ test("with barely any room the options scroll and the title still shows", () => 
   dialog.maxRows = 5
   const lines = rows()
   expect(lines[0]).toBe("? Merge the worktree?")
-  expect(lines.at(-1)).toBe("↑↓ move · Enter choose · Esc cancel")
+  expect(lines.at(-1)).toBe("↑↓ move · enter choose · esc cancel")
   expect(lines.length).toBeLessThanOrEqual(5)
   expect(lines).toContain("❯ 1 a")
 })
@@ -404,7 +431,7 @@ test("a tight approval gives up its blank rows and message before its options", 
     "  Yes, and don't ask again this session",
     "  No",
     "  Other…",
-    "↑↓ select · n no · Esc deny",
+    "↑↓ select · n no · esc deny",
   ])
 })
 
@@ -420,7 +447,7 @@ test("narrow, descriptions go under their labels; CJK text wraps by its width", 
     "    Fix it in place",
     "  3 Other…",
     "",
-    "←→ question · Enter next",
+    "←→ question · enter next",
   ])
   const cjk = ask([
     {
@@ -442,7 +469,7 @@ test("narrow, descriptions go under their labels; CJK text wraps by its width", 
     "    就地修复",
     "  3 Other…",
     "",
-    "Enter choose · Esc cancel",
+    "enter choose · esc cancel",
   ])
   for (const l of lines) expect(Bun.stringWidth(l)).toBeLessThanOrEqual(30)
 })
@@ -465,7 +492,7 @@ test("several questions are asked one after another and answered together", () =
   type("3")
   expect(rows()).toContain("  1 [x] Tests")
   expect(rows()).toContain("❯ 3 [x] Changelog")
-  expect(rows(80).at(-1)).toBe("←→ question · ↑↓ move · Space toggle · Enter submit · Esc back")
+  expect(rows(80).at(-1)).toBe("←→ question · ↑↓ move · space toggle · enter submit · esc back")
   press("enter")
   expect(answers).toEqual([[{ selected: ["Patch"] }, { selected: ["Tests", "Changelog"] }]])
 })
@@ -530,7 +557,7 @@ test("colors: the bar and ❯ in the accent, an approval's bar in the warning co
 test("dialog keys come from the keybindings", () => {
   const keys = new Keybindings({ ...defaultKeys({ vscode: false }), "dialog.yes": ["j"], "dialog.no": ["x"] })
   const { dialog, answers, rows } = open({ kind: "confirm", requestId: "r3", title: "Go?" }, keys)
-  expect(rows(60).at(-1)).toBe("↑↓ select · j/x · Esc cancel")
+  expect(rows(60).at(-1)).toBe("↑↓ select · j/x · esc cancel")
   dialog.handleInput(textKey("y"))
   expect(answers).toEqual([])
   dialog.handleInput(textKey("j"))
@@ -553,15 +580,15 @@ test("an unbound action has no footer item", () => {
   const confirm = open({ kind: "confirm", requestId: "r5", title: "Go?" }, keys)
   expect(confirm.rows(40).at(-1)).toBe("↓ select")
   confirm.press("down")
-  expect(confirm.rows(40).at(-1)).toBe("↓ move · Enter choose")
+  expect(confirm.rows(40).at(-1)).toBe("↓ move · enter choose")
   const list = open({ kind: "select", requestId: "r6", title: "Pick", options: ["a"] }, keys)
-  expect(list.rows(60).at(-1)).toBe("↓ move · type to filter · Enter choose")
+  expect(list.rows(60).at(-1)).toBe("↓ move · type to filter · enter choose")
   const input = open({ kind: "input", requestId: "r7", title: "Name" }, keys)
-  expect(input.rows(40).at(-1)).toBe("Enter submit")
+  expect(input.rows(40).at(-1)).toBe("enter submit")
   const multi = ask([QUESTIONS[1]!])
-  expect(multi.rows(80).at(-1)).toBe("↑↓ move · Space toggle · Enter submit · Esc cancel")
+  expect(multi.rows(80).at(-1)).toBe("↑↓ move · space toggle · enter submit · esc cancel")
   const unbound = open({ kind: "ask", requestId: "q", title: "q", questions: [QUESTIONS[1]!] }, keys)
-  expect(unbound.rows(80).at(-1)).toBe("↓ move · Enter submit")
+  expect(unbound.rows(80).at(-1)).toBe("↓ move · enter submit")
 })
 
 test("an input dialog short of rows keeps the caret: the title goes first, then the text scrolls", () => {
@@ -571,7 +598,7 @@ test("an input dialog short of rows keeps the caret: the title goes first, then 
   const lines = d.dialog.render(20, plain)
   expect(lines.length).toBeLessThanOrEqual(3)
   expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
-  expect(stripAnsi(lines.at(-1)!)).toContain("Enter")
+  expect(stripAnsi(lines.at(-1)!)).toContain("enter")
 })
 
 test("the position row of a scrolled list gives way before the title when rows are short", () => {
@@ -610,10 +637,10 @@ test("a select's sections: a heading over their options, and their own Enter lab
     "  Kept worktrees",
     "  3 sa_1 · 3 files",
     "",
-    "↑↓ move · Enter open · p print · Esc cancel",
+    "↑↓ move · enter open · p print · esc cancel",
   ])
   press("down", "down")
-  expect(rows().at(-1)).toBe("↑↓ move · type to filter · Enter review · Esc cancel")
+  expect(rows().at(-1)).toBe("↑↓ move · type to filter · enter review · esc cancel")
 })
 
 test("a section's key answers with the option it was pressed on; elsewhere it does nothing", () => {

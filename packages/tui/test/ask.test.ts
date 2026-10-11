@@ -29,6 +29,7 @@ const ESC = "\x1b[27u"
 const UP = "\x1b[A"
 const DOWN = "\x1b[B"
 const LEFT = "\x1b[D"
+const TIMESTAMP = "(?:[01]\\d|2[0-3]):[0-5]\\d"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -187,7 +188,7 @@ for (const mode of MODES) {
       "┃   2 Patch                  Fix it in place",
       "┃   3 Other…",
       "┃",
-      "┃ ←→ question · ↑↓ move · Enter next · Esc cancel",
+      "┃ ←→ question · ↑↓ move · enter next · esc cancel",
     ])
     s.terminal.send("2")
     await waitFor(() => s.dialog()[0] === "┃ 2/2 · Extras", "the second question")
@@ -235,7 +236,7 @@ for (const mode of MODES) {
     // Digits and y are text in the field.
     s.terminal.send("both, 2 steps")
     await waitFor(() => s.dialog().includes("┃ ❯ 3 both, 2 steps"), "typed")
-    expect(s.dialog().at(-1)).toBe("┃ Enter submit · Esc back")
+    expect(s.dialog().at(-1)).toBe("┃ enter submit · esc back")
     s.terminal.send("\r")
     await s.shows("ok")
     await s.idle()
@@ -243,7 +244,10 @@ for (const mode of MODES) {
       'The user answered:\n1. Which approach do you prefer?\n   → (own words) "both, 2 steps"',
     )
     expect(s.all()).toMatch(
-      /^ {2}└ Asked Which approach do you prefer\?\n {5}✓ \(own words\) "both, 2 steps"$/m,
+      new RegExp(
+        `^ {2}└ Asked Which approach do you prefer\\? +${TIMESTAMP}\\n {5}✓ \\(own words\\) "both, 2 steps"$`,
+        "m",
+      ),
     )
     s.terminal.send("again\r")
     await waitFor(() => s.dialog().length > 0, "the second dialog")
@@ -286,7 +290,7 @@ for (const mode of MODES) {
       "┃     Fix it in place",
       "┃   3 Other…",
       "┃",
-      "┃ Enter choose · Esc cancel",
+      "┃ enter choose · esc cancel",
     ])
     s.terminal.send("1")
     await s.shows("a")
@@ -303,14 +307,16 @@ for (const mode of MODES) {
       "┃     就地修复",
       "┃   3 Other…",
       "┃",
-      "┃ Enter choose · Esc cancel",
+      "┃ enter choose · esc cancel",
     ])
     s.terminal.send("2")
     await s.shows("b")
     await s.idle()
     // The echo wraps like any line: the answer follows the question.
-    expect(s.all()).toMatch(/^ {2}└ Asked 你想用哪种…这个功能？\n {5}✓ 修补$/m)
-    expect(s.all()).toMatch(/^ {2}└ Asked Which appr…you prefer\?\n {5}✓ Rewrite \(Recommended\)$/m)
+    expect(s.all()).toMatch(new RegExp(`^ {2}└ Asked 你想用…功能？ {2}${TIMESTAMP}\\n {5}✓ 修补$`, "m"))
+    expect(s.all()).toMatch(
+      new RegExp(`^ {2}└ Asked Which …refer\\? {2}${TIMESTAMP}\\n {5}✓ Rewrite \\(Recommended\\)$`, "m"),
+    )
     s.terminal.send("\x03")
     await s.exited
   })
@@ -335,7 +341,7 @@ for (const mode of MODES) {
       "┃   No",
       "┃   Other…",
       "┃",
-      "┃ ↑↓ select · n no · Esc deny",
+      "┃ ↑↓ select · n no · esc deny",
     ])
     // Nothing is preselected: an Enter typed now does not answer it.
     s.terminal.send("\r")
@@ -354,11 +360,11 @@ for (const mode of MODES) {
     // Asked once for both calls.
     expect(s.all().split("? Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
     // Each call says who let it run.
-    expect(s.all()).toContain(
-      [
-        mode === "fullscreen" ? "  ├ wipe  ✓ wiped · allowed by you" : "  └ wipe  ✓ wiped · allowed by you",
-        "  └ wipe  ✓ wiped · allowed · session rule",
-      ].join("\n"),
+    expect(s.all()).toMatch(
+      new RegExp(
+        `^ {2}${mode === "fullscreen" ? "├" : "└"} wipe {2}✓ wiped · allowed by you +${TIMESTAMP}\\n {2}└ wipe {2}✓ wiped · allowed · session rule$`,
+        "m",
+      ),
     )
     s.terminal.send("\x03")
     await s.exited
@@ -372,7 +378,7 @@ test("Esc on an approval denies the call and stops the turn; meanwhile the activ
   })
   s.terminal.send("clean up\r")
   await waitFor(() => s.dialog().length > 0, "the approval")
-  expect(s.live()).toMatch(/^ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}Esc stop$/m)
+  expect(s.live()).toMatch(/^ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}esc stop$/m)
   s.terminal.send(ESC)
   await s.idle()
   expect(s.host.ui.pending).toEqual([])
@@ -395,8 +401,11 @@ test("an approval refused with free text tells the model what to do instead", as
   await s.shows("ok, moving to trash")
   await s.idle()
   expect(s.toolResult("wipe")).toContain("the user said no: move them to the trash")
-  expect(s.all()).toContain(
-    "  └ wipe\n     ⊘ Tool call not approved: the user said no: move them\n     to the trash",
+  expect(s.all()).toMatch(
+    new RegExp(
+      `^ {2}└ wipe +${TIMESTAMP}\\n {5}⊘ Tool call not approved: the user said no: move them\\n {5}to the trash$`,
+      "m",
+    ),
   )
   s.terminal.send("\x03")
   await s.exited

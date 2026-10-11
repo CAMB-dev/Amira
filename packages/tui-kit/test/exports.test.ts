@@ -58,6 +58,7 @@ test("the public theme exports are part of the stable package surface", async ()
     "isSubmitKey",
     "italic",
     "key",
+    "keyLabel",
     "magenta",
     "markdownTheme",
     "matchesKey",

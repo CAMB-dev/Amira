@@ -22,6 +22,7 @@ export class ReasoningBlock extends Block {
     public durationMs: number | undefined,
     readonly startedAt: number | undefined = undefined,
     thinking = false,
+    readonly timestamp?: number,
   ) {
     super()
     this.#thinking = thinking
@@ -63,6 +64,7 @@ export class ReasoningBlock extends Block {
       {
         ...(this.durationMs !== undefined ? { durationMs: this.durationMs } : {}),
         thinking: this.#thinking,
+        timestamp: this.timestamp,
         expanded: this.shows(env),
         // A manually folded block keeps its override when global detail changes.
         expandKey:
