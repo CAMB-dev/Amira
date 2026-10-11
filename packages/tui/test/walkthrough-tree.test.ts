@@ -18,9 +18,25 @@ const sub = {
 for (const variant of ["dark", "light"] as const) {
   test(`${variant}: tree guides use the visible gray token, not dim`, () => {
     const theme = createTheme({ theme: variant, colorDepth: "truecolor", color: true, platform: "linux" })
-    const rows = runningToolLines(theme, undefined, { name: "read", args: {}, startedAt: 0 }, 6000, "*", 80)
+    const rows = finishedToolLines(
+      theme,
+      undefined,
+      { name: "read", args: {}, result: textResult("ok") },
+      "summary",
+      80,
+    )
     expect(rows[0]).toContain(theme.muted("├"))
     expect(rows[0]).not.toContain(theme.dim("├"))
+    const running = runningToolLines(
+      theme,
+      undefined,
+      { name: "read", args: {}, startedAt: 0, partial: textResult("live") },
+      6000,
+      "*",
+      80,
+    )
+    expect(running[0]).not.toContain("├")
+    expect(running[1]).toBe(`    ${theme.muted("│")} ${theme.muted("live")}`)
     const children = subagentRows(sub, 6000, 80, theme, false)
     expect(children[0]).toContain(theme.muted("  ├"))
   })

@@ -86,7 +86,12 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
   const detail = opts.detail ?? "summary"
   const toolOpts = opts.outputLines !== undefined ? { outputLines: opts.outputLines } : {}
   /** Successful exploring calls in a row, to go as one "Explored" row, as they did live. */
-  let exploring: { call: FinishedCall; presenter: ToolPresenter | undefined; last: boolean }[] = []
+  let exploring: {
+    call: FinishedCall
+    presenter: ToolPresenter | undefined
+    last: boolean
+    timestamp?: number
+  }[] = []
   const flush = () => {
     if (!exploring.length) return
     const [first] = exploring
@@ -94,10 +99,12 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       exploring.length === 1
         ? finishedToolLines(theme, first!.presenter, first!.call, detail, opts.width, {
             ...toolOpts,
+            timestamp: first?.timestamp,
             last: exploring.at(-1)?.last,
           })
         : exploredLines(theme, exploring, detail === "full", detail, opts.width, {
             ...toolOpts,
+            timestamp: first?.timestamp,
             last: exploring.at(-1)?.last,
           })
     exploring = []
@@ -107,7 +114,12 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     flush()
     out.push(...t.block(kind, lines))
   }
-  let replySeen = false
+  let assistantSeen = false
+  const firstAssistantTime = (timestamp: number | undefined) => {
+    if (assistantSeen) return undefined
+    assistantSeen = true
+    return timestamp
+  }
   for (const m of messages) {
     if (isSummaryMessage(m)) {
       // The summary reads as what it is, not as a message of the user's; its reply goes with it.
@@ -118,7 +130,7 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
         )
       }
     } else if (m.role === "user") {
-      replySeen = false
+      assistantSeen = false
       block("user", userLines(theme, m, opts.width))
     } else if (m.role === "assistant") {
       // The sources the reply cited follow its last text, as they did live.
@@ -128,11 +140,18 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       const lastText = m.content.findLastIndex((b) => b.type === "text" && b.text.trim() !== "")
       for (const [i, b] of m.content.entries()) {
         if (b.type === "thinking" && (b.text.trim() || b.redacted)) {
-          block("reasoning", reasoningLines(theme, b.text, { expanded: detail === "full" }, opts.width))
+          block(
+            "reasoning",
+            reasoningLines(
+              theme,
+              b.text,
+              { expanded: detail === "full", timestamp: firstAssistantTime(timestamp) },
+              opts.width,
+            ),
+          )
         } else if (b.type === "text" && b.text.trim()) {
           // Markdown, as the reply showed when it streamed in.
-          const at = replySeen ? undefined : timestamp
-          replySeen = true
+          const at = assistantSeen ? undefined : timestamp
           const width = Math.max(1, opts.width - visibleWidth(gutter))
           const firstRowWidth = Math.max(1, timestampRoom(opts.width, at) - visibleWidth(gutter))
           const text = i === lastText ? b.text + sources : b.text
@@ -141,7 +160,10 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
             ? committedMarkdown(text, width, theme, markdown)
             : renderMarkdown(text, width, theme, markdown)
           const lines = replyRows(rows)
-          if (lines.length) lines[0] = timestampRow(lines[0]!, theme, opts.width, at)
+          if (lines.length) {
+            assistantSeen = true
+            lines[0] = timestampRow(lines[0]!, theme, opts.width, at)
+          }
           block("assistant", lines)
         } else if (b.type === "serverTool") {
           // A search the provider ran shows as the tool row it was live.
@@ -151,6 +173,7 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
             "tool",
             finishedToolLines(theme, opts.presenters?.get(b.name), finished, detail, opts.width, {
               ...toolOpts,
+              timestamp: firstAssistantTime(timestamp),
               last: i === lastTool,
             }),
           )
@@ -166,12 +189,15 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
             result,
             ...(rejected ? { rejected } : {}),
           }
-          if (explorationOf(presenter, call)) exploring.push({ call, presenter, last: i === lastTool })
+          const at = firstAssistantTime(timestamp)
+          if (explorationOf(presenter, call))
+            exploring.push({ call, presenter, last: i === lastTool, timestamp: at })
           else
             block(
               "tool",
               finishedToolLines(theme, presenter, call, detail, opts.width, {
                 ...toolOpts,
+                timestamp: at,
                 last: i === lastTool,
               }),
             )

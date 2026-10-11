@@ -8,7 +8,9 @@ exports[`width-100 fullscreen running turn matches the chosen prototype details 
   › Make the status bar clearer.                                                           8:19 PM
 
 
-  # Status bar layout                                                                      8:19 PM
+  ∴ Thought for 4.2s                                                                       8:19 PM
+
+  # Status bar layout
 
   The header now carries context and cost.
 
@@ -18,7 +20,9 @@ exports[`width-100 fullscreen running turn matches the chosen prototype details 
 
   ───
 
-  └ ⠋ Running git diff --stat                                                                     0s
+  ⠋ Running git diff --stat                                                                       4s
+    │ packages/tui/src/status-bar.ts | 15 ++++++++++++---
+    │  1 file changed, 12 insertions(+), 3 deletions(-)
 
  ⠋ Responding… 4.1s                                         1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮

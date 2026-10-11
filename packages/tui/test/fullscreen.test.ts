@@ -214,7 +214,9 @@ test("reads in a row become one Explored row, which unfolds to the calls", async
   terminal.send("\r")
   await waitFor(() => view().includes("├ Read a.ts"), "unfolded")
   expect(view()).toMatch(
-    /▌ ├ Read a\.ts\n▌ │ {2}✓ contents of a\.ts …\n▌ └ Read b\.ts\n▌ {4}✓ contents of b\.ts …/,
+    new RegExp(
+      `▌ ├ Read a\\.ts +${localClock(Date.now())}\\n▌ │ {2}✓ contents of a\\.ts …\\n▌ └ Read b\\.ts\\n▌ {4}✓ contents of b\\.ts …`,
+    ),
   )
   terminal.send(ESC)
   terminal.send("\x03")
@@ -228,7 +230,9 @@ test("thinking shows folded as how long it took, and unfolds to the text", async
   terminal.send("go\r")
   await shows("It is 42.")
   await idle()
-  const thought = view().match(/ {2}∴ Thought for (\d+(?:\.\d+)?)s {2}Ctrl\+O to expand\n\n {2}It is 42\./)
+  const thought = view().match(
+    / {2}∴ Thought for (\d+(?:\.\d+)?)s {2}ctrl\+o to expand +\d{1,2}:\d{2}(?: [AP]M)?\n\n {2}It is 42\./,
+  )
   expect(thought).not.toBeNull()
   const duration = Number(thought![1])
   expect(duration).toBeGreaterThanOrEqual(0.1)
@@ -272,13 +276,14 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   ].join("\n")
   // Right above the bottom area, which stays at the bottom of the screen.
   expect(withoutClocks(view())).toContain(`${conversation}\n\n╭`)
-  // Only user/reply first lines carry a clock, at the fixed right edge; tool rows do not.
+  // The user and the first assistant output (this tool) carry clocks at the fixed right edge.
   const clock = localClock(Date.now())
   const clockCells = visibleWidth(clock)
   const clockRows = screen.lines.filter((row) => row.endsWith(clock))
   expect(clockRows).toHaveLength(2)
   expect(clockRows[0]).toBe(`  › what is in a.ts?${" ".repeat(38 - clockCells)}${clock}`)
-  expect(clockRows[1]).toBe(`  The file has three lines.${" ".repeat(31 - clockCells)}${clock}`)
+  const toolHead = "  └ read a.ts  ✓ contents of a.ts (+2 lines)"
+  expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(58 - visibleWidth(toolHead) - clockCells)}${clock}`)
   expect(screen.lines[0]).toMatch(/^ \/work\/proj +0 \/ 128K$/)
   expect(screen.lines[1]).toBe("")
   expect(screen.lines.at(-2)).toMatch(/^╰─+ m1 · auto ─╯$/)
@@ -370,20 +375,29 @@ test("parallel tool calls keep their places in call order and finish in place", 
   terminal.send("go\r")
   // The fast one finished below the slow one, which still runs above it.
   await waitFor(
-    () => / {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\.ts +\d+(?:\.\d+)?s\n {2}└ fast b\.ts {2}✓ fast result/.test(view()),
+    () =>
+      new RegExp(
+        ` {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}\\n {2}└ fast b\\.ts {2}✓ fast result`,
+      ).test(view()),
     "fast done in place",
   )
   // The activity line stays while tools run: its spinner, the tool still running and the time.
   await waitFor(
-    () => /^ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 1 tool running… \d+(?:\.\d+)?s +[^\n]*Esc stop$/m.test(view()),
+    () => /^ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 1 tool running… \d+(?:\.\d+)?s +[^\n]*esc stop$/m.test(view()),
     "activity",
   )
-  expect(view()).toContain("Esc stop")
-  expect(view()).toMatch(/ {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\.ts +\d+(?:\.\d+)?s/)
+  expect(view()).toContain("esc stop")
+  expect(view()).toMatch(
+    new RegExp(` {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}`),
+  )
   release()
   await shows("done")
   await idle()
-  expect(view()).toMatch(/ {2}├ slow a\.ts {2}✓ slow result\n {2}└ fast b\.ts {2}✓ fast result\n\n {2}done/)
+  expect(view()).toMatch(
+    new RegExp(
+      ` {2}├ slow a\\.ts {2}✓ slow result +${localClock(Date.now())}\\n {2}└ fast b\\.ts {2}✓ fast result\\n\\n {2}done`,
+    ),
+  )
   terminal.send("\x03")
   await exited
 })
@@ -437,23 +451,23 @@ test("sub-agents stay under their call, also running in the background after the
   // The turn is over; the sub-agent runs on right under its call, updated in place.
   await waitFor(
     () =>
-      / {2}└ launch {2}✓ Started in the background\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log/.test(
-        view(),
-      ),
+      new RegExp(
+        ` {2}└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \\d+s · 0 tok\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs/app\\.log`,
+      ).test(view()),
     "rows under the call",
   )
   expect(view()).not.toContain("running in background")
   // No turn runs: the sub-agent working on brings no activity line.
-  expect(view()).not.toContain("Esc stop")
+  expect(view()).not.toContain("esc stop")
   finish()
   await child!.result()
   await bus.flush()
   // It ends in place: its end line stays under the call.
   await waitFor(
     () =>
-      / {2}└ launch {2}✓ Started in the background\n {5}└ ✓ Scan the logs · explorer · \d+\.\ds · 0 tok/.test(
-        view(),
-      ),
+      new RegExp(
+        ` {2}└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {5}└ ✓ Scan the logs · explorer · \\d+\\.\\ds · 0 tok`,
+      ).test(view()),
     "end line under the call",
   )
   terminal.send("\x03")
@@ -510,9 +524,9 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await idle()
   await waitFor(
     () =>
-      / {2}└ flow {2}✓ Started in the background\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/3 agents/.test(
-        view(),
-      ),
+      new RegExp(
+        ` {2}└ flow {2}✓ Started in the background +${localClock(Date.now())}\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0/3 agents`,
+      ).test(view()),
     "one line for the group under its call",
   )
   expect(view()).not.toContain("Scan api")
@@ -645,7 +659,7 @@ test("keys a block selection does not use reach the input: Ctrl+C interrupts, ty
     "test",
   )
   terminal.send("go\r")
-  await waitFor(() => agent.status !== "idle" && / {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] hold/.test(view()), "the turn running")
+  await waitFor(() => agent.status !== "idle" && / {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] hold/.test(view()), "the turn running")
   terminal.send(CTRL_UP)
   await waitFor(() => view().includes("tool call"), "selected")
   // Ctrl+C stops the running turn with a block selected.
@@ -703,7 +717,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   await shows("› x")
   expect(view()).not.toMatch(SELECT_BAR)
   terminal.send(click(again, 2))
-  await shows("Shift+right-click (or Ctrl+V) pastes")
+  await shows("shift+right-click (or ctrl+v) pastes")
   terminal.send("\x03\x03")
   await exited
 })
@@ -945,7 +959,7 @@ test("Ctrl+F finds text in the transcript, highlights matches and moves between 
   terminal.send("needle")
   await shows("2/2")
   // The find bar keeps its essential keys; the input's hint row stays, blank.
-  expect(view()).toMatch(/2\/2 · Enter older · Esc close$/m)
+  expect(view()).toMatch(/2\/2 · enter older · esc close$/m)
   expect(view()).not.toContain("newer")
   expect(view()).not.toContain("shift+tab mode")
   expect(view()).toContain("needle 30")
@@ -1013,7 +1027,7 @@ test("copying the last reply and a selected block goes through OSC 52", async ()
   terminal.send(CTRL_UP)
   await waitFor(() => /message \d+ of/.test(view()), "the user message selected")
   // The selection's bar keeps its essential keys; moving is in the key reference.
-  expect(view()).toMatch(/[›❯] message \d+ of \d+ · (Enter fold · )?y copy · Esc back$/m)
+  expect(view()).toMatch(/[›❯] message \d+ of \d+ · (enter fold · )?y copy · esc back$/m)
   expect(view()).not.toContain(" move")
   terminal.send("y")
   await shows("Copied the message")
@@ -1088,9 +1102,9 @@ test("a selected call opens the sub-agent viewer on its sub-agent", async () => 
   await idle()
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
-  await waitFor(() => /tool call \d+ of \d+ · Enter unfold · → sub-agent/.test(view()), "the call selected")
+  await waitFor(() => /tool call \d+ of \d+ · enter unfold · → sub-agent/.test(view()), "the call selected")
   terminal.send("o")
-  await waitFor(() => view().includes("Esc close") && !SELECT_BAR.test(view()), "the viewer")
+  await waitFor(() => view().includes("esc close") && !SELECT_BAR.test(view()), "the viewer")
   expect(view()).toContain("Scan the logs")
   terminal.send(ESC)
   await waitFor(() => SELECT_BAR.test(view()), "back, still selected")
@@ -1111,7 +1125,7 @@ test("a selected row of background sub-agents opens the viewer on them with →"
   terminal.send(CTRL_UP)
   await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")
   terminal.send(RIGHT)
-  await waitFor(() => view().includes("Esc close") && view().includes("Scan api"), "the viewer")
+  await waitFor(() => view().includes("esc close") && view().includes("Scan api"), "the viewer")
   terminal.send(ESC)
   await waitFor(() => /background sub-agents \d+ of \d+/.test(view()), "back, still selected")
   terminal.send(ESC)
@@ -1382,7 +1396,7 @@ test("a compaction's summary in a resumed history is a folded block that unfolds
   expect(view()).not.toContain("Fixed the parser")
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
-  await waitFor(() => /summary \d+ of \d+ · Enter unfold/.test(view()), "the summary selected")
+  await waitFor(() => /summary \d+ of \d+ · enter unfold/.test(view()), "the summary selected")
   terminal.send("\r")
   await shows("Fixed the parser.")
   expect(view()).toContain("▾ Compacted summary of earlier messages")

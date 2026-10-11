@@ -697,12 +697,12 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   const before = s.screen.mainText
   s.terminal.send("/agents view\r")
   await waitFor(() => s.screen.inAltScreen, "the viewer")
-  await waitFor(() => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the transcript")
+  await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the transcript")
   const lines = s.screen.lines
   expect(lines[0]).toMatch(/^◆ Check explorer · running · \d+s · 1\.5k tok · .+ 1 of 1$/)
   expect(lines[1]).toBe("task: task for the explorer")
   // Shared transcript rendering: one gap, closed tool groups, and inset reply text.
-  expect(lines.slice(3, 11)).toEqual([
+  expect(lines.slice(3, 13)).toEqual([
     "",
     "  › task for the explorer",
     "",
@@ -711,8 +711,10 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
     "",
     "  Now waiting.",
     "",
+    "  ───",
+    "",
   ])
-  expect(lines[11]).toMatch(/^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
+  expect(lines[13]).toMatch(/^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
   expect(s.view()).not.toContain("└ running")
   expect(s.view()).not.toContain("… working")
   expect(lines.at(-1)).toContain("following")
@@ -754,9 +756,9 @@ test("elapsed time redraws every second while no child event arrives", async () 
   s.terminal.send("go\r")
   await waitFor(s.isWaiting, "the waiting child")
   s.terminal.send("/agents view\r")
-  await waitFor(() => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the view")
+  await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the view")
   const before = s.screen.lines[0]!
-  const spin = () => s.view().match(/^ {2}└ ([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) wait/m)?.[1]
+  const spin = () => s.view().match(/^ {2}([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) wait/m)?.[1]
   const firstFrame = spin()
   await waitFor(() => spin() !== firstFrame, "the overlay spinner frame", 400)
   await waitFor(() => s.screen.lines[0] !== before, "the elapsed tick", 2500)
@@ -781,10 +783,10 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   s.terminal.send("go\r")
   await waitFor(s.isWaiting, "the child to block")
   s.terminal.send("/agents view\r")
-  await waitFor(() => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the viewer")
+  await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the viewer")
   // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
   expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
-  expect(s.screen.lines.at(-1)).toMatch(/ · Esc close$/)
+  expect(s.screen.lines.at(-1)).toMatch(/ · esc close$/)
   s.terminal.send("x")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
@@ -921,7 +923,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await waitFor(() => s.view().includes("── done ──"), "the viewer")
   const bells = s.screen.bells
   const answer = s.host.ui.api("approval").confirm("Allow bash?", "rm -rf build")
-  await waitFor(() => s.view().includes("⚠️ Waiting for you: Allow bash? · Esc to answer"), "the banner")
+  await waitFor(() => s.view().includes("⚠️ Waiting for you: Allow bash? · esc to answer"), "the banner")
   // Bells only: a BEL ending an OSC string (a title, the progress indicator) is not one.
   expect(s.screen.bells - bells).toBe(1)
   expect(s.screen.inAltScreen).toBe(true)
@@ -1056,8 +1058,8 @@ test("viewer streams partial tool output through the host's running renderer", a
   )
   await s.bus.flush()
   const rows = s.render().split("\n")
-  expect(rows).toContain("     one")
-  expect(rows).toContain("     two")
-  expect(rows.some((row) => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash build/.test(row))).toBe(true)
+  expect(rows).toContain("    │ one")
+  expect(rows).toContain("    │ two")
+  expect(rows.some((row) => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash build/.test(row))).toBe(true)
   s.host.unload("builtin:agent")
 })

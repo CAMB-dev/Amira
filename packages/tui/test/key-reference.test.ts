@@ -41,12 +41,28 @@ test("it fits any screen: exactly its rows, none wider than the width", () => {
   }
 })
 
+test("rebound reference labels and its footer are lower-case, while prose keeps its case", () => {
+  const rebound = new Keybindings({
+    ...defaultKeys({ vscode: false }, "linux"),
+    submit: ["ctrl+alt+shift+f12"],
+    "dialog.choose": ["f6"],
+  })
+  const ref = new KeyReference(rebound, { fullscreen: true, onClose: () => {} })
+  const rows = ref.render(180, { ...plain, rows: 300 })
+  const text = rows.join("\n")
+  expect(text).toMatch(/^ {2}ctrl\+alt\+shift\+f12 +Send the message/m)
+  expect(text).toMatch(/^ {2}f6 +Choose the selected option/m)
+  expect(text).toContain("Input")
+  expect(text).toContain("Block selection")
+  expect(rows.at(-1)).toBe("↑↓ pgup pgdn home end scroll · esc close")
+})
+
 test("keys the terminal cannot send are left out; an action with none says so", () => {
   const { ref } = open({ usable: (action, s) => action !== "newline" || !(s.shift && s.name === "enter") })
   const text = ref.render(120, { ...plain, rows: 40 }).join("\n")
-  expect(text).toMatch(/^ {2}Ctrl\+Enter +Insert a line break · newline$/m)
+  expect(text).toMatch(/^ {2}ctrl\+enter +Insert a line break · newline$/m)
   expect(text).toMatch(
     /^ {2}not bound +Send the message; while a turn runs, always steer it · submit\.steer$/m,
   )
-  expect(text).toMatch(/^ {2}F1 +List every key/m)
+  expect(text).toMatch(/^ {2}f1 +List every key/m)
 })

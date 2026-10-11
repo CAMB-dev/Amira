@@ -156,7 +156,7 @@ test("a command opens an extension's view over its data; it follows changes, run
   expect(lines[1]).toBe("1/2 done")
   expect(lines[2]).toBe("─".repeat(80))
   expect(lines.slice(3, 5)).toEqual(["✓ read the diff", "… check the tests"])
-  expect(lines.at(-1)).toBe("x cancel · c close · ↑↓ PgUp PgDn Home End scroll · Esc close")
+  expect(lines.at(-1)).toBe("x cancel · c close · ↑↓ pgup pgdn home end scroll · esc close")
 
   // The extension changes its data and asks for a redraw: the view shows it.
   s.data.steps.push({ title: "write the summary", state: "running" })
@@ -465,7 +465,10 @@ test("named navigation keys distinguish Tab and Shift+Tab, leaving reserved keys
       },
     },
   )
-  viewer.render(80, renderContext)
+  const footer = stripAnsi(viewer.render(120, renderContext).at(-1)!)
+  expect(footer).toContain("tab tab")
+  expect(footer).toContain("shift+tab shift-tab")
+  expect(footer).toContain("esc close")
   for (const event of [keyEvent("left"), keyEvent("right"), keyEvent("tab"), keyEvent("tab", true)])
     expect(viewer.handleInput(event)).toBe(true)
   expect(viewer.handleInput({ ...keyEvent("left"), ctrl: true })).toBe(false)
@@ -494,7 +497,7 @@ test("keys sharing a label share a footer item, empty labels stay out, and the a
   }
   const lines = new ExtensionViewer(view, {}).render(40, renderContext).map(stripAnsi)
   expect(lines[0]).toBe("◆ A rather long title that has t… 2 of 5")
-  expect(lines.at(-1)).toBe("←→ switch · x y stop · Esc close")
+  expect(lines.at(-1)).toBe("←→ switch · x y stop · esc close")
   const wide = new ExtensionViewer(view, {}).render(120, renderContext).map(stripAnsi)
   expect(wide[0]).toMatch(/^◆ A rather long title .*screen +2 of 5$/)
   expect(wide[0]).toHaveLength(120)
@@ -779,7 +782,7 @@ test("a key can ask for a line of text at the bottom of the view; Esc cancels it
   // Keys go to the prompt: "q" and "m" are typed, not run.
   s.terminal.send("q m\r")
   await waitFor(() => s.view().includes("sent: hi q m"), "the answer")
-  expect(s.screen.lines.at(-1)).toBe("m message · ↑↓ PgUp PgDn Home End scroll · Esc close")
+  expect(s.screen.lines.at(-1)).toBe("m message · ↑↓ pgup pgdn home end scroll · esc close")
   s.terminal.send("m")
   await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer:"), "the prompt again")
   s.terminal.send(ESC)
@@ -823,8 +826,9 @@ test("transcript helpers share main reply/tool styles, closing rails and running
   expect(rows[2]).toContain(defaultTheme.path("a.ts"))
   expect(stripAnsi(rows[2]!)).toBe("  └ read a.ts  ✓ done")
   expect(rows[4]).toBe(`  ${defaultTheme.strong!("Now waiting.")}`)
-  expect(stripAnsi(rows[6]!)).toMatch(/^ {2}└ ⠋ wait +1s$/)
-  expect(visibleWidth(rows[6]!)).toBe(80)
+  expect(rows.slice(5, 8).map(stripAnsi)).toEqual(["", "  ───", ""])
+  expect(stripAnsi(rows[8]!)).toMatch(/^ {2}⠋ wait +1s$/)
+  expect(visibleWidth(rows[8]!)).toBe(80)
   now += 80
-  expect(stripAnsi(viewer.render(80, ctx)[6]!)).toMatch(/^ {2}└ ⠙ wait +1s$/)
+  expect(stripAnsi(viewer.render(80, ctx)[8]!)).toMatch(/^ {2}⠙ wait +1s$/)
 })

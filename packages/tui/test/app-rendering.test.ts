@@ -678,7 +678,7 @@ test("the status goes under a dialog that takes the input box's place, and back 
 test("a command list below the input box leaves the status in the border", async () => {
   const { terminal, live, exited } = await setup([], { commands: testCommands([]) })
   terminal.send("/")
-  await waitFor(() => live().includes("Tab complete · Enter run · Esc close"), "the list")
+  await waitFor(() => live().includes("tab complete · enter run · esc close"), "the list")
   expect(live()).toMatch(/^╰─+ m1 · auto ─╯$/m)
   terminal.send("\x03\x03")
   await exited
@@ -742,11 +742,11 @@ test("? opens the key reference on an empty input; it lists every action with it
     expect(text).toContain("To change a key, map the action name")
     expect(text).toMatch(/^Input$/m)
     // The keys bound now, all of them, next to what they do.
-    expect(text).toMatch(/^ {2}Enter +Send the message/m)
-    expect(text).toMatch(/^ {2}Ctrl\+T +While a turn runs, send the message/m)
+    expect(text).toMatch(/^ {2}enter +Send the message/m)
+    expect(text).toMatch(/^ {2}ctrl\+t +While a turn runs, send the message/m)
     // Keys that do not fit the column go on under it; the action's name follows its description.
-    expect(text).toMatch(/^ {2}Shift\+Enter, +Insert a line break · newline\n {2}Ctrl\+Enter$/m)
-    expect(text).toMatch(/↑↓ PgUp PgDn Home End scroll · Esc close$/m)
+    expect(text).toMatch(/^ {2}shift\+enter, +Insert a line break · newline\n {2}ctrl\+enter$/m)
+    expect(text).toMatch(/↑↓ pgup pgdn home end scroll · esc close$/m)
     // It scrolls to the end, where the last group is.
     terminal.send("\x1b[F")
     await waitFor(() => /^end · /m.test(live()), `${mode}: scrolled to the end`)
@@ -826,10 +826,10 @@ for (const mode of ["inline", "fullscreen"] as const) {
         terminal.send("review @rea")
         await waitFor(() => live().includes("❯ readme.md"), "fixture selected in the @ file list")
         expect(input()).toBe("│ › review @rea")
-        expect(live()).toContain("Tab/Enter insert")
+        expect(live()).toContain("tab/enter insert")
         terminal.send("\t")
         await waitFor(() => input() === "│ › review @readme.md", "file completion inserted")
-        expect(live()).not.toContain("Tab/Enter insert")
+        expect(live()).not.toContain("tab/enter insert")
         terminal.send("\x1a") // Ctrl+Z: undo the entire completion in one step.
         await waitFor(() => input() !== "│ › review @readme.md", "undo rendered")
         expect(input()).toBe("│ › review @rea")
@@ -904,13 +904,13 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
       ],
     })
     terminal.send("/keys\r")
-    await shows("Enter=Send the message; while a turn runs, steer it")
-    expect(all()).toContain("Ctrl+R=Search the prompts sent before")
+    await shows("enter=Send the message; while a turn runs, steer it")
+    expect(all()).toContain("ctrl+r=Search the prompts sent before")
     expect(all()).toContain(
-      "Esc=Cancel a command or stop the turn; twice in a row, rewind to an earlier message",
+      "esc=Cancel a command or stop the turn; twice in a row, rewind to an earlier message",
     )
     expect(all()).toContain("?=Every key and what it does")
-    if (mode === "fullscreen") expect(all()).toContain("Ctrl+F=Find text in the transcript")
+    if (mode === "fullscreen") expect(all()).toContain("ctrl+f=Find text in the transcript")
     else expect(all()).not.toContain("Find text in the transcript")
     terminal.send("\x03")
     await exited

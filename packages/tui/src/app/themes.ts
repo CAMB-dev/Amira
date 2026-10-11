@@ -201,7 +201,13 @@ export class RuntimeThemes {
         {
           kind: "select",
           requestId: "tui-theme",
-          title: "Choose a theme (arrows preview, Enter applies, Esc restores)",
+          title: `Choose a theme (${[
+            "arrows preview",
+            deps.keys.label("dialog.choose") && `${deps.keys.label("dialog.choose")} applies`,
+            deps.keys.label("dialog.cancel") && `${deps.keys.label("dialog.cancel")} restores`,
+          ]
+            .filter(Boolean)
+            .join(", ")})`,
           initial: previous.name,
           options: entries.map((entry) => entry.name),
           descriptions: entries.map(
@@ -226,7 +232,7 @@ export class RuntimeThemes {
             },
           ],
           header: () =>
-            `Appearance: ${VARIANTS.map((variant) => (variant === themeVariant ? `[${variant}]` : variant)).join(" / ")} (Tab, left/right)`,
+            `Appearance: ${VARIANTS.map((variant) => (variant === themeVariant ? `[${variant}]` : variant)).join(" / ")} (${keyLabel({ name: "tab" })}, left/right)`,
           handleInput: (event) => {
             if (event.type !== "key" || event.ctrl || event.alt) return false
             if (!["tab", "left", "right"].includes(event.name)) return false

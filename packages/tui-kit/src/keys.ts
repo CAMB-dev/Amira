@@ -119,6 +119,23 @@ export interface MouseInput {
 
 export type InputEvent = KeyEvent | PasteEvent | FocusEvent | MouseInput
 
+const KEY_LABELS: Record<string, string> = {
+  escape: "esc",
+  up: "↑",
+  down: "↓",
+  left: "←",
+  right: "→",
+  pageup: "pgup",
+  pagedown: "pgdn",
+}
+
+/** How a key reads in hints: "ctrl+q", "alt+enter", "esc", "↑", "y". */
+export function keyLabel(spec: { name: string; ctrl?: boolean; alt?: boolean; shift?: boolean }): string {
+  const name = spec.name.toLowerCase()
+  const base = KEY_LABELS[name] ?? name
+  return `${spec.ctrl ? "ctrl+" : ""}${spec.alt ? "alt+" : ""}${spec.shift ? "shift+" : ""}${base}`
+}
+
 export function key(name: KeyId, mods: Partial<Pick<KeyEvent, "ctrl" | "shift" | "alt">> = {}): KeyEvent {
   return { type: "key", name, ctrl: !!mods.ctrl, shift: !!mods.shift, alt: !!mods.alt }
 }

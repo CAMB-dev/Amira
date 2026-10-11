@@ -17,7 +17,7 @@ exports[`walkthrough frame at 100 columns 1`] = `
   │ }                                                                                              │
   ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
 
-  ├ ⠋ agent                                                                                       6s
+  ⠋ agent                                                                                         6s
   │  └ ⠋ List project files · explorer · 6s · 31k tok
   │    └ ⠋ bash ls src
   ├ edit src/add.ts  +1 / -1
@@ -45,7 +45,7 @@ exports[`walkthrough frame at 50 columns 1`] = `
   │ }                                            │
   ╰──────────────────────────────────────────────╯
 
-  ├ ⠋ agent                                     6s
+  ⠋ agent                                       6s
   │  └ ⠋ List project f… · explorer · 6s · 31k tok
   │    └ ⠋ bash ls src
   ├ edit src/add.ts  +1 / -1

@@ -18,7 +18,7 @@ import { glyphs } from "../glyphs.ts"
 import { fitHint } from "../hint.ts"
 import type { HistorySearch } from "../history-search.ts"
 import { InputBox } from "../input-box.ts"
-import type { Keybindings, KeySpec } from "../keybindings.ts"
+import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
 import type { TurnActivity } from "./activity.ts"
@@ -164,7 +164,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         running: deps.view().runningTools,
         waiting: deps.dialogs().length > 0,
         spinner,
-        stop: `${keys.label("interrupt") ?? "esc"} stop`,
+        stop: `${keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
       })
     }),
     // The input box carries the status in its bottom border. A dialog takes the box's place;
@@ -242,7 +242,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
    */
   function inputHint(theme: Theme): HintItems {
     const item = (key: string | undefined, label: string, priority: number) =>
-      key && { text: `${bold(theme.fg2(key.toLowerCase()))}${theme.muted(` ${label}`)}`, priority }
+      key && { text: `${bold(theme.fg2(key))}${theme.muted(` ${label}`)}`, priority }
     const interruptKey = keys.label("interrupt")
     const working = deps.activity().working
     const cancellable = deps.hasCancellable() && !deps.activity().compacting

@@ -149,7 +149,10 @@ export class KeyReference implements Component {
       p.total <= p.height
         ? []
         : [p.following ? "end" : `${p.top + 1}–${Math.min(p.total, p.top + p.height)} of ${p.total}`]
-    const hint = [...where, "↑↓ PgUp PgDn Home End scroll", "Esc close"].join(` ${glyphs.separator} `)
+    const scroll = ["pageup", "pagedown", "home", "end"].map((name) => keyLabel({ name })).join(" ")
+    const hint = [...where, `↑↓ ${scroll} scroll`, `${keyLabel({ name: "escape" })} close`].join(
+      ` ${glyphs.separator} `,
+    )
     return theme.muted(truncateToWidth(hint, width, glyphs.more))
   }
 }

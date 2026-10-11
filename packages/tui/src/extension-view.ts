@@ -43,6 +43,7 @@ import {
   type FinishedCall,
   finishedToolLines,
   type PresenterSource,
+  runningOutputLimit,
   runningToolLines,
 } from "./tool-view.ts"
 import { UiRuntime } from "./ui-runtime/runtime.ts"
@@ -148,6 +149,7 @@ export class ExtensionViewer implements Component {
   #disposed = false
   /** Host-rendered transcript lines keep their styles without exposing escapes to views. */
   #hostLines = new WeakMap<ViewLine, string>()
+  #liveRows = new WeakMap<ViewLine, { group: object; row: number }>()
   #animating = false
   /** Running transcript rows need the same redraw cadence as the main spinner. */
   get animating(): boolean {
@@ -553,16 +555,20 @@ export class ExtensionViewer implements Component {
     return this.#renderLines(lines, width, theme)
   }
 
-  #hostRows(rows: string[]): ViewLine[] {
-    return rows.map((text) => {
+  #hostRows(rows: string[], live = false): ViewLine[] {
+    const group = {}
+    return rows.map((text, row) => {
       const line: ViewLine = { kind: "code", text: stripAnsi(text) }
       this.#hostLines.set(line, text)
+      if (live && row > 0) this.#liveRows.set(line, { group, row: rows.length - row })
       return line
     })
   }
 
   #renderOptions(width: number, theme: Theme): ViewRenderOptions {
     const now = this.#now()
+    let finished = false
+    let separated = false
     // Existing redraws drive the spinner at its usual cadence; no view-specific timer.
     const frame = Math.floor(now / 80)
     if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
@@ -571,8 +577,9 @@ export class ExtensionViewer implements Component {
       width,
       now,
       ...(this.#pages.length > 1 ? { page: { depth: this.#pages.length - 1, data: this.#page.data } } : {}),
-      renderTool: (name, call, detail, options) =>
-        this.#hostRows(
+      renderTool: (name, call, detail, options) => {
+        finished = true
+        return this.#hostRows(
           finishedToolLines(
             theme,
             this.#opts.presenters?.get(name),
@@ -581,9 +588,11 @@ export class ExtensionViewer implements Component {
             width,
             options,
           ),
-        ),
+        )
+      },
       toolDetail: this.#toolDetail ?? this.#opts.toolDetail?.() ?? "summary",
       renderTools: (calls, detail, options) => {
+        finished ||= calls.length > 0
         const rows: string[] = []
         let run: { call: FinishedCall; presenter: ReturnType<PresenterSource["get"]> }[] = []
         const flush = (last: boolean) => {
@@ -608,26 +617,35 @@ export class ExtensionViewer implements Component {
       },
       renderRunningTool: (name, call, options) => {
         this.#animating = true
-        return this.#hostRows(
-          runningToolLines(
-            theme,
-            this.#opts.presenters?.get(name),
-            { ...call, name, startedAt: call.startedAt ?? now },
-            now,
-            this.#spinner.glyph,
-            width,
-            options,
+        const boundary = finished && !separated ? ["", theme.muted(`  ${glyphs.rule.repeat(3)}`), ""] : []
+        separated ||= finished
+        return [
+          ...this.#hostRows(boundary),
+          ...this.#hostRows(
+            runningToolLines(
+              theme,
+              this.#opts.presenters?.get(name),
+              { ...call, name, startedAt: call.startedAt ?? now },
+              now,
+              this.#spinner.glyph,
+              width,
+              options,
+            ),
+            true,
           ),
+        ]
+      },
+      renderReply: (text) => {
+        finished ||= !!text.trim()
+        return this.#hostRows(
+          replyRows(renderMarkdown(text, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)),
         )
       },
-      renderReply: (text) =>
-        this.#hostRows(
-          replyRows(renderMarkdown(text, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)),
-        ),
     }
   }
 
   #renderLines(lines: ViewLine[], width: number, theme: Theme): string[] {
+    const groups = [...new Set(lines.flatMap((line) => this.#liveRows.get(line)?.group ?? []))]
     const out: string[] = []
     let plain: ViewLine[] = []
     const flush = () => {
@@ -635,9 +653,14 @@ export class ExtensionViewer implements Component {
       plain = []
     }
     for (const line of wrapViewLines(lines, width)) {
+      const live = this.#liveRows.get(line)
+      if (live && live.row > runningOutputLimit(groups.indexOf(live.group), groups.length)) continue
       const tool = this.#hostLines.get(line)
       if (tool !== undefined) {
         flush()
+        if (stripAnsi(tool) === `  ${glyphs.rule.repeat(3)}`) {
+          while (stripAnsi(out.at(-1) ?? "x") === "" && stripAnsi(out.at(-2) ?? "x") === "") out.pop()
+        }
         out.push(tool)
       } else plain.push(line)
     }
@@ -688,7 +711,7 @@ export class ExtensionViewer implements Component {
       const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), glyphs.more)
       const room = Math.max(1, width - visibleWidth(label))
       const back = this.#navigationLabel("view.back", true)
-      const placeholder = `Enter send${back ? ` ${glyphs.separator} ${back} cancel` : ""}`
+      const placeholder = `${bindingLabel({ name: "enter" })} send${back ? ` ${glyphs.separator} ${back} cancel` : ""}`
       return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder })}`
     }
     if (this.#view.hostKeys === "minimal")
@@ -698,7 +721,10 @@ export class ExtensionViewer implements Component {
         fitHint(
           [
             ...keyHints(this.#view.keys ?? []),
-            { text: "Tab focus · arrows navigate · Enter open/send", priority: 2 },
+            {
+              text: `${bindingLabel({ name: "tab" })} focus · arrows navigate · ${bindingLabel({ name: "enter" })} open/send`,
+              priority: 2,
+            },
             { text: this.#scrollHint(), priority: 1 },
             { text: this.#backHint(), priority: 5 },
           ],
@@ -762,8 +788,7 @@ function keyHints(keys: readonly ViewKey[]): HintItem[] {
 }
 
 function keyLabel(key: string): string {
-  const labels: Record<string, string> = { left: "←", right: "→", tab: "Tab", "shift-tab": "Shift+Tab" }
-  return labels[key] ?? terminalText(key)
+  return bindingLabel({ name: key === "shift-tab" ? "tab" : terminalText(key), shift: key === "shift-tab" })
 }
 
 function oneLine(s: string): string {
