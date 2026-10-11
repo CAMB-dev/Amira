@@ -280,7 +280,12 @@ export class RuntimeThemes {
               priority: 6,
             },
             {
-              text: `${keyLabel({ name: "left" })}/${keyLabel({ name: "right" })} change`,
+              // The arrows change a control only while one has focus, not the list.
+              get text() {
+                return shimmer.focus === "list"
+                  ? ""
+                  : `${keyLabel({ name: "left" })}/${keyLabel({ name: "right" })} change`
+              },
               priority: 5,
             },
             {
@@ -290,10 +295,7 @@ export class RuntimeThemes {
               priority: 4,
             },
           ],
-          header: () =>
-            shimmer.header(
-              VARIANTS.map((variant) => (variant === themeVariant ? `[${variant}]` : variant)).join(" / "),
-            ),
+          header: (theme) => shimmer.header(themeVariant, theme),
           handleInput: (event) => {
             if (shimmer.handleInput(event)) return true
             if (event.type !== "key" || event.ctrl || event.alt) return false

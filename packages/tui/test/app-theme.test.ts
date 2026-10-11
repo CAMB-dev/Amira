@@ -5,6 +5,9 @@ import type { ThemeVariant } from "@amira/tui-kit"
 import { glyphs } from "../src/glyphs.ts"
 import { setup, waitFor } from "./app-harness.ts"
 
+const selectedAppearance = (variant: ThemeVariant) =>
+  new RegExp(`\x1b\\[1m(?:\x1b\\[[\\d;]+m)*${variant}\x1b\\[`)
+
 test("interactive startup applies palette and depth settings, with mono taking precedence", async () => {
   const cases = [
     { settings: { theme: "dark", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;120;219;226m› " },
@@ -78,8 +81,8 @@ test("/theme arrows preview immediately, Esc restores without saving, and Enter 
   try {
     s.terminal.send("/theme\r")
     await s.shows("arrows preview")
+    expect(s.terminal.output).toMatch(selectedAppearance("dark"))
     s.terminal.clearWrites()
-    expect(s.live()).toContain("[dark]")
     s.terminal.send("\x1b[C")
     await waitFor(() => s.terminal.output.includes(light), "light preview")
     expect(saved).toEqual([])
@@ -125,7 +128,7 @@ test("theme picker lists built-ins first, custom themes next and terminal last",
     })
     expect(names).toEqual(["amira", "amber", "burnt", "lavender", "mono", "ascii", "custom", "terminal"])
     expect(rows.find((row) => /\bamira\b/.test(row))).toContain("current")
-    expect(s.live()).toContain("[auto]")
+    expect(s.terminal.output).toMatch(selectedAppearance("auto"))
     expect(s.live()).toContain("user · User palette")
   } finally {
     s.terminal.send("\x1b")
@@ -167,12 +170,16 @@ test("theme and variant preview survive reload and Esc restores both from the cu
     expect(saved).toEqual([])
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("arrows preview"), "reopened picker")
-    expect(s.live()).toContain("[light]")
+    expect(s.terminal.output).toMatch(selectedAppearance("light"))
     s.terminal.send("\t")
-    await waitFor(() => s.live().includes("[Shimmer]"), "Tab focuses shimmer")
-    expect(s.live()).toContain("[light]")
+    await waitFor(() => s.live().includes("❯ Shimmer:"), "Tab focuses shimmer")
+    expect(s.terminal.output).toMatch(selectedAppearance("light"))
+    s.terminal.clearWrites()
     s.terminal.send("\t\x1b[C")
-    await waitFor(() => s.live().includes("[auto]"), "appearance arrows after returning focus")
+    await waitFor(
+      () => selectedAppearance("auto").test(s.terminal.output),
+      "appearance arrows after returning focus",
+    )
     s.terminal.send("\x1b")
   } finally {
     s.terminal.send("\x1b")
@@ -195,7 +202,7 @@ test("legacy light opens as current Amira light and direct names keep the appear
   try {
     s.terminal.send("/theme\r")
     await s.shows("arrows preview")
-    expect(s.live()).toContain("[light]")
+    expect(s.terminal.output).toMatch(selectedAppearance("light"))
     expect(
       s
         .live()
@@ -456,7 +463,7 @@ test("picker cycles every shimmer preset, applies it, and soft explicitly delete
     s.terminal.send("/theme\r")
     await s.shows("arrows preview")
     s.terminal.send("\t")
-    await waitFor(() => s.live().includes("[Shimmer]"), "shimmer focus")
+    await waitFor(() => s.live().includes("❯ Shimmer:"), "shimmer focus")
     for (const preset of ["soft", "sharp", "wide", "bounce", "pulse", "wave", "reveal"]) {
       s.terminal.send("\x1b[C")
       await waitFor(() => s.live().includes(`Shimmer: ${preset}`), `${preset} preview`)
@@ -519,8 +526,9 @@ test("picker customizes all six knobs, inherits the theme, and color pairs follo
     expect(s.live()).toContain("edge: linear")
     expect(s.live()).toContain("direction: rtl")
     expect(saved).toEqual([])
+    s.terminal.clearWrites()
     s.terminal.send("\r\t\x1b[C")
-    await waitFor(() => s.live().includes("[light]"), "appearance after customize")
+    await waitFor(() => selectedAppearance("light").test(s.terminal.output), "appearance after customize")
     s.terminal.send("\t\r")
     await waitFor(() => s.live().includes("colors: amber (#001100 → #002200)"), "amber light shimmer pair")
     s.terminal.send("\r\r")
@@ -633,7 +641,7 @@ test("soft overrides a pulse theme and theme removes the override", async () => 
   }
 })
 
-test("up/down moves the theme list while Shimmer stays focused", async () => {
+test("up/down focuses the theme list and leaves both controls unhighlighted", async () => {
   const themes = new ThemeRegistry()
   themes.register({ name: "amira", shimmerEffect: "pulse" }, "built-in")
   themes.register({ name: "amber", shimmerEffect: "wave" }, "built-in")
@@ -646,12 +654,17 @@ test("up/down moves the theme list while Shimmer stays focused", async () => {
   try {
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "Amira pulse")
+    expect(s.live()).toContain("←/→ change")
     s.terminal.send("\t\x1b[B")
     await waitFor(() => s.live().includes("Shimmer: theme (wave)"), "down previews Amber")
-    expect(s.live()).toContain("[Shimmer]")
+    expect(s.live()).not.toContain("❯ Shimmer:")
+    expect(s.live()).not.toContain("❯ Appearance:")
+    // The arrows only change a focused control, so the list's footer leaves them out.
+    expect(s.live()).not.toContain("←/→ change")
     s.terminal.send("\x1b[A")
     await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "up returns to Amira")
-    expect(s.live()).toContain("[Shimmer]")
+    expect(s.live()).not.toContain("❯ Shimmer:")
+    expect(s.live()).not.toContain("❯ Appearance:")
   } finally {
     s.terminal.send("\x1b")
     await Bun.sleep(40)
@@ -687,12 +700,12 @@ test("reloaded theme settings replace palette, appearance and shimmer in the run
     await waitFor(() => s.terminal.output.includes("\x1b[38;2;1;2;3m› "), "reloaded light palette")
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("Shimmer: wave"), "reloaded shimmer selection")
-    expect(s.live()).toContain("[light]")
+    expect(s.terminal.output).toMatch(selectedAppearance("light"))
     apply!(undefined)
     await waitFor(() => !s.live().includes("arrows preview"), "reload replaces the open preview")
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("Shimmer: theme (soft)"), "removed settings restore defaults")
-    expect(s.live()).toContain("[auto]")
+    expect(s.terminal.output).toMatch(selectedAppearance("auto"))
   } finally {
     s.terminal.send("\x1b")
     await Bun.sleep(40)
