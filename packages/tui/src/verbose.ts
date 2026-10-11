@@ -1,6 +1,6 @@
 import type { CommandDefinition, ToolDetailLevel } from "@amira/api"
 
-/** The tool output levels, in the order Ctrl+O cycles through them from the default. */
+/** The tool output levels, in the order /verbose cycles through them from the default. */
 export const DETAIL_LEVELS: readonly ToolDetailLevel[] = ["summary", "full", "collapsed"]
 
 const DESCRIPTIONS: Record<ToolDetailLevel, string> = {
@@ -13,9 +13,14 @@ export function nextDetail(level: ToolDetailLevel): ToolDetailLevel {
   return DETAIL_LEVELS[(DETAIL_LEVELS.indexOf(level) + 1) % DETAIL_LEVELS.length]!
 }
 
+/** Ctrl+O expands summaries, then returns to them; collapsed is command-only. */
+export function toggleDetail(level: ToolDetailLevel): ToolDetailLevel {
+  return level === "summary" ? "full" : "summary"
+}
+
 /**
  * /verbose: how much of each finished tool call the TUI commits from now on. Without an
- * argument it moves to the next level, like Ctrl+O. `set` returns the line to print.
+ * argument it cycles all three levels. `set` returns the line to print.
  */
 export function detailCommand(
   get: () => ToolDetailLevel,

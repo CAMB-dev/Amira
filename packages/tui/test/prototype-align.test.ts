@@ -115,7 +115,7 @@ test(
         synchronizedOutput: false,
         shiftEnter: true,
       },
-      settings: {},
+      settings: { margin: 0, marginRows: 0 },
       presenters: env.presenters,
       hyperlinks: false,
       renders: new ReplyRenderers(undefined),

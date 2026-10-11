@@ -47,7 +47,7 @@ import {
   runningToolLines,
 } from "./tool-view.ts"
 import { UiRuntime } from "./ui-runtime/runtime.ts"
-import { nextDetail } from "./verbose.ts"
+import { toggleDetail } from "./verbose.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
 import { renderViewLines, viewTitle } from "./view-lines.ts"
 
@@ -301,7 +301,7 @@ export class ExtensionViewer implements Component {
       return true
     }
     if (this.#keys.is(e, "tool-output")) {
-      this.#toolDetail = nextDetail(this.#toolDetail ?? this.#opts.toolDetail?.() ?? "summary")
+      this.#toolDetail = toggleDetail(this.#toolDetail ?? this.#opts.toolDetail?.() ?? "summary")
       this.#uiDirty = true
       this.#opts.requestRender?.()
       return true

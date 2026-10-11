@@ -26,7 +26,7 @@ function setup(mode: "inline" | "fullscreen", binding: string[] = ["ctrl+o"], co
     terminal,
     theme: plain.theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
-    settings: {},
+    settings: { margin: 0, marginRows: 0 },
     presenters: undefined,
     hyperlinks: false,
     renders: new ReplyRenderers(undefined),
@@ -346,23 +346,30 @@ for (const mode of ["inline", "fullscreen"] as const) {
 }
 
 for (const mode of ["inline", "fullscreen"] as const) {
-  test(`${mode}: the rebound key named by live thinking actually reveals its content`, async () => {
+  test.each([
+    ["ctrl+o", "\x0f"],
+    ["ctrl+b", "\x02"],
+  ])(`${mode}: %s toggles live thinking and restores its hint`, async (binding, press) => {
     let release!: () => void
     const until = new Promise<void>((resolve) => {
       release = resolve
     })
-    const keys = new Keybindings({ ...defaultKeys({ vscode: false }), "tool-output": ["ctrl+b"] })
+    const keys = new Keybindings({ ...defaultKeys({ vscode: false }), "tool-output": [binding] })
     const app = await setupApp(
       [{ thinking: "A readable thought.", text: "Answer.", hold: { chunks: 0, until } }],
       { settings: { mode }, keybindings: keys, cols: 100, rows: 40 },
     )
     try {
       app.terminal.send("go\r")
-      await waitFor(() => app.live().includes("ctrl+b to expand"), "bound thinking hint")
+      await waitFor(() => app.live().includes(`${binding} to expand`), "bound thinking hint")
       expect(app.live()).not.toContain("A readable thought.")
-      app.terminal.send("\x02")
+      app.terminal.send(press)
       await waitFor(() => app.live().includes("    A readable thought."), "expanded thinking")
       expect(app.live()).not.toContain("to expand")
+      app.terminal.send(press)
+      await waitFor(() => app.live().includes(`${binding} to expand`), "thinking hint restored")
+      expect(app.live()).not.toContain("A readable thought.")
+      expect(app.live()).toContain("Tool output: summary")
       release()
       await app.idle()
     } finally {

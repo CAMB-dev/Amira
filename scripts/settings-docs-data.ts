@@ -642,6 +642,16 @@ export const annotations: Record<string, Annotation> = {
     en: '`"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal\'s scrollback. `--inline` and `--fullscreen` win. Fullscreen pins live prompts below the header when scrolled away; resumed history has no sticky prompt.',
     zh: '`"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。全屏模式下，本次输入的提示滚出视口后固定在标题栏下方；恢复的历史记录不显示固定提示。',
   },
+  "tui.margin": {
+    default: documentedDefault("tui.margin"),
+    en: "Side margin in cells, in both modes (integer 0–12). Narrow terminals shrink it to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for the edge-to-edge layout.",
+    zh: "两种模式的左右留白宽度，单位为字符格（整数 0–12）。窄终端会自动缩小留白，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边布局。",
+  },
+  "tui.marginRows": {
+    default: documentedDefault("tui.marginRows"),
+    en: "Empty rows above the header and below the key-hint line, fullscreen only (integer 0–2). Terminals shorter than 24 rows omit them; inline mode has no vertical margin.",
+    zh: "全屏模式标题栏上方和按键提示行下方的空行数（整数 0–2）。终端不足 24 行时自动取消；行内模式没有上下留白。",
+  },
   "tui.theme": {
     default: documentedDefault("tui.theme"),
     en: 'A theme name, or `"auto"` for Amira following the terminal background (dark if unknown). `"dark"` and `"light"` select Amira explicitly; `"terminal"` uses the terminal\'s own ANSI colors. `/theme` previews and saves a named theme.',

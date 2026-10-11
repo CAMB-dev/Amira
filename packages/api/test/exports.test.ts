@@ -79,6 +79,8 @@ test("the public API exports stay stable", async () => {
     "DEFAULT_TUI_BELL",
     "DEFAULT_TUI_COLOR_DEPTH",
     "DEFAULT_TUI_IMAGES",
+    "DEFAULT_TUI_MARGIN",
+    "DEFAULT_TUI_MARGIN_ROWS",
     "DEFAULT_TUI_MODE",
     "DEFAULT_TUI_NOTIFY",
     "DEFAULT_TUI_PROGRESS",
@@ -206,6 +208,17 @@ test("the additive provider-stream event contract preserves optional timing meta
       },
     ]
   `)
+})
+
+test("the public TUI settings include optional margins without changing API_VERSION", async () => {
+  const { API_VERSION, DEFAULT_TUI_MARGIN, DEFAULT_TUI_MARGIN_ROWS } = await import("../src/index.ts")
+  const defaults: TuiSettings = { margin: DEFAULT_TUI_MARGIN, marginRows: DEFAULT_TUI_MARGIN_ROWS }
+  const edgeToEdge: TuiSettings = { margin: 0, marginRows: 0 }
+  const omitted: TuiSettings = {}
+  expect(API_VERSION).toBe("0.1.41")
+  expect(defaults).toEqual({ margin: 3, marginRows: 1 })
+  expect(edgeToEdge).toEqual({ margin: 0, marginRows: 0 })
+  expect(omitted).toEqual({})
 })
 
 test("the public shimmer types are shared by theme definitions and TUI settings", () => {

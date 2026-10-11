@@ -256,6 +256,8 @@ Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tool
 | Key | Type | Default | Description | User file only |
 | --- | --- | --- | --- | --- |
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal's scrollback. `--inline` and `--fullscreen` win. Fullscreen pins live prompts below the header when scrolled away; resumed history has no sticky prompt. |  |
+| `tui.margin` | `number` | `3` | Side margin in cells, in both modes (integer 0–12). Narrow terminals shrink it to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for the edge-to-edge layout. |  |
+| `tui.marginRows` | `number` | `1` | Empty rows above the header and below the key-hint line, fullscreen only (integer 0–2). Terminals shorter than 24 rows omit them; inline mode has no vertical margin. |  |
 | `tui.theme` | `string` | `"auto"` | A theme name, or `"auto"` for Amira following the terminal background (dark if unknown). `"dark"` and `"light"` select Amira explicitly; `"terminal"` uses the terminal's own ANSI colors. `/theme` previews and saves a named theme. |  |
 | `tui.themeVariant` | `"auto" \| "dark" \| "light"` | `"auto"` | For named themes, `"auto"` follows the terminal background; `"dark"` or `"light"` forces that variant. A missing variant uses the default Amira palette. |  |
 | `tui.shimmer` | `ShimmerEffect` | theme’s effect, else `"soft"` | Activity-label animation: `off`, `soft`, `sharp`, `wide`, `bounce`, `pulse`, `wave` or `reveal`. An object overrides only its supplied knobs; see [Shimmer animation](themes.md#shimmer-animation) for ranges and colors. |  |

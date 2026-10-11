@@ -20,6 +20,8 @@ export interface MouseDeps {
   pane: TranscriptPane
   paneRows: () => number
   paneTop?: () => number
+  paneLeft?: () => number
+  paneWidth?: () => number
   stickyPrompt?: () => Block | undefined
   stickyRows?: () => number
   requestRender: () => void
@@ -97,13 +99,20 @@ export function createMouse(deps: MouseDeps) {
       return true
     }
     if (e.button !== "left") return true
-    e = { ...e, y: e.y - (deps.paneTop?.() ?? 0) }
+    e = { ...e, x: e.x - (deps.paneLeft?.() ?? 0), y: e.y - (deps.paneTop?.() ?? 0) }
     /** Near the last press: a column off still makes a double click. */
     const near = (p: typeof lastPress) => p !== undefined && p.y === e.y && Math.abs(p.x - e.x) <= 1
     if (e.action === "press") {
       // A click clears the selection and does nothing else: the keyboard stays with the input.
       stopDrag()
       pane.clearText()
+      // Margin presses do not select text or jump to the pinned message. Drags may leave
+      // the column: the pane clamps them to the first/last content cell.
+      if (e.x < 0 || e.x >= (deps.paneWidth?.() ?? terminal.columns)) {
+        armed = false
+        lastPress = undefined
+        return true
+      }
       const pinned = e.y < 0 && e.y >= -(deps.stickyRows?.() ?? 1) ? deps.stickyPrompt?.() : undefined
       if (pinned) {
         armed = false

@@ -32,6 +32,7 @@ import {
 import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
 import { ACTIONS, type Action } from "./keybindings.ts"
+import { contentGeometry, marginView } from "./margins.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
 import {
   backgroundLabel,
@@ -86,6 +87,7 @@ const INPUT_ACTIONS = (Object.keys(ACTIONS) as Action[]).filter((a) => ACTIONS[a
 export function createInlineView(host: ViewHost): TranscriptView {
   const { terminal, presenters } = host
   let theme = host.theme
+  const contentWidth = () => contentGeometry(terminal.columns, terminal.rows, host.settings, false).width
   // The reply is Markdown: its finished blocks go to the scrollback as they close; images and
   // what extensions render (D88) as they are ready.
   const nodes = inlineNodes({
@@ -163,7 +165,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     if (!pendingDialog) return
     const draw = pendingDialog
     pendingDialog = undefined
-    commit(transcript.block("dialog", draw(Math.max(1, terminal.columns))))
+    commit(transcript.block("dialog", draw(Math.max(1, contentWidth()))))
   }
   const commit = (lines: string[]) => {
     pendingCommits.push(...lines)
@@ -179,7 +181,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     commit(transcript.block(kind, lines))
   }
   /** A system notice fitted to the terminal. */
-  const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, terminal.columns)
+  const note = (level: NoticeLevel, text: string) => noticeLines(theme, level, text, contentWidth())
   /** How finished calls show besides the detail level: the user's settings. */
   const toolOptions = (last = false, timestamp?: number) => ({
     outputLines: host.settings.shellOutputLines ?? OUTPUT_LINES,
@@ -211,7 +213,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   }
   function flushExplored(): void {
     if (!exploring.length) return
-    const lines = exploredRows(terminal.columns, theme, host.detail())
+    const lines = exploredRows(contentWidth(), theme, host.detail())
     exploring = []
     commit(transcript.block("tool", lines))
   }
@@ -228,7 +230,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       theme,
       text,
       { durationMs: Date.now() - startedAt, expanded, timestamp },
-      terminal.columns,
+      contentWidth(),
     )
     commitBlock("reasoning", lines)
     return true
@@ -414,7 +416,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     return [...dialog, ...thinking, ...lead, ...drawReply(reply, width, ctx.theme), ...tools, "", ...rest]
   })
   const reflow = host.settings.reflow ?? DEFAULT_TUI_REFLOW
-  const renderer = new LiveRenderer(terminal, root, {
+  const renderer = new LiveRenderer(terminal, marginView(root, host.settings, false), {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     frameIntervalMs: FRAME_MS,
     theme,
@@ -427,7 +429,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
    * Forms and the sub-agent viewer go on the alternate screen. The inline UI is suspended
    * meanwhile: what the main session commits is held and printed when it closes.
    */
-  const fullScreen = new FullScreenRenderer(terminal, host.overlay, {
+  const fullScreen = new FullScreenRenderer(terminal, marginView(host.overlay, host.settings, true), {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     theme,
     glyphs: host.glyphs,
@@ -454,7 +456,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     for (const c of calls) {
       const tree = callTree(c.id)
       const continuation = treeContinuation(theme, isLastTool(c.id))
-      const treeWidth = Math.max(1, terminal.columns - visibleWidth(continuation))
+      const treeWidth = Math.max(1, contentWidth() - visibleWidth(continuation))
       const ends: string[] = []
       const cutShort = c.end!.interrupted || c.end!.rejected !== undefined
       // The call's own result line comes after them, so only a nested one can close a level.
@@ -483,7 +485,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
         presenter,
         call,
         host.detail(),
-        terminal.columns,
+        contentWidth(),
         toolOptions(isLastTool(c.id), timestamp),
       )
       lines.splice(1, 0, ...ends)
@@ -500,7 +502,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     for (const n of subagents.values()) {
       if (isLiveCall(rootCall(n))) continue
       if (n.end) {
-        if (endsAlone(n)) commitBlock("tool", [subagentEndLine(n, n.end, terminal.columns, theme)])
+        if (endsAlone(n)) commitBlock("tool", [subagentEndLine(n, n.end, contentWidth(), theme)])
         subagents.delete(n.id)
       } else n.detached ??= "interrupted"
     }
@@ -537,7 +539,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
         // is done: a background one's notice reports it; one cut short gets its line on its own.
         if (isLiveCall(rootCall(node))) break
         subagents.delete(node.id)
-        if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end!, terminal.columns, theme)])
+        if (endsAlone(node)) commitBlock("tool", [subagentEndLine(node, node.end!, contentWidth(), theme)])
         break
       }
       case "subagent.state": {
@@ -627,11 +629,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
         ...(transcript.last === undefined ? [""] : []),
         ...transcript.block(
           "banner",
-          wrapText(typeof line === "function" ? line(theme) : line, Math.max(1, terminal.columns)),
+          wrapText(typeof line === "function" ? line(theme) : line, Math.max(1, contentWidth())),
         ),
       ]),
-    user: (m) =>
-      commitBlock("user", userLines(theme, m, terminal.columns, messageTimestamp(m) ?? Date.now())),
+    user: (m) => commitBlock("user", userLines(theme, m, contentWidth(), messageTimestamp(m) ?? Date.now())),
     replyDelta(text) {
       if (!text.trim() && (thought || !assistantSeen)) return
       flushDialog()
@@ -652,9 +653,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       flushDialog()
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
-      const rows = streaming.take(replyWidth(terminal.columns))
-      if (rows.length)
-        commit(transcript.continue("assistant", drawReply(rows, terminal.columns, theme, true)))
+      const rows = streaming.take(replyWidth(contentWidth()))
+      if (rows.length) commit(transcript.continue("assistant", drawReply(rows, contentWidth(), theme, true)))
       replyAt = undefined
       transcript.end()
       // Thinking that came after the text (or with none) goes after it.
@@ -710,15 +710,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
         ...note(level, text),
         // Inline, details show only at the full tool output level: the notice is printed once.
         ...(detail && host.detail() === "full"
-          ? noticeDetailLines(theme, level, detail, terminal.columns)
+          ? noticeDetailLines(theme, level, detail, contentWidth())
           : []),
       ]),
-    commandEcho: (line) => commitBlock("command", commandEchoLines(theme, line, terminal.columns)),
+    commandEcho: (line) => commitBlock("command", commandEchoLines(theme, line, contentWidth())),
     commandOutput(level, text) {
       flushDialog()
       // Right after its command it hangs under the echo; on its own it is a notice.
       if (transcript.last === "command" || transcript.last === "command-output") {
-        commitBlock("command-output", commandOutputLines(theme, level, text, terminal.columns))
+        commitBlock("command-output", commandOutputLines(theme, level, text, contentWidth()))
       } else commitBlock("notice", note(level, text))
     },
     dialogEcho(draw) {
@@ -733,7 +733,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       commit(
         historyLines(theme, messages, {
           ...(presenters ? { presenters } : {}),
-          width: terminal.columns,
+          width: contentWidth(),
           detail: host.detail(),
           session: boundary,
           transcript,
@@ -764,7 +764,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     },
     detailNote(level: ToolDetailLevel) {
       const cycle = host.keys.label("tool-output")
-      return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} cycles` : ""})`
+      return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} toggles summary/full` : ""})`
     },
     handleInput(e) {
       // Find, the page keys and block selection are the full-screen view's: said once, not

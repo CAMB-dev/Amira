@@ -205,7 +205,7 @@ function fullscreen(withHeader = true, height = 12, theme = plain.theme) {
     terminal,
     theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
-    settings: {},
+    settings: { margin: 0, marginRows: 0 },
     presenters: undefined,
     hyperlinks: false,
     renders: new ReplyRenderers(undefined),

@@ -26,6 +26,7 @@ export interface FindSelectDeps {
   showNote: (text: string) => void
   terminal: Terminal
   editorEmpty: () => boolean
+  contentWidth?: () => number
   openSubagent?: (id: string) => void
 }
 
@@ -175,7 +176,7 @@ export function createFindSelect(deps: FindSelectDeps) {
 
   function selectKey(e: InputEvent): boolean {
     const block = pane.selected!
-    const renv = env(terminal.columns)
+    const renv = env(deps.contentWidth?.() ?? terminal.columns)
     if (pane.selectedCode && codeKey(e)) return true
     if (keys.is(e, "select.exit")) pane.select(undefined)
     else if (keys.is(e, "select.prev")) pane.selectPrev()

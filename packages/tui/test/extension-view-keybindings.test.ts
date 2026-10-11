@@ -200,6 +200,23 @@ test("binding a shared scroll key to view.back warns about the view-scope confli
   expect(warnings).toEqual(['keybindings.json: pgup is bound to both "view.back" and "scroll.page-up"'])
 })
 
+test("tool-output toggles summary/full and leaves collapsed at summary in extension views", () => {
+  for (const initial of ["summary", "collapsed"] as const) {
+    const viewer = new ExtensionViewer(
+      { ...view, render: (_data, opts) => [{ kind: "text", text: opts.toolDetail! }] },
+      {},
+      { toolDetail: () => initial, keys: bindings({ "tool-output": "f10" }) },
+    )
+    expect(viewer.render(100, ctx).join("\n")).toContain(initial)
+    const levels = initial === "summary" ? ["full", "summary", "full"] : ["summary", "full", "summary"]
+    for (const level of levels) {
+      expect(viewer.handleInput(key("f10"))).toBe(true)
+      expect(viewer.render(100, ctx).join("\n")).toContain(level)
+    }
+    viewer.dispose()
+  }
+})
+
 test("view hints and the key reference show the current host bindings", () => {
   const { keys, warnings } = parseKeybindings(
     {
@@ -226,6 +243,7 @@ test("view hints and the key reference show the current host bindings", () => {
     .map(stripAnsi)
     .join("\n")
   expect(text).toContain("Extension views")
+  expect(text).toContain("Toggle tool output between summary and full")
   expect(text).toMatch(/f6 +.*view\.back/)
   expect(text).toMatch(/f7 +.*view\.close/)
   expect(text).toMatch(/f8 +.*scroll\.page-up/)

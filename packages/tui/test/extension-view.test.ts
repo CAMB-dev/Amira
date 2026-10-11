@@ -139,6 +139,7 @@ async function setup(
       leftoverInput: "",
     }),
     env: {},
+    settings: { margin: 0, marginRows: 0 },
     onReady: () => agent.start("startup"),
   })
   await waitFor(() => screen.text.includes("Amira"), "startup")
