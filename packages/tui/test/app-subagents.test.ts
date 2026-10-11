@@ -211,19 +211,19 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   )
   agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
-  await waitFor(
-    () =>
-      new RegExp(
-        `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s {2}${localClock(Date.now())}\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Outer task · explorer · \\d+s · 0 tok\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Inner check · explorer · \\d+s · 0 tok\\n`,
-        "m",
-      ).test(live()),
-    "nested rows",
-  )
+  let firstReplyClock = ""
+  await waitFor(() => {
+    firstReplyClock = localClock(Date.now())
+    return new RegExp(
+      `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s {2}${firstReplyClock}\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Outer task · explorer · \\d+s · 0 tok\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Inner check · explorer · \\d+s · 0 tok\\n`,
+      "m",
+    ).test(live())
+  }, "nested rows")
   await shows("all done")
   await idle()
   expect(all()).toMatch(
     new RegExp(
-      `^ {2}└ delegate {2}✓ outer done · \\d+\\.\\ds +${localClock(Date.now())}\\n {5}└ ✓ Outer task · explorer · \\d+\\.\\ds · 0 tok\\n {7}└ ✓ Inner check · explorer · \\d+\\.\\ds · 0 tok$`,
+      `^ {2}└ delegate {2}✓ outer done · \\d+\\.\\ds +${firstReplyClock}\\n {5}└ ✓ Outer task · explorer · \\d+\\.\\ds · 0 tok\\n {7}└ ✓ Inner check · explorer · \\d+\\.\\ds · 0 tok$`,
       "m",
     ),
   )

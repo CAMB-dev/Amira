@@ -69,7 +69,7 @@ import {
   noticeLines,
   Transcript,
 } from "./transcript.ts"
-import { type TranscriptView, View, type ViewHost } from "./view.ts"
+import { type CallRef, type TranscriptView, View, type ViewHost } from "./view.ts"
 
 /** The renderer's shortest time between frames. */
 const FRAME_MS = 16
@@ -102,6 +102,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   })
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
+  const unstartedCalls = new Map<string, CallRef>()
   let stepIds: string[] = []
   const isLastTool = (id: string) => stepIds.at(-1) === id
   /** The first visible assistant row owns the turn's clock, even when it is not text. */
@@ -659,10 +660,13 @@ export function createInlineView(host: ViewHost): TranscriptView {
       // Thinking that came after the text (or with none) goes after it.
       const thoughtShown = commitThought()
       stepIds = calls.map((c) => c.id)
+      unstartedCalls.clear()
+      for (const call of calls) unstartedCalls.set(call.id, call)
       toolCalls.expect(stepIds)
       return rows.length > 0 || early || thoughtShown
     },
     toolStart(id, name, args, at) {
+      unstartedCalls.delete(id)
       flushDialog()
       if (!stepIds.includes(id)) stepIds.push(id)
       const timestamp = firstAssistantTime()
@@ -671,9 +675,21 @@ export function createInlineView(host: ViewHost): TranscriptView {
       callNames.set(id, name)
     },
     toolUpdate: (id, partial) => toolCalls.update(id, partial),
-    toolEnd: (id, end) => commitCalls(toolCalls.end(id, end)),
+    toolEnd(id, end) {
+      const call = unstartedCalls.get(id)
+      if (call) {
+        // A rejected call can become visible without ever starting.
+        unstartedCalls.delete(id)
+        flushDialog()
+        const timestamp = firstAssistantTime()
+        if (timestamp !== undefined) toolTimes.set(id, timestamp)
+        toolCalls.start(id, call.name, call.args, Date.now())
+      }
+      return commitCalls(toolCalls.end(id, end))
+    },
     turnEnd() {
       const shown = commitCalls(toolCalls.flush())
+      unstartedCalls.clear()
       // A run of exploring calls ends with the turn.
       flushExplored()
       assistantSeen = false
@@ -732,6 +748,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     leaveSession() {
       pendingDialog = undefined
       toolCalls.flush()
+      unstartedCalls.clear()
       thought = undefined
       assistantSeen = false
       replyAt = undefined

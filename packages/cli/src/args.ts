@@ -77,7 +77,7 @@ Options:
                         asks only where rules and protected files say), edits
                         (changes files, asks before shell commands) or plan
                         (read-only: no file changes, no shell commands). Wins
-                        over "permissions.mode" in settings.json; Shift+Tab
+                        over "permissions.mode" in settings.json; shift+tab
                         cycles it in the UI
       --fullscreen      Draw the UI full screen: Amira scrolls, searches and
                         folds the conversation, and prints it on exit (default,
@@ -94,7 +94,7 @@ Sub-agents run in the background, and their results start a turn of their own.
 --print (and --rpc once stdin closes) waits for the ones still running and the
 turns their results start before exiting, however long they take (the budget
 in settings.json limits them), including up to three resends 10, 30 and 90 s
-after a turn with their results fails; Ctrl+C stops waiting. Sub-agents still running
+after a turn with their results fails; ctrl+c stops waiting. Sub-agents still running
 at exit are stopped and given up to 5 s to wrap up.
 
 Commands:

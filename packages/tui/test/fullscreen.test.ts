@@ -717,7 +717,9 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   await shows("› x")
   expect(view()).not.toMatch(SELECT_BAR)
   terminal.send(click(again, 2))
-  await shows("shift+right-click (or ctrl+v) pastes")
+  await shows("shift+right-click (or ctrl+v) pastes, shift+drag selects natively.")
+  terminal.send(click(again, 1))
+  await shows("shift+middle-click (or ctrl+v) pastes, shift+drag selects natively.")
   terminal.send("\x03\x03")
   await exited
 })

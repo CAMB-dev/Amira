@@ -310,7 +310,7 @@ export function providerFormSpec(
         allowCustom: true,
         options: known.map((m) => ({ value: m.id, description: modelDescription(m) })),
         default: startModels,
-        help: "Space picks · type an id and press Enter to add one the list lacks.",
+        help: "space picks · type an id and press enter to add one the list lacks.",
       },
       {
         type: "number",
