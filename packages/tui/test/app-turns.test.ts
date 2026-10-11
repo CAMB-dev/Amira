@@ -30,11 +30,9 @@ const TIMESTAMP = "(?:[01]\\d|2[0-3]):[0-5]\\d"
 /** The whole activity row, including the step clock and right-side turn stats. */
 const activity = (label: string, hasOutput = true) =>
   new RegExp(
-    `^ ${SPINNER} ${label}… ${ELAPSED} +${ELAPSED}${hasOutput ? " {2}⇣\\d+(?:\\.\\d+)?k? {2}· {2}~\\d+ tok/s" : ""} {3}Esc stop$`,
+    `^ ${SPINNER} ${label}… ${ELAPSED} +${ELAPSED}${hasOutput ? " {2}⇣\\d+(?:\\.\\d+)?k? {2}· {2}~\\d+ tok/s" : ""} {3}esc stop$`,
     "m",
   )
-
-const withoutTimestamps = (text: string) => text.replace(new RegExp(` +${TIMESTAMP}(?=\\n|$)`, "g"), "")
 
 test("a conversation: user message, tool call and reply end up in the transcript", async () => {
   const { terminal, all, shows, idle, exited } = await setup([
@@ -47,27 +45,31 @@ test("a conversation: user message, tool call and reply end up in the transcript
   await idle()
   const text = all()
   expect(text).toMatch(new RegExp(`^ {2}› what is in a\\.ts\\? {33}${TIMESTAMP}$`, "m"))
-  expect(text).toMatch(/^ {2}└ read a\.ts {2}✓ contents of a\.ts \(\+2 lines\)$/m)
+  expect(text).toMatch(
+    new RegExp(`^ {2}└ read a\\.ts {2}✓ contents of a\\.ts \\(\\+2 lines\\) {9}${TIMESTAMP}$`, "m"),
+  )
   expect(text.indexOf("  └ read")).toBeLessThan(text.indexOf("The file has three lines."))
   // One blank line between blocks, and the reply indented so it reads apart from the rest. The
   // user's band has painted padding above and below, apart from each unpainted block gap.
-  expect(withoutTimestamps(text)).toContain(
-    [
-      "Amira · mock/m1 · /work/proj",
-      // Where to start, right under the banner.
-      "@ files · ? keys",
-      "",
-      "",
-      "  › what is in a.ts?",
-      "",
-      "",
-      "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
-      "",
-      "  The file has three lines.",
-      "",
-      ` /work/proj${" ".repeat(40)}0 / 128K`,
-      "╭",
-    ].join("\n"),
+  expect(text).toMatch(
+    new RegExp(
+      [
+        "Amira · mock/m1 · /work/proj",
+        // Where to start, right under the banner.
+        "@ files · \\? keys",
+        "",
+        "",
+        `  › what is in a\\.ts\\? {33}${TIMESTAMP}`,
+        "",
+        "",
+        `  └ read a\\.ts  ✓ contents of a\\.ts \\(\\+2 lines\\) {9}${TIMESTAMP}`,
+        "",
+        "  The file has three lines\\.",
+        "",
+        ` /work/proj${" ".repeat(40)}0 / 128K`,
+        "╭",
+      ].join("\n"),
+    ),
   )
   terminal.send("\x03")
   expect(await exited).toBe(0)
@@ -188,9 +190,10 @@ test("parallel tool calls reach the transcript in call order, whichever finishes
   await waitFor(
     () =>
       fastDone &&
-      new RegExp(`^ {2}├ ${SPINNER} slow a\\.ts +${ELAPSED}\\n {2}└ fast b\\.ts {2}✓ fast result$`, "m").test(
-        live(),
-      ),
+      new RegExp(
+        `^ {2}${SPINNER} slow a\\.ts +${ELAPSED} {2}${TIMESTAMP}\\n {2}└ fast b\\.ts {2}✓ fast result$`,
+        "m",
+      ).test(live()),
     "fast held under slow",
   )
   await Bun.sleep(30)
@@ -198,8 +201,11 @@ test("parallel tool calls reach the transcript in call order, whichever finishes
   release()
   await shows("done")
   await idle()
-  expect(all()).toContain(
-    ["  ├ slow a.ts  ✓ slow result", "  └ fast b.ts  ✓ fast result", "", "  done"].join("\n"),
+  expect(all()).toMatch(
+    new RegExp(
+      `^ {2}├ slow a\\.ts {2}✓ slow result +${TIMESTAMP}\\n {2}└ fast b\\.ts {2}✓ fast result\\n\\n {2}done$`,
+      "m",
+    ),
   )
   terminal.send("\x03")
   await exited
@@ -226,14 +232,14 @@ test("a running tool shows the last lines of its output live, and only its resul
     "test",
   )
   terminal.send("go\r")
-  await waitFor(() => /^ {5}l5$/m.test(live()), "live output")
-  expect(live()).toContain("     l3\n     l4\n     l5")
-  expect(live()).not.toContain("     l2")
+  await waitFor(() => /^ {4}│ l5$/m.test(live()), "live output")
+  expect(live()).toContain("    │ l3\n    │ l4\n    │ l5")
+  expect(live()).not.toContain("    │ l2")
   release()
   await shows("built")
   await idle()
   expect(all()).toContain("  └ stream make  ✓ ok")
-  expect(all()).not.toContain("     l5")
+  expect(all()).not.toContain("    │ l5")
   terminal.send("\x03")
   await exited
 })
@@ -262,7 +268,7 @@ test("many calls at once take at most half the screen: output first, then the fi
   terminal.send("go\r")
   await waitFor(() => releases.length === 8 && live().includes("job8"), "all running")
   // 14 rows: at most 7 for the calls, their output dropped, the first three counted.
-  expect(live()).not.toContain("     l2")
+  expect(live()).not.toContain("    │ l2")
   expect(live()).toContain("… 3 earlier calls")
   expect(live()).not.toContain("job3 ")
   expect(live()).toContain("job4")
@@ -290,14 +296,19 @@ test("Esc interrupting a running tool marks it interrupted, muted, not failed", 
   )
   terminal.send("go\r")
   await waitFor(
-    () => new RegExp(`^ {2}└ ${SPINNER} hang sleep 100 +${ELAPSED}$`, "m").test(live()),
+    () => new RegExp(`^ {2}${SPINNER} hang sleep 100 +${ELAPSED} {2}${TIMESTAMP}$`, "m").test(live()),
     "running",
   )
   terminal.send("\x1b[27u")
   await shows("⊘ Interrupted")
   await idle()
   // What it printed before it was stopped stays under it.
-  expect(all()).toContain("  └ hang sleep 100  ⊘ interrupted\n     Command was aborted.\n\n⊘ Interrupted")
+  expect(all()).toMatch(
+    new RegExp(
+      `^ {2}└ hang sleep 100 {2}⊘ interrupted +${TIMESTAMP}\\n {5}Command was aborted\\.\\n\\n⊘ Interrupted$`,
+      "m",
+    ),
+  )
   expect(all()).not.toContain("✗")
   terminal.send("\x03")
   await exited
@@ -318,7 +329,9 @@ test("failures show their output cut to 8 lines; Ctrl+O shows all of later ones 
   terminal.send("go\r")
   await shows("one")
   await idle()
-  expect(all()).toContain("  └ fail  ✗ bad (+20 lines)\n     out 1\n")
+  expect(all()).toMatch(
+    new RegExp(`^ {2}└ fail {2}✗ bad \\(\\+20 lines\\) +${TIMESTAMP}\\n {5}out 1\\n`, "m"),
+  )
   expect(all()).toContain("     … 13 more lines\n")
   expect(all()).not.toContain("out 10")
   terminal.send("\x0f")
@@ -339,7 +352,7 @@ test("/verbose sets the tool output level, printed under the command", async () 
   await shows("Tool output: collapsed")
   // Wrapped to the width, hanging under the result mark, directly below the echo.
   expect(all()).toContain(
-    "› /verbose collapsed\n  └ Tool output: collapsed (applies to tool results from now\n    on; Ctrl+O cycles)",
+    "› /verbose collapsed\n  └ Tool output: collapsed (applies to tool results from now\n    on; ctrl+o cycles)",
   )
   terminal.send("/verbose loud\r")
   await shows('Unknown level "loud"')
@@ -375,9 +388,10 @@ test("the built-in presenters: an edit shows its diff with line numbers", async 
   terminal.send("go\r")
   await shows("ok")
   await idle()
-  expect(all()).toContain(
-    ["  └ Edited src/a.ts  +1 / -1", "     11   keep", "     12 - old", "     12 + new", "", "  ok"].join(
-      "\n",
+  expect(all()).toMatch(
+    new RegExp(
+      `^ {2}└ Edited src/a\\.ts {2}\\+1 / -1 +${TIMESTAMP}\\n {5}11 {3}keep\\n {5}12 - old\\n {5}12 \\+ new\\n\\n {2}ok$`,
+      "m",
     ),
   )
   terminal.send("\x03")
@@ -401,7 +415,7 @@ test("successful reads in a row, over steps too, go to the scrollback as one Exp
   terminal.send("go\r")
   await shows("done")
   await idle()
-  expect(all()).toContain("  └ Read 3 files  ▸\n\n  done")
+  expect(all()).toMatch(new RegExp(`^ {2}└ Read 3 files {2}▸ +${TIMESTAMP}\\n\\n {2}done$`, "m"))
   expect(all()).not.toContain("  └ Read a.ts")
   terminal.send("\x03")
   await exited
@@ -502,7 +516,7 @@ test("the activity line shows what the turn does, its time and output tokens; th
     ` shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys  │  enter steer  │  ${QUEUE_HINT.toLowerCase()} queue`,
   )
   await idle()
-  expect(live()).not.toContain("Esc stop")
+  expect(live()).not.toContain("esc stop")
   terminal.send("\x03")
   await exited
 })
@@ -539,12 +553,12 @@ test("while tools run the activity line names them and keeps its spinner and tim
   terminal.send("go\r")
   await waitFor(() => activity("2 tools running", false).test(live()), "two tools")
   // The rows keep their own spinners.
-  expect(live()).toMatch(new RegExp(`^ {2}├ ${SPINNER} slowa +${ELAPSED}$`, "m"))
+  expect(live()).toMatch(new RegExp(`^ {2}${SPINNER} slowa +${ELAPSED} {2}${TIMESTAMP}$`, "m"))
   release.slowb!()
   await waitFor(() => activity("1 tool running", false).test(live()), "one tool left")
   release.slowa!()
   await idle()
-  expect(live()).not.toContain("Esc stop")
+  expect(live()).not.toContain("esc stop")
   terminal.send("\x03")
   await exited
 })
@@ -655,8 +669,8 @@ test("a message sent during /compact counts its own time and tokens, not the las
   await waitFor(() => /› q2|enter steer/.test(live()), "sent")
   // The prompt waits for the compaction; its activity line starts from zero meanwhile.
   expect(live()).toMatch(activity("Compacting the conversation", false))
-  expect(live()).toMatch(/Compacting the conversation… 0s +0s {3}Esc stop$/m)
-  expect(live()).toContain("Esc stop")
+  expect(live()).toMatch(/Compacting the conversation… 0s +0s {3}esc stop$/m)
+  expect(live()).toContain("esc stop")
   expect(live()).not.toContain("⇣4.3k")
   expect(await compacted).toBe(true)
   await shows("second answer")
@@ -1003,8 +1017,8 @@ test("a reply with only thinking shows that it thought, not that there was no re
   const { terminal, idle, all, exited } = await setup([{ thinking: "hmm" }])
   terminal.send("go\r")
   await waitFor(
-    () => /^ {2}∴ Thought for \d+(?:\.\d+)?s$/m.test(all()),
-    "thinking summary without a timestamp",
+    () => /^ {2}∴ Thought for \d+(?:\.\d+)?s +(?:[01]\d|2[0-3]):[0-5]\d$/m.test(all()),
+    "thinking summary with a timestamp",
   )
   await idle()
   expect(all()).not.toContain("No reply")
@@ -1019,7 +1033,7 @@ test("a reply's thinking goes before its text", async () => {
   terminal.send("go\r")
   await shows("Answer.")
   await idle()
-  expect(all()).toMatch(/^ {2}∴ Thought for \d+(?:\.\d+)?s\n\n {2}Answer\. +(?:[01]\d|2[0-3]):[0-5]\d$/m)
+  expect(all()).toMatch(/^ {2}∴ Thought for \d+(?:\.\d+)?s +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}Answer\.$/m)
   terminal.send("\x03")
   await exited
 })
@@ -1067,7 +1081,7 @@ test("the running tool is on screen before the tool starts, even if it blocks th
   await idle()
   // The running tool is drawn as its own line with a spinner and its time on the right, and the
   // activity line under it keeps its spinner, says what runs and the turn's time.
-  expect(seenWhileRunning).toMatch(new RegExp(`^ {2}└ ${SPINNER} block +0s$`, "m"))
+  expect(seenWhileRunning).toMatch(new RegExp(`^ {2}${SPINNER} block +0s {2}${TIMESTAMP}$`, "m"))
   expect(seenWhileRunning).toMatch(activity("1 tool running", false))
   terminal.send("\x03")
   await exited
@@ -1093,7 +1107,7 @@ test("running tools show as lines with their arguments and are replaced by the r
   )
   terminal.send("go\r")
   await waitFor(
-    () => new RegExp(`^ {2}└ ${SPINNER} slow bun test --watch +${ELAPSED}$`, "m").test(live()),
+    () => new RegExp(`^ {2}${SPINNER} slow bun test --watch +${ELAPSED} {2}${TIMESTAMP}$`, "m").test(live()),
     "running line",
   )
   release()

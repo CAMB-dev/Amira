@@ -15,7 +15,7 @@ import {
 import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
-import { type Action, defaultKeybindings, type Keybindings } from "./keybindings.ts"
+import { type Action, defaultKeybindings, type Keybindings, keyLabel } from "./keybindings.ts"
 
 export type DialogRequest = EventMap["ui.request"]
 
@@ -437,7 +437,7 @@ export class Dialog implements Component {
       !picking && this.#hint("dialog.choose", choose, 5),
       // Typed into a filter, the keys are part of it.
       ...(this.#filter && !(r.kind === "select" && r.searchTexts) ? [] : (section?.keys ?? [])).map((k) => ({
-        text: `${r.kind === "select" && r.searchTexts ? `Ctrl+${k.key}` : k.key} ${k.label}`,
+        text: `${keyLabel({ name: k.key, ctrl: r.kind === "select" && !!r.searchTexts })} ${k.label}`,
         priority: 4,
       })),
       ...(this.selection.footer ?? []),

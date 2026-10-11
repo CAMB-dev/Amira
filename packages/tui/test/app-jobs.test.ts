@@ -184,7 +184,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     })
     terminal.send("\x03")
     await waitFor(
-      () => live().includes("2 background jobs still running — Ctrl+C again to stop them and quit"),
+      () => live().includes("2 background jobs still running — ctrl+c again to stop them and quit"),
       "the warning",
     )
     await Bun.sleep(50)

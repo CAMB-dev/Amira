@@ -1,5 +1,6 @@
 import { type MouseInput, modes, osc, type Terminal } from "@amira/tui-kit"
 import type { Block } from "../blocks/base.ts"
+import { keyLabel } from "../keybindings.ts"
 import type { TranscriptPane } from "../transcript-pane.ts"
 
 /** Rows one notch of the mouse wheel scrolls. */
@@ -74,7 +75,9 @@ export function createMouse(deps: MouseDeps) {
     terminal.write(osc.clipboard(text))
     const n = [...text].length
     const big =
-      text.length > OSC52_SAFE ? " (a lot: some terminals drop that much; Shift+drag selects natively)" : ""
+      text.length > OSC52_SAFE
+        ? ` (a lot: some terminals drop that much; ${keyLabel({ name: "drag", shift: true })} selects natively)`
+        : ""
     showNote(`Copied ${n} character${n === 1 ? "" : "s"}${big}`)
   }
 
@@ -87,7 +90,7 @@ export function createMouse(deps: MouseDeps) {
     if (e.action === "press" && (e.button === "right" || e.button === "middle")) {
       // The terminal hands every click to the app while it reports the mouse; say how to paste.
       showNote(
-        `Clicks go to Amira here: Shift+${e.button}-click (or Ctrl+V) pastes, Shift+drag selects natively.`,
+        `Clicks go to Amira here: ${keyLabel({ name: `${e.button}-click`, shift: true })} (or ${keyLabel({ name: "v", ctrl: true })}) pastes, ${keyLabel({ name: "drag", shift: true })} selects natively.`,
       )
       return true
     }

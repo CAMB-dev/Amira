@@ -25,7 +25,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { renderToolLines, terminalText } from "./diff-view.ts"
-import { formatDuration, formatElapsed, summarizeArgs } from "./format.ts"
+import { formatDuration, formatElapsed, stampRows, summarizeArgs, timestampRoom } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 
 /** Where the TUI finds the presenter of a tool; the core's ToolRendererRegistry is one. */
@@ -67,6 +67,8 @@ export interface ToolViewOptions {
   last?: boolean
   /** An unfolded exploration keeps each result below its own head. */
   expanded?: boolean
+  /** Only the first visible assistant row of a turn owns a clock. */
+  timestamp?: number
 }
 
 /** Most lines of a failure's body in `summary` detail: its start and its end. */
@@ -75,6 +77,18 @@ export const FAILURE_LINES = 8
 export const BODY_LINES = 20
 /** Most live output lines under a running call. */
 export const RUNNING_LINES = 3
+/** Shared live-output budget; running heads always remain visible. */
+export const RUNNING_TOTAL_LINES = 6
+
+/** Split the preview budget in call order, with at most three rows per streaming call. */
+export function runningOutputLimit(index: number, count: number): number {
+  if (count <= 0) return RUNNING_LINES
+  return Math.min(
+    RUNNING_LINES,
+    Math.floor(RUNNING_TOTAL_LINES / count) + (index < RUNNING_TOTAL_LINES % count ? 1 : 0),
+  )
+}
+
 /** Output lines a successful shell command shows by default (the shellOutputLines default, kept equal to RUNNING_LINES by a test). */
 export const OUTPUT_LINES = DEFAULT_SHELL_OUTPUT_LINES
 
@@ -361,8 +375,9 @@ export function finishedToolLines(
   // Interrupted while it ran (not before it started): what it printed so far still shows.
   const cutShort = outcome === "interrupted" && call.rejected !== "aborted" && view.text !== ""
   const continuation = treeContinuation(theme, opts.last)
+  const headWidth = timestampRoom(width, opts.timestamp)
   const out = [
-    headLine(theme, treeHead(theme, opts.last), call.name, summary, width, {
+    headLine(theme, treeHead(theme, opts.last), call.name, summary, headWidth, {
       muted: !ran,
       verb: ran || cutShort ? presenter?.verbs?.past : undefined,
       summaryStyle: summaryStyle(theme, call.args),
@@ -436,7 +451,7 @@ export function finishedToolLines(
     detail !== "full" &&
     !opts.expanded &&
     !marked.includes("\n") &&
-    visibleWidth(out[0]!) + 2 + visibleWidth(resultText) <= width
+    visibleWidth(out[0]!) + 2 + visibleWidth(resultText) <= headWidth
   ) {
     out[0] = `${out[0]!}  ${resultText}`
   } else {
@@ -463,7 +478,7 @@ export function finishedToolLines(
       "  ",
     ).map((line) => truncateToWidth(`${continuation}${line}`, width, glyphs.more)),
   )
-  return out
+  return stampRows(out, theme, width, opts.timestamp)
 }
 
 export { formatElapsed }
@@ -479,37 +494,41 @@ export function runningToolLines(
   now: number,
   spinner: string,
   width: number,
-  opts: Pick<ToolViewOptions, "last"> = {},
+  opts: Pick<ToolViewOptions, "last" | "timestamp"> & { liveOutputLines?: number } = {},
 ): string[] {
   const summary = callSummary(presenter, call.args)
   const right = theme.muted(formatElapsed(now - call.startedAt))
   const head = headLine(
     theme,
-    `${treeHead(theme, opts.last)} ${theme.accent(spinner)}`,
+    theme.accent(spinner),
     call.name,
     summary,
-    width,
+    timestampRoom(width, opts.timestamp),
     {
       right,
       verb: presenter?.verbs?.running,
       summaryStyle: summaryStyle(theme, call.args),
     },
   )
-  const live = attempt(presenter?.running && (() => presenter.running!(call.args, call.partial)), () =>
-    fallbackPresenter.running(call.args, call.partial),
-  ).slice(-RUNNING_LINES)
-  const prefix = `${treeContinuation(theme, opts.last)}  `
-  const output = themeToken(theme, "fg2") ?? theme.muted
-  return [
-    head,
-    ...live.map((l) =>
-      truncateToWidth(
-        `${prefix}${(l.kind === "code" ? output : theme.muted)(terminalText(l.text))}`,
-        width,
-        glyphs.more,
+  const limit = Math.max(0, Math.min(RUNNING_LINES, opts.liveOutputLines ?? RUNNING_LINES))
+  const live =
+    limit && call.partial
+      ? attempt(presenter?.running && (() => presenter.running!(call.args, call.partial)), () =>
+          fallbackPresenter.running(call.args, call.partial),
+        ).slice(-limit)
+      : []
+  const prefix = `    ${theme.muted(glyphs.treePipe)} `
+  return stampRows(
+    [
+      head,
+      ...live.map((l) =>
+        truncateToWidth(`${prefix}${theme.muted(terminalText(l.text))}`, width, glyphs.more),
       ),
-    ),
-  ]
+    ],
+    theme,
+    width,
+    opts.timestamp,
+  )
 }
 
 /** A finished call waiting for the calls before it to be committed: just its head. */
@@ -518,7 +537,7 @@ export function heldToolLine(
   presenter: ToolPresenter | undefined,
   call: FinishedCall,
   width: number,
-  opts: Pick<ToolViewOptions, "last"> = {},
+  opts: Pick<ToolViewOptions, "last" | "timestamp"> = {},
 ): string {
   return finishedToolLines(theme, presenter, call, "collapsed", width, opts)[0]!
 }
@@ -624,13 +643,21 @@ export function exploredLines(
     return calls.flatMap(({ call, presenter }, i) =>
       finishedToolLines(theme, presenter, call, expanded ? "full" : detail, width, {
         ...opts,
+        timestamp: i === 0 ? opts.timestamp : undefined,
         last: i === calls.length - 1 && opts.last,
       }),
     )
-  if (!expanded) return [exploredLine(theme, explored, width, opts)]
+  if (!expanded)
+    return stampRows(
+      [exploredLine(theme, explored, timestampRoom(width, opts.timestamp), opts)],
+      theme,
+      width,
+      opts.timestamp,
+    )
   return calls.flatMap(({ call, presenter }, i) =>
     finishedToolLines(theme, presenter, call, "full", width, {
       ...opts,
+      timestamp: i === 0 ? opts.timestamp : undefined,
       expanded: true,
       last: i === calls.length - 1 && opts.last,
     }),

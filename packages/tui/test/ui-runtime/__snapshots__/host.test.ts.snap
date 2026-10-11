@@ -52,7 +52,7 @@ exports[`semantic dashboard snapshot 180x52 1`] = `
 ┏ Message the team ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃❯ Review the keyboard paths                                                                                                                                             Enter send┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-Tab focus · arrows navigate · Enter open/send · PgUp PgDn scroll · Esc close"
+tab focus · arrows navigate · enter open/send · pgup pgdn scroll · esc close"
 `;
 
 exports[`semantic dashboard snapshot 80x24 1`] = `
@@ -79,5 +79,5 @@ exports[`semantic dashboard snapshot 80x24 1`] = `
 ┏ Message the team ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃❯ Review the keyboard paths                                         Enter send┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-Tab focus · arrows navigate · Enter open/send · PgUp PgDn scroll · Esc close"
+tab focus · arrows navigate · enter open/send · pgup pgdn scroll · esc close"
 `;

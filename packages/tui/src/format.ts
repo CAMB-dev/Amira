@@ -259,7 +259,13 @@ function originLines(theme: Theme, text: string, width = Number.POSITIVE_INFINIT
 export function reasoningLines(
   theme: Theme,
   text: string,
-  opts: { durationMs?: number; thinking?: boolean; expanded?: boolean; expandKey?: string },
+  opts: {
+    durationMs?: number
+    thinking?: boolean
+    expanded?: boolean
+    expandKey?: string
+    timestamp?: number
+  },
   width: number,
 ): string[] {
   const time =
@@ -271,7 +277,12 @@ export function reasoningLines(
   const hint =
     body && !opts.expanded && opts.expandKey ? `  ${theme.muted(`${opts.expandKey} to expand`)}` : ""
   const head = `  ${thinking(glyphs.thought)} ${thinking(opts.thinking ? "Thinking" : `Thought${time}`)}${hint}`
-  const lines = [truncateToWidth(head, Math.max(1, width), glyphs.more)]
+  const lines = stampRows(
+    [truncateToWidth(head, Math.max(1, timestampRoom(width, opts.timestamp)), glyphs.more)],
+    theme,
+    width,
+    opts.timestamp,
+  )
   if (!opts.expanded || !body) return lines
   const style = (s: string) => theme.muted(italic(s))
   const room = Math.max(1, width - 4)

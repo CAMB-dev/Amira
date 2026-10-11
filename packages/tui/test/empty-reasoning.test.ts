@@ -45,7 +45,7 @@ function setup(mode: "inline" | "fullscreen", detail: ToolDetailLevel) {
 }
 
 for (const mode of ["inline", "fullscreen"] as const) {
-  test(`${mode}: live clocks remain fixed and a streamed reply gets only one`, () => {
+  test(`${mode}: the first thinking clock remains fixed and its streamed reply gets none`, () => {
     const at = new Date(2026, 9, 10, 20, 9).getTime()
     const clock = spyOn(Date, "now").mockReturnValue(at)
     const { view, screen, text } = setup(mode, "summary")
@@ -54,6 +54,11 @@ for (const mode of ["inline", "fullscreen"] as const) {
       view.reasoningDelta("Consider this.")
       view.render()
       expect(text()).toContain("Thinking")
+      expect(
+        text()
+          .split("\n")
+          .find((row) => row.includes("Thinking")),
+      ).toEndWith(localClock(at))
       clock.mockReturnValue(at + 4000)
       view.replyDelta("First paragraph.\n\n")
       view.render()
@@ -63,7 +68,12 @@ for (const mode of ["inline", "fullscreen"] as const) {
       view.render()
       expect(text().split(localClock(at)).slice(1)).toHaveLength(2)
       expect(text()).not.toContain(localClock(at + 180_000))
-      expect(text()).toContain(mode === "fullscreen" ? "Thought for 4s  Ctrl+O to expand" : "Thought for 4s")
+      expect(
+        text()
+          .split("\n")
+          .find((row) => row.includes("First paragraph.")),
+      ).not.toContain(localClock(at))
+      expect(text()).toContain(mode === "fullscreen" ? "Thought for 4s  ctrl+o to expand" : "Thought for 4s")
       expect(text().includes("to expand")).toBe(mode === "fullscreen")
     } finally {
       view.stop()

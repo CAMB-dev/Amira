@@ -393,14 +393,14 @@ for (const mode of ["inline", "fullscreen"] as const) {
     })
     try {
       s.terminal.send("/theme\r")
-      await waitFor(() => s.live().includes("Tab appearance"), "visible appearance footer")
+      await waitFor(() => s.live().includes("tab appearance"), "visible appearance footer")
       expect(s.live()).not.toContain("Appearance:")
       expect(
         s
           .live()
           .split("\n")
-          .find((line) => line.includes("Tab appearance")),
-      ).toContain("Enter choose")
+          .find((line) => line.includes("tab appearance")),
+      ).toContain("enter choose")
       s.terminal.send("\t\r")
       await waitFor(() => saved.length === 1, "theme and appearance saved")
       expect(saved).toEqual([{ name: "amira", variant: "dark" }])
