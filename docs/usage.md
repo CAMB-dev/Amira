@@ -26,7 +26,7 @@ Full-screen mode is the default. Amira keeps the transcript on the alternate scr
 
 The transcript contains your messages, streamed replies, thinking where the model supplies it, tool activity, questions and notices. In full-screen mode, PgUp/PgDn scroll; End returns to the newest output when the input is empty. Ctrl+F searches the transcript. Ctrl+Up selects a block; ↑/↓ move between blocks, Enter folds or unfolds, and `y` copies. Some terminals need the alternate bindings listed in [Keybindings](keybindings.md).
 
-Ctrl+O cycles tool output detail in either mode; `/verbose` controls it in the interactive UI. Alt+C copies the last reply as Markdown. In full-screen mode dragging selects and copies text; Shift+drag uses the terminal's own selection. Type `?` with an empty input to see the keys currently bound.
+Ctrl+O toggles summary and full tool output in either mode; from collapsed it returns to summary. `/verbose collapsed` selects collapsed, and `/verbose` without an argument still cycles all three levels. Alt+C copies the last reply as Markdown. In full-screen mode dragging selects and copies text; Shift+drag uses the terminal's own selection. Type `?` with an empty input to see the keys currently bound.
 
 ## Sending, steering and queueing
 

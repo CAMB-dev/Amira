@@ -256,6 +256,8 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。全屏模式下，本次输入的提示滚出视口后固定在标题栏下方；恢复的历史记录不显示固定提示。 |  |
+| `tui.margin` | `number` | `3` | 两种模式的左右留白宽度，单位为字符格（整数 0–12）。窄终端会自动缩小留白，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边布局。 |  |
+| `tui.marginRows` | `number` | `1` | 全屏模式标题栏上方和按键提示行下方的空行数（整数 0–2）。终端不足 24 行时自动取消；行内模式没有上下留白。 |  |
 | `tui.theme` | `string` | `"auto"` | 主题名称，或 `"auto"`：Amira 根据终端背景选择配色（无法判断时使用深色）。`"dark"` 和 `"light"` 指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色。`/theme` 可预览并保存主题。 |  |
 | `tui.themeVariant` | `"auto" \| "dark" \| "light"` | `"auto"` | 命名主题的配色版本：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定版本。缺少的版本使用默认 Amira 配色。 |  |
 | `tui.shimmer` | `ShimmerEffect` | 主题的动画，否则为 `"soft"` | 活动标签动画：`off`、`soft`、`sharp`、`wide`、`bounce`、`pulse`、`wave` 或 `reveal`。对象只覆盖明确指定的参数；范围与颜色见[微光动画](themes.md#微光动画)。 |  |

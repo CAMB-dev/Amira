@@ -52,13 +52,14 @@ import { headerLine } from "./header.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
+import { contentGeometry, contentMouse } from "./margins.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { mouseLabels } from "./mouse-labels.ts"
 import { PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import { TerminalStatus } from "./terminal-status.ts"
 import { INTERRUPTED_NOTICE, modelErrorNotice } from "./transcript.ts"
-import { detailCommand, nextDetail } from "./verbose.ts"
+import { detailCommand, toggleDetail } from "./verbose.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
 export type { RetryState } from "./app/activity.ts"
@@ -743,6 +744,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       }
       return
     }
+    if (overlays.hasFullscreen && e.type === "mouse") {
+      const translated = contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings, true))
+      if (!translated) return
+      e = translated
+    }
     if (overlays.handleInput(e)) return
     const dialog = overlays.dialogs[0]
     if (!dialog) composer.prepareInput(e)
@@ -799,7 +805,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         mode === "fullscreen" ? `${mouseLabels.drag} selects text.` : "Select it with the mouse."
       copyToClipboard(terminal, lastReplyText(agent.messages), "the last reply", showNote, fallback)
     } else if (keys.is(e, "tool-output")) {
-      showNote(setDetail(nextDetail(detail)))
+      showNote(setDetail(toggleDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && bottomArea.panelsShown) {
       bottomArea.togglePanels()
     } else if (keys.is(e, "permissions.mode")) {

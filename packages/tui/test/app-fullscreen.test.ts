@@ -621,6 +621,7 @@ test("history, the history search, the file list and Ctrl+O take their keys from
     promptHistory,
     files: ["src/app.ts"],
     tuiCommands: true,
+    settings: { margin: 0, marginRows: 0 },
     cols: 80,
   })
   // The default Ctrl+R and ↑ are not bound any more.
@@ -644,7 +645,7 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   await waitFor(() => !live().includes("src/app.ts"), "file list closed")
   terminal.send("\x03\x14")
   await waitFor(() => live().includes("Tool output: full"), "tool output note")
-  expect(live()).toContain("ctrl+t cycles")
+  expect(live()).toContain("ctrl+t toggles")
   terminal.send("\x03")
   await exited
 })

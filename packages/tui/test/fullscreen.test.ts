@@ -174,7 +174,7 @@ async function setup(steps: MockStep[], o: Options = {}) {
     onReady: () => agent.start("startup"),
     files: fileList([]),
     env: o.env ?? {},
-    ...(o.settings ? { settings: o.settings } : {}),
+    settings: { margin: 0, marginRows: 0, ...o.settings },
   })
   /** What the alternate screen shows now. */
   const view = () => screen.lines.join("\n")

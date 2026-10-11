@@ -26,7 +26,7 @@ function setup(mode: "inline" | "fullscreen") {
     terminal,
     theme: plain.theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
-    settings: {},
+    settings: { margin: 0, marginRows: 0 },
     presenters: undefined,
     hyperlinks: false,
     renders: new ReplyRenderers(undefined),

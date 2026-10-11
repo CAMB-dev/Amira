@@ -250,6 +250,10 @@ export interface TuiSettings {
    * DEFAULT_TUI_MODE; the --inline and --fullscreen flags win.
    */
   mode?: "fullscreen" | "inline"
+  /** Side margin in cells (integer 0–12); shrinks on narrow terminals. See DEFAULT_TUI_MARGIN. */
+  margin?: number
+  /** Fullscreen top/bottom margin in rows (integer 0–2); dropped below 24 rows. See DEFAULT_TUI_MARGIN_ROWS. */
+  marginRows?: number
   /**
    * A theme name, or "auto" for Amira following the terminal background (dark if unknown).
    * "dark" and "light" choose Amira explicitly; "terminal" uses the terminal's ANSI colors.

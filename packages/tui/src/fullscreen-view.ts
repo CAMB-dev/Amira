@@ -34,6 +34,7 @@ import { runningBoundary } from "./fullscreen/running-boundary.ts"
 import { createSubagentBlocks } from "./fullscreen/subagent-blocks.ts"
 import { glyphs } from "./glyphs.ts"
 import { sessionBoundary } from "./history.ts"
+import { contentGeometry, insetLines, marginView } from "./margins.ts"
 import { stickyPrompt, stickyPromptLines } from "./pane/sticky-prompt.ts"
 import { OUTPUT_LINES } from "./tool-view.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
@@ -57,6 +58,7 @@ const MIN_TRANSCRIPT_ROWS = 3
 export function createFullscreenView(host: ViewHost): TranscriptView {
   const { terminal, keys } = host
   let theme = host.theme
+  const geometry = () => contentGeometry(terminal.columns, terminal.rows, host.settings, true)
   const pane = new TranscriptPane()
   const boundary = runningBoundary(pane)
   /** Tool calls by id, for their sub-agents; kept after their turn. */
@@ -135,6 +137,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
 
   const findSelect = createFindSelect({
     editorEmpty: () => host.editorEmpty(),
+    contentWidth: () => geometry().width,
     env,
     keys,
     openSubagent: host.openSubagent ? (id) => host.openSubagent?.(id) : undefined,
@@ -149,7 +152,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
 
   /** Makes the exploring calls in a row around `block` one "Explored" row. */
   function regroup(block: Block): void {
-    const run = exploredRun(pane.blocks, block, env(terminal.columns))
+    const run = exploredRun(pane.blocks, block, env(geometry().width))
     if (!run) return
     pane.insertAfter(run.replaces.at(-1)!, run.group)
     const selected = pane.selected
@@ -202,7 +205,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         )
     return [...header, ...rows, below, ...bar, ...bottom]
   })
-  const renderer = new FullScreenRenderer(terminal, root, {
+  const renderer = new FullScreenRenderer(terminal, marginView(root, host.settings, true), {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     theme,
     glyphs: host.glyphs,
@@ -212,7 +215,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   const mouseHandlers = createMouse({
     pane,
     paneRows: () => paneRows,
-    paneTop: () => paneTop,
+    paneTop: () => paneTop + geometry().rows,
+    paneLeft: () => geometry().left,
+    paneWidth: () => geometry().width,
     stickyPrompt: () => pinned,
     stickyRows: () => pinnedRows,
     requestRender: () => renderer.requestRender(),
@@ -270,7 +275,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   function printout(): string {
     boundary.clear()
     const color = isColorEnabled()
-    const lines = pane.printout(env(terminal.columns))
+    const lines = insetLines(pane.printout(env(geometry().width)), geometry().left)
     const rows = lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
     return `\r\n${rows}\r\n`
   }
@@ -465,7 +470,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         hyperlinks: host.hyperlinks,
         noticeBlock,
         sessionId: () => host.sessionId(),
-        terminal,
+        terminal: { columns: geometry().width },
       }))
         pane.add(b)
       markToolTrees()
@@ -480,7 +485,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     },
     detailNote(level: ToolDetailLevel) {
       const cycle = keys.label("tool-output")
-      return `Tool output: ${level} (every tool call; folded ones keep theirs${cycle ? `; ${cycle} cycles` : ""})`
+      return `Tool output: ${level} (every tool call; folded ones keep theirs${cycle ? `; ${cycle} toggles summary/full` : ""})`
     },
     handleInput(e) {
       if (overlay) return false

@@ -352,7 +352,7 @@ test("/verbose sets the tool output level, printed under the command", async () 
   await shows("Tool output: collapsed")
   // Wrapped to the width, hanging under the result mark, directly below the echo.
   expect(all()).toContain(
-    "› /verbose collapsed\n  └ Tool output: collapsed (applies to tool results from now\n    on; ctrl+o cycles)",
+    "› /verbose collapsed\n  └ Tool output: collapsed (applies to tool results from now\n    on; ctrl+o toggles summary/full)",
   )
   terminal.send("/verbose loud\r")
   await shows('Unknown level "loud"')

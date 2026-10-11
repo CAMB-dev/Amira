@@ -43,7 +43,7 @@
 | `history.prev` | `up` | 光标在输入首行时调出上一条提示词 |
 | `history.next` | `down` | 光标在输入末行时调出下一条提示词 |
 | `history.search` | `ctrl+r` | 搜索提示词历史 |
-| `tool-output` | `ctrl+o` | 切换工具结果的显示量，与 `/verbose` 相同 |
+| `tool-output` | `ctrl+o` | 在摘要和完整工具输出之间切换；折叠级别返回摘要 |
 | `panels.toggle` | `ctrl+t` | 把活动行上方的实时面板折叠为一行，或展开 |
 | `permissions.mode` | `shift+tab` | 依次切换[权限模式](usage.md#权限)：`auto`、`edits`（修改文件不询问，运行 shell 命令前询问）、`plan`（只读）。提示栏会说明新模式的作用；非 `auto` 模式显示在输入框边框中的模型名旁边。对整个会话生效，包括子 agent |
 | `copy.reply` | `alt+c` | 将会话最后一条回复按 Markdown 复制到剪贴板，两种界面模式都可用 |
@@ -136,7 +136,7 @@
 | `select.back` | `left` | 从代码块返回整条回复 |
 | `select.exit` | `escape` | 退出选择；代码块中先返回整条回复 |
 
-Ctrl+O（`tool-output`）按摘要 → 完整 → 折叠循环显示量。完整级别也显示思考文本：两种模式中正在进行的思考，以及全屏模式保留的思考。行内模式已写入滚动缓冲区的思考无法再展开。思考提示仅在下一次按键可以显示文本时出现，并使用当前绑定的按键。手动折叠或展开过的块保留自己的显示级别。
+Ctrl+O（`tool-output`）在摘要 ↔ 完整之间切换；折叠级别会返回摘要。`/verbose collapsed` 仍可选择折叠，不带参数的 `/verbose` 仍按摘要 → 完整 → 折叠循环。完整级别也显示思考文本：两种模式中正在进行的思考，以及全屏模式保留的思考。行内模式已写入滚动缓冲区的思考无法再展开。思考提示仅在下一次按键可以显示文本时出现，并使用当前绑定的按键。手动折叠或展开过的块保留自己的显示级别。
 
 ## 文本选择与复制
 
@@ -171,6 +171,8 @@ VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 V
 | 设置 | 默认值 | 行为 |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` 使用 alternate screen，由 Amira 滚动、查找、折叠和复制，窗口改变时重绘，退出或崩溃时打印到普通屏幕；`"inline"` 将完成的输出留在终端滚动历史中。`--inline` 和 `--fullscreen` 优先 |
+| `tui.margin` | `3` | 两种模式的左右留白宽度，单位为字符格（整数 0–12）；窄终端会自动缩小，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边输出 |
+| `tui.marginRows` | `1` | 全屏模式标题栏上方和按键提示行下方的空行数（整数 0–2）；终端不足 24 行时取消。行内模式没有上下留白 |
 | `tui.theme` | `"auto"` | [主题名称](themes.md)，或 `"auto"` 根据终端背景选择（无法判断时使用深色）；`"dark"` 和 `"light"` 显式指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色 |
 | `tui.themeVariant` | `"auto"` | 命名主题的深浅：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定。缺少变体时使用所选外观的默认 Amira 配色 |
 | `tui.colorDepth` | `"auto"` | 颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。`"256"` 和 `"16"` 必须写成字符串，而不是数字 |

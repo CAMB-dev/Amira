@@ -76,8 +76,8 @@ export const ACTIONS = {
   },
   "tool-output": {
     scope: "input",
-    description: "Cycle how much of tool results is shown",
-    help: "Show more or less of tool output",
+    description: "Toggle tool output between summary and full",
+    help: "Toggle tool output between summary and full",
   },
   "panels.toggle": {
     scope: "input",

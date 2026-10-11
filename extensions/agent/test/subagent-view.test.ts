@@ -164,6 +164,7 @@ async function setup(steps: MockStep[], o: { cols?: number; rows?: number } = {}
       leftoverInput: "",
     }),
     env: {},
+    settings: { margin: 0, marginRows: 0 },
     onReady: () => agent.start("startup"),
   })
   const view = () => screen.lines.join("\n")

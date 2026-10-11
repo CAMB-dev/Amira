@@ -35,7 +35,7 @@ test(
         synchronizedOutput: false,
         shiftEnter: true,
       },
-      settings: {},
+      settings: { margin: 0, marginRows: 0 },
       presenters: { get: (name) => builtinPresenters[name] },
       hyperlinks: false,
       renders: new ReplyRenderers(undefined),

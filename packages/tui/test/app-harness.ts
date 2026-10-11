@@ -243,7 +243,8 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
     ...(o.promptHistory ? { history: o.promptHistory } : {}),
     env: o.env ?? {},
     ...(o.keybindings ? { keybindings: o.keybindings } : {}),
-    ...(o.settings ? { settings: o.settings } : {}),
+    // Existing exact-layout fixtures exercise the legacy edge-to-edge preset.
+    settings: { margin: 0, marginRows: 0, ...o.settings },
     ...(o.initialPrompt ? { initialPrompt: o.initialPrompt } : {}),
     ...(o.startupEvents ? { startupEvents: o.startupEvents } : {}),
     ...(o.notice ? { notice: o.notice } : {}),

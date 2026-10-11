@@ -41,6 +41,11 @@ const boolean = expect("true or false", (v) => typeof v === "boolean")
 const number = expect("a number", (v) => typeof v === "number" && Number.isFinite(v))
 const integer = (min: number) =>
   expect(`a whole number of at least ${min}`, (v) => Number.isInteger(v) && (v as number) >= min)
+const integerBetween = (min: number, max: number) =>
+  expect(
+    `a whole number between ${min} and ${max}`,
+    (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max,
+  )
 const share = expect("a number between 0 and 1", (v) => typeof v === "number" && v > 0 && v < 1)
 const oneOf = (...values: string[]) =>
   expect(`one of ${values.map((v) => `"${v}"`).join(", ")}`, (v) => values.includes(v as string))
@@ -264,6 +269,8 @@ const settings = object({
   merge: object({ reviewThreshold: object({ lines: integer(0), files: integer(0) }) }),
   tui: object({
     mode: oneOf("fullscreen", "inline"),
+    margin: integerBetween(0, 12),
+    marginRows: integerBetween(0, 2),
     theme: string,
     themeVariant: oneOf("auto", "dark", "light"),
     // Like an unknown theme name, invalid shimmer falls back with a frontend notice,

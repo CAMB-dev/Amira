@@ -64,7 +64,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `history.prev` | `up` | Recall the previous prompt (from the input's first line) |
 | `history.next` | `down` | Recall the next prompt (from the input's last line) |
 | `history.search` | `ctrl+r` | Search the prompt history |
-| `tool-output` | `ctrl+o` | Cycle how much of tool results is shown (like `/verbose`) |
+| `tool-output` | `ctrl+o` | Toggle tool output between summary and full; collapsed returns to summary |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as the running background jobs, or an extension's todo list) to one line each, or unfold them |
 | `permissions.mode` | `shift+tab` | Cycle the [permission mode](usage.md#permissions): `auto`, `edits` (changes files, asks before shell commands), `plan` (read-only). The hint line says what the new mode does; a mode other than `auto` shows next to the model in the input box's border. It applies to the whole session, sub-agents included |
 | `copy.reply` | `alt+c` | Copy the last reply of the session, as Markdown, to the clipboard (both modes) |
@@ -231,7 +231,9 @@ the latest; `←`/`→` there switch between them.
 | `select.back` | `left` | Go back from a code block to its whole reply |
 | `select.exit` | `escape` | Stop selecting (from a code block: back to its reply) |
 
-`tool-output` (Ctrl+O) cycles summary → full → collapsed. Full also reveals thinking text:
+`tool-output` (Ctrl+O) toggles summary ↔ full; from collapsed it returns to summary.
+`/verbose collapsed` still selects collapsed, and `/verbose` without an argument cycles
+summary → full → collapsed. Full also reveals thinking text:
 live thoughts in either mode, and retained thoughts in fullscreen. Inline thoughts already
 committed to scrollback cannot be expanded. The thinking hint appears only when the next
 press reveals text and names the current binding. Blocks folded or unfolded by hand keep
@@ -310,6 +312,8 @@ These live under `tui` in `settings.json`, the user's or a project's (`.amira/se
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `tui.mode` | `"fullscreen"` | `"fullscreen"` draws on the alternate screen: Amira scrolls, finds, folds and copies the conversation, redraws all of it when the window changes size, and prints it to the normal screen when it exits (also after a crash). `"inline"` leaves finished output in the terminal's own scrollback, for SSH, tmux, or native scrolling and selection. The `--inline` and `--fullscreen` flags win |
+| `tui.margin` | `3` | Side margin in cells in both modes (integer 0–12); shrinks on narrow terminals to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for edge-to-edge output |
+| `tui.marginRows` | `1` | Empty rows above the header and below the key-hint line in fullscreen (integer 0–2); omitted below 24 terminal rows. No vertical margin in inline mode |
 | `tui.theme` | `"auto"` | A [theme name](themes.md), or `"auto"` to follow the terminal background (dark if unknown); `"dark"` and `"light"` choose Amira's palette explicitly; `"terminal"` uses the terminal's own ANSI colors |
 | `tui.themeVariant` | `"auto"` | Named-theme appearance: `"auto"` follows the terminal background; `"dark"` or `"light"` forces that appearance. Missing variants use Amira's default palette for that appearance |
 | `tui.colorDepth` | `"auto"` | Color depth: `"auto"` detects terminal support; `"truecolor"`, `"256"` and `"16"` override it. Use strings, not numbers, for `"256"` and `"16"` |
