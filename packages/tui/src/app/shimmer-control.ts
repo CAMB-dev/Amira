@@ -8,7 +8,14 @@ import type {
   ThemeDefinition,
 } from "@amira/api"
 import { normalizeShimmer, resolveShimmer, SHIMMER_PRESETS } from "@amira/core"
-import { type InputEvent, type RenderContext, truncateToWidth } from "@amira/tui-kit"
+import {
+  bold,
+  type InputEvent,
+  type RenderContext,
+  type Theme,
+  truncateToWidth,
+  underline,
+} from "@amira/tui-kit"
 import { Dialog } from "../dialog.ts"
 import { glyphs } from "../glyphs.ts"
 import { type Keybindings, keyLabel } from "../keybindings.ts"
@@ -46,7 +53,7 @@ export function shimmerColorChoices(
 }
 
 export class ShimmerControl {
-  focus: "appearance" | "shimmer" = "appearance"
+  focus: "list" | "appearance" | "shimmer" = "appearance"
   customizing = false
   private knob = 0
   private colorChoice: string | undefined
@@ -84,16 +91,30 @@ export class ShimmerControl {
     return this.focus === "shimmer" && !this.returnedFromCustomize
   }
 
-  header(appearance: string): string {
-    const focused = this.focus === "appearance" ? "[Appearance]" : "[Shimmer]"
-    const activeAppearance = appearance.split(" / ").find((variant) => variant.startsWith("[")) ?? appearance
+  header(appearance: "auto" | "dark" | "light", theme: Theme): string {
+    const accent = (text: string) => bold(theme.accent(text))
+    const separator = theme.muted(` ${glyphs.separator} `)
+    const appearanceFocused = this.focus === "appearance"
+    const variants = ["auto", "dark", "light"].map((variant) =>
+      variant === appearance
+        ? appearanceFocused
+          ? accent(variant)
+          : theme.muted(underline(bold(variant)))
+        : theme.muted(variant),
+    )
+    const appearanceLabel = appearanceFocused
+      ? accent(`${glyphs.choice} Appearance: `)
+      : theme.muted("Appearance: ")
     const effect = resolveShimmer(this.deps.definition()?.shimmerEffect)
     const inherited =
       PRESETS.find((preset) =>
         KNOBS.every((key) => key === "colors" || SHIMMER_PRESETS[preset][key] === effect[key]),
       ) ?? effect.style
     const label = this.preset === "theme" ? `theme (${inherited})` : this.preset
-    return `${focused} Appearance: ${activeAppearance} · Shimmer: ${label}`
+    const shimmer = `Shimmer: ${label}`
+    return `${appearanceLabel}${variants.join(separator)}${separator}${
+      this.focus === "shimmer" ? accent(`${glyphs.choice} ${shimmer}`) : theme.muted(shimmer)
+    }`
   }
 
   /** Esc belongs to Dialog and cancels the entire preview, including the customize panel. */
@@ -127,6 +148,11 @@ export class ShimmerControl {
       this.focus = this.focus === "appearance" ? "shimmer" : "appearance"
       this.returnedFromCustomize = false
       return true
+    }
+    if (up || down) {
+      this.focus = "list"
+      this.returnedFromCustomize = false
+      return false
     }
     const step = event.name === "left" ? -1 : 1
     if (this.focus !== "shimmer" || !horizontal) return false

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { ShimmerEffect, ThemeDefinition } from "@amira/api"
 import { resolveShimmer } from "@amira/core"
-import type { InputEvent } from "@amira/tui-kit"
+import { type InputEvent, stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { ShimmerControl, shimmerColorChoices } from "../src/app/shimmer-control.ts"
 import { defaultKeybindings } from "../src/keybindings.ts"
@@ -60,6 +60,9 @@ test("Tab switches focus without changing appearance or shimmer; preset arrows w
   expect(shimmer.handleInput(key("up"))).toBe(false)
   expect(shimmer.handleInput(key("down"))).toBe(false)
   expect(changes).toHaveLength(count)
+  expect(shimmer.focus).toBe("list")
+  shimmer.handleInput(key("tab"))
+  shimmer.handleInput(key("tab"))
   shimmer.handleInput(key("left"))
   expect(shimmer.override).toBe("reveal")
   shimmer.handleInput(key("right"))
@@ -70,7 +73,7 @@ test("theme opens without an override and soft overrides a pulse theme", () => {
   const definition: ThemeDefinition = { name: "custom", shimmerEffect: "pulse" }
   const { shimmer } = control(undefined, definition)
   expect(shimmer.preset).toBe("theme")
-  expect(shimmer.header("[auto] / dark / light")).toContain("Shimmer: theme (pulse)")
+  expect(stripAnsi(shimmer.header("auto", plain.theme))).toContain("Shimmer: theme (pulse)")
   shimmer.handleInput(key("tab"))
   shimmer.handleInput(key("right"))
   shimmer.handleInput(key("right"))
@@ -82,16 +85,19 @@ test("theme opens without an override and soft overrides a pulse theme", () => {
   expect(resolveShimmer(definition.shimmerEffect, shimmer.override).style).toBe("pulse")
 })
 
-test("focused preset values fit the 60-column picker header", () => {
+test("named presets fit the picker header; longer inherited labels use normal narrow truncation", () => {
   const { shimmer } = control("reveal")
   shimmer.handleInput(key("tab"))
-  const header = shimmer.header("[auto] / dark / light")
-  expect(header.length).toBeLessThanOrEqual(58)
-  expect(header).toContain("Shimmer: reveal")
+  const header = shimmer.header("auto", plain.theme)
+  expect(visibleWidth(header)).toBeLessThanOrEqual(58)
+  expect(stripAnsi(header)).toContain("Shimmer: reveal")
   const inherited = control(undefined, { name: "custom", shimmerEffect: "reveal" }).shimmer
   inherited.handleInput(key("tab"))
-  expect(inherited.header("auto / dark / [light]").length).toBeLessThanOrEqual(58)
-  expect(inherited.header("auto / dark / [light]")).toContain("Shimmer: theme (reveal)")
+  const inheritedHeader = inherited.header("light", plain.theme)
+  expect(stripAnsi(inheritedHeader)).toBe("Appearance: auto · dark · light · ❯ Shimmer: theme (reveal)")
+  const narrow = truncateToWidth(inheritedHeader, 58, "…")
+  expect(visibleWidth(narrow)).toBe(58)
+  expect(stripAnsi(narrow)).toBe("Appearance: auto · dark · light · ❯ Shimmer: theme (revea…")
 })
 
 test("knob edits stay sparse and inherit the theme; panel Enter returns to Shimmer then applies", () => {

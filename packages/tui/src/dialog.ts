@@ -118,7 +118,7 @@ export class Dialog implements Component {
     private selection: {
       changed?: (option: string) => void
       /** A local picker's independent control, shown below its title. */
-      header?: () => string
+      header?: (theme: Theme) => string
       footer?: HintItem[]
       handleInput?: (event: InputEvent) => boolean
     } = {},
@@ -401,8 +401,8 @@ export class Dialog implements Component {
     const question = this.#current?.question ?? r.title
     const rows = wrapText(`${question}${from}`, Math.max(1, width - 2))
     const title = rows.map((l, i) => (i === 0 ? `${theme.accent(glyphs.question)} ${l}` : `  ${l}`))
-    const header = this.selection.header?.()
-    if (header) title.push(truncateToWidth(theme.muted(header), width, glyphs.more))
+    const header = this.selection.header?.(theme)
+    if (header) title.push(truncateToWidth(header, width, glyphs.more))
     return title
   }
 

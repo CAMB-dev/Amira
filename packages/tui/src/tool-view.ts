@@ -243,8 +243,8 @@ function summaryStyle(theme: Theme, args: Record<string, unknown>): StyleFn {
 }
 
 /**
- * `├ name summary`, fitted to `width`, with `right` against the right edge when it fits. A
- * summary too long is cut in its middle, so a path keeps its file name and a command its end.
+ * `├ name summary`, fitted to `width`, with a two-cell gap before `right` at the right edge.
+ * A summary too long is cut in its middle, so a path keeps its file name and a command its end.
  */
 function headLine(
   theme: Theme,
@@ -259,7 +259,7 @@ function headLine(
     ? (opts.nameStyle ?? ((s) => bold(theme.text(s))))(verb)
     : nameLabel(theme, name, opts.nameStyle ?? themeToken(theme, "fg2") ?? theme.text)
   const right = opts.right ?? ""
-  const reserved = right ? visibleWidth(right) + 1 : 0
+  const reserved = right ? visibleWidth(right) + 2 : 0
   const fitsRight = right !== "" && width - reserved >= 12
   const room = (fitsRight ? width - reserved : width) - visibleWidth(`  ${bullet} ${label} `)
   const shown = summary && room >= 8 ? clipMiddle(summary, room) : summary
@@ -268,7 +268,7 @@ function headLine(
   const left = `  ${bullet} ${label}${text}`
   if (!fitsRight) return truncateToWidth(left, width, glyphs.more)
   const cut = truncateToWidth(left, width - reserved, glyphs.more)
-  return `${cut}${" ".repeat(Math.max(1, width - visibleWidth(cut) - visibleWidth(right)))}${right}`
+  return `${cut}${" ".repeat(Math.max(2, width - visibleWidth(cut) - visibleWidth(right)))}${right}`
 }
 
 /** "… 3 more lines", said the same way everywhere a body is cut. */

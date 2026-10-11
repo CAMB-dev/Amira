@@ -169,6 +169,44 @@ test("/agents host renderer uses the same heads, pipes, total cap and transient 
   expect(finished).toContain("  └ Ran check-3  ✓ done")
 })
 
+test("/agents long commands leave two cells before elapsed time and finished results retain their rail", () => {
+  const command = `printf '%s' ${"very-long-argument/".repeat(12)} | head -5)`
+  let done = false
+  const viewer = new ExtensionViewer(
+    {
+      kind: "preview",
+      title: () => "Preview",
+      render: (_data, opts) =>
+        done
+          ? opts.renderTool!(
+              "bash",
+              {
+                args: { command },
+                result: { ...textResult("ok"), details: { exitCode: 0 } },
+                text: "ok",
+                durationMs: 17_600,
+              },
+              "collapsed",
+            )
+          : opts.renderRunningTool!("bash", { args: { command }, startedAt: 0 }),
+    },
+    {},
+    { now: () => 9000, presenters: env.presenters },
+  )
+  const ctx = { theme: monoTheme, color: false, rows: 30 }
+  const head = viewer
+    .render(80, ctx)
+    .map(stripAnsi)
+    .find((row) => row.includes("Running"))!
+  expect(head).toMatch(/head -5\) {2,}9s$/)
+  expect(visibleWidth(head)).toBe(80)
+  done = true
+  const finished = viewer.render(80, ctx).map(stripAnsi)
+  expect(finished.find((row) => row.includes("Ran"))).not.toContain("✓")
+  expect(finished).toContain("  │  ✓ 1 line · 17.6s")
+  expect(finished.every((row) => visibleWidth(row) <= 80)).toBe(true)
+})
+
 test("/agents rule removes only its duplicate blank line, not earlier intentional spacing", () => {
   for (const blanks of [0, 1, 3]) {
     const viewer = new ExtensionViewer(
@@ -222,6 +260,52 @@ test("/agents and fullscreen give one streaming call three rows beside two silen
 })
 
 for (const mode of ["fullscreen", "inline"] as const) {
+  test(`${mode}: long running commands keep a two-cell timer gap and finished results wrap below`, async () => {
+    const command = `printf '%s' ${"very-long-argument/".repeat(12)} | head -5)`
+    const s = await setup(
+      [
+        { text: "Before the command.", toolCalls: [{ name: "bash", args: { command } }] },
+        { text: "After the command." },
+      ],
+      { cols: 80, rows: 40, presenters: true, settings: { mode } },
+    )
+    let release: (() => void) | undefined
+    s.agent.tools.register(
+      defineTool({
+        name: "bash",
+        ...parallel,
+        execute: async () => {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return {
+            ...textResult(Array.from({ length: 22 }, (_, i) => `out ${i + 1}`).join("\n")),
+            details: { exitCode: 0, outputLines: 22 },
+          }
+        },
+      }),
+      "test:timer-gap",
+    )
+    try {
+      s.terminal.send("go\r")
+      await waitFor(() => !!release && s.live().includes("Running"), "long running command")
+      const head = s
+        .live()
+        .split("\n")
+        .find((row) => row.includes("Running"))!
+      expect(head).toMatch(/head -5\) {2,}\d+s$/)
+      expect(visibleWidth(head)).toBe(80)
+      release!()
+      await s.shows("After the command.")
+      await s.idle()
+      const finished = s.all().split("\n")
+      expect(finished.find((row) => row.includes("Ran"))).not.toContain("✓")
+      expect(finished.some((row) => /^ +✓ 22 lines(?: · .+)?$/.test(row))).toBe(true)
+    } finally {
+      release?.()
+      await closeImageApp(s)
+    }
+  })
   test(`${mode}: one streaming call beside two silent calls keeps three live rows`, async () => {
     const s = await setup(
       [

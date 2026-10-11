@@ -472,6 +472,32 @@ test("finished and running lines fit the width, the running spinner replaces the
   expect(narrow.every((l) => visibleWidth(l) <= 30)).toBe(true)
 })
 
+test("long running commands reserve two cells before elapsed time; long finished results keep their rail", () => {
+  const command = `printf '%s' ${"very-long-argument/".repeat(12)} | head -5)`
+  const call = { name: "bash", args: { command }, startedAt: 0 }
+  for (const width of [24, 40, 80, 100]) {
+    for (const now of [9000, 99_000, 600_000]) {
+      const head = stripAnsi(runningToolLines(theme, builtinPresenters.bash, call, now, "⠋", width)[0]!)
+      expect(visibleWidth(head)).toBe(width)
+      expect(head).toMatch(/\S {2,}\d+(?:m \d+)?s$/)
+      if (width === 80) expect(head).toContain("head -5)")
+    }
+    const finished = show(
+      builtinPresenters.bash,
+      {
+        ...call,
+        result: { ...textResult(numbered(22)), details: { exitCode: 0, outputLines: 22 } },
+        durationMs: 17_600,
+      },
+      "collapsed",
+      width,
+    )
+    expect(finished).toHaveLength(2)
+    expect(finished[1]).toBe("  │  ✓ 22 lines · 17.6s")
+    expect(finished.every((row) => visibleWidth(row) <= width)).toBe(true)
+  }
+})
+
 test("a failed built-in call shows why under its result, whatever its presenter shows", () => {
   const lines = show(builtinPresenters.read, {
     name: "read",
