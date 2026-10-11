@@ -344,16 +344,16 @@ test("the /model list and completions do not offer models from a borrowed catalo
     }),
   )
   session.ai.registerProvider({
-    id: "local-fast",
+    id: "my-gateway",
     dialect: "openai-responses",
     baseUrl: "http://localhost:1234/v1",
     catalogId: "llmgateway",
     models: [{ id: "gpt-fast" }],
   })
-  expect(host.control.models()).toEqual(["mock/m", "local-fast/gpt-fast"])
-  const completions = await host.complete("/model local-fast/")
-  expect(completions.candidates.map((c) => c.value)).toEqual(["local-fast/gpt-fast"])
-  host.control.setModel("local-fast/gpt-fast")
+  expect(host.control.models()).toEqual(["mock/m", "my-gateway/gpt-fast"])
+  const completions = await host.complete("/model my-gateway/")
+  expect(completions.candidates.map((c) => c.value)).toEqual(["my-gateway/gpt-fast"])
+  host.control.setModel("my-gateway/gpt-fast")
   expect(host.control.info().contextWindow).toBe(200_000)
 })
 

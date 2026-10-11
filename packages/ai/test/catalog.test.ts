@@ -194,7 +194,7 @@ test("a borrowed catalog supplies metadata, not additional models", () => {
     }),
     providers: [
       {
-        id: "local-fast",
+        id: "my-gateway",
         dialect: "openai-responses",
         baseUrl: "http://localhost:1234/v1",
         catalogId: "llmgateway",
@@ -202,8 +202,8 @@ test("a borrowed catalog supplies metadata, not additional models", () => {
       },
     ],
   })
-  expect(ai.knownModels()).toEqual(["local-fast/gpt-fast"])
-  expect(ai.model("local-fast/gpt-fast")).toMatchObject({
+  expect(ai.knownModels()).toEqual(["my-gateway/gpt-fast"])
+  expect(ai.model("my-gateway/gpt-fast")).toMatchObject({
     contextWindow: 200_000,
     contextWindowSource: "catalog",
     caps: { tools: "none" },
@@ -218,7 +218,7 @@ test.each([
   { id: "gemini", catalogId: "google", listsCatalog: true },
   { id: "gemini", catalogId: "gemini", listsCatalog: true },
   { id: "deepseek-anthropic", catalogId: undefined, listsCatalog: true },
-  { id: "local-fast", catalogId: "deepseek", listsCatalog: false },
+  { id: "my-gateway", catalogId: "deepseek", listsCatalog: false },
   { id: "gemini", catalogId: "deepseek", listsCatalog: false },
   { id: "deepseek", catalogId: false as const, listsCatalog: false },
   { id: "ollama", catalogId: undefined, listsCatalog: false },
