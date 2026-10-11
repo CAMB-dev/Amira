@@ -346,16 +346,19 @@ describe("protected paths", () => {
     expect(hit("docs/git-hooks.md")).toBeUndefined()
   })
 
-  test("Windows aliases: MSYS paths, trailing dots, data streams, device prefixes", () => {
-    if (process.platform !== "win32") return
-    const dir = repo()
-    const msys = `/${dir[0]!.toLowerCase()}/${dir.slice(3).replaceAll("\\", "/")}/.git/config`
-    expect(protectedPath(dir, msys, opts)).toBeDefined()
-    expect(protectedPath(dir, ".git./config", opts)).toBeDefined()
-    expect(protectedPath(dir, ".git\\config::$DATA", opts)).toBeDefined()
-    expect(protectedPath(dir, ".amira ./settings.json", opts)).toBeDefined()
-    expect(protectedPath(dir, `\\\\?\\${dir}\\.git\\hooks\\x`, opts)).toBeDefined()
-  })
+  // These aliases use the native Windows path rules, not POSIX path simulation.
+  test.if(process.platform === "win32")(
+    "Windows aliases: MSYS paths, trailing dots, data streams, device prefixes",
+    () => {
+      const dir = repo()
+      const msys = `/${dir[0]!.toLowerCase()}/${dir.slice(3).replaceAll("\\", "/")}/.git/config`
+      expect(protectedPath(dir, msys, opts)).toBeDefined()
+      expect(protectedPath(dir, ".git./config", opts)).toBeDefined()
+      expect(protectedPath(dir, ".git\\config::$DATA", opts)).toBeDefined()
+      expect(protectedPath(dir, ".amira ./settings.json", opts)).toBeDefined()
+      expect(protectedPath(dir, `\\\\?\\${dir}\\.git\\hooks\\x`, opts)).toBeDefined()
+    },
+  )
 
   test("a link into a protected directory is followed", () => {
     const dir = repo()

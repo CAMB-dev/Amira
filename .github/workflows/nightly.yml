@@ -1,0 +1,270 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize publishers rather than cancelling a draft/asset upload halfway through.
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Check for changes on main
+    # A manual run from another branch would publish that branch's workflow; only main publishes.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+      sha: ${{ steps.plan.outputs.sha }}
+      previous: ${{ steps.plan.outputs.previous }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select the commit and a fresh nightly tag
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          python3 - <<'PY'
+          import datetime
+          import json
+          import os
+          import re
+          import subprocess
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+
+          pattern = re.compile(r"^v\d+\.\d+\.\d+-nightly\.\d{8}(?:\.\d+)?$")
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "releases.json")) as file:
+              releases = [release for page in json.load(file) for release in page]
+          nightlies = sorted(
+              (release for release in releases if release["prerelease"] and not release["draft"]
+               and pattern.fullmatch(release["tag_name"])),
+              key=lambda release: release["published_at"], reverse=True,
+          )
+          previous = nightlies[0]["tag_name"] if nightlies else ""
+          sha = git("rev-parse", "HEAD")
+          changed = not previous or bool(git("rev-list", f"{previous}..{sha}"))
+          with open("packages/cli/package.json") as file:
+              version = json.load(file)["version"]
+          base = f"v{version}-nightly.{datetime.datetime.now(datetime.timezone.utc):%Y%m%d}"
+          occupied = set(git("tag", "--list").splitlines())
+          occupied.update(release["tag_name"] for release in releases)
+          # Never fill suffix gaps: pruned immutable tags cannot be reused either.
+          same_day = re.compile(re.escape(base) + r"(?:\.(\d+))?$")
+          suffixes = [int(match[1] or 0) for tag in occupied
+                      if (match := same_day.fullmatch(tag))]
+          tag = f"{base}.{max(suffixes) + 1}" if suffixes else base
+          with open(os.environ["GITHUB_OUTPUT"], "a") as file:
+              for key, value in {"changed": str(changed).lower(), "sha": sha,
+                                 "previous": previous, "tag": tag, "version": tag[1:]}.items():
+                  file.write(f"{key}={value}\n")
+          if not changed:
+              print("Main has no commits since the last nightly; skipping checks and publication.")
+          PY
+
+  check:
+    name: Check (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.changed == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      # check invokes test with the isolated test-home preload, never live-test opt-ins.
+      - run: bun run check
+
+  build:
+    name: Cross-compile all seven targets
+    needs: [plan, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Build channel next
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: bun run build:all --version "$VERSION" --channel next
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-archives
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+  smoke:
+    name: Native archive smoke (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: bun-linux-x64 bun-linux-x64-baseline
+            exe: amira
+          - os: windows-latest
+            targets: bun-windows-x64 bun-windows-x64-baseline
+            exe: amira.exe
+          - os: macos-latest
+            targets: bun-darwin-arm64
+            exe: amira
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-archives
+          path: dist
+      - name: Verify checksums and smoke-test extracted archives (no Bun installation)
+        env:
+          TARGETS: ${{ matrix.targets }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          # macOS runners ship python3 only, Windows runners python only.
+          py=$(command -v python3 || command -v python)
+          "$py" - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          for line in Path("dist/SHA256SUMS").read_text().splitlines():
+              digest, name = line.split(maxsplit=1)
+              file = Path("dist") / name.lstrip("*")
+              assert hashlib.sha256(file.read_bytes()).hexdigest() == digest, file
+          PY
+          for target in $TARGETS; do
+            mkdir -p "smoke/$target"
+            if [[ "$target" == bun-windows-* ]]; then
+              # Git Bash on Windows runners has no unzip.
+              "$py" -m zipfile -e "dist/amira-$target.zip" "smoke/$target"
+            else
+              tar -xzf "dist/amira-$target.tar.gz" -C "smoke/$target"
+            fi
+            exe=$(find "smoke/$target" -type f -name "$EXE")
+            test -n "$exe"
+            "$exe" --version
+            "$exe" --self-check
+          done
+      - name: Record targets without a native smoke runner
+        if: runner.os == 'macOS'
+        run: |
+          echo 'darwin-x64 smoke skipped: macos-13 retired in December 2025. linux-arm64 smoke skipped: this workflow has no Linux ARM64 runner.' >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish immutable nightly and prune older nightlies
+    needs: [plan, build, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-archives
+          path: dist
+      - name: Create a draft, attach every asset, then publish once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          {
+            printf 'Automated nightly from `%s` (channel `next`).\n\n' "$SHA"
+            printf '## Commits since the previous nightly\n\n'
+            if [[ -n "$PREVIOUS" ]]; then
+              git log --format='- %h %s' "$PREVIOUS..$SHA"
+            else
+              git log --format='- %h %s' "$SHA"
+            fi
+            printf '\nNative smoke: Windows x64 and baseline, Linux x64 and baseline, macOS ARM64.\n'
+            printf 'macOS x64 smoke skipped because macos-13 was retired; Linux ARM64 has no native runner in this workflow.\n'
+          } > "$RUNNER_TEMP/notes.md"
+          # Abort if another publisher created the tag after planning; never reuse its tag.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG" \
+            --jq ".[] | select(.ref == \"refs/tags/$TAG\") | .ref")
+          test -z "$existing"
+          # A failed earlier run can leave an unpublished draft under this tag name (drafts have no
+          # tag yet, and the read-only plan job cannot see them). Remove it so the upload below
+          # cannot land on the stale draft.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.draft and .tag_name == \"$TAG\") | .id" |
+            while read -r id; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"; done
+          # gh refuses an existing release; uploads never use --clobber.
+          gh release create "$TAG" --target "$SHA" --draft --prerelease --latest=false \
+            --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          gh release upload "$TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS
+          # This is the only edit, while still a draft. Never edit a published release.
+          gh release edit "$TAG" --draft=false
+      - name: Keep the newest 14 nightly prereleases (never stable releases)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "releases.json")) as file:
+              releases = [release for page in json.load(file) for release in page]
+          pattern = re.compile(r"^v\d+\.\d+\.\d+-nightly\.\d{8}(?:\.\d+)?$")
+          nightlies = sorted(
+              (release for release in releases if release["prerelease"] and not release["draft"]
+               and pattern.fullmatch(release["tag_name"])),
+              key=lambda release: release["published_at"], reverse=True,
+          )
+          for release in nightlies[14:]:
+              # Deleting the release first unlocks its immutable tag for deletion.
+              subprocess.run(["gh", "release", "delete", release["tag_name"],
+                              "--yes", "--cleanup-tag"], check=True)
+          PY

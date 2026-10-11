@@ -19,6 +19,8 @@ cd ../..
 
 The CLI package provides the global `amira` command; make sure Bun's executable directory is on your PATH. You can also run `bun run amira` from the repository root.
 
+Nightly executable prereleases are available on [GitHub Releases](https://github.com/CAMB-dev/Amira/releases). See [building Amira](docs/building.md) for local builds and diagnostics.
+
 ## First run
 
 Run `amira` in your project. Add a provider with `/provider add`, search for a vendor by name or ID in the models.dev catalog, then review its prefilled settings, models and key source. Choose `Custom` for a local or unlisted service, or if the catalog is unavailable offline, and select its protocol and base URL manually. The built-in protocols are `openai-chat`, `openai-responses`, `anthropic-messages` and `google-gemini`. For environment-based keys, select `Read it from an environment variable`, enter the variable name (`apiKeyEnv`), and set it in the shell that launches Amira. Then pick a model with `/model`. See [providers](docs/providers.md) for setup details.

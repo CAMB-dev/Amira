@@ -55,7 +55,9 @@ test("shell and tools.disabled come from settings unless the flags are given", (
   put(path.join(cwd, ".amira", "settings.json"), { shell: "bash", tools: { disabled: ["glob"] } })
   // The shell mode hides tools by their declared shell once they are registered (toolsToDisable).
   expect(config([])).toMatchObject({ shell: "bash", disabledTools: ["glob"] })
-  expect(config(["--shell", "powershell"]).shell).toBe(process.platform === "win32" ? "powershell" : "auto")
+  expect(config(["--shell", "powershell"], {}, process.platform).shell).toBe(
+    process.platform === "win32" ? "powershell" : "auto",
+  )
   expect(config(["--disable-tools", "grep"])).toMatchObject({ shell: "bash", disabledTools: ["grep"] })
   expect(config(["--shell", "auto", "--disable-tools", ""])).toMatchObject({
     shell: "auto",

@@ -1,7 +1,7 @@
 import { setUserAgentVersion } from "@amira/net"
-import pkg from "../package.json" with { type: "json" }
+import { version } from "./version.ts"
 
-export const USER_AGENT = `Amira/${pkg.version}`
+export const USER_AGENT = `Amira/${version}`
 
 // Web requests, including extension API helpers, share the host's application version.
-setUserAgentVersion(pkg.version)
+setUserAgentVersion(version)

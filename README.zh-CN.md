@@ -19,6 +19,8 @@ cd ../..
 
 CLI 包提供全局 `amira` 命令；请确认 Bun 的可执行文件目录已加入 PATH。在仓库根目录也可以用 `bun run amira` 启动。
 
+Nightly 可执行程序预发布版本可从 [GitHub Releases](https://github.com/CAMB-dev/Amira/releases) 下载。本地构建和诊断方法见[构建 Amira](docs/zh/building.md)。
+
 ## 第一次使用
 
 在项目目录运行 `amira`。输入 `/provider add`，按名称或 ID 搜索 models.dev 目录中的服务商，再确认预填的设置、模型和密钥来源。本地服务、未列出的服务，或离线时无法获取目录的情况，选择 `Custom` 并手动指定协议和服务地址。内置协议包括 `openai-chat`、`openai-responses`、`anthropic-messages` 和 `google-gemini`。使用环境变量存放密钥时，在表单中选择 `Read it from an environment variable`，填入变量名（`apiKeyEnv`），并在启动 Amira 的 shell 中设置该变量。然后用 `/model` 选择模型。配置详情见[provider 文档](docs/zh/providers.md)。

@@ -4,7 +4,6 @@ import { DEFAULT_TUI_MODE } from "@amira/api"
 import { type Agent, amiraPath, listSessions, SessionStore } from "@amira/core"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import { consoleCodePage } from "@amira/tui-kit/console-code-page"
-import pkg from "../package.json" with { type: "json" }
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { resolveConfig } from "./config.ts"
 import { createCommandHost } from "./control.ts"
@@ -16,10 +15,12 @@ import { runProviderCommand } from "./provider-command.ts"
 import { chooseStore, exitNote, formatSessionList, pickSession } from "./resume.ts"
 import { runRpc } from "./rpc.ts"
 import { rpcSchema } from "./rpc-schema.ts"
+import { selfCheck } from "./self-check.ts"
 import { closeTrace } from "./session/trace-shutdown.ts"
 import { createSession } from "./session.ts"
 import { runSessionsCommand } from "./sessions-command.ts"
 import { askProjectTrust, planPackages } from "./trust.ts"
+import { versionLine } from "./version.ts"
 
 async function main(argv: string[]): Promise<number> {
   try {
@@ -32,6 +33,12 @@ async function main(argv: string[]): Promise<number> {
 }
 
 async function run(argv: string[]): Promise<number> {
+  // Diagnostics never load user settings, extensions, credentials or session stores.
+  if (argv.length === 1 && argv[0] === "--self-check") {
+    const result = await selfCheck()
+    process.stdout.write(`${JSON.stringify(result)}\n`)
+    return result.ok ? 0 : 1
+  }
   const io = {
     stdout: (s: string) => void process.stdout.write(s),
     stderr: (s: string) => void process.stderr.write(s),
@@ -60,7 +67,7 @@ async function run(argv: string[]): Promise<number> {
     return 0
   }
   if (args.version) {
-    process.stdout.write(`${pkg.version}\n`)
+    process.stdout.write(`${versionLine}\n`)
     return 0
   }
   if (args.rpcSchema) {

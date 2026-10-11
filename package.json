@@ -9,6 +9,8 @@
   ],
   "scripts": {
     "amira": "bun packages/cli/src/main.ts",
+    "build": "bun scripts/build.ts",
+    "build:all": "bun scripts/build.ts --all",
     "test": "bun test --parallel=3 --timings=scripts/test-timings.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
