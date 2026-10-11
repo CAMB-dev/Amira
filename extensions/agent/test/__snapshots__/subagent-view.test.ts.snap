@@ -10,7 +10,9 @@ task: Task a
 
   Now waiting.
 
-  └ ⠋ wait                                                                    0s
+  ───
+
+  ⠋ wait                                                                      0s
 
 
 
@@ -18,7 +20,5 @@ task: Task a
 
 
 
-
-
-following · ←→ switch · x stop · p print · Esc close"
+following · ←→ switch · x stop · p print · esc close"
 `;

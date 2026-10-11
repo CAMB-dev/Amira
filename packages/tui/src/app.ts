@@ -51,7 +51,7 @@ import { glyphs } from "./glyphs.ts"
 import { headerLine } from "./header.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
-import { defaultKeys, Keybindings, type KeySpec } from "./keybindings.ts"
+import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
@@ -556,7 +556,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     const jobs = runningJobs()
     if ((!n && !jobs) || Date.now() < quitArmedUntil) return quit()
     quitArmedUntil = Date.now() + HINT_NOTE_MS
-    const key = keys.label(action) ?? "Ctrl+C"
+    const key = keys.label(action) ?? keyLabel({ name: "c", ctrl: true })
     const what = [
       n ? `${n} sub-agent${n === 1 ? "" : "s"}` : "",
       jobs ? `${jobs} background job${jobs === 1 ? "" : "s"}` : "",
@@ -789,7 +789,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return quitOrWarn("exit")
     } else if (keys.is(e, "copy.reply")) {
       // In both modes: from the session's messages, so a new session (/clear) has none yet.
-      const fallback = mode === "fullscreen" ? "Shift+drag selects text." : "Select it with the mouse."
+      const fallback =
+        mode === "fullscreen"
+          ? `${keyLabel({ name: "drag", shift: true })} selects text.`
+          : "Select it with the mouse."
       copyToClipboard(terminal, lastReplyText(agent.messages), "the last reply", showNote, fallback)
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(nextDetail(detail)))

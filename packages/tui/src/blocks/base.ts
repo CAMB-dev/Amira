@@ -41,6 +41,8 @@ export interface BlockEnv {
   renders?: BlockRenders
   /** Output lines a successful shell command shows at `summary` detail (tui.shellOutputLines). */
   outputLines?: number
+  /** Rows available to a running call from the shared transient-output budget. */
+  liveOutputLines?: number
 }
 
 /** What replies need to show their images (D83): the same object for every frame. */

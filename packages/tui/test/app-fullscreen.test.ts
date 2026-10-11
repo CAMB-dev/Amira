@@ -6,6 +6,7 @@ import { userMessage } from "@amira/ai"
 import { defineTool, textResult } from "@amira/api"
 import { Agent, type CommandHost, type ExtensionHost, SessionStore } from "@amira/core"
 import { FileIndex } from "../src/file-index.ts"
+import { localClock } from "../src/format.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
 import { ALT_ENTER, setup, skillSetup, testCommands, userTexts, waitFor } from "./app-harness.ts"
@@ -74,7 +75,7 @@ test("inline: Alt+C copies the last reply; a key of the full-screen view says so
   terminal.send("\x1b[1;5A")
   terminal.send("\x03")
   terminal.send("\x1b[5~")
-  await shows("PgUp is for full-screen mode")
+  await shows("pgup is for full-screen mode")
   terminal.send("\x03\x03")
   await exited
 })
@@ -163,10 +164,12 @@ test("a diff review taller than the terminal keeps its title, options and keys i
   expect(live()).toContain("+ line 54")
   expect(live()).toContain("❯ 1 merge")
   expect(live()).toContain("  2 keep")
-  expect(live()).toContain("↑↓ move · Enter choose · Esc cancel")
+  expect(live()).toContain("↑↓ move · enter choose · esc cancel")
   expect(live()).not.toContain("type to filter")
   // The running call that asked stays in view above it, and the frame fits the screen.
-  expect(rows.some((l) => /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review +\d+s$/.test(l))).toBe(true)
+  expect(
+    rows.some((l) => new RegExp(`^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review +\\d+s {2}${localClock(Date.now())}$`).test(l)),
+  ).toBe(true)
   expect(rows[0]).not.toContain("line")
   terminal.send("1")
   await idle()
@@ -270,7 +273,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await waitFor(() => live().includes(`› ${text}`), what)
       await Bun.sleep(20)
       // No list opened for the recalled text.
-      expect(live()).not.toContain("Esc close")
+      expect(live()).not.toContain("esc close")
     }
     for (const t of ["newest", "$deploy", "/status", "oldest", "look at @src"]) {
       terminal.send(UP)
@@ -286,11 +289,11 @@ for (const mode of ["inline", "fullscreen"] as const) {
     terminal.send(`${UP}${UP}${UP}`)
     await shown("/status", `${mode}: /status again`)
     terminal.send("\x7fs")
-    await waitFor(() => live().includes("Esc close"), `${mode}: the command list`)
+    await waitFor(() => live().includes("esc close"), `${mode}: the command list`)
     terminal.send(UP)
     await Bun.sleep(30)
     expect(live()).toContain("› /status")
-    expect(live()).toContain("Esc close")
+    expect(live()).toContain("esc close")
     terminal.send("\x03\x03")
     await exited
   })
@@ -310,7 +313,7 @@ test("Enter runs a recalled command; Ctrl+R still puts a command in the editor w
   terminal.send("\x12stat")
   await waitFor(() => /│ › \/status +│/.test(live()) && live().includes("search history"), "match")
   terminal.send("\r")
-  await waitFor(() => !live().includes("search history") && live().includes("Esc close"), "the list")
+  await waitFor(() => !live().includes("search history") && live().includes("esc close"), "the list")
   terminal.send("\x03\x03")
   await exited
 })
@@ -343,7 +346,7 @@ test("Ctrl+R searches the history; Enter keeps the match in the editor to send o
   })
   terminal.send("\x12")
   await waitFor(() => live().includes("search history"), "search line")
-  expect(live()).toContain("Esc cancel")
+  expect(live()).toContain("esc cancel")
   terminal.send("deploy")
   await waitFor(() => live().includes("› deploy to prod"), "newest match")
   expect(live()).toContain("1 of 2")
@@ -398,7 +401,7 @@ test("typing @ offers project files; Tab inserts the path and the message keeps 
   })
   terminal.send("look at @form")
   await waitFor(() => live().includes("❯ src/format.ts"), "file list")
-  expect(live()).toContain("Tab/Enter insert")
+  expect(live()).toContain("tab/enter insert")
   // Like the command list, it opens below the input box, in place of the status bar.
   const rows = live().split("\n")
   expect(rows.findIndex((l) => l.includes("❯ src/format.ts"))).toBeGreaterThan(
@@ -406,7 +409,7 @@ test("typing @ offers project files; Tab inserts the path and the message keeps 
   )
   terminal.send("\t")
   await waitFor(() => live().includes("› look at @src/format.ts"), "inserted")
-  expect(live()).not.toContain("Tab/Enter insert")
+  expect(live()).not.toContain("tab/enter insert")
   terminal.send("please\r")
   await shows("read it")
   await idle()
@@ -627,7 +630,7 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   expect(live()).not.toContain("› old prompt")
   terminal.send("\x06")
   await waitFor(() => live().includes("search history"), "search line")
-  expect(live()).toContain("Enter accept · Ctrl+R older · Ctrl+X cancel")
+  expect(live()).toContain("enter accept · ctrl+r older · ctrl+x cancel")
   terminal.send("\x18")
   await waitFor(() => !live().includes("search history"), "search closed")
   terminal.send("\x10")
@@ -636,12 +639,12 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   terminal.send("@src")
   // The directory named as typed first, then its file.
   await waitFor(() => live().includes("❯ src/\n  src/app.ts"), "file list")
-  expect(live()).toContain("Tab/Enter insert · Ctrl+X close")
+  expect(live()).toContain("tab/enter insert · ctrl+x close")
   terminal.send("\x18")
   await waitFor(() => !live().includes("src/app.ts"), "file list closed")
   terminal.send("\x03\x14")
   await waitFor(() => live().includes("Tool output: full"), "tool output note")
-  expect(live()).toContain("Ctrl+T cycles")
+  expect(live()).toContain("ctrl+t cycles")
   terminal.send("\x03")
   await exited
 })

@@ -81,6 +81,7 @@ export {
   type KeyId,
   type KeyName,
   key,
+  keyLabel,
   type MouseInput,
   matchesKey,
   type PasteEvent,

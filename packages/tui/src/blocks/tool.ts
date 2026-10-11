@@ -8,6 +8,7 @@ import {
   toolResultText,
 } from "@amira/api"
 import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { timestampIn } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { childrenOf, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
 import { type CopyRow, chromeRows } from "../text-selection.ts"
@@ -35,6 +36,7 @@ const DETAIL_RANK: Record<ToolDetailLevel, number> = { collapsed: 0, summary: 1,
 export class ToolBlock extends Block {
   readonly kind = "tool"
   startedAt: number | undefined
+  timestamp: number | undefined
   partial: ToolResult | undefined
   end:
     | {
@@ -109,14 +111,17 @@ export class ToolBlock extends Block {
         startedAt: this.startedAt!,
         ...(this.partial ? { partial: this.partial } : {}),
       }
-      return [
-        ...runningToolLines(theme, presenter, call, now, env.spinner, width, { last: this.last }),
-        ...nested(treeRows(tree, now, treeWidth, theme, env.groups, true, env.spinner)),
-      ]
+      const rows = runningToolLines(theme, presenter, call, now, env.spinner, width, {
+        timestamp: this.timestamp,
+        liveOutputLines: env.liveOutputLines,
+      })
+      rows.push(...nested(treeRows(tree, now, treeWidth, theme, env.groups, true, env.spinner)))
+      return rows
     }
     const detail = this.detail(env)
     const opts = {
       last: this.last,
+      timestamp: this.timestamp,
       ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
     }
     const lines = finishedToolLines(theme, presenter, this.finished(), detail, width, opts)
@@ -155,8 +160,10 @@ export class ToolBlock extends Block {
     }
   }
 
-  override copyRows(plain: readonly string[]): CopyRow[] {
+  override copyRows(plain: readonly string[], lines: readonly string[] = plain): CopyRow[] {
     const rows = chromeRows(plain)
+    const stamp = timestampIn(lines)
+    if (stamp) rows[stamp.line]!.to = stamp.to
     const prefix = 4 + Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
     if (this.last) {
       for (let i = 1; i < rows.length; i++) {
@@ -197,6 +204,7 @@ export class ToolBlock extends Block {
 
   /** As the inline transcript shows it, or as unfolded by hand when that shows more. */
   override printLines(env: BlockEnv): string[] {
+    if (!this.end) return this.lines({ ...env, liveOutputLines: 0 })
     const folding = this.folding
     if (folding && DETAIL_RANK[folding] > DETAIL_RANK[env.detail]) return this.lines(env)
     this.folding = undefined
@@ -240,6 +248,17 @@ export class ExploredBlock extends Block {
     super()
   }
 
+  get timestamp(): number | undefined {
+    return this.calls.find((call) => call.timestamp !== undefined)?.timestamp
+  }
+
+  override copyRows(plain: readonly string[], lines: readonly string[] = plain): CopyRow[] {
+    const rows = chromeRows(plain)
+    const stamp = timestampIn(lines)
+    if (stamp) rows[stamp.line]!.to = stamp.to
+    return rows
+  }
+
   private detail(env: BlockEnv): ToolDetailLevel {
     return this.folding ?? (env.detail === "full" ? "full" : "summary")
   }
@@ -247,6 +266,7 @@ export class ExploredBlock extends Block {
   lines(env: BlockEnv): string[] {
     const opts = {
       last: this.last,
+      timestamp: this.timestamp,
       ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
     }
     const calls = this.calls.map((b) => ({ call: b.finished(), presenter: env.presenters?.get(b.name) }))

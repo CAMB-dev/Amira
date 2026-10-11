@@ -1,5 +1,5 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
-import { type InputEvent, isSubmitKey, matchesKey } from "../keys.ts"
+import { type InputEvent, isSubmitKey, keyLabel, matchesKey } from "../keys.ts"
 import { bold, inverse, type Theme } from "../style.ts"
 import { graphemes, truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { Editor } from "./editor.ts"
@@ -686,7 +686,7 @@ export class Form implements Component {
           const adds = f.def.allowCustom && typed && !rows.some((r) => r.value === typed)
           out.push(
             truncateToWidth(
-              `${INDENT}${theme.muted("filter ›")} ${f.filter}${CURSOR_MARKER}${adds ? theme.muted("  Enter adds it") : ""}`,
+              `${INDENT}${theme.muted("filter ›")} ${f.filter}${CURSOR_MARKER}${adds ? theme.muted(`  ${keyLabel({ name: "enter" })} adds it`) : ""}`,
               width,
             ),
           )
@@ -709,7 +709,11 @@ export class Form implements Component {
         out.push(truncateToWidth(`${mark} ${button(f.def.label, focused, ctx)}`, width, "…"))
         if (a.running) {
           out.push(
-            truncateToWidth(INDENT + theme.muted(`… ${a.text ?? "working"} · Esc stops it`), width, "…"),
+            truncateToWidth(
+              INDENT + theme.muted(`… ${a.text ?? "working"} · ${keyLabel({ name: "escape" })} stops it`),
+              width,
+              "…",
+            ),
           )
         } else if (a.text) {
           const style = toneStyle(theme, a.tone)
@@ -778,23 +782,28 @@ export class Form implements Component {
 
   private hint(): string {
     const f = this.field(this.focus)
-    const common = "Tab/↑↓ move · Ctrl+S save · Esc cancel"
-    if (!f) return `Enter press · ${common}`
+    const enter = keyLabel({ name: "enter" })
+    const esc = keyLabel({ name: "escape" })
+    const tab = keyLabel({ name: "tab" })
+    const space = keyLabel({ name: "space" })
+    const save = keyLabel({ name: "s", ctrl: true })
+    const common = `${tab}/↑↓ move · ${save} save · ${esc} cancel`
+    if (!f) return `${enter} press · ${common}`
     switch (f.def.type) {
       case "select":
         return f.open
-          ? "↑↓ pick · type to filter · Enter choose · Esc close"
-          : `Enter list · ←→ change · ${common}`
+          ? `↑↓ pick · type to filter · ${enter} choose · ${esc} close`
+          : `${enter} list · ←→ change · ${common}`
       case "multiselect":
-        return `Space toggle · type to filter${f.def.allowCustom ? " or add" : ""} · Ctrl+A all · ${common}`
+        return `${space} toggle · type to filter${f.def.allowCustom ? " or add" : ""} · ${keyLabel({ name: "a", ctrl: true })} all · ${common}`
       case "checkbox":
-        return `Space toggle · ${common}`
+        return `${space} toggle · ${common}`
       case "textarea":
-        return `Shift+Enter newline · Enter next · ${common}`
+        return `${keyLabel({ name: "enter", shift: true })} newline · ${enter} next · ${common}`
       case "action":
-        return f.action?.running ? "Esc stop · Tab/↑↓ move · Ctrl+S save" : `Enter run · ${common}`
+        return f.action?.running ? `${esc} stop · ${tab}/↑↓ move · ${save} save` : `${enter} run · ${common}`
       default:
-        return `Enter next · ${common}`
+        return `${enter} next · ${common}`
     }
   }
 }

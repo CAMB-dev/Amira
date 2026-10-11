@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs"
-import { detectEnv, type InputEvent, type TerminalEnv } from "@amira/tui-kit"
+import { detectEnv, type InputEvent, keyLabel, type TerminalEnv } from "@amira/tui-kit"
+
+export { keyLabel } from "@amira/tui-kit"
 
 /**
  * Where an action applies: the input box, a completion list below it while open (commands
@@ -147,12 +149,11 @@ export const ACTIONS = {
   "scroll.page-down": { scope: "transcript", description: "Scroll the transcript or view down a page" },
   "scroll.top": {
     scope: "transcript",
-    description: "Go to the start of the transcript or view (transcript Home only with empty input)",
+    description: `Go to the start of the transcript or view (transcript ${keyLabel({ name: "home" })} only with empty input)`,
   },
   "scroll.bottom": {
     scope: "transcript",
-    description:
-      "Go to the end of the transcript or view and follow it (transcript End only with empty input)",
+    description: `Go to the end of the transcript or view and follow it (transcript ${keyLabel({ name: "end" })} only with empty input)`,
   },
   "select.start": {
     scope: "transcript",
@@ -338,32 +339,6 @@ export function keyMatches(e: InputEvent, spec: KeySpec): boolean {
   )
 }
 
-const LABELS: Record<string, string> = {
-  enter: "Enter",
-  tab: "Tab",
-  escape: "Esc",
-  backspace: "Backspace",
-  delete: "Delete",
-  insert: "Insert",
-  space: "Space",
-  up: "↑",
-  down: "↓",
-  left: "←",
-  right: "→",
-  home: "Home",
-  end: "End",
-  pageup: "PgUp",
-  pagedown: "PgDn",
-}
-
-/** How a key reads in hints: "Ctrl+Q", "Alt+Enter", "Esc", "↑", "y". */
-export function keyLabel(spec: KeySpec): string {
-  const mods = spec.ctrl || spec.alt || spec.shift
-  const base = LABELS[spec.name] ?? (/^f\d+$/.test(spec.name) ? spec.name.toUpperCase() : spec.name)
-  const key = mods && base.length === 1 ? base.toUpperCase() : base
-  return `${spec.ctrl ? "Ctrl+" : ""}${spec.alt ? "Alt+" : ""}${spec.shift ? "Shift+" : ""}${key}`
-}
-
 const specKey = (s: KeySpec) => `${s.ctrl}:${s.alt}:${s.shift ?? "any"}:${s.name}`
 
 /** The keys of every action, checked by name wherever the TUI takes a key. */
@@ -401,7 +376,7 @@ export class Keybindings {
     return spec ? keyLabel(spec) : undefined
   }
 
-  /** A pair of moves in one label: "↑↓" for the arrows, else "Ctrl+P/Ctrl+N". */
+  /** A pair of moves in one label: "↑↓" for the arrows, else "ctrl+p/ctrl+n". */
   pairLabel(up: Action, down: Action): string | undefined {
     const a = this.label(up)
     const b = this.label(down)

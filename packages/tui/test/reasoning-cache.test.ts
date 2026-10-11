@@ -8,7 +8,7 @@ const env = (width = 80, detail: BlockEnv["detail"] = "summary"): BlockEnv => ({
   theme: plain.theme,
   width,
   detail,
-  reasoningExpandKey: "Ctrl+O",
+  reasoningExpandKey: "ctrl+o",
   now: at,
   spinner: "*",
   presenters: undefined,
@@ -36,12 +36,12 @@ test("the disclosure becoming available invalidates a collapsed head once", () =
   const pane = new TranscriptPane()
   const block = new ReasoningBlock("", undefined, at, true)
   pane.add(block)
-  expect(pane.plain(block, env())[0]).not.toContain("Ctrl+O")
+  expect(pane.plain(block, env())[0]).not.toContain("ctrl+o")
   block.append(" \n")
   expect(block.version).toBe(0)
   block.append("A thought.")
   expect(block.version).toBe(1)
-  expect(pane.plain(block, env())[0]).toContain("Ctrl+O to expand")
+  expect(pane.plain(block, env())[0]).toContain("ctrl+o to expand")
   block.append(" More.")
   expect(block.version).toBe(1)
 })

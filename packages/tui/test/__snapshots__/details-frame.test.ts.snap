@@ -35,7 +35,7 @@ exports[`width-100 fullscreen details frames: verb groups and sticky prompt whil
   ├ Read 3 files · Searched 2 patterns  ▸
   ├ Edited a.ts  +0 / -0
   └ Ran bun test  ✓ 412 pass (+1 line)
-  ↓ 2 rows below · Ctrl+End follows
+  ↓ 2 rows below · ctrl+end follows
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ › Message Amira                                                                                  │
 ╰────────────────────────────────────────────────────────────────────────────────── mock/m1 · ask ─╯

@@ -44,7 +44,7 @@ export const noProbe = async () => ({
 /** Alt+Enter in the kitty keyboard protocol. */
 export const ALT_ENTER = "\x1b[13;3u"
 /** Windows terminals keep Alt+Enter for fullscreen, so the hint names Ctrl+Q there. */
-export const QUEUE_HINT = process.platform === "win32" ? "Ctrl+Q" : "Alt+Enter"
+export const QUEUE_HINT = process.platform === "win32" ? "ctrl+q" : "alt+enter"
 
 export async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs

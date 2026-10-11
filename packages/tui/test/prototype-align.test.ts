@@ -85,8 +85,8 @@ test(
   "width-100 fullscreen running turn matches the chosen prototype details",
   withSnapshotClock(() => {
     const clock = spyOn(Date, "now").mockReturnValue(at)
-    const terminal = new FakeTerminal(100, 24)
-    const screen = new VirtualScreen(100, 24)
+    const terminal = new FakeTerminal(100, 28)
+    const screen = new VirtualScreen(100, 28)
     const write = terminal.write.bind(terminal)
     terminal.write = (data) => {
       write(data)
@@ -168,6 +168,8 @@ test(
       }
       rememberMessageTime(prompt, at)
       view.user(prompt)
+      view.reasoningDelta("Move context and cost into the header.")
+      clock.mockReturnValue(at + 4200)
       view.replyDelta("# Status bar layout\n\nThe header now carries context and cost.")
       view.replyEnd([])
       for (const [id, name, args] of [
@@ -194,18 +196,27 @@ test(
         })
       }
       view.toolStart("8", "bash", { command: "git diff --stat" }, at)
+      view.toolUpdate(
+        "8",
+        textResult(
+          " packages/tui/src/status-bar.ts | 15 ++++++++++++---\n 1 file changed, 12 insertions(+), 3 deletions(-)",
+        ),
+      )
       view.render()
       const frame = screen.lines.join("\n")
       expect(frame).toContain("  ├ Read 3 files · Searched 2 patterns  ▸")
       expect(frame).toContain("Edited packages/tui/src/status-bar.ts")
       expect(frame).toContain("Ran bun test packages/tui  ✓ 412 pass · 3.1s")
       expect(frame).toContain("# Status bar layout")
-      expect(frame).toContain("Running git diff --stat")
+      expect(frame).toContain("  ⠋ Running git diff --stat")
+      expect(frame).toContain("    │  1 file changed, 12 insertions(+), 3 deletions(-)")
+      expect(frame).toMatch(/∴ Thought for 4\.2s +8:19 PM/m)
+      expect(frame.split("\n").filter((row) => row.includes("8:19 PM"))).toHaveLength(2)
       expect(frame).toContain("shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys")
       const rows = screen.lines
       const index = rows.indexOf("  ───")
       expect(rows.slice(index - 1, index + 2)).toEqual(["", "  ───", ""])
-      expect(rows).toHaveLength(24)
+      expect(rows).toHaveLength(28)
       expect(rows.every((row) => visibleWidth(row) <= 100)).toBe(true)
       expect(frame).toMatchSnapshot()
       if (process.env.TUI_ALIGN_FRAME === "1") console.log(`FRAME 100\n${frame}\nEND FRAME 100`)
