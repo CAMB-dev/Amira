@@ -51,6 +51,15 @@ let workerUrl = new URL("./worker.ts", import.meta.url).href
 let worker: Worker | undefined
 /** The worker module loaded and answered at least once. */
 let workerReady = false
+/** Distinguishes the explicit startup handshake from any other worker reply. */
+let workerSentReady = false
+
+/** Diagnostic only: does not start a worker or change the fallback policy. */
+export function commandWorkerStatus(): "idle" | "starting" | "worker" | "inline" {
+  if (workerBroken) return "inline"
+  if (!worker) return "idle"
+  return workerSentReady ? "worker" : "starting"
+}
 /** Workers cannot be used here (e.g. the module is missing from a compiled binary); run inline. */
 let workerBroken = false
 let nextId = 1
@@ -109,6 +118,7 @@ function getWorker(): Worker | undefined {
     w.addEventListener("close", () => onWorkerGone(w))
     worker = w
     workerReady = false
+    workerSentReady = false
   } catch {
     workerBroken = true
   }
@@ -181,7 +191,10 @@ function onMessage(m: FromWorker) {
     for (const j of jobs.values()) delete j.earlyStop
   }
   workerReady = true
-  if (m.type === "ready") return
+  if (m.type === "ready") {
+    workerSentReady = true
+    return
+  }
   if (m.type === "pipe") {
     const p = pipes.get(m.id)
     if (m.event.type === "exit") pipes.delete(m.id)
@@ -610,6 +623,7 @@ export function resetCommandWorker(opts: { url?: string } = {}): void {
   worker = undefined
   abandonWorker(false)
   workerReady = false
+  workerSentReady = false
   workerBroken = false
   workerUrl = opts.url ?? new URL("./worker.ts", import.meta.url).href
 }

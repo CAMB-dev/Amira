@@ -254,22 +254,20 @@ for (const how of ["exit", "crash", ...(process.platform === "win32" ? [] : ["si
   })
 }
 
-test("Amira killed outright leaves no process of a job behind on Windows (the Job Object)", async () => {
-  const { child, pidFile } = await runHost("wait")
-  const pids = await treePids(pidFile)
-  const reader = child.stdout.getReader()
-  await reader.read()
-  // TerminateProcess on Windows, SIGKILL elsewhere: no exit hook runs.
-  child.kill("SIGKILL")
-  await child.exited
-  if (process.platform === "win32") return expectAllGone(pids)
-  // POSIX has no equivalent of kill-on-close: the jobs outlive a SIGKILL. Clean up here.
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGKILL")
-    } catch {}
-  }
-})
+// POSIX has no Job Object kill-on-close equivalent; an outright SIGKILL leaves its jobs alive.
+test.if(process.platform === "win32")(
+  "Amira killed outright leaves no process of a job behind on Windows (the Job Object)",
+  async () => {
+    const { child, pidFile } = await runHost("wait")
+    const pids = await treePids(pidFile)
+    const reader = child.stdout.getReader()
+    await reader.read()
+    // TerminateProcess: no exit hook runs.
+    child.kill("SIGKILL")
+    await child.exited
+    await expectAllGone(pids)
+  },
+)
 
 test("a SIGINT someone handles leaves jobs running; one nobody handles kills them and exits 130", async () => {
   const job = backgroundJobs.start({ command: "idle", argv: script("setInterval(() => {}, 1000)"), cwd })
