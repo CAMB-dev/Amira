@@ -912,7 +912,7 @@ test("/permissions lists the mode and the rules with their sources; /status coun
   const none = await setup()
   expect((await none.run("/permissions")).text).toBe("This session has no permission policy.")
   expect((await none.run("/status")).text).not.toContain("Permissions")
-  const { run } = await setup({
+  const { run, host } = await setup({
     info: () => ({
       id: "s1",
       cwd: "/work",
@@ -939,6 +939,16 @@ test("/permissions lists the mode and the rules with their sources; /status coun
   expect(text).toMatch(/deny\s+rm\s+project p\.json/)
   expect(text).toContain("Shell commands can still change these files")
   expect(text).toContain("this project is not trusted")
+  expect(text).toContain("shift+tab cycles")
+  const rebound = await host.run("/permissions", {
+    frontend: "tui",
+    keys: () => [{ keys: "alt+m", description: "Cycle the permission mode: auto, edits, plan" }],
+  })
+  expect(rebound.output.join("\n")).toContain("alt+m cycles")
+  expect(rebound.output.join("\n")).not.toContain("shift+tab")
+  const unbound = await host.run("/permissions", { frontend: "tui", keys: () => [] })
+  expect(unbound.output.join("\n")).not.toContain("shift+tab")
+  expect(unbound.output.join("\n")).toContain("Cycle auto, edits and plan in the UI")
 })
 
 test("/prune reports artifacts by reference and deletes only the scope asked for", async () => {

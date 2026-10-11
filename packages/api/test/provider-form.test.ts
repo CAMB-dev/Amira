@@ -299,6 +299,9 @@ test("provider form carries catalog identity in descriptions and actions, not ed
   const initial = { ...providerVendorInitial(admin, VENDOR), models: ["m"] }
   const form = providerFormSpec(admin, undefined, initial)
   expect(form.fields.some((field) => field.id === "catalogId")).toBe(false)
+  expect(form.fields.find((field) => field.id === "models")?.help).toBe(
+    "space picks · type an id and press enter to add one the list lacks.",
+  )
   const values = { id: "renamed", dialect: "openai-chat", baseUrl: VENDOR.baseUrl!, models: ["m"] }
   for (const id of ["fetchModels", "testConnection"]) {
     const action = form.fields.find((field) => field.id === id)

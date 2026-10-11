@@ -79,7 +79,7 @@ export function createComposer(deps: ComposerDeps): Composer {
     }
     for (const image of attachments) editor.insertImage(image)
     showNote(
-      `Attached ${attachments.map((image) => image.name.replace(/\p{Cc}/gu, " ")).join(", ")}. Backspace removes an attachment.`,
+      `Attached ${attachments.map((image) => image.name.replace(/\p{Cc}/gu, " ")).join(", ")}. Press backspace to remove an attachment.`,
     )
     return true
   }

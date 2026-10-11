@@ -154,7 +154,9 @@ test("/clear and /resume switch the active agent and announce it; a running turn
   const turn = first.prompt("hello")
   await Bun.sleep(10)
   expect(await run("/clear")).toContain("a turn is running")
-  expect(() => host.control.setModel("mock/m")).toThrow(/a turn is running/)
+  expect(() => host.control.setModel("mock/m")).toThrow(
+    "a turn is running; switch models after it ends (or press esc to stop it)",
+  )
   await turn
   expect(await run("/clear")).toContain("Started a new session")
   expect(host.agent).not.toBe(first)

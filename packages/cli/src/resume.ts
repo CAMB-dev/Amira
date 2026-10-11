@@ -41,7 +41,7 @@ export async function pickSession(sessions: SessionSummary[]): Promise<SessionSu
   process.stdout.write(`${formatSessionList(sessions, process.stdout.columns || 100)}\n\n`)
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   try {
-    const answer = (await rl.question("Resume which session? (number, Enter to cancel) ")).trim()
+    const answer = (await rl.question("Resume which session? (number, enter to cancel) ")).trim()
     const n = Number(answer)
     return Number.isInteger(n) && n >= 1 ? sessions[n - 1] : undefined
   } finally {

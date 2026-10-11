@@ -659,7 +659,7 @@ export class ExtensionViewer implements Component {
       if (tool !== undefined) {
         flush()
         if (stripAnsi(tool) === `  ${glyphs.rule.repeat(3)}`) {
-          while (stripAnsi(out.at(-1) ?? "x") === "" && stripAnsi(out.at(-2) ?? "x") === "") out.pop()
+          if (stripAnsi(out.at(-1) ?? "x") === "" && stripAnsi(out.at(-2) ?? "x") === "") out.pop()
         }
         out.push(tool)
       } else plain.push(line)

@@ -13,11 +13,17 @@ import {
   textResult,
 } from "@amira/api"
 import { EventBus, UiRequests } from "@amira/core"
-import { parseCliArgs, UsageError } from "../src/args.ts"
+import { parseCliArgs, USAGE, UsageError } from "../src/args.ts"
 import { type PrintIO, runPrint, safeJson } from "../src/print.ts"
 import { createSession } from "../src/session.ts"
 
 const here = import.meta.dir
+
+test("usage prints lower-case key labels", () => {
+  expect(USAGE).toContain("shift+tab")
+  expect(USAGE).toContain("ctrl+c stops waiting")
+  expect(USAGE).not.toMatch(/Shift\+Tab|Ctrl\+C/)
+})
 
 test("parses print mode, repeatable extensions and the positional prompt", () => {
   const a = parseCliArgs(

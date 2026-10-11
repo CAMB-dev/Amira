@@ -17,9 +17,14 @@ export function permissionsCommand(): CommandDefinition {
         plan: "read-only: no file changes, no shell commands",
       }
       const where = report.modeSource === "default" ? "the default" : `from ${report.modeSource}`
+      const keys = ctx.keys?.()
+      const cycle = keys?.find(
+        (key) => key.description === "Cycle the permission mode: auto, edits, plan",
+      )?.keys
+      const cycleHint = keys ? cycle : "shift+tab"
       const lines = [
         `Mode: ${report.mode} (${where}) — ${modes[report.mode] ?? ""}`,
-        "Shift+Tab cycles auto, edits and plan in the UI; --permission-mode and permissions.mode set it at start.",
+        `${cycleHint ? `${cycleHint} cycles` : "Cycle"} auto, edits and plan in the UI; --permission-mode and permissions.mode set it at start.`,
         "",
       ]
       if (report.rules.length) {

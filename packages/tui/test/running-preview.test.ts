@@ -169,7 +169,99 @@ test("/agents host renderer uses the same heads, pipes, total cap and transient 
   expect(finished).toContain("  └ Ran check-3  ✓ done")
 })
 
+test("/agents rule removes only its duplicate blank line, not earlier intentional spacing", () => {
+  for (const blanks of [0, 1, 3]) {
+    const viewer = new ExtensionViewer(
+      {
+        kind: "preview",
+        title: () => "Preview",
+        render: (_data, opts) => [
+          ...opts.renderReply!("Before."),
+          ...Array.from({ length: blanks }, () => ({ kind: "text" as const, text: "" })),
+          ...opts.renderRunningTool!("bash", { args: { command: "check" }, startedAt: 0 }),
+        ],
+      },
+      {},
+      { now: () => 4000 },
+    )
+    const rows = viewer.render(100, { theme: monoTheme, color: false, rows: 30 }).map(stripAnsi)
+    const before = rows.indexOf("  Before.")
+    const rule = rows.indexOf("  ───")
+    expect(rows.slice(before + 1, rule)).toEqual(Array(Math.max(1, blanks)).fill(""))
+    expect(rows[rule + 1]).toBe("")
+  }
+})
+
+test("/agents and fullscreen give one streaming call three rows beside two silent calls", () => {
+  const pane = new TranscriptPane()
+  for (const id of [1, 2, 3]) {
+    const call = tool(id)
+    if (id !== 2) call.partial = undefined
+    pane.add(call)
+  }
+  const viewer = new ExtensionViewer(
+    {
+      kind: "preview",
+      title: () => "Preview",
+      render: (_data, opts) =>
+        [1, 2, 3].flatMap((id) =>
+          opts.renderRunningTool!("bash", {
+            args: { command: `check-${id}` },
+            startedAt: 0,
+            ...(id === 2 ? { partial: preview(id) } : {}),
+          }),
+        ),
+    },
+    {},
+    { now: () => 4000, presenters: env.presenters },
+  )
+  const liveRows = (rows: string[]) => rows.map(stripAnsi).filter((row) => row.startsWith("    │ "))
+  const expected = ["    │ 2-earlier", "    │ 2-latest", "    │ 2-tail"]
+  expect(liveRows(viewer.render(100, { theme: monoTheme, color: false, rows: 30 }))).toEqual(expected)
+  expect(liveRows(pane.render(env, 16))).toEqual(expected)
+})
+
 for (const mode of ["fullscreen", "inline"] as const) {
+  test(`${mode}: one streaming call beside two silent calls keeps three live rows`, async () => {
+    const s = await setup(
+      [
+        { toolCalls: [1, 2, 3].map((id) => ({ name: "stream", args: { command: `check-${id}` } })) },
+        { text: "After the checks." },
+      ],
+      { cols: 100, rows: 40, settings: { mode } },
+    )
+    const releases: (() => void)[] = []
+    s.agent.tools.register(
+      defineTool({
+        name: "stream",
+        ...parallel,
+        execute: async (_args, ctx) => {
+          const id = releases.length + 1
+          if (id === 2) ctx.update(preview(id))
+          await new Promise<void>((resolve) => releases.push(resolve))
+          return textResult(`finished-${id}`)
+        },
+      }),
+      "test:preview",
+    )
+    try {
+      s.terminal.send("go\r")
+      await waitFor(() => releases.length === 3 && s.live().includes("2-tail"), "mixed live previews")
+      expect(
+        s
+          .live()
+          .split("\n")
+          .filter((row) => row.startsWith("    │ ")),
+      ).toEqual(["    │ 2-earlier", "    │ 2-latest", "    │ 2-tail"])
+      for (const release of releases) release()
+      await s.shows("After the checks.")
+      await s.idle()
+      expect(s.all()).not.toContain("-tail")
+    } finally {
+      for (const release of releases) release()
+      await closeImageApp(s)
+    }
+  })
   test(`${mode}: parallel live updates use one preview per call and disappear from the committed transcript`, async () => {
     const s = await setup(
       [

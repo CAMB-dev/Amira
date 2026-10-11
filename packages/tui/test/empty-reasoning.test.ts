@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test"
-import type { AssistantMessage, ToolDetailLevel } from "@amira/api"
+import { type AssistantMessage, type ToolDetailLevel, textResult } from "@amira/api"
 import { FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
@@ -45,6 +45,42 @@ function setup(mode: "inline" | "fullscreen", detail: ToolDetailLevel) {
 }
 
 for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: a rejected first call owns the clock without a start event`, () => {
+    const at = new Date(2026, 9, 10, 20, 9).getTime()
+    const clock = spyOn(Date, "now").mockReturnValue(at)
+    const { view, screen, text } = setup(mode, "summary")
+    try {
+      view.replyEnd([{ id: "blocked", name: "bash", args: { command: "check" } }])
+      view.render()
+      expect(text()).not.toContain("check")
+      expect(
+        view.toolEnd("blocked", {
+          result: textResult("Denied", true),
+          durationMs: 0,
+          rejected: "blocked",
+        }),
+      ).toBe(true)
+      view.render()
+      expect(
+        text()
+          .split("\n")
+          .find((row) => row.includes("check")),
+      ).toEndWith(localClock(at))
+      clock.mockReturnValue(at + 180_000)
+      view.replyDelta("Later reply.")
+      view.replyEnd([])
+      view.turnEnd()
+      view.render()
+      expect(text()).toContain("Later reply.")
+      expect(text().split(localClock(at)).slice(1)).toHaveLength(1)
+      expect(text()).not.toContain(localClock(at + 180_000))
+    } finally {
+      view.stop()
+      clock.mockRestore()
+    }
+    expect(screen.mainText.split(localClock(at)).slice(1)).toHaveLength(1)
+  })
+
   test(`${mode}: the first thinking clock remains fixed and its streamed reply gets none`, () => {
     const at = new Date(2026, 9, 10, 20, 9).getTime()
     const clock = spyOn(Date, "now").mockReturnValue(at)

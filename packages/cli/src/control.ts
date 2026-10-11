@@ -67,7 +67,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
     const a = agent()
     if (!a.busy) return
     const running = a.turnId ? "a turn" : `a ${a.holdingFor ?? "compaction"}`
-    throw new Error(`${running} is running; ${what} after it ends (or press Esc to stop it)`)
+    throw new Error(`${running} is running; ${what} after it ends (or press esc to stop it)`)
   }
   const switchTo = async (
     rootSessionId: string,

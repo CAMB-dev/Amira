@@ -53,6 +53,7 @@ import { imageBytes, MAX_IMAGE_BYTES } from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
+import { mouseLabels } from "./mouse-labels.ts"
 import { PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import { TerminalStatus } from "./terminal-status.ts"
@@ -790,9 +791,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     } else if (keys.is(e, "copy.reply")) {
       // In both modes: from the session's messages, so a new session (/clear) has none yet.
       const fallback =
-        mode === "fullscreen"
-          ? `${keyLabel({ name: "drag", shift: true })} selects text.`
-          : "Select it with the mouse."
+        mode === "fullscreen" ? `${mouseLabels.drag} selects text.` : "Select it with the mouse."
       copyToClipboard(terminal, lastReplyText(agent.messages), "the last reply", showNote, fallback)
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(nextDetail(detail)))
