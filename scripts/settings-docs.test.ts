@@ -70,6 +70,15 @@ describe("settings reference", () => {
     expect(generated(read(file))).toBe(renderReference(language as "en" | "zh", rows))
   })
 
+  test("the shimmer union stays a named row with a valid schema sample", () => {
+    const row = rows.find((row) => row.key === "tui.shimmer")!
+    expect(row.type.name).toBe("ShimmerEffect")
+    expect(sampleValue(row.type)).toBe("soft")
+    expect(validateSettings({ tui: { shimmer: sampleValue(row.type) } }, "settings.json").warnings).toEqual(
+      [],
+    )
+  })
+
   test("a changed or added settings key makes the documents stale", () => {
     const changed = sources().map((s) => s.replace("bell?: boolean", "bell?: number"))
     expect(renderReference("en", settingsRows(changed))).not.toBe(generated(read(docFiles.en)))
@@ -107,6 +116,7 @@ describe("settings reference", () => {
       "compact.model",
       "agents.<role>.model",
       "mcpServers.<name>.type",
+      "tui.shimmer",
     ])
     for (const [key, annotation] of Object.entries(annotations)) {
       if (key in settingsDefaults || inherited.has(key)) continue

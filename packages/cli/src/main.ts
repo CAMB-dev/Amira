@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import type { AnyEvent } from "@amira/api"
+import type { AnyEvent, TuiSettings } from "@amira/api"
 import { DEFAULT_TUI_MODE } from "@amira/api"
 import { type Agent, amiraPath, listSessions, SessionStore } from "@amira/core"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
@@ -135,6 +135,7 @@ async function run(argv: string[]): Promise<number> {
   }
   const store = choice?.store
   const resumed = choice?.resumed ?? false
+  let applyThemeSettings: ((settings: TuiSettings | undefined) => void) | undefined
   const session = await createSession({
     ...(model ? { model } : {}),
     // Print mode cannot pick a model; the UI and rpc clients can (/model, model.set).
@@ -155,6 +156,7 @@ async function run(argv: string[]): Promise<number> {
       const reloaded = resolveConfig(args)
       return { settings: reloaded.settings, layers: reloaded.settingsLayers, warnings: reloaded.warnings }
     },
+    onSettingsReload: (settings) => applyThemeSettings?.(settings.tui),
     permissions: config.permissions,
     providers: config.providers,
     apiKeys: config.apiKeys,
@@ -239,7 +241,13 @@ async function run(argv: string[]): Promise<number> {
       commands,
       registerCommand: (c) => host.commands.register(c, "builtin:tui"),
       themes: host.themes,
-      saveTheme: (name, variant) => commands.rememberTheme(name, variant),
+      subscribeThemeSettings: (listener) => {
+        applyThemeSettings = listener
+        return () => {
+          applyThemeSettings = undefined
+        }
+      },
+      saveTheme: (name, variant, ...shimmer) => commands.rememberTheme(name, variant, ...shimmer),
       toolRenderers: host.renderers,
       views: host.views,
       imageProviders: host.images,

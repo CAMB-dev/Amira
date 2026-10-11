@@ -258,6 +258,7 @@ Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tool
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal's scrollback. `--inline` and `--fullscreen` win. Fullscreen pins live prompts below the header when scrolled away; resumed history has no sticky prompt. |  |
 | `tui.theme` | `string` | `"auto"` | A theme name, or `"auto"` for Amira following the terminal background (dark if unknown). `"dark"` and `"light"` select Amira explicitly; `"terminal"` uses the terminal's own ANSI colors. `/theme` previews and saves a named theme. |  |
 | `tui.themeVariant` | `"auto" \| "dark" \| "light"` | `"auto"` | For named themes, `"auto"` follows the terminal background; `"dark"` or `"light"` forces that variant. A missing variant uses the default Amira palette. |  |
+| `tui.shimmer` | `ShimmerEffect` | theme’s effect, else `"soft"` | Activity-label animation: `off`, `soft`, `sharp`, `wide`, `bounce`, `pulse`, `wave` or `reveal`. An object overrides only its supplied knobs; see [Shimmer animation](themes.md#shimmer-animation) for ranges and colors. |  |
 | `tui.colorDepth` | `"auto" \| "truecolor" \| "256" \| "16"` | `"auto"` | Color depth: `"auto"` detects terminal support; `"truecolor"`, `"256"` and `"16"` override it. Values are strings, including `"256"` and `"16"`. |  |
 | `tui.bell` | `boolean` | `true` | Ring once per wait when the terminal is unfocused and a turn ends or a dialog needs input. With unknown focus, completed turns never ring; only permission/question dialogs alert. Set to `false` to disable BEL; desktop alerts are controlled separately by `tui.notify`. |  |
 | `tui.notify` | `"auto" \| "off"` | `"auto"` | `"auto"` sends desktop alerts once per wait under the same focus rules as `tui.bell`: OSC 9 for iTerm2/Ghostty, OSC 777 for WezTerm, OSC 99 for kitty. Windows Terminal uses BEL/taskbar alerts only, not a desktop-notification OSC. Unknown terminals, dumb terminals and tmux/screen get no notification OSC. Terminal/OS notification settings still apply. `"off"` disables desktop alerts without changing the bell. |  |
@@ -316,5 +317,19 @@ The MCP extension reads `mcpServers` from `.mcp.json` in the working directory, 
 | `skills.dirs` | `string[]` | none | Extra skill directories, searched after `.amira/skills` and `~/.amira/skills` and before `.agents/skills` and `.claude/skills`. `~` is your home directory; relative paths start from the working directory. |  |
 
 <!-- settings:generated:end -->
+
+## Shimmer settings
+
+Use a preset (`"shimmer": "pulse"`), disable animation (`"shimmer": "off"`), or override individual theme knobs in `settings.json`:
+
+```json
+{
+  "tui": {
+    "shimmer": { "preset": "bounce", "width": 8, "period": 2400 }
+  }
+}
+```
+
+`"shimmer": { "width": 4 }` keeps the theme's style, period and colors. Optional colors accept a shared pair (`"colors": ["#78dbe2", "#6fb3e8"]`) or separate `dark`/`light` pairs. Invalid fields fall back individually and numbers are clamped, with one notice per invalid block. See [Shimmer animation](themes.md#shimmer-animation) for all knobs and merge rules. The `/theme` picker previews and saves changes; choosing `theme` removes the user override. Named presets, including `soft`, are saved unless `soft` already matches the active theme’s plain soft effect. `/reload` applies all three theme settings live.
 
 Related: [Getting started](getting-started.md) · [Providers](providers.md) · [Usage](usage.md) · [Sub-agents](subagents.md) · [Extensions](extensions.md) · [Keybindings](keybindings.md).

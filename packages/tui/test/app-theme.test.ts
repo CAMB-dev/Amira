@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test"
+import type { ShimmerEffect, TuiSettings } from "@amira/api"
 import { ThemeRegistry } from "@amira/core"
+import type { ThemeVariant } from "@amira/tui-kit"
 import { glyphs } from "../src/glyphs.ts"
 import { setup, waitFor } from "./app-harness.ts"
 
@@ -167,7 +169,10 @@ test("theme and variant preview survive reload and Esc restores both from the cu
     await waitFor(() => s.live().includes("arrows preview"), "reopened picker")
     expect(s.live()).toContain("[light]")
     s.terminal.send("\t")
-    await waitFor(() => s.live().includes("[auto]"), "Tab appearance preview")
+    await waitFor(() => s.live().includes("[Shimmer]"), "Tab focuses shimmer")
+    expect(s.live()).toContain("[light]")
+    s.terminal.send("\t\x1b[C")
+    await waitFor(() => s.live().includes("[auto]"), "appearance arrows after returning focus")
     s.terminal.send("\x1b")
   } finally {
     s.terminal.send("\x1b")
@@ -401,7 +406,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           .split("\n")
           .find((line) => line.includes("tab appearance")),
       ).toContain("enter choose")
-      s.terminal.send("\t\r")
+      s.terminal.send("\x1b[C\r")
       await waitFor(() => saved.length === 1, "theme and appearance saved")
       expect(saved).toEqual([{ name: "amira", variant: "dark" }])
     } finally {
@@ -412,3 +417,317 @@ for (const mode of ["inline", "fullscreen"] as const) {
     }
   })
 }
+
+test("idle theme picker starts a live activity preview and cancellation stops it", async () => {
+  const s = await setup([], {
+    commands: [],
+    tuiCommands: true,
+    settings: { mode: "fullscreen", colorDepth: "truecolor" },
+  })
+  try {
+    expect(s.live()).not.toContain("Responding…")
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("Responding…"), "idle shimmer preview")
+    expect(s.agent.status).toBe("idle")
+    s.terminal.clearWrites()
+    await waitFor(() => s.terminal.writes.length > 1, "animated idle preview frames")
+    expect(s.terminal.output).toContain("\x1b[38;2;")
+    s.terminal.send("\x1b")
+    await waitFor(() => !s.live().includes("Responding…"), "idle preview stopped")
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("picker cycles every shimmer preset, applies it, and soft explicitly deletes the override", async () => {
+  const saved: [string, ThemeVariant, ShimmerEffect?][] = []
+  const s = await setup([], {
+    commands: [],
+    tuiCommands: true,
+    settings: { mode: "fullscreen", shimmer: "off" },
+    saveTheme: (name, variant, ...shimmer) => {
+      saved.push([name, variant, ...shimmer])
+    },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await s.shows("arrows preview")
+    s.terminal.send("\t")
+    await waitFor(() => s.live().includes("[Shimmer]"), "shimmer focus")
+    for (const preset of ["soft", "sharp", "wide", "bounce", "pulse", "wave", "reveal"]) {
+      s.terminal.send("\x1b[C")
+      await waitFor(() => s.live().includes(`Shimmer: ${preset}`), `${preset} preview`)
+      expect(saved).toEqual([])
+    }
+    s.terminal.send("\t\r")
+    await waitFor(() => saved.length === 1, "shimmer writeback")
+    expect(saved).toEqual([["amira", "auto", "reveal"]])
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("arrows preview"), "reopened picker")
+    s.terminal.send("\t\x1b[C\x1b[C\x1b[C")
+    await waitFor(() => s.live().includes("Shimmer: soft"), "soft reset")
+    s.terminal.send("\t\r")
+    await waitFor(() => saved.length === 2, "soft writeback")
+    expect(saved[1]).toEqual(["amira", "auto", undefined])
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("picker customizes all six knobs, inherits the theme, and color pairs follow appearance", async () => {
+  const themes = new ThemeRegistry()
+  themes.register({ name: "custom", shimmerEffect: { style: "wave", width: 11, period: 2400 } }, "user")
+  const colors = { dark: ["#110000", "#220000"], light: ["#001100", "#002200"] } as const
+  themes.register(
+    {
+      name: "amber",
+      dark: { shimmer: colors.dark[0], shimmerEnd: colors.dark[1] },
+      light: { shimmer: colors.light[0], shimmerEnd: colors.light[1] },
+    },
+    "built-in",
+  )
+  const saved: [string, ThemeVariant, ShimmerEffect?][] = []
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    cols: 110,
+    rows: 40,
+    settings: { mode: "fullscreen", theme: "custom", themeVariant: "dark", colorDepth: "truecolor" },
+    saveTheme: (name, variant, ...shimmer) => {
+      saved.push([name, variant, ...shimmer])
+    },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await s.shows("arrows preview")
+    s.terminal.send("\t\r")
+    await waitFor(() => s.live().includes("Customize shimmer"), "customize panel")
+    expect(s.live()).toContain("style: wave")
+    expect(s.live()).toContain("width: 11")
+    s.terminal.send("\x1b[C\x1b[B\x1b[C\x1b[B\x1b[C\x1b[B\x1b[C\x1b[B\x1b[C\x1b[B\x1b[C\x1b[C")
+    await waitFor(() => s.live().includes("colors: amber (#110000 → #220000)"), "amber dark shimmer pair")
+    expect(s.live()).toContain("style: reveal")
+    expect(s.live()).toContain("width: 12")
+    expect(s.live()).toContain("period: 2600 ms")
+    expect(s.live()).toContain("edge: linear")
+    expect(s.live()).toContain("direction: rtl")
+    expect(saved).toEqual([])
+    s.terminal.send("\r\t\x1b[C")
+    await waitFor(() => s.live().includes("[light]"), "appearance after customize")
+    s.terminal.send("\t\r")
+    await waitFor(() => s.live().includes("colors: amber (#001100 → #002200)"), "amber light shimmer pair")
+    s.terminal.send("\r\r")
+    await waitFor(() => saved.length === 1, "custom override writeback")
+    expect(saved).toEqual([
+      [
+        "custom",
+        "light",
+        {
+          style: "reveal",
+          width: 12,
+          period: 2600,
+          edge: "linear",
+          direction: "rtl",
+          colors,
+        },
+      ],
+    ])
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("Esc in customize and abort after reload both restore the prior shimmer override", async () => {
+  const themes = new ThemeRegistry()
+  themes.register({ name: "custom", shimmerEffect: "pulse" }, "user")
+  const saved: ShimmerEffect[] = []
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    settings: { mode: "fullscreen", theme: "custom", shimmer: { width: 8 }, colorDepth: "truecolor" },
+    saveTheme: (_name, _variant, shimmer) => {
+      if (shimmer) saved.push(shimmer)
+    },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await s.shows("arrows preview")
+    s.terminal.send("\t\r\x1b[B\x1b[C")
+    await waitFor(() => s.live().includes("width: 9"), "changed width")
+    themes.register({ name: "custom", shimmerEffect: "wave" }, "user")
+    s.terminal.send("\x1b")
+    await waitFor(() => !s.live().includes("Customize shimmer"), "customize Esc cancels picker")
+    expect(saved).toEqual([])
+    const controller = new AbortController()
+    const picking = s.commands!.run("/theme", { frontend: "tui", signal: controller.signal })
+    await waitFor(() => s.live().includes("arrows preview"), "abortable picker")
+    s.terminal.send("\t\r")
+    await waitFor(() => s.live().includes("Customize shimmer"), "restored customize panel")
+    expect(s.live()).toContain("width: 8")
+    expect(s.live()).toContain("style: wave")
+    s.terminal.send("\x1b[B\x1b[C")
+    await waitFor(() => s.live().includes("width: 9"), "abortable width change")
+    themes.register({ name: "custom", shimmerEffect: "reveal" }, "user")
+    controller.abort()
+    await picking
+    await waitFor(() => !s.live().includes("Responding…"), "abort stopped preview")
+    expect(saved).toEqual([])
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("arrows preview"), "picker after abort")
+    s.terminal.send("\t\r")
+    await waitFor(() => s.live().includes("Customize shimmer"), "customize after abort")
+    expect(s.live()).toContain("width: 8")
+    expect(s.live()).toContain("style: reveal")
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("soft overrides a pulse theme and theme removes the override", async () => {
+  const themes = new ThemeRegistry()
+  themes.register({ name: "custom", shimmerEffect: "pulse" }, "user")
+  const saved: (ShimmerEffect | undefined)[] = []
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    settings: { mode: "fullscreen", theme: "custom" },
+    saveTheme: (_name, _variant, shimmer) => {
+      saved.push(shimmer)
+    },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "inherited pulse entry")
+    s.terminal.send("\t\x1b[C\x1b[C")
+    await waitFor(() => s.live().includes("Shimmer: soft"), "explicit soft selection")
+    s.terminal.send("\t\r")
+    await waitFor(() => saved.length === 1, "soft saved on pulse theme")
+    expect(saved).toEqual(["soft"])
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("Shimmer: soft"), "picker retains explicit soft")
+    s.terminal.send("\t\x1b[D\x1b[D")
+    await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "theme selection")
+    s.terminal.send("\t\r")
+    await waitFor(() => saved.length === 2, "theme clears user override")
+    expect(saved).toEqual(["soft", undefined])
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("up/down moves the theme list while Shimmer stays focused", async () => {
+  const themes = new ThemeRegistry()
+  themes.register({ name: "amira", shimmerEffect: "pulse" }, "built-in")
+  themes.register({ name: "amber", shimmerEffect: "wave" }, "built-in")
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    settings: { mode: "fullscreen", theme: "amira" },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "Amira pulse")
+    s.terminal.send("\t\x1b[B")
+    await waitFor(() => s.live().includes("Shimmer: theme (wave)"), "down previews Amber")
+    expect(s.live()).toContain("[Shimmer]")
+    s.terminal.send("\x1b[A")
+    await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "up returns to Amira")
+    expect(s.live()).toContain("[Shimmer]")
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})
+
+test("reloaded theme settings replace palette, appearance and shimmer in the running TUI", async () => {
+  let apply: ((settings: TuiSettings | undefined) => void) | undefined
+  const themes = new ThemeRegistry()
+  themes.register({ name: "custom", light: { accent: "#010203" }, shimmerEffect: "pulse" }, "user")
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    settings: {
+      mode: "fullscreen",
+      theme: "amira",
+      themeVariant: "dark",
+      shimmer: "off",
+      colorDepth: "truecolor",
+    },
+    subscribeThemeSettings: (listener) => {
+      apply = listener
+      return () => {
+        apply = undefined
+      }
+    },
+  })
+  try {
+    apply!({ theme: "custom", themeVariant: "light", shimmer: "wave" })
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;1;2;3m› "), "reloaded light palette")
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("Shimmer: wave"), "reloaded shimmer selection")
+    expect(s.live()).toContain("[light]")
+    apply!(undefined)
+    await waitFor(() => !s.live().includes("arrows preview"), "reload replaces the open preview")
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("Shimmer: theme (soft)"), "removed settings restore defaults")
+    expect(s.live()).toContain("[auto]")
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+  expect(apply).toBeUndefined()
+})
+
+test("runtime shimmer tokens use the resolved override pair for the preview's current appearance", async () => {
+  const themes = new ThemeRegistry()
+  themes.register({ name: "custom", shimmerEffect: { style: "wave", edge: "hard" } }, "user")
+  const s = await setup([], {
+    themes,
+    commands: [],
+    tuiCommands: true,
+    settings: {
+      mode: "fullscreen",
+      theme: "custom",
+      themeVariant: "dark",
+      colorDepth: "truecolor",
+      shimmer: { colors: { dark: ["#110000", "#110000"], light: ["#001100", "#001100"] } },
+    },
+  })
+  try {
+    s.terminal.send("/theme\r")
+    await waitFor(() => s.live().includes("Responding…"), "configured idle preview")
+    expect(s.terminal.output).toContain("\x1b[38;2;17;0;0m")
+    s.terminal.clearWrites()
+    s.terminal.send("\x1b[C")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;0;17;0m"), "resolved light shimmer colors")
+  } finally {
+    s.terminal.send("\x1b")
+    await Bun.sleep(40)
+    s.terminal.send("\x03\x03")
+    await s.exited
+  }
+})

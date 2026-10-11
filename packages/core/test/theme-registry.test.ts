@@ -276,6 +276,78 @@ test("injected theme registries are exposed by the extension host", async () => 
   expect(themes.list()).toEqual([])
 })
 
+test("shimmer effects normalize without rejecting an otherwise valid theme", () => {
+  const { themes, notices } = registry()
+  themes.register({ name: "animated", shimmerEffect: "wave", dark: { shimmer: "#ABC" } }, "user")
+  expect(themes.get("animated")).toEqual({
+    name: "animated",
+    shimmerEffect: { preset: "wave" },
+    dark: { shimmer: "#aabbcc" },
+  })
+  expect(notices).toEqual([])
+  themes.register(
+    {
+      name: "partial",
+      dark: { accent: "#123456" },
+      shimmerEffect: { style: "invalid", width: 500, colors: ["red", "#123"], extra: true },
+    } as unknown as ThemeDefinition,
+    "user",
+    "partial.json",
+  )
+  expect(themes.get("partial")).toEqual({
+    name: "partial",
+    dark: { accent: "#123456" },
+    shimmerEffect: { width: 20 },
+  })
+  expect(notices).toHaveLength(1)
+  expect(notices[0]!.origin).toBe("partial.json")
+  expect(notices[0]!.text).toContain('Theme "partial": shimmerEffect:')
+  themes.register({ name: "invalid-shimmer", shimmerEffect: false } as unknown as ThemeDefinition, "project")
+  expect(themes.get("invalid-shimmer")).toEqual({ name: "invalid-shimmer" })
+  expect(notices).toHaveLength(2)
+  themes.register(
+    {
+      name: "unreadable-shimmer",
+      get shimmerEffect(): never {
+        throw new Error("getter failed")
+      },
+    },
+    "extension",
+  )
+  expect(themes.get("unreadable-shimmer")).toEqual({ name: "unreadable-shimmer" })
+  expect(notices).toHaveLength(3)
+})
+
+test("theme reload retains valid shimmer fields and freezes appearance colors", () => {
+  const { themes, notices } = registry()
+  themes.replaceFiles([
+    {
+      theme: {
+        name: "animated",
+        shimmerEffect: {
+          preset: "sweep",
+          width: 5,
+          colors: { dark: ["#ABC", "#DEF"], light: ["#123", "#456"] },
+        },
+      } as unknown as ThemeDefinition,
+      source: "user",
+    },
+  ])
+  const shimmer = themes.get("animated")!.shimmerEffect
+  expect(shimmer).toEqual({
+    preset: "soft",
+    width: 5,
+    colors: { dark: ["#aabbcc", "#ddeeff"], light: ["#112233", "#445566"] },
+  })
+  expect(Object.isFrozen(shimmer)).toBe(true)
+  if (typeof shimmer === "object" && shimmer.colors && "dark" in shimmer.colors) {
+    expect(Object.isFrozen(shimmer.colors)).toBe(true)
+    expect(Object.isFrozen(shimmer.colors.dark)).toBe(true)
+    expect(Object.isFrozen(shimmer.colors.light)).toBe(true)
+  }
+  expect(notices).toEqual([])
+})
+
 test("tui.theme keywords are rejected as theme names", () => {
   const { themes, notices } = registry()
   for (const name of ["auto", "dark", "light", "terminal"]) themes.register({ name }, "user", `${name}.json`)

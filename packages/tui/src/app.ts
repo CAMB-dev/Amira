@@ -195,6 +195,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const bottomArea = createBottomArea({
     agent: () => agent,
     activity: () => activity,
+    themePreview: () => themes.previewing,
     view: () => view,
     noticeStrip: () => noticeStrip,
     dialogs: () => overlays.dialogs,
@@ -314,6 +315,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   })
 
   themes.connect((selection) => {
+    if (!activity.working && !activity.compacting) {
+      if (themes.previewing) spinner.start(() => view.requestRender())
+      else spinner.stop()
+    }
     theme = selection.theme
     editor.setPrompt(`${glyphs.user} `)
     renders.setTheme(selection.variant)
@@ -452,7 +457,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         serverRows.clear()
         if (view.turnEnd()) turnShowedOutput = true
         activity.turnEnded()
-        spinner.stop()
+        if (!themes.previewing) spinner.stop()
         outbox.clearSteering()
         activity.setRetry(undefined)
         if (e.data.reason === "error") errorNotice(e.data)
@@ -473,12 +478,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
       case "compact.end":
         activity.endCompaction()
-        if (!activity.working) spinner.stop()
+        if (!activity.working && !themes.previewing) spinner.stop()
         view.notice("success", compactionNotice(e.data.replaced, e.data))
         break
       case "compact.failed":
         activity.endCompaction()
-        if (!activity.working) spinner.stop()
+        if (!activity.working && !themes.previewing) spinner.stop()
         if (e.data.empty) view.notice("info", "Nothing to compact yet.")
         else if (e.data.blocked) view.notice("info", `Compaction skipped: ${e.data.error}`)
         else view.notice("warning", `Compaction failed: ${e.data.error}`)

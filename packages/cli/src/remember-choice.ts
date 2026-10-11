@@ -3,8 +3,8 @@ import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { isNoModel } from "@amira/ai"
-import type { SessionControl, TuiSettings } from "@amira/api"
-import { type Agent, amiraHome, projectAmiraDir, updateSettingsFile } from "@amira/core"
+import type { SessionControl, ShimmerEffect, TuiSettings } from "@amira/api"
+import { type Agent, amiraHome, normalizeShimmer, projectAmiraDir, updateSettingsFile } from "@amira/core"
 
 /** Only the interactive command surface gets this wrapper, never extensions or RPC. */
 export function rememberingControl(
@@ -15,7 +15,11 @@ export function rememberingControl(
   probe = git,
 ): {
   control: SessionControl
-  rememberTheme: (name: string, variant: NonNullable<TuiSettings["themeVariant"]>) => void
+  rememberTheme: (
+    name: string,
+    variant: NonNullable<TuiSettings["themeVariant"]>,
+    shimmer?: ShimmerEffect,
+  ) => void
   flush: () => Promise<void>
 } {
   const warn = (a: Agent, error: string) =>
@@ -40,7 +44,11 @@ export function rememberingControl(
     }
     return existsSync(project) ? path.join(project, "settings.local.json") : undefined
   }
-  const save = (theme?: { name: string; variant: NonNullable<TuiSettings["themeVariant"]> }) => {
+  const save = (theme?: {
+    name: string
+    variant: NonNullable<TuiSettings["themeVariant"]>
+    shimmer: [ShimmerEffect?]
+  }) => {
     const a = agent()
     if (a.parentSessionId || a.depth > 0) return
     // Capture the choice now, not after a probe or another queued save finishes.
@@ -58,7 +66,19 @@ export function rememberingControl(
             const tui = settings.tui
             if (tui !== undefined && (typeof tui !== "object" || tui === null || Array.isArray(tui)))
               throw new Error("tui must be an object")
-            return { ...settings, tui: { ...tui, theme: theme.name, themeVariant: theme.variant } }
+            const next: Record<string, unknown> = {
+              ...tui,
+              theme: theme.name,
+              themeVariant: theme.variant,
+            }
+            // An omitted third argument is a direct name selection, not a shimmer reset.
+            if (theme.shimmer.length) {
+              const effect = theme.shimmer[0]
+              const normalized = normalizeShimmer(effect)
+              if (!normalized || !Object.keys(normalized).length) delete next.shimmer
+              else next.shimmer = typeof effect === "string" ? effect : normalized
+            }
+            return { ...settings, tui: next }
           },
           { preserveFormatting: true },
         )
@@ -82,7 +102,7 @@ export function rememberingControl(
     })
   }
   return {
-    rememberTheme: (name, variant) => save({ name, variant }),
+    rememberTheme: (name, variant, ...shimmer) => save({ name, variant, shimmer }),
     flush: () => pending,
     control: {
       ...control,

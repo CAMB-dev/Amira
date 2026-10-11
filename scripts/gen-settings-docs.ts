@@ -12,6 +12,7 @@ import {
   collapsed,
   extraRows,
   omitted,
+  opaqueTypes,
   sections,
 } from "./settings-docs-data.ts"
 
@@ -195,6 +196,7 @@ export function settingsRows(sources = readSources(), omit: Record<string, strin
   }
   /** The type with named types, Partial, Omit and intersections written out. */
   const expand = (type: Type): Type => {
+    if (Object.hasOwn(opaqueTypes, type.name)) return type
     if (type.fields || type.name === "&" || type.name === "Partial" || type.name === "Omit") {
       return { name: "object", fields: fieldsOf(type).map((f) => ({ ...f, type: expand(f.type) })) }
     }
@@ -250,6 +252,7 @@ export function showType(type: Type): string {
  * documented default that default instead, for ranges 1000 does not fit.
  */
 export function sampleValue(type: Type): unknown {
+  if (Object.hasOwn(opaqueTypes, type.name)) return opaqueTypes[type.name]
   if (type.fields) return Object.fromEntries(type.fields.map((f) => [f.name, sampleValue(f.type)]))
   if (type.name === "array") return [sampleValue(type.args![0]!)]
   if (type.name === "Record") return { a: sampleValue(type.args![1]!) }

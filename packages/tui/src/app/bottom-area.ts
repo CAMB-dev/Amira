@@ -38,6 +38,7 @@ export interface BottomArea {
 export interface BottomAreaDeps {
   agent: () => Agent
   activity: () => TurnActivity
+  themePreview?: () => boolean
   view: () => Pick<TranscriptView, "runningTools" | "capturing">
   noticeStrip: () => NoticeStrip
   dialogs: () => readonly Dialog[]
@@ -162,7 +163,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     new View((width, ctx) => {
       return deps.activity().render(width, ctx, {
         running: deps.view().runningTools,
-        waiting: deps.dialogs().length > 0,
+        waiting: deps.dialogs().length > 0 && !deps.themePreview?.(),
+        preview: deps.themePreview?.(),
         spinner,
         stop: `${keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
       })

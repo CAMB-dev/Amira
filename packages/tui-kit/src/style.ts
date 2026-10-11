@@ -295,6 +295,8 @@ export interface ThemeOptions {
   theme?: ThemeSetting
   themeVariant?: ThemeVariant
   definition?: ThemeDefinition
+  /** Resolved shimmer stops for this appearance; quantized once with the theme. */
+  shimmerColors?: readonly [Hex, Hex]
   colorDepth?: ColorDepthSetting
   env?: Record<string, string | undefined>
   capabilities?: Partial<Capabilities>
@@ -325,8 +327,8 @@ export function createTheme(options: ThemeOptions = {}): Theme {
   const variant = background ?? "dark"
   const overrides = options.definition?.[variant]
   const p = { ...palettes[variant], ...overrides }
-  const shimmer = p.shimmer
-  const shimmerEnd = p.shimmerEnd
+  const shimmer = options.shimmerColors?.[0] ?? p.shimmer
+  const shimmerEnd = options.shimmerColors?.[1] ?? p.shimmerEnd
   const fg = (hex: Hex, fallback = gray) => (depth === "16" ? fallback : sgr(quantize(hex, depth, 90), 39))
   const theme: Theme = {
     ...terminalTheme,

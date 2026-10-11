@@ -258,6 +258,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。全屏模式下，本次输入的提示滚出视口后固定在标题栏下方；恢复的历史记录不显示固定提示。 |  |
 | `tui.theme` | `string` | `"auto"` | 主题名称，或 `"auto"`：Amira 根据终端背景选择配色（无法判断时使用深色）。`"dark"` 和 `"light"` 指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色。`/theme` 可预览并保存主题。 |  |
 | `tui.themeVariant` | `"auto" \| "dark" \| "light"` | `"auto"` | 命名主题的配色版本：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定版本。缺少的版本使用默认 Amira 配色。 |  |
+| `tui.shimmer` | `ShimmerEffect` | 主题的动画，否则为 `"soft"` | 活动标签动画：`off`、`soft`、`sharp`、`wide`、`bounce`、`pulse`、`wave` 或 `reveal`。对象只覆盖明确指定的参数；范围与颜色见[微光动画](themes.md#微光动画)。 |  |
 | `tui.colorDepth` | `"auto" \| "truecolor" \| "256" \| "16"` | `"auto"` | 颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。所有值均为字符串，包括 `"256"` 和 `"16"`。 |  |
 | `tui.bell` | `boolean` | `true` | 终端失去焦点时，轮次结束或对话框需要输入，每次等待只响铃一次。焦点未知时，轮次结束从不响铃，仅权限或提问对话框提醒。设为 `false` 可关闭 BEL 响铃；桌面通知由 `tui.notify` 单独控制。 |  |
 | `tui.notify` | `"auto" \| "off"` | `"auto"` | `"auto"` 按 `tui.bell` 相同的焦点规则，每次等待发送一次桌面通知：iTerm2/Ghostty 使用 OSC 9，WezTerm 使用 OSC 777，kitty 使用 OSC 99。Windows Terminal 仅使用 BEL/任务栏提醒，不发送桌面通知 OSC。未知终端、dumb 终端及 tmux/screen 不发送通知 OSC。通知仍受终端和操作系统设置限制。`"off"` 关闭桌面通知，不影响响铃。 |  |
@@ -316,5 +317,19 @@ MCP 扩展依次从工作目录的 `.mcp.json`、用户文件、项目文件和 
 | `skills.dirs` | `string[]` | 无 | 额外的技能目录，搜索顺序在 `.amira/skills` 和 `~/.amira/skills` 之后、`.agents/skills` 和 `.claude/skills` 之前。`~` 表示用户主目录；相对路径从工作目录算起。 |  |
 
 <!-- settings:generated:end -->
+
+## 微光设置
+
+在 `settings.json` 中使用预设（`"shimmer": "pulse"`）、关闭动画（`"shimmer": "off"`），或覆盖主题的个别参数：
+
+```json
+{
+  "tui": {
+    "shimmer": { "preset": "bounce", "width": 8, "period": 2400 }
+  }
+}
+```
+
+`"shimmer": { "width": 4 }` 会保留主题的样式、周期和颜色。可选颜色接受共享颜色对（`"colors": ["#78dbe2", "#6fb3e8"]`），也可分别指定 `dark`/`light` 颜色对。无效字段逐项回退，数值限制在范围内；每个无效配置块只提示一次。所有参数与合并规则见[微光动画](themes.md#微光动画)。`/theme` 选择器可预览并保存更改；选择 `theme` 时会移除用户覆盖值。命名预设（包括 `soft`）会保存，除非 `soft` 已与当前主题的普通 soft 效果一致。`/reload` 会实时应用这三个主题设置。
 
 相关文档：[快速开始](getting-started.md) · [Provider](providers.md) · [使用说明](usage.md) · [子 agent](subagents.md) · [扩展](extensions.md) · [快捷键](keybindings.md)。

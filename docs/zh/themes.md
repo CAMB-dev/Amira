@@ -6,9 +6,9 @@
 
 ## 选择主题
 
-输入 `/theme` 打开主题选择器，查看名称、来源和描述。列表先显示 `amira`、`amber`、`burnt`、`lavender`、`mono`、`ascii`，然后显示自定义主题，最后是 `terminal`；当前主题会标注。上下方向键立即预览主题，Tab 或左右方向键在独立的外观控制中循环选择 `auto`、`dark`、`light`（Shift+Tab 反向循环）。Enter 同时应用主题和外观；Esc 恢复两者且不保存，即使预览期间重新加载了主题定义。
+输入 `/theme` 打开主题选择器，查看名称、来源和描述。列表先显示 `amira`、`amber`、`burnt`、`lavender`、`mono`、`ascii`，然后显示自定义主题，最后是 `terminal`；当前主题会标注。上下方向键立即预览主题。Tab（或 Shift+Tab）在 Appearance（外观）与 Shimmer（微光）之间切换焦点，左右方向键改变当前控制的值。外观循环选择 `auto`、`dark`、`light`；微光先提供 `theme`，并显示继承的效果，例如 `theme (pulse)`，之后是各动画预设。没有用户覆盖值时，选择器打开后选中 `theme`。焦点位于 Shimmer 时，上下方向键仍移动主题列表。在 Shimmer 上按 Enter 打开自定义面板：上下方向键选择参数，左右方向键修改，再按 Enter 返回 Shimmer 控制，提示为 `enter back`；下一次 Enter 会应用选择。颜色在 `theme` 与各内置主题的深浅渐变颜色对之间循环。在 Appearance 上按 Enter 同时应用所有选择。即使没有运行中的回合，状态行也会实时预览动画。Esc 恢复原来的主题、外观和微光配置且不保存，即使预览期间重新加载了主题定义。
 
-`/theme <name>` 可直接选择主题并保留外观。旧命令 `/theme auto`、`/theme dark`、`/theme light` 选择 Amira 及对应外观；旧设置仍有效，在选择器中映射为当前的 Amira 主题。交互选择同时保存 `tui.theme` 和 `tui.themeVariant`，方式与模型选择相同：写入用户设置，以及允许保存时的项目 `settings.local.json`。项目保存限制见[设置参考](settings.md#保存模型与思考设置)。
+`/theme <name>` 可直接选择主题并保留外观。旧命令 `/theme auto`、`/theme dark`、`/theme light` 选择 Amira 及对应外观；旧设置仍有效，在选择器中映射为当前的 Amira 主题。交互选择保存 `tui.theme`、`tui.themeVariant` 和 `tui.shimmer`。选择 `theme` 会移除微光覆盖值。命名预设（包括 `soft`）会显式保存；仅当当前主题已经解析为普通的 soft 效果时，才省略 `soft` 覆盖值。直接使用 `/theme <name>` 会保留微光设置。保存方式与模型选择相同：写入用户设置，以及允许保存时的项目 `settings.local.json`。项目保存限制见[设置参考](settings.md#保存模型与思考设置)。
 
 也可以在 `settings.json` 中指定名称：
 
@@ -43,7 +43,7 @@
 
 ## 主题格式
 
-格式见 [`ThemeDefinition`](../../packages/api/src/themes.ts)。`name` 必填，不能为空，不能有首尾空白或控制字符。`description`、`dark`、`light` 和 `glyphs` 均可省略。颜色必须是不带透明度的 `#RGB` 或 `#RRGGBB` 十六进制字符串；不接受 `cyan` 等颜色名称、CSS 函数、alpha 通道或 ANSI 转义序列。
+格式见 [`ThemeDefinition`](../../packages/api/src/themes.ts)。`name` 必填，不能为空，不能有首尾空白或控制字符。`description`、`dark`、`light`、`glyphs` 和 `shimmerEffect` 均可省略。颜色必须是不带透明度的 `#RGB` 或 `#RRGGBB` 十六进制字符串；不接受 `cyan` 等颜色名称、CSS 函数、alpha 通道或 ANSI 转义序列。
 
 配色是部分覆盖，不必替换全部默认颜色。`bg` 和 `fg` 是计算表面颜色的参考值，不会重设终端背景。`shimmer` 和 `shimmerEnd` 是独立的渐变起止颜色；省略时继承该外观的默认 Amira 渐变。下面是包含全部颜色键及部分符号覆盖的完整文件，可保存为 `~/.amira/themes/my-theme.json`：
 
@@ -120,6 +120,41 @@
 ```
 
 编辑器 schema 是本参考旁的 [`themes.schema.json`](../themes.schema.json)。在编辑器中将它关联到主题 JSON 文件即可。运行时还会检查终端单元格宽度，这是 JSON Schema 无法表达的约束。
+
+### 微光动画
+
+`shimmerEffect` 配置活动标签的动画。可使用预设名称（`off`、`soft`、`sharp`、`wide`、`bounce`、`pulse`、`wave` 或 `reveal`），也可以用对象指定可选参数：
+
+```json
+{
+  "name": "quiet-wave",
+  "shimmerEffect": {
+    "preset": "wave",
+    "period": 2400,
+    "width": 8,
+    "colors": {
+      "dark": ["#78dbe2", "#6fb3e8"],
+      "light": ["#157c84", "#1f6aa8"]
+    }
+  }
+}
+```
+
+| 参数 | 值 | 默认值（`soft`） |
+| --- | --- | --- |
+| `preset` | `off`、`soft`、`sharp`、`wide`、`bounce`、`pulse`、`wave`、`reveal` | `soft` |
+| `style` | `off`、`sweep`、`bounce`、`pulse`、`wave`、`reveal` | `sweep` |
+| `width` | 1–20 个终端单元格，四舍五入为整数 | `6` |
+| `period` | 每个周期 400–5000 毫秒 | `1800` |
+| `edge` | `soft`、`linear` 或 `hard` | `soft` |
+| `direction` | `ltr` 或 `rtl` | `ltr` |
+| `colors` | 两个十六进制颜色，或同时包含 `dark` 和 `light` 颜色对的对象 | 主题的 `shimmer` / `shimmerEnd` 颜色 |
+
+`soft` 保留原有的 6 单元格、1.8 秒柔和扫光；`sharp` 是 3 单元格、1.1 秒硬边扫光；`wide` 是 12 单元格、2.6 秒柔和扫光。`bounce` 往返移动，`pulse` 改变整个标签的亮度，`wave` 移动渐变，`reveal` 逐步高亮标签。`off` 保持标签静止。对象形式还接受 `preset: "sweep"`，作为 `soft` 的别名；独立字符串 `"sweep"` 不是预设。
+
+解析时先使用 `soft`，然后应用主题的 `shimmerEffect`，最后应用设置中的 `tui.shimmer`。每一层先展开预设的所有动画参数，再应用显式指定的字段。用户只覆盖 `width` 时会保留主题的样式、周期和颜色；用户指定预设时会替换主题的动画参数，但保留主题的颜色，除非也指定了新颜色。所有样式（包括 `wave`）默认使用当前外观的主题渐变，而不是彩虹配色。
+
+无效字段逐项忽略，超出范围的有限数值会限制在范围内。每个无效配置块只产生一次提示，不会丢弃主题的其他部分。使用 `tui.shimmer: "off"` 可独立于所选主题关闭动画。`/reload` 会实时应用修改后的 `tui.theme`、`tui.themeVariant` 和 `tui.shimmer` 设置，并重新加载主题文件。终端颜色支持不足时仍不启用动画。
 
 ### 符号键与宽度
 

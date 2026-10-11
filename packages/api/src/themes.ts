@@ -1,6 +1,29 @@
 /** Terminal colors are opaque RGB hex strings (#RGB or #RRGGBB). */
 export type ThemeHex = `#${string}`
 
+export type ShimmerPreset = "off" | "soft" | "sharp" | "wide" | "bounce" | "pulse" | "wave" | "reveal"
+export type ShimmerStyle = "off" | "sweep" | "bounce" | "pulse" | "wave" | "reveal"
+
+/** Two gradient stops, shared by both appearances or selected by appearance. */
+export type ShimmerColors =
+  | readonly [ThemeHex, ThemeHex]
+  | { dark: readonly [ThemeHex, ThemeHex]; light: readonly [ThemeHex, ThemeHex] }
+
+export interface ShimmerOptions {
+  preset?: ShimmerPreset | "sweep"
+  style?: ShimmerStyle
+  /** Highlight width in terminal cells, rounded and clamped to 1–20. */
+  width?: number
+  /** Animation cycle in milliseconds, clamped to 400–5000. */
+  period?: number
+  edge?: "soft" | "linear" | "hard"
+  direction?: "ltr" | "rtl"
+  /** Omitted colors use the theme's shimmer/shimmerEnd tokens, including wave. */
+  colors?: ShimmerColors
+}
+
+export type ShimmerEffect = ShimmerPreset | ShimmerOptions
+
 /** Canonical palette keys shared by the host and terminal frontends. */
 export const THEME_PALETTE_TOKENS = [
   "bg",
@@ -110,6 +133,8 @@ export interface ThemeDefinition {
   dark?: Partial<ThemePalette>
   light?: Partial<ThemePalette>
   glyphs?: Partial<ThemeGlyphs>
+  /** Activity-label animation; user tui.shimmer overrides individual knobs. */
+  shimmerEffect?: ShimmerEffect
 }
 
 export type ThemeSource = "built-in" | "user" | "project" | "package" | "extension"

@@ -1,26 +1,10 @@
-import { bold, type RenderContext, themeToken, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { bold, type RenderContext, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens, formatDuration } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { formatElapsed } from "../tool-view.ts"
+import { paintShimmer as shimmerLabel } from "./shimmer.ts"
 
-/** Soft six-cell highlight, on the existing spinner's frames (one sweep per 1.8s). */
-export function shimmerLabel(label: string, ctx: RenderContext, elapsed: number): string {
-  if (!ctx.color || !themeToken(ctx.theme, "shimmer0Fade8")) return ctx.theme.muted(label)
-  const chars = [...label]
-  const cells = visibleWidth(label)
-  const center = ((elapsed % 1800) / 1800) * (cells + 6) - 3
-  let cell = 0
-  return chars
-    .map((char) => {
-      const distance = Math.abs(cell - center)
-      const fade = distance < 3 ? Math.round(Math.cos(((distance / 3) * Math.PI) / 2) ** 2 * 8) : 0
-      const stop = Math.round((cell / Math.max(1, cells - 1)) * 15)
-      cell += visibleWidth(char)
-      const style = fade ? themeToken(ctx.theme, `shimmer${stop}Fade${fade}`) : undefined
-      return (style ?? ctx.theme.muted)(char)
-    })
-    .join("")
-}
+export { shimmerLabel }
 
 export interface ActivityRowInfo {
   label: string

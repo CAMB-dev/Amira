@@ -98,6 +98,7 @@ export interface SetupOptions {
   settings?: TuiSettings
   themes?: InteractiveOptions["themes"]
   saveTheme?: InteractiveOptions["saveTheme"]
+  subscribeThemeSettings?: InteractiveOptions["subscribeThemeSettings"]
   /** Start without a model (NO_MODEL); "none" also configures no provider. */
   noModel?: "none" | "unpicked"
   /** The startup notice, as the CLI passes it when there is no model. */
@@ -219,6 +220,7 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
     status: host.status,
     themes: o.themes,
     saveTheme: o.saveTheme,
+    subscribeThemeSettings: o.subscribeThemeSettings,
     panels: host.panels,
     ui: host.ui,
     ...(commands ? { commands } : {}),
