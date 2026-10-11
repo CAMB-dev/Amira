@@ -6,9 +6,9 @@ Themes change semantic colors and symbols without changing the terminal's own ba
 
 ## Choose a theme
 
-Use `/theme` to open the theme picker with each theme's name, source and description. The list starts with `amira`, `amber`, `burnt`, `lavender`, `mono` and `ascii`, followed by custom themes, with `terminal` last. The current theme is marked. Up/down arrows preview themes immediately; Tab or left/right arrows cycle the separate appearance control between `auto`, `dark` and `light` (Shift+Tab cycles backward). Enter applies the theme and appearance together. Esc restores both without saving, including when theme definitions reload during a preview.
+Use `/theme` to open the theme picker with each theme's name, source and description. The list starts with `amira`, `amber`, `burnt`, `lavender`, `mono` and `ascii`, followed by custom themes, with `terminal` last. The current theme is marked. Up/down arrows preview themes immediately. Tab (or Shift+Tab) switches focus between Appearance and Shimmer; left/right arrows change the focused control. Appearance cycles `auto`, `dark` and `light`; Shimmer starts with `theme` (shown with the inherited effect, such as `theme (pulse)`), followed by the animation presets. With no user override, the picker opens on `theme`. Up/down still moves the theme list while Shimmer is focused. Enter on Shimmer opens a small customize panel: up/down selects a knob, left/right changes it, and Enter returns focus to Shimmer with the hint `enter back`. The next Enter applies the choices. Colors cycle through `theme` and the built-in themes' dark/light gradient pairs. Enter from Appearance applies all choices together. The status row previews the effect live, even while idle. Esc restores the previous theme, appearance and shimmer without saving, including when theme definitions reload during a preview.
 
-`/theme <name>` selects a theme directly while keeping the chosen appearance. The legacy commands `/theme auto`, `/theme dark` and `/theme light` select Amira with that appearance. Legacy settings still work and appear as the current Amira theme in the picker. Interactive choices save both `tui.theme` and `tui.themeVariant` like model choices: in the user settings and, when allowed, the project's `settings.local.json`. See [Settings reference](settings.md#saving-model-and-thinking-choices) for project-save restrictions.
+`/theme <name>` selects a theme directly while keeping the chosen appearance. The legacy commands `/theme auto`, `/theme dark` and `/theme light` select Amira with that appearance. Legacy settings still work and appear as the current Amira theme in the picker. Interactive choices save `tui.theme`, `tui.themeVariant` and `tui.shimmer` like model choices. Selecting `theme` removes the shimmer override. Named presets, including `soft`, are saved explicitly; `soft` is omitted only when the active theme already resolves to the plain soft effect. Direct `/theme <name>` keeps the shimmer setting. Choices are saved in the user settings and, when allowed, the project's `settings.local.json`. See [Settings reference](settings.md#saving-model-and-thinking-choices) for project-save restrictions.
 
 You can also set a name in `settings.json`:
 
@@ -43,7 +43,7 @@ Restart Amira or run `/reload` while idle after changing theme files or package 
 
 ## Theme format
 
-The format is [`ThemeDefinition`](../packages/api/src/themes.ts). `name` is required and must be non-empty, with no surrounding whitespace or control characters. `description`, `dark`, `light` and `glyphs` are optional. Colors are opaque `#RGB` or `#RRGGBB` hex strings; names such as `cyan`, CSS functions, alpha channels and ANSI escape sequences are not accepted.
+The format is [`ThemeDefinition`](../packages/api/src/themes.ts). `name` is required and must be non-empty, with no surrounding whitespace or control characters. `description`, `dark`, `light`, `glyphs` and `shimmerEffect` are optional. Colors are opaque `#RGB` or `#RRGGBB` hex strings; names such as `cyan`, CSS functions, alpha channels and ANSI escape sequences are not accepted.
 
 A palette is a set of partial overrides, not a replacement for every default color. `bg` and `fg` are reference colors for surfaces, not requests to repaint the terminal. `shimmer` and `shimmerEnd` are independent gradient stops; when omitted, they inherit the default Amira gradient for that appearance. The following complete file shows all palette keys and a few glyph overrides. Save it as `~/.amira/themes/my-theme.json`:
 
@@ -120,6 +120,41 @@ A palette is a set of partial overrides, not a replacement for every default col
 ```
 
 The editor schema is [`themes.schema.json`](themes.schema.json), next to this reference. Configure your editor to associate it with theme JSON files. Runtime validation also checks terminal cell widths, which JSON Schema cannot express.
+
+### Shimmer animation
+
+`shimmerEffect` configures the animated activity label. Use a preset name (`off`, `soft`, `sharp`, `wide`, `bounce`, `pulse`, `wave` or `reveal`), or an object with optional knobs:
+
+```json
+{
+  "name": "quiet-wave",
+  "shimmerEffect": {
+    "preset": "wave",
+    "period": 2400,
+    "width": 8,
+    "colors": {
+      "dark": ["#78dbe2", "#6fb3e8"],
+      "light": ["#157c84", "#1f6aa8"]
+    }
+  }
+}
+```
+
+| Knob | Values | Default (`soft`) |
+| --- | --- | --- |
+| `preset` | `off`, `soft`, `sharp`, `wide`, `bounce`, `pulse`, `wave`, `reveal` | `soft` |
+| `style` | `off`, `sweep`, `bounce`, `pulse`, `wave`, `reveal` | `sweep` |
+| `width` | 1–20 terminal cells; rounded to an integer | `6` |
+| `period` | 400–5000 milliseconds per cycle | `1800` |
+| `edge` | `soft`, `linear` or `hard` | `soft` |
+| `direction` | `ltr` or `rtl` | `ltr` |
+| `colors` | Two hex colors, or an object containing both `dark` and `light` pairs | Theme `shimmer` / `shimmerEnd` tokens |
+
+`soft` is the unchanged six-cell, 1.8-second sweep with soft edges. `sharp` is a three-cell, 1.1-second sweep with hard edges; `wide` is a twelve-cell, 2.6-second sweep with soft edges. `bounce` travels back and forth, `pulse` changes the whole label's brightness, `wave` moves the gradient, and `reveal` progressively highlights the label. `off` keeps the label static. The object form also accepts `preset: "sweep"` as an alias for `soft`; the standalone string `"sweep"` is not a preset.
+
+Resolution starts with `soft`, applies the theme's `shimmerEffect`, then applies settings `tui.shimmer`. Within each layer, a preset supplies all animation knobs before explicit fields override it. A user override of just `width` preserves the theme's style, period and colors; a user preset replaces the theme's animation knobs but keeps its colors unless new colors are supplied. Every style, including `wave`, uses the selected appearance's theme gradient by default, not a rainbow palette.
+
+Invalid fields are ignored individually; finite numeric values outside the ranges are clamped. A malformed block produces one notice without discarding the rest of the theme. Use `tui.shimmer: "off"` to disable the effect independently of the chosen theme. `/reload` applies edited `tui.theme`, `tui.themeVariant` and `tui.shimmer` settings live, along with theme files. Animation remains disabled without suitable terminal color support.
 
 ### Glyph keys and widths
 

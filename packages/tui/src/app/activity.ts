@@ -91,6 +91,8 @@ export interface TurnActivityRenderOptions {
   waiting: boolean
   spinner: Spinner
   stop?: string
+  /** The theme picker keeps the same status-row animation alive while idle. */
+  preview?: boolean
 }
 
 export interface TurnActivity {
@@ -146,6 +148,7 @@ export function createTurnActivity(): TurnActivity {
   let messageStartedAt = 0
   let animationGlyph = ""
   let animationMs = 0
+  let previewStartedAt: number | undefined
 
   /** The activity line counts the turn's time and tokens from here. */
   const startClock = () => {
@@ -265,7 +268,34 @@ export function createTurnActivity(): TurnActivity {
       compacting = false
     },
     render(width, ctx, options) {
-      if (!working && !compacting) return []
+      if (!options.preview) previewStartedAt = undefined
+      if (!working && !compacting) {
+        if (!options.preview) return []
+        if (previewStartedAt === undefined) {
+          previewStartedAt = Date.now()
+          animationGlyph = ""
+        }
+        if (animationGlyph !== options.spinner.glyph) {
+          animationGlyph = options.spinner.glyph
+          animationMs = Date.now() - previewStartedAt
+        }
+        return [
+          activityRow(
+            {
+              label: "responding",
+              spinner: options.spinner.glyph,
+              stepMs: 0,
+              turnMs: 0,
+              tokens: 0,
+              rate: 0,
+              stop: "preview",
+              animationMs,
+            },
+            width,
+            ctx,
+          ),
+        ]
+      }
       const label = activityLabel({
         compacting,
         onServer: compactingOnServer,

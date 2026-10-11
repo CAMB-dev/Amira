@@ -266,6 +266,9 @@ const settings = object({
     mode: oneOf("fullscreen", "inline"),
     theme: string,
     themeVariant: oneOf("auto", "dark", "light"),
+    // Like an unknown theme name, invalid shimmer falls back with a frontend notice,
+    // not a settings-file failure. Preserve it for shared normalization after merging.
+    shimmer: (value) => value,
     colorDepth: oneOf("auto", "truecolor", "256", "16"),
     bell: boolean,
     notify: oneOf("auto", "off"),

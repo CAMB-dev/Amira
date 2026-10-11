@@ -1,5 +1,6 @@
 // Owns runtime theme selection, registry reloads and the interactive preview picker.
-import type { CommandContext, CommandDefinition, ThemeDefinition } from "@amira/api"
+import type { CommandContext, CommandDefinition, ShimmerEffect, ThemeDefinition } from "@amira/api"
+import { resolveShimmer, SHIMMER_PRESETS } from "@amira/core"
 import {
   backgroundFromEnv,
   backgroundOf,
@@ -11,10 +12,11 @@ import {
   type Theme,
   type ThemeVariant,
 } from "@amira/tui-kit"
-import { Dialog } from "../dialog.ts"
 import { type Glyphs, glyphs, setGlyphs } from "../glyphs.ts"
 import { type Keybindings, keyLabel } from "../keybindings.ts"
 import type { OverlayManager } from "./overlays.ts"
+import { configureShimmer } from "./shimmer.ts"
+import { ShimmerControl, shimmerColorChoices, ThemePickerDialog } from "./shimmer-control.ts"
 import type { InteractiveOptions } from "./startup.ts"
 
 const BUILTINS = ["amira", "amber", "burnt", "lavender", "mono", "ascii"]
@@ -35,20 +37,35 @@ export class RuntimeThemes {
   private readonly originalGlyphs = { ...glyphs }
   private changed: ((selection: Selection) => void) | undefined
   private off: (() => void) | undefined
+  private offSettings: (() => void) | undefined
+  private cancelPicker: (() => void) | undefined
   private registryVersion = 0
+  private shimmer: ShimmerEffect | undefined
+  private isPreviewing = false
 
   constructor(
     private readonly opts: InteractiveOptions,
     private readonly env: Record<string, string | undefined>,
     private readonly capabilities: Capabilities,
   ) {
+    this.shimmer = opts.settings?.shimmer
     this.selection = this.build(opts.settings?.theme ?? "auto", opts.settings?.themeVariant ?? "auto")
-    if (opts.theme) this.selection.theme = opts.theme
+    if (opts.theme) {
+      this.selection.theme = opts.theme
+      configureShimmer(
+        opts.theme,
+        resolveShimmer(opts.themes?.get(this.selection.name)?.shimmerEffect, this.shimmer),
+      )
+    }
     setGlyphs(this.selection.glyphs)
   }
 
   get current(): Selection {
     return this.selection
+  }
+
+  get previewing(): boolean {
+    return this.isPreviewing
   }
 
   /** Connect after the editor, renderers and overlays exist; reloads preserve the selected name. */
@@ -57,6 +74,11 @@ export class RuntimeThemes {
     this.off = this.opts.themes?.subscribe(() => {
       this.registryVersion++
       this.select(this.selection.name, this.selection.themeVariant)
+    })
+    this.offSettings = this.opts.subscribeThemeSettings?.((settings) => {
+      this.cancelPicker?.()
+      this.shimmer = settings?.shimmer
+      this.select(settings?.theme ?? "auto", settings?.themeVariant ?? "auto")
     })
   }
 
@@ -75,19 +97,23 @@ export class RuntimeThemes {
             ? backgroundOf(this.capabilities.backgroundRgb)
             : backgroundFromEnv(this.env)) ??
           "dark")
+    const shimmer = resolveShimmer(definition?.shimmerEffect, this.shimmer)
+    const theme = createTheme({
+      theme: name,
+      definition,
+      themeVariant,
+      shimmerColors: shimmer.colors && ("dark" in shimmer.colors ? shimmer.colors[variant] : shimmer.colors),
+      colorDepth: setting?.colorDepth,
+      env: this.env,
+      capabilities: this.capabilities,
+      color: isColorEnabled(),
+    })
+    configureShimmer(theme, shimmer)
     return {
       name,
       variant,
       themeVariant,
-      theme: createTheme({
-        theme: name,
-        definition,
-        themeVariant,
-        colorDepth: setting?.colorDepth,
-        env: this.env,
-        capabilities: this.capabilities,
-        color: isColorEnabled(),
-      }),
+      theme,
       markdownGlyphs: { ...defaultGlyphs, ...this.markdownGlyphs(definition) },
       glyphs: definition?.glyphs ?? {},
     }
@@ -165,30 +191,53 @@ export class RuntimeThemes {
     deps: { overlays: OverlayManager; keys: Keybindings; requestRender: () => void },
   ): Promise<void> {
     const previous = this.selection
+    const previousShimmer = this.shimmer
     const registryVersion = this.registryVersion
     const entries = this.entries()
     let themeVariant = previous.themeVariant
+    const shimmer = new ShimmerControl(this.shimmer, {
+      keys: deps.keys,
+      definition: () => this.opts.themes?.get(this.selection.name),
+      variant: () => this.selection.variant,
+      colors: () => shimmerColorChoices(BUILTINS.map((name) => this.opts.themes?.get(name) ?? { name })),
+      changed: (override) => {
+        this.shimmer = override
+        this.select(this.selection.name, themeVariant)
+      },
+    })
     return new Promise<void>((resolve, reject) => {
       let finished = false
       let close: (() => void) | undefined
       const finish = (name: string | undefined) => {
         if (finished) return
         finished = true
+        this.cancelPicker = undefined
         ctx.signal.removeEventListener("abort", cancel)
         close?.()
         if (name !== undefined && !this.entries().some((entry) => entry.name === name)) {
           ctx.print(`Theme "${name}" is no longer available.`, "warning")
           name = undefined
         }
+        this.isPreviewing = false
         if (name === undefined) {
+          this.shimmer = previousShimmer
           if (registryVersion === this.registryVersion) this.restore(previous)
           else this.select(previous.name, previous.themeVariant)
           resolve()
         } else {
           const applied = name
+          const inherited = resolveShimmer(this.opts.themes?.get(applied)?.shimmerEffect)
+          if (
+            this.shimmer === "soft" &&
+            Object.entries(SHIMMER_PRESETS.soft).every(
+              ([key, value]) => inherited[key as keyof typeof inherited] === value,
+            )
+          )
+            this.shimmer = undefined
+          const appliedShimmer = this.shimmer
           this.select(applied, themeVariant)
           Promise.resolve()
-            .then(() => this.opts.saveTheme?.(applied, themeVariant))
+            .then(() => this.opts.saveTheme?.(applied, themeVariant, appliedShimmer))
             .then(() => {
               ctx.print(`Theme: ${applied} (${themeVariant})`)
               resolve()
@@ -197,14 +246,14 @@ export class RuntimeThemes {
         deps.requestRender()
       }
       const cancel = () => finish(undefined)
-      const dialog = new Dialog(
+      const dialog = new ThemePickerDialog(
         {
           kind: "select",
           requestId: "tui-theme",
           title: `Choose a theme (${[
             "arrows preview",
-            deps.keys.label("dialog.choose") && `${deps.keys.label("dialog.choose")} applies`,
-            deps.keys.label("dialog.cancel") && `${deps.keys.label("dialog.cancel")} restores`,
+            deps.keys.label("dialog.choose") && `${deps.keys.label("dialog.choose")!.toLowerCase()} applies`,
+            deps.keys.label("dialog.cancel") && `${deps.keys.label("dialog.cancel")!.toLowerCase()} restores`,
           ]
             .filter(Boolean)
             .join(", ")})`,
@@ -227,16 +276,29 @@ export class RuntimeThemes {
           changed: (name) => this.select(name, themeVariant),
           footer: [
             {
-              text: `${keyLabel({ name: "tab", ctrl: false, alt: false, shift: false })} appearance`,
+              text: `${keyLabel({ name: "tab" }).toLowerCase()} appearance/shimmer`,
               priority: 6,
+            },
+            {
+              text: `${keyLabel({ name: "left" })}/${keyLabel({ name: "right" })} change`,
+              priority: 5,
+            },
+            {
+              get text() {
+                return `${deps.keys.label("dialog.choose")?.toLowerCase() ?? "enter"} ${shimmer.opensCustomize ? "customize" : "apply"}`
+              },
+              priority: 4,
             },
           ],
           header: () =>
-            `Appearance: ${VARIANTS.map((variant) => (variant === themeVariant ? `[${variant}]` : variant)).join(" / ")} (${keyLabel({ name: "tab" })}, left/right)`,
+            shimmer.header(
+              VARIANTS.map((variant) => (variant === themeVariant ? `[${variant}]` : variant)).join(" / "),
+            ),
           handleInput: (event) => {
+            if (shimmer.handleInput(event)) return true
             if (event.type !== "key" || event.ctrl || event.alt) return false
-            if (!["tab", "left", "right"].includes(event.name)) return false
-            const step = event.name === "left" || (event.name === "tab" && event.shift) ? -1 : 1
+            if (shimmer.focus !== "appearance" || !["left", "right"].includes(event.name)) return false
+            const step = event.name === "left" ? -1 : 1
             themeVariant =
               VARIANTS[(VARIANTS.indexOf(themeVariant) + step + VARIANTS.length) % VARIANTS.length]!
             this.select(this.selection.name, themeVariant)
@@ -244,14 +306,20 @@ export class RuntimeThemes {
           },
         },
       )
+      dialog.shimmer = shimmer
       if (ctx.signal.aborted) return cancel()
       ctx.signal.addEventListener("abort", cancel, { once: true })
+      this.cancelPicker = cancel
+      this.isPreviewing = true
+      this.select(previous.name, themeVariant)
       close = deps.overlays.openLocalDialog(dialog)
     })
   }
 
   dispose(): void {
     this.off?.()
+    this.offSettings?.()
+    this.cancelPicker = undefined
     this.changed = undefined
     setGlyphs(this.originalGlyphs)
   }

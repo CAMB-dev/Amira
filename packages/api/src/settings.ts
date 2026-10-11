@@ -1,5 +1,6 @@
 import type { ModelOverrides, ProviderCompat, ReasoningEffort } from "@amira/ai"
 import type { Budget } from "./subagents.ts"
+import type { ShimmerEffect } from "./themes.ts"
 
 export type ShellMode = "auto" | "bash" | "powershell"
 
@@ -257,6 +258,8 @@ export interface TuiSettings {
   theme?: string
   /** Named themes follow the background by default; force an appearance with dark or light. */
   themeVariant?: "auto" | "dark" | "light"
+  /** Activity-label animation overrides, layered over the selected theme's shimmerEffect. */
+  shimmer?: ShimmerEffect
   /**
    * "auto" detects terminal color support; "truecolor", "256" and "16" override the color
    * depth. See DEFAULT_TUI_COLOR_DEPTH.

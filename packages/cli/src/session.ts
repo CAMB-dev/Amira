@@ -15,6 +15,7 @@ import {
   InterceptorRegistry,
   instructionsSection,
   loadInstructions,
+  normalizeShimmer,
   Permissions,
   type ResolvedPermissions,
   type SessionStore,
@@ -91,6 +92,8 @@ export interface SessionOptions {
   settingsLayers?: SettingsLayers
   /** Re-reads settings for `/reload`, with their warnings; omitted by isolated session callers. */
   reloadSettings?: () => { settings: Settings; layers: SettingsLayers; warnings?: string[] }
+  /** Pushes the reloaded settings to an attached frontend after themes and extensions settle. */
+  onSettingsReload?: (settings: Settings) => void
   /** Providers from settings; there are no others. Unused when `ai` is given. */
   providers?: ProviderConfig[]
   /** Stored API keys by provider id (auth.json). Unused when `ai` is given. */
@@ -272,15 +275,20 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus.emit("extension.notice", { source: "packages", text, level: "warning" }, { sessionId: "host" })
   }
   await loadExtensions()
-  const themeName = settings.tui?.theme
-  if (
-    themeName &&
-    !["auto", "dark", "light", "terminal"].includes(themeName) &&
-    !host.themes.get(themeName)
-  ) {
-    const text = `Theme "${themeName}" from settings tui.theme was not found; using the default theme.`
-    bus.emit("extension.notice", { source: "themes", text, level: "warning" }, { sessionId: "host" })
+  const noticeThemeSettings = (value: Settings) => {
+    const warn = (text: string) =>
+      bus.emit("extension.notice", { source: "themes", text, level: "warning" }, { sessionId: "host" })
+    const themeName = value.tui?.theme
+    if (
+      themeName &&
+      !["auto", "dark", "light", "terminal"].includes(themeName) &&
+      !host.themes.get(themeName)
+    ) {
+      warn(`Theme "${themeName}" from settings tui.theme was not found; using the default theme.`)
+    }
+    normalizeShimmer(value.tui?.shimmer, (text) => warn(`Settings tui.shimmer: ${text}`))
   }
+  noticeThemeSettings(settings)
   const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
   for (const name of requested) {
     if (tools.has(name)) continue
@@ -426,6 +434,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       } finally {
         host.replayOnLoad(undefined)
       }
+      noticeThemeSettings(reloaded?.settings ?? opts.settings ?? {})
+      opts.onSettingsReload?.(reloaded?.settings ?? opts.settings ?? {})
       const after = new Set(host.loaded)
       const skillsAfter = new Set(host.skills.list().map((s) => s.name))
       return {

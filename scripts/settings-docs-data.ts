@@ -27,6 +27,9 @@ export const omitted: Record<string, string> = {
 /** Keys documented as one row: their fields repeat ones listed elsewhere. */
 export const collapsed: string[] = ["providers.<id>.defaultModel"]
 
+/** Named shapes documented separately, mapped to a valid sample for schema checks. */
+export const opaqueTypes: Record<string, unknown> = { ShimmerEffect: "soft" }
+
 /** Keys whose shape belongs to an extension (the MCP extension reads mcpServers itself). */
 export const extraRows: { key: string; type: string }[] = [
   { key: "mcpServers.<name>.type", type: '"stdio" | "http"' },
@@ -648,6 +651,11 @@ export const annotations: Record<string, Annotation> = {
     default: documentedDefault("tui.themeVariant"),
     en: 'For named themes, `"auto"` follows the terminal background; `"dark"` or `"light"` forces that variant. A missing variant uses the default Amira palette.',
     zh: '命名主题的配色版本：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定版本。缺少的版本使用默认 Amira 配色。',
+  },
+  "tui.shimmer": {
+    default: { en: 'theme’s effect, else `"soft"`', zh: '主题的动画，否则为 `"soft"`' },
+    en: "Activity-label animation: `off`, `soft`, `sharp`, `wide`, `bounce`, `pulse`, `wave` or `reveal`. An object overrides only its supplied knobs; see [Shimmer animation](themes.md#shimmer-animation) for ranges and colors.",
+    zh: "活动标签动画：`off`、`soft`、`sharp`、`wide`、`bounce`、`pulse`、`wave` 或 `reveal`。对象只覆盖明确指定的参数；范围与颜色见[微光动画](themes.md#微光动画)。",
   },
   "tui.colorDepth": {
     default: documentedDefault("tui.colorDepth"),

@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test"
-import type { EventMap } from "../src/index.ts"
+import type {
+  EventMap,
+  ShimmerColors,
+  ShimmerEffect,
+  ShimmerOptions,
+  ShimmerPreset,
+  ShimmerStyle,
+  ThemeDefinition,
+  TuiSettings,
+} from "../src/index.ts"
 
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
@@ -197,6 +206,47 @@ test("the additive provider-stream event contract preserves optional timing meta
       },
     ]
   `)
+})
+
+test("the public shimmer types are shared by theme definitions and TUI settings", () => {
+  const preset: ShimmerPreset = "soft"
+  const style: ShimmerStyle = "sweep"
+  const colors: ShimmerColors = { dark: ["#123", "#456"], light: ["#ABC", "#DEF"] }
+  const options: ShimmerOptions = {
+    preset,
+    style,
+    colors,
+    width: 6,
+    period: 1800,
+    edge: "soft",
+    direction: "ltr",
+  }
+  const effect: ShimmerEffect = options
+  const theme: ThemeDefinition = { name: "animated", shimmerEffect: effect }
+  const settings: TuiSettings = { shimmer: effect }
+  expect(theme.shimmerEffect).toBe(settings.shimmer)
+  expect(effect).toMatchInlineSnapshot(`
+    {
+      "colors": {
+        "dark": [
+          "#123",
+          "#456",
+        ],
+        "light": [
+          "#ABC",
+          "#DEF",
+        ],
+      },
+      "direction": "ltr",
+      "edge": "soft",
+      "period": 1800,
+      "preset": "soft",
+      "style": "sweep",
+      "width": 6,
+    }
+  `)
+  const alias: ShimmerEffect = { preset: "sweep", edge: "linear" }
+  expect(alias).toEqual({ preset: "sweep", edge: "linear" })
 })
 
 test("the canonical theme glyph export includes the layout symbols", async () => {

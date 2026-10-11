@@ -120,6 +120,104 @@ test("theme choices preserve nested settings and share the ordered choice writer
   }
 })
 
+test("shimmer writeback preserves unrelated nested settings and omitted overrides", async () => {
+  const tui = { theme: "amira", themeVariant: "light", colorDepth: "256", bell: true, shimmer: "wave" }
+  for (const file of [globalFile(), localFile()])
+    writeFileSync(file, `${JSON.stringify({ tui, model: "mock/first", thinking: "high" }, null, 2)}\n`)
+  const { commands } = await start()
+  commands.rememberTheme("amber", "dark")
+  await commands.flushChoices()
+  for (const file of [globalFile(), localFile()])
+    expect(json(file)).toEqual({
+      tui: { ...tui, theme: "amber", themeVariant: "dark" },
+      model: "mock/first",
+      thinking: "high",
+    })
+
+  const shimmer = {
+    style: "bounce",
+    width: 9,
+    period: 2200,
+    edge: "linear",
+    direction: "rtl",
+    colors: { dark: ["#110000", "#220000"], light: ["#001100", "#002200"] },
+  } as const
+  commands.rememberTheme("lavender", "auto", shimmer)
+  await commands.flushChoices()
+  for (const file of [globalFile(), localFile()])
+    expect(json(file)).toEqual({
+      tui: { ...tui, theme: "lavender", themeVariant: "auto", shimmer },
+      model: "mock/first",
+      thinking: "high",
+    })
+  commands.rememberTheme("burnt", "light")
+  await commands.flushChoices()
+  for (const file of [globalFile(), localFile()]) expect(json(file).tui.shimmer).toEqual(shimmer)
+})
+
+test.each([undefined, {}] as const)(
+  "explicit %s removes shimmer without changing other tui fields",
+  async (shimmer) => {
+    const original = {
+      tui: { theme: "amira", themeVariant: "dark", colorDepth: "256", shimmer: { style: "wave", width: 9 } },
+      keep: true,
+    }
+    for (const file of [globalFile(), localFile()]) writeFileSync(file, JSON.stringify(original))
+    const { commands } = await start()
+    commands.rememberTheme("amber", "light", shimmer)
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()])
+      expect(json(file)).toEqual({
+        tui: { theme: "amber", themeVariant: "light", colorDepth: "256" },
+        keep: true,
+      })
+  },
+)
+
+test.each(["soft", { preset: "soft" }, { preset: "sweep" }] as const)(
+  "explicit soft preset %s is persisted on a pulse theme",
+  async (shimmer) => {
+    const { commands, session } = await start()
+    session.host.themes.register({ name: "custom", shimmerEffect: "pulse" }, "user")
+    commands.rememberTheme("custom", "dark", shimmer)
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()])
+      expect(json(file).tui).toEqual({
+        theme: "custom",
+        themeVariant: "dark",
+        shimmer: typeof shimmer === "string" ? "soft" : { preset: "soft" },
+      })
+  },
+)
+
+test("shimmer choices remain ordered across a delayed project eligibility probe", async () => {
+  const { commands } = await start(["--rpc"])
+  const gate = Promise.withResolvers<string | undefined>()
+  const probe = mock(async (_cwd: string, args: string[]) => (args[0] === "rev-parse" ? gate.promise : ""))
+  const choices = rememberingControl(commands.control, () => commands.agent, cwd, home, probe)
+  try {
+    choices.rememberTheme("amber", "dark", "wave")
+    choices.rememberTheme("burnt", "light", undefined)
+    choices.rememberTheme("lavender", "auto", { period: 2000 })
+    expect(json(globalFile()).tui).toEqual({
+      theme: "lavender",
+      themeVariant: "auto",
+      shimmer: { period: 2000 },
+    })
+    expect(existsSync(localFile())).toBe(false)
+    gate.resolve("true")
+    await choices.flush()
+    expect(json(localFile())).toEqual(json(globalFile()))
+    choices.rememberTheme("amira", "auto", undefined)
+    await choices.flush()
+    for (const file of [globalFile(), localFile()])
+      expect(json(file).tui).toEqual({ theme: "amira", themeVariant: "auto" })
+  } finally {
+    gate.resolve("true")
+    await choices.flush()
+  }
+})
+
 test.each(["-p", "--rpc"])("%s never saves a theme choice", async (mode) => {
   const flags = mode === "-p" ? [mode, "hello"] : [mode]
   const { commands } = await start(flags)

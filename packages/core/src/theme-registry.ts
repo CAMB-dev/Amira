@@ -8,6 +8,7 @@ import {
   type ThemeSource,
   textCells,
 } from "@amira/api"
+import { normalizeShimmer } from "./shimmer.ts"
 
 export interface ThemeFileEntry {
   theme: ThemeDefinition
@@ -25,7 +26,7 @@ type Notice = (text: string, origin?: string) => void
 
 const PALETTE_TOKENS = new Set<string>(THEME_PALETTE_TOKENS)
 const SOURCES = new Set<string>(["built-in", "user", "project", "package", "extension"])
-const THEME_KEYS = new Set(["name", "description", "dark", "light", "glyphs"])
+const THEME_KEYS = new Set(["name", "description", "dark", "light", "glyphs", "shimmerEffect"])
 // tui.theme keywords; a theme with one of these names could never be selected.
 const RESERVED_NAMES = new Set(["auto", "dark", "light", "terminal"])
 // biome-ignore lint/suspicious/noControlCharactersInRegex: glyphs must never contain terminal controls
@@ -170,6 +171,15 @@ export class ThemeRegistry {
           }
         }
         theme.glyphs = Object.freeze(glyphs)
+      }
+      try {
+        const effect = raw.shimmerEffect
+        if (effect !== undefined) {
+          const shimmer = normalizeShimmer(effect, (text) => warn(`shimmerEffect: ${text}`))
+          if (shimmer) theme.shimmerEffect = Object.freeze(shimmer)
+        }
+      } catch {
+        warn("shimmerEffect: unreadable configuration; ignored")
       }
       return { theme: Object.freeze(theme), source, ...(origin !== undefined ? { origin } : {}) }
     } catch (error) {

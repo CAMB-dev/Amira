@@ -1,6 +1,6 @@
 // Owns interactive options, shared UI constants and startup helpers.
 import { homedir } from "node:os"
-import type { AnyEvent, CommandDefinition, TerminalApi, TuiSettings } from "@amira/api"
+import type { AnyEvent, CommandDefinition, ShimmerEffect, TerminalApi, TuiSettings } from "@amira/api"
 import type {
   Agent,
   CommandHost,
@@ -61,8 +61,13 @@ export interface InteractiveOptions {
   theme?: Theme
   /** Named themes, live across file reloads and extension registration/disposal. */
   themes?: Pick<ThemeRegistry, "get" | "list" | "subscribe"> & Partial<Pick<ThemeRegistry, "source">>
-  /** Persists the applied name and appearance together; preview and cancellation never call it. */
-  saveTheme?: (name: string, variant: ThemeVariant) => void | Promise<void>
+  /**
+   * Persists applied choices only. Omitted shimmer preserves it; explicit undefined removes
+   * the override. Preview and cancellation never call this.
+   */
+  saveTheme?: (name: string, variant: ThemeVariant, shimmer?: ShimmerEffect) => void | Promise<void>
+  /** Delivers reloaded theme, appearance and shimmer settings to the running UI. */
+  subscribeThemeSettings?: (listener: (settings: TuiSettings | undefined) => void) => () => void
   /**
    * Prompts sent before, for ↑/↓ and Ctrl+R; the CLI passes the project's persisted history.
    * Default: one kept in memory for this run.

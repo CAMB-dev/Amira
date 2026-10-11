@@ -16,10 +16,54 @@
     "description": { "type": "string" },
     "dark": { "$ref": "#/$defs/palette" },
     "light": { "$ref": "#/$defs/palette" },
-    "glyphs": { "$ref": "#/$defs/glyphs" }
+    "glyphs": { "$ref": "#/$defs/glyphs" },
+    "shimmerEffect": { "$ref": "#/$defs/shimmerEffect" }
   },
   "$defs": {
     "hex": { "type": "string", "pattern": "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" },
+    "shimmerPair": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/hex" }
+    },
+    "shimmerColors": {
+      "oneOf": [
+        { "$ref": "#/$defs/shimmerPair" },
+        {
+          "type": "object",
+          "required": ["dark", "light"],
+          "additionalProperties": false,
+          "properties": {
+            "dark": { "$ref": "#/$defs/shimmerPair" },
+            "light": { "$ref": "#/$defs/shimmerPair" }
+          }
+        }
+      ]
+    },
+    "shimmerPreset": { "enum": ["off", "soft", "sharp", "wide", "bounce", "pulse", "wave", "reveal"] },
+    "shimmerEffect": {
+      "description": "Activity-label animation. Presets expand before explicit knobs; omitted colors inherit shimmer/shimmerEnd for the selected appearance.",
+      "oneOf": [
+        { "$ref": "#/$defs/shimmerPreset" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "preset": {
+              "enum": ["off", "soft", "sharp", "wide", "bounce", "pulse", "wave", "reveal", "sweep"],
+              "description": "sweep is accepted as an alias for soft in options objects."
+            },
+            "style": { "enum": ["off", "sweep", "bounce", "pulse", "wave", "reveal"] },
+            "width": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "period": { "type": "number", "minimum": 400, "maximum": 5000 },
+            "edge": { "enum": ["soft", "linear", "hard"] },
+            "direction": { "enum": ["ltr", "rtl"] },
+            "colors": { "$ref": "#/$defs/shimmerColors" }
+          }
+        }
+      ]
+    },
     "palette": {
       "type": "object",
       "additionalProperties": false,
