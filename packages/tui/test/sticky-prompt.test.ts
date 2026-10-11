@@ -20,7 +20,7 @@ import { createFullscreenView } from "../src/fullscreen-view.ts"
 import { glyphs, setGlyphs } from "../src/glyphs.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
-import { stickyPrompt, stickyPromptLine } from "../src/pane/sticky-prompt.ts"
+import { stickyPrompt, stickyPromptLine, stickyPromptLines } from "../src/pane/sticky-prompt.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
 
 const at = new Date(2026, 9, 10, 20, 9).getTime()
@@ -193,9 +193,9 @@ test("clicking the sticky slot jumps to its full message, never starts a drag or
   mouse.stopEdgeScroll()
 })
 
-function fullscreen(withHeader = true) {
-  const terminal = new FakeTerminal(100, 12)
-  const screen = new VirtualScreen(100, 12)
+function fullscreen(withHeader = true, height = 12, theme = plain.theme) {
+  const terminal = new FakeTerminal(100, height)
+  const screen = new VirtualScreen(100, height)
   const write = terminal.write.bind(terminal)
   terminal.write = (data) => {
     write(data)
@@ -203,7 +203,7 @@ function fullscreen(withHeader = true) {
   }
   const view = createFullscreenView({
     terminal,
-    theme: plain.theme,
+    theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
     settings: {},
     presenters: undefined,
@@ -363,4 +363,193 @@ test("selecting a whole message marks text but leaves the painted padding unsele
   expect(after[0]).toContain("\x1b[48;2;32;32;32m")
   expect(after[1]).not.toBe(before[1])
   expect(prompt.copyText()).toBe("Only text")
+})
+
+test("expanded sticky bands match transcript wrapping, painted padding, marker and clock", () => {
+  const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
+  for (const text of ["First line\nSecond line", "界 word ".repeat(20), "A\tB\x00\x07\x1b[2JC\nD"]) {
+    const block = userBlock(message(text))
+    const real = block.lines(banded)
+    const sticky = stickyPromptLines(block, banded, 12)
+    expect(sticky).toEqual(real)
+    expect(sticky[0]).toBe(banded.theme.userBg!(" ".repeat(100)))
+    expect(sticky.at(-1)).toBe(sticky[0])
+    expect(sticky[0]).toContain("\x1b[48;2;32;32;32m")
+    expect(sticky.at(-1)).toContain("\x1b[48;2;32;32;32m")
+    expect(sticky[1]).toContain(banded.theme.accent(glyphs.user))
+    expect(sticky[1]).toContain(banded.theme.muted(clock))
+    expect(sticky.every((row) => visibleWidth(row) === 100)).toBe(true)
+    expect(sticky.join("\n")).not.toContain("\x1b[2J")
+  }
+})
+
+test("expanded bands cap wrapped text at three rows and use the glyph table ellipsis", () => {
+  const previous = { ...glyphs }
+  try {
+    setGlyphs({ user: ">", more: "." })
+    const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") }, width: 30 }
+    for (const text of ["界".repeat(100), "One\nTwo\nThree\nFour", "word ".repeat(50)]) {
+      const block = userBlock(message(text))
+      const real = block.lines(banded)
+      const sticky = stickyPromptLines(block, banded, 12)
+      expect(sticky).toHaveLength(5)
+      expect(sticky.slice(0, 3)).toEqual(real.slice(0, 3))
+      expect(stripAnsi(sticky[3]!).trimEnd()).toEndWith(".")
+      expect(stripAnsi(sticky[3]!)).toStartWith("    ")
+      expect(sticky.every((row) => visibleWidth(row) === 30)).toBe(true)
+      expect(sticky.at(-1)).toBe(sticky[0])
+      expect(stickyPromptLines(block, banded, 11)).toEqual([stickyPromptLine(block, banded)])
+    }
+    for (const width of [1, 8, 15, 16]) {
+      const sticky = stickyPromptLines(userBlock(message("long".repeat(30))), { ...banded, width }, 12)
+      expect(sticky).toHaveLength(5)
+      expect(sticky.every((row) => visibleWidth(row) === width)).toBe(true)
+    }
+  } finally {
+    setGlyphs(previous)
+  }
+})
+
+test("reserved band rows shrink the actual pane height for pages, wheel, selection and row counts", () => {
+  const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
+  const pane = new TranscriptPane()
+  const prompt = userBlock(message("First line\nSecond line"))
+  const reply = output(60, "needle")
+  pane.add(prompt)
+  pane.add(reply)
+  const render = () =>
+    pane.render(banded, 20, (layout) => {
+      const block = stickyPrompt(pane.blocks, layout)
+      return block ? stickyPromptLines(block, banded, 20).length - 1 : 0
+    })
+  expect(render()).toHaveLength(17)
+  expect(pane.layout[0]).toEqual({ block: reply, line: 43 })
+  pane.pageUp()
+  render()
+  expect(pane.layout[0]).toEqual({ block: reply, line: 27 })
+  expect(pane.rowsBelow).toBe(16)
+  pane.selectLine(0, 5)
+  expect(pane.selectedText()).toBe("  needle 27")
+  pane.pageDown()
+  render()
+  expect(pane.following).toBe(true)
+  expect(pane.layout[0]).toEqual({ block: reply, line: 43 })
+  const mouse = createMouse({
+    pane,
+    paneRows: () => 17,
+    paneTop: () => 5,
+    stickyRows: () => 4,
+    stickyPrompt: () => pinned(pane),
+    requestRender: () => {},
+    showNote: () => {},
+    terminal: new FakeTerminal(100, 30),
+  })
+  mouse.mouse({ ...mouseEvent("wheel", 2), button: "up" })
+  render()
+  expect(pane.layout[0]).toEqual({ block: reply, line: 40 })
+  expect(pane.rowsBelow).toBe(3)
+  pane.find("needle")
+  render()
+  expect(pane.matchCount).toBe(60)
+  pane.clearFind()
+  // Each painted/text row jumps to the real band, and none is selectable chrome.
+  for (const row of [1, 2, 3, 4]) {
+    pane.follow()
+    render()
+    mouse.mouse(mouseEvent("press", row))
+    mouse.mouse(mouseEvent("release", row))
+    expect(pane.selectedText()).toBe("")
+    expect(pane.dragging).toBe(false)
+    expect(render()).toHaveLength(20)
+    expect(pinned(pane)).toBeUndefined()
+    expect(pane.layout[0]).toEqual({ block: prompt, line: 0 })
+  }
+})
+
+test("tail reservation rechecks turn boundaries and gives visible real prompts priority", () => {
+  const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
+  const pane = new TranscriptPane()
+  pane.add(userBlock(message("Older\nTwo\nThree")))
+  pane.add(output(20))
+  const newer = userBlock(message("Newer"))
+  pane.add(newer)
+  pane.add(output(8))
+  let sticky: LinesBlock | undefined
+  const render = () =>
+    pane.render(banded, 14, (layout) => {
+      sticky = stickyPrompt(pane.blocks, layout)
+      return sticky ? stickyPromptLines(sticky, banded, 14).length - 1 : 0
+    })
+  render()
+  expect(sticky).toBeUndefined()
+  expect(pane.layout.some((row) => row.block === newer && row.line === 1)).toBe(true)
+  // Crossing back into the older turn grows the chrome: do not follow using the old height.
+  pane.scrollBy(-1)
+  render()
+  expect(pane.following).toBe(false)
+  expect(sticky?.prompt).toBe("Older\nTwo\nThree")
+  expect(pane.layout[0]).toEqual({ block: pane.blocks[1]!, line: 19 })
+  expect(pane.rowsBelow).toBe(4)
+  pane.follow()
+  render()
+  pane.add(output(20))
+  expect(render()).toHaveLength(12)
+  expect(sticky).toBe(newer)
+  pane.toBlock(newer)
+  expect(render()).toHaveLength(14)
+  expect(sticky).toBeUndefined()
+  pane.follow()
+  render()
+  pane.scrollBy(-1)
+  render()
+  expect(pane.following).toBe(false) // Do not snap back using the unshrunk height.
+  expect(pane.rowsBelow).toBe(1)
+})
+
+test("fullscreen uses expanded band coordinates, preserves the bottom, and falls back below twelve rows", () => {
+  const theme = { ...defaultTheme, ...surfaceTheme("dark") }
+  for (const height of [15, 16, 30]) {
+    const { view, screen, terminal } = fullscreen(true, height, theme)
+    try {
+      view.user(message("Fix the transcript\nKeep every row reachable"))
+      view.replyDelta(Array.from({ length: 40 }, (_, i) => `Result ${i}`).join("\n\n"))
+      view.replyEnd([])
+      view.render()
+      const expanded = height >= 16 // height - header/gap(2) - below(1) - bottom(1) >= 12
+      const top = expanded ? 5 : 2
+      expect(screen.lines[0]).toBe(" Amira · project")
+      expect(screen.lines[1]).toBe(
+        expanded ? "" : `  › Fix the transcript…${" ".repeat(75 - clockCells)}${clock}`,
+      )
+      if (expanded) {
+        expect(screen.lines[2]).toContain("› Fix the transcript")
+        expect(screen.lines[3]).toBe("    Keep every row reachable")
+        expect(screen.lines[4]).toBe("")
+        expect(terminal.output).toContain("\x1b[48;2;32;32;32m")
+      }
+      expect(screen.lines[height - 1]).toBe("input")
+      const tail = screen.lines.slice(top, height - 2)
+      view.handleInput(key("up", { shift: true }))
+      view.render()
+      expect(screen.lines.slice(top + 1, height - 2)).toEqual(tail.slice(0, -1))
+      expect(screen.lines[height - 2]).toContain("1 row below")
+      // Triple-click a transcript text row, not the sticky band's last row.
+      const resultRow = screen.lines.findIndex((row, i) => i >= top && row.includes("Result"))
+      for (let i = 0; i < 3; i++) {
+        view.handleInput(mouseEvent("press", resultRow))
+        view.handleInput(mouseEvent("release", resultRow))
+      }
+      expect(terminal.output).toContain("\x1b]52;")
+      expect(terminal.output).not.toContain(Buffer.from("Keep every row reachable").toString("base64"))
+      view.handleInput(mouseEvent("press", top - 1))
+      view.handleInput(mouseEvent("release", top - 1))
+      view.render()
+      expect(screen.lines[1]).toBe("")
+      expect(screen.lines[3]).toContain("Fix the transcript")
+      expect(screen.lines[4]).toContain("Keep every row reachable")
+    } finally {
+      view.stop()
+    }
+    expect(screen.mainText.match(/Fix the transcript/g)).toHaveLength(1)
+  }
 })

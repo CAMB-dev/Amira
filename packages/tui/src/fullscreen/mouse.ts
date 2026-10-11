@@ -21,6 +21,7 @@ export interface MouseDeps {
   paneRows: () => number
   paneTop?: () => number
   stickyPrompt?: () => Block | undefined
+  stickyRows?: () => number
   requestRender: () => void
   showNote: (text: string) => void
   terminal: Terminal
@@ -103,7 +104,7 @@ export function createMouse(deps: MouseDeps) {
       // A click clears the selection and does nothing else: the keyboard stays with the input.
       stopDrag()
       pane.clearText()
-      const pinned = e.y === -1 ? deps.stickyPrompt?.() : undefined
+      const pinned = e.y < 0 && e.y >= -(deps.stickyRows?.() ?? 1) ? deps.stickyPrompt?.() : undefined
       if (pinned) {
         armed = false
         lastPress = undefined

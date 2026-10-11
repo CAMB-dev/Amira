@@ -1,6 +1,6 @@
 import { themeToken, truncateToWidth, visibleWidth, wrapText } from "@amira/tui-kit"
 import { type Block, type BlockEnv, LinesBlock } from "../blocks/base.ts"
-import { bandRows, timestampRoom, timestampRow } from "../format.ts"
+import { bandRows, timestampRoom, timestampRow, userLines } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import type { PaneRow } from "../transcript-pane.ts"
 
@@ -17,7 +17,22 @@ export function stickyPrompt(blocks: readonly Block[], layout: readonly PaneRow[
   return undefined
 }
 
-/** Nonselectable chrome: a single band row, with the original message clock. */
+/** Below twelve available transcript rows, keep the compact one-row preview. */
+const MIN_BAND_ROWS = 12
+
+/** Nonselectable chrome, formatted exactly like the real band, capped at three text rows. */
+export function stickyPromptLines(block: LinesBlock, env: BlockEnv, transcriptRows: number): string[] {
+  if (transcriptRows < MIN_BAND_ROWS) return [stickyPromptLine(block, env)]
+  return userLines(
+    env.theme,
+    { role: "user", content: [{ type: "text", text: block.prompt ?? "" }] },
+    env.width,
+    block.timestamp,
+    3,
+  )
+}
+
+/** Compact fallback: a single band row, with the original message clock. */
 export function stickyPromptLine(block: LinesBlock, env: BlockEnv): string {
   const { theme, width } = env
   const text = block.prompt ?? ""
