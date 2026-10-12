@@ -133,6 +133,8 @@ export interface CopyRow {
   to?: number
   skip?: boolean
   joins?: boolean
+  /** Search separator before a wrapped row: empty for mid-word/CJK, a space for word wrapping. */
+  joinBefore?: "" | " "
   repeats?: boolean
   text?: string
   exact?: string

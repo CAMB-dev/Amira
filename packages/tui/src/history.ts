@@ -78,7 +78,11 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
   const rejections = new Map<string, ToolRejection>()
   for (const m of messages) {
     if (m.role === "toolResult") {
-      results.set(m.toolCallId, { content: m.content, isError: m.isError })
+      results.set(m.toolCallId, {
+        content: m.content,
+        isError: m.isError,
+        ...(m.details !== undefined ? { details: m.details } : {}),
+      })
       if (m.rejected) rejections.set(m.toolCallId, m.rejected)
     }
   }

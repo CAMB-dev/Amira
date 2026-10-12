@@ -31,6 +31,12 @@ export interface ToolLine {
   text: string
   /** A line number to show in a gutter, for diffs and file content. */
   lineNo?: number
+  /** Wrap this line to the available columns rather than truncate it. */
+  wrap?: boolean
+  /** A themed status/empty-choice glyph before the text; continuation rows align with the text. */
+  marker?: "success" | "unchecked"
+  /** Muted explanation after the text, wrapping under it when it does not fit. */
+  description?: string
 }
 
 /**

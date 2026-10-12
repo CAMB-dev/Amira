@@ -74,7 +74,11 @@ export function historyBlocks(
           // all (the turn was cut short) means it never ran to completion either.
           call.end = result
             ? {
-                result: { content: result.content, isError: result.isError },
+                result: {
+                  content: result.content,
+                  isError: result.isError,
+                  ...(result.details !== undefined ? { details: result.details } : {}),
+                },
                 ...(result.rejected ? { rejected: result.rejected } : {}),
               }
             : { result: { content: [], isError: true }, rejected: "aborted" }

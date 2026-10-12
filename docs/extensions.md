@@ -208,6 +208,20 @@ Containment uses native filesystem realpaths for existing path prefixes, not jus
 
 This only exempts the enclosing Amira home protection. Git metadata, `.gitmodules`, configured hooks paths and nested `.amira` directories still require approval. Plan mode still denies writes; shell permission rules and interceptor requests for approval are unchanged, and sub-agents use the same policy. Path reports are trusted extension declarations, not a shell sandbox, race-free authorization or proof of exclusive ownership: a hard link may refer to the same file from outside the directory. Custom tools must resolve reports and actual file accesses consistently with file-tool semantics. See [Permissions](usage.md#permissions).
 
+### Tool results and presenter lines
+
+A tool result's `content` is its model-facing text or images. Optional `details` holds structured presenter data and is transient by default. Set `persistDetails: true` on the result to retain a JSON snapshot of those details in saved history, including resumed transcripts and `/agents`. Built-in provider serializers do not send details to the model.
+
+Each result can persist at most **16 KiB (16,384 bytes) of serialized UTF-8 details**, including JSON quotes and escapes. Oversized details, or values that cannot be serialized (such as cycles or `BigInt`), are **dropped, not truncated**. Live presenters still receive the original details; history falls back to the saved result text or its artifact preview. Always make `content` useful without details. Older sessions without details continue to load; `ask_user` does not infer selections from their saved text.
+
+Tool presenters, full-screen `ViewLine` values and block Markdown renderers share `ToolLine`. In addition to `kind` and `text`, lines can set:
+
+- `wrap: true`: wrap text to the available columns instead of truncating it.
+- `marker: "success" | "unchecked"`: prepend the theme's success or empty-choice glyph, including the ASCII theme. The marker appears once; continuation rows align under the label. Success markers use the success color, empty-choice markers are muted, and `kind` controls the label color.
+- `description: string`: show a muted explanation after the label when it fits, otherwise wrap it under the label. The explanation appears once per logical line.
+
+Markers and descriptions also request wrapping, so you do not need to set `wrap` separately on a choice line. For example, `{ kind: "text", text: "Patch", marker: "success", description: "Fix it in place", wrap: true }` shows a chosen option with a normal-color label and muted explanation. These fields describe display content; they do not alter the tool result sent to the model. Core sanitizes Markdown-renderer descriptions like their text; block line limits are unchanged.
+
 ### Markdown and math renderers
 
 `api.registerMarkdownRenderer({ id, match, render })` claims completed reply nodes. Use `match: { codeLang: ["latex", "tex"] }` for fences, `{ image: true }` for standalone images, or `{ math: "inline" | "display" | "both" }` for math. Math nodes are `{ type: "math", display: boolean, source: string }`; `source` excludes the delimiters. Renderers run by descending priority, then registration order. Returning `undefined`, throwing, or returning an invalid result lets the next renderer try; if none claims the node, its existing Markdown rendering is unchanged.
