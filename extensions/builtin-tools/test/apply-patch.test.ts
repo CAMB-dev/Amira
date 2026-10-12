@@ -58,6 +58,35 @@ test("tool integrates add, update, move, delete and per-file presenter diffs", a
   expect(applyPatchPresenter.summary!({ patch: "garbage" })).toBe("patch")
 })
 
+// NTFS file IDs exceed 2^53: as numbers, two unrelated files can share an inode and look like
+// hard links of each other. Find such a pair among fresh files and patch both at once.
+test.if(process.platform === "win32")(
+  "unrelated files with colliding number inodes are not hard links",
+  async () => {
+    const dir = await tmp.make()
+    const seen = new Map<number, string>()
+    let pair: [string, string] | undefined
+    for (let i = 0; i < 5000 && !pair; i++) {
+      const name = `f${i}`
+      await writeFile(join(dir, name), "old\n")
+      const ino = (await lstat(join(dir, name))).ino
+      const other = seen.get(ino)
+      if (other) pair = [other, name]
+      else seen.set(ino, name)
+    }
+    // Collisions came up several times per 2000 files on NTFS; a volume without them proves nothing.
+    if (!pair) return
+    const result = await applyPatchTool.execute(
+      { patch: envelope(`${update(pair[0])}\n${update(pair[1])}`) },
+      makeCtx(dir),
+    )
+    expect(result.isError, toolResultText(result)).toBeUndefined()
+    expect(await readFile(join(dir, pair[0]), "utf8")).toBe("new\n")
+    expect(await readFile(join(dir, pair[1]), "utf8")).toBe("new\n")
+  },
+  60_000,
+)
+
 test("third failing hunk validates before any file or parent directory is written", async () => {
   const dir = await tmp.make()
   await writeFile(join(dir, "a"), "one\ntwo\nthree\n")
