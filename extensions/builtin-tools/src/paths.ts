@@ -1,5 +1,6 @@
+import { realpathSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { isAbsolute, join, relative, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 
 export const OUTSIDE_WORKING_DIRECTORY = "[outside working directory]"
 
@@ -39,9 +40,23 @@ export function outsideNote(cwd: string, root: string): string {
   return isOutside(cwd, root) ? `${OUTSIDE_WORKING_DIRECTORY} paths below are absolute\n` : ""
 }
 
-/** Key for ordering writes to the same file: the resolved path, case-folded where paths are case-insensitive. */
+/** Key for ordering writes to the same file, resolving directory aliases even for new files. */
 export function fileKey(cwd: string, path: unknown): string | undefined {
   if (typeof path !== "string" || path === "") return undefined
-  const abs = resolvePath(cwd, path)
+  let abs = resolvePath(cwd, path)
+  let parent = abs
+  const suffix: string[] = []
+  for (;;) {
+    try {
+      abs = join(realpathSync.native(parent), ...suffix)
+      break
+    } catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) break
+      const next = dirname(parent)
+      if (next === parent) break
+      suffix.unshift(basename(parent))
+      parent = next
+    }
+  }
   return process.platform === "win32" || process.platform === "darwin" ? abs.toLowerCase() : abs
 }

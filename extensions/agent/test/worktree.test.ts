@@ -160,6 +160,8 @@ test("a parent reached through a directory link keeps the child's subdirectory",
   expect(wt.root).toBe(root)
   expect(wt.cwd).toBe(path.join(wt.dir, "src"))
   expect(read(path.join(wt.cwd, "g.txt"))).toBe("g\n")
+  expect(projectKey(alias)).toBe(projectKey(root))
+  expect(listKeptWorktrees(home, alias).map((w) => w.dir)).toEqual([wt.dir])
   expect((await mergeWorktree(git, wt)).outcome).toBe("empty")
 })
 

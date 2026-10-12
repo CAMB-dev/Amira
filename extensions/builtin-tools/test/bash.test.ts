@@ -141,6 +141,12 @@ test.if(hasBash && !isWindows)("a command killed by a signal says so", async () 
   )
 })
 
+test.if(hasBash)("a normal exit 137 is not reported as a signal", async () => {
+  const result = await bashTool.execute({ command: "exit 137" }, makeCtx(dir))
+  expect(result.isError).toBe(true)
+  expect(textOf(result)).toEndWith("Exit code: 137")
+})
+
 test("errors when already aborted or when command is missing", async () => {
   const ac = new AbortController()
   ac.abort()

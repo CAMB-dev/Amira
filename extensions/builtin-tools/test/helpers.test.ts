@@ -1,10 +1,10 @@
 import { afterAll, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
 import { isBinary, walkFiles } from "../src/files.ts"
-import { displayPath, OUTSIDE_WORKING_DIRECTORY, resolvePath } from "../src/paths.ts"
+import { displayPath, fileKey, OUTSIDE_WORKING_DIRECTORY, resolvePath } from "../src/paths.ts"
 import { keepOutput, TempOutputStore } from "../src/truncate.ts"
 import { makeCtx } from "./util.ts"
 
@@ -22,6 +22,18 @@ async function keep(text: string, dir?: string) {
 const dirs: string[] = []
 afterAll(async () => {
   for (const d of dirs) await rm(d, { recursive: true, force: true })
+})
+
+test("file-write keys identify existing and new files through directory aliases", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "amira-file-key-"))
+  dirs.push(dir)
+  const root = join(dir, "real")
+  const alias = join(dir, "alias")
+  await mkdir(root)
+  await symlink(root, alias, process.platform === "win32" ? "junction" : "dir")
+  await writeFile(join(root, "existing"), "same file")
+  expect(fileKey(dir, "alias/existing")).toBe(fileKey(dir, "real/existing"))
+  expect(fileKey(dir, "alias/new/nested/file")).toBe(fileKey(dir, "real/new/nested/file"))
 })
 
 test("short output is returned unchanged", async () => {

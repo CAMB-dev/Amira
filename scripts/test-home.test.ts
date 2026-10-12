@@ -76,11 +76,15 @@ describe("test home isolation", () => {
     const result = files.run(`
       import { strict as assert } from "node:assert";
       import fs from "node:fs";
-      import os from "node:os";
+      import os, { homedir } from "node:os";
       import path from "node:path";
       const env = process.env;
       assert.equal(env.HOME, env.USERPROFILE);
       assert.equal(os.homedir(), env.HOME);
+      assert.equal(homedir(), env.HOME);
+      assert.equal(require("node:os").homedir(), env.HOME);
+      assert.equal((await import("node:os")).homedir(), env.HOME);
+      fs.writeFileSync(path.join(homedir(), ".amira", "via-os"), "yes");
       assert.equal(env.AMIRA_HOME, path.join(env.HOME, ".amira"));
       assert.equal(env.XDG_CONFIG_HOME, path.join(env.HOME, ".config"));
       assert.equal(env.AMIRA_MODEL, undefined);

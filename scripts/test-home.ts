@@ -1,9 +1,9 @@
-import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-// Do not change these to runtime ESM imports. Bun snapshots named fs exports on first
+// Do not change these to runtime ESM imports. Bun snapshots named builtin exports on first
 // import; patching require() first also protects subsequent named imports, without mocks.
+const os: typeof import("node:os") = require("node:os")
 const fs: typeof import("node:fs") = require("node:fs")
 const promises: typeof import("node:fs/promises") = require("node:fs/promises")
 const realpath = fs.realpathSync
@@ -260,6 +260,9 @@ export function isolateTestHome(): () => void {
   }
   process.env.HOME = home
   process.env.USERPROFILE = home
+  // Bun caches the POSIX home at startup. Redirect the builtin itself, before application
+  // imports (including named imports) can capture it; children inherit HOME at startup.
+  os.homedir = () => home
   process.env.AMIRA_HOME = amira
   process.env.XDG_CONFIG_HOME = config
   if (process.platform === "win32") {

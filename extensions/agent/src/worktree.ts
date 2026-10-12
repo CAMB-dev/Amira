@@ -66,6 +66,11 @@ const SNAPSHOT_IDENTITY = ["-c", "user.name=Amira", "-c", "user.email=amira@loca
 
 /** `<repo folder>-<hash of its path>`, so two projects with the same folder name never share a directory. */
 export function projectKey(root: string): string {
+  try {
+    root = realpathSync.native(root)
+  } catch {
+    root = path.resolve(root)
+  }
   const key = process.platform === "win32" ? root.toLowerCase() : root
   return `${path.basename(root)}-${createHash("sha256").update(key).digest("hex").slice(0, 8)}`
 }

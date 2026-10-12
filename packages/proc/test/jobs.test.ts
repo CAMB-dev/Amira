@@ -11,6 +11,7 @@ import {
   PASSIVE_SIGNAL_LISTENER,
   resetCommandWorker,
   startJob,
+  startJobInline,
 } from "../src/index.ts"
 
 // Spawns can take seconds on Windows machines with antivirus scanning.
@@ -80,6 +81,32 @@ async function expectAllGone(pids: number[]) {
 }
 
 const script = (code: string) => [bun, "-e", code]
+
+test.each([null, "SIGKILL"] as const)(
+  "job exits distinguish signal metadata from exit 137 (%s)",
+  async (signal) => {
+    const proc = Bun.spawn(script("process.exit(137)"), {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+      detached: process.platform !== "win32",
+    })
+    await proc.exited
+    Object.defineProperty(proc, "signalCode", { value: signal })
+    const spawn = spyOn(Bun, "spawn").mockReturnValue(proc)
+    try {
+      const exit = await new Promise<JobEvent>((resolve) => {
+        startJobInline({ argv: script("unused"), cwd }, (event) => {
+          if (event.type === "exit") resolve(event)
+        })
+      })
+      expect(exit).toEqual({ type: "exit", code: signal ? null : 137, signal })
+    } finally {
+      spawn.mockRestore()
+    }
+  },
+)
 
 test("a job runs detached from its caller; its output is read incrementally", async () => {
   const job = backgroundJobs.start({

@@ -104,7 +104,7 @@ export function endText(job: BackgroundJobInfo): string {
   if (job.status === "failed")
     return job.pid === undefined ? `failed to start: ${job.error}` : `was lost: ${job.error}`
   if (job.status === "stopped") return "was stopped"
-  if (job.exitCode === null) return `was killed${job.signal ? ` by ${job.signal}` : ""}`
+  if (job.signal || job.exitCode === null) return `was killed${job.signal ? ` by ${job.signal}` : ""}`
   return `exited with code ${job.exitCode}`
 }
 

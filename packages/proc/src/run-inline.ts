@@ -95,7 +95,7 @@ export function runCommandInline(argv: string[], opts: RunOptions): Promise<RunR
   }
   let prepared: PreparedCommand
   try {
-    prepared = prepareCommandInline(argv, opts)
+    prepared = spawnCommand(argv, opts, undefined, true)
   } catch (err) {
     return Promise.reject(err)
   }
@@ -111,6 +111,15 @@ export function prepareCommandInline(
   argv: string[],
   opts: SpawnOptions,
   onIdleExit?: () => void,
+): PreparedCommand {
+  return spawnCommand(argv, opts, onIdleExit)
+}
+
+function spawnCommand(
+  argv: string[],
+  opts: SpawnOptions,
+  onIdleExit?: () => void,
+  immediate = false,
 ): PreparedCommand {
   const cap = outputCharLimit(opts.maxOutputChars)
   const gated = !!opts.gated
@@ -201,7 +210,9 @@ export function prepareCommandInline(
       return state === "idle" && !exited()
     },
     async run(release) {
-      if (state !== "idle" || exited()) {
+      // An immediate, ungated command may already have exited inside Bun.spawn(). Its result
+      // still belongs to this call; only a standby needs to remain alive until release.
+      if (state !== "idle" || (!immediate && exited())) {
         closeIdle()
         throw new StandbyGoneError("the prepared command is no longer available")
       }
@@ -249,6 +260,7 @@ async function collect(
   let endGrace = () => {}
   try {
     const exitCode = await proc.exited
+    const signalCode = proc.signalCode
     clearTimeout(timer)
     opts.signal.removeEventListener("abort", onAbort)
     // Only a timeout or abort that fired before the exit explains how the command ended.
@@ -266,8 +278,10 @@ async function collect(
     const settled = await Promise.race([drained.then(() => true), grace])
     return {
       ...result(),
-      exitCode,
-      signalCode: proc.signalCode,
+      // Bun's exited promise may resolve to 128+n even when it also reports a signal.
+      // Only explicit signal metadata distinguishes that from a normal exit 137.
+      exitCode: signalCode ? null : exitCode,
+      signalCode,
       timedOut: cause === "timeout",
       aborted: cause === "abort",
       settled,
