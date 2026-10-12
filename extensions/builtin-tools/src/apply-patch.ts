@@ -25,8 +25,9 @@ export interface ApplyPatchParams {
 interface Snapshot {
   path: string
   bytes?: Buffer
-  ino?: number
-  dev?: number
+  // bigint: NTFS file IDs exceed 2^53, so number inodes of different files can compare equal.
+  ino?: bigint
+  dev?: bigint
   mode?: number
 }
 
@@ -59,7 +60,7 @@ const disk: PatchIO = {
 
 async function stat(path: string) {
   try {
-    return await lstat(path)
+    return await lstat(path, { bigint: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
     throw error
@@ -101,7 +102,7 @@ async function snapshot(path: string): Promise<Snapshot> {
   const st = await stat(path)
   if (!st) return { path }
   if (!st.isFile()) throw new Error(`Not a regular file: ${path}`)
-  return { path, bytes: await readFile(path), ino: st.ino, dev: st.dev, mode: st.mode }
+  return { path, bytes: await readFile(path), ino: st.ino, dev: st.dev, mode: Number(st.mode) }
 }
 
 async function unchanged(cwd: string, before: Snapshot): Promise<void> {
@@ -272,7 +273,7 @@ async function commitPatch(
         // Journal only after exclusive creation succeeds: EEXIST belongs to somebody else.
         const handle = await open(change.before.path, change.before.bytes ? "r+" : "wx", change.mode)
         try {
-          const st = await handle.stat()
+          const st = await handle.stat({ bigint: true })
           if (
             change.before.bytes &&
             (st.ino !== change.before.ino ||
@@ -288,7 +289,7 @@ async function commitPatch(
             bytes: Buffer.from(change.after),
             ino: st.ino,
             dev: st.dev,
-            mode: st.mode,
+            mode: Number(st.mode),
           })
         } finally {
           await handle.close()
