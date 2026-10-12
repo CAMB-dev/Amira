@@ -51,14 +51,16 @@ export async function runTool(
     // Windows: Bun stalls for seconds on some direct spawns of git.
     ...(argv[0] === "git" ? { viaCmd: true } : {}),
   })
-  if (r.exitCode === 0) return r.output
+  // A cancel wins even when the command finished first: a cancelled install must not go on.
+  const aborted = r.aborted || !!opts.signal?.aborted
+  if (r.exitCode === 0 && !aborted) return r.output
   const why = r.timedOut
     ? "timed out"
-    : r.aborted
+    : aborted
       ? "was cancelled"
       : `failed (exit ${r.exitCode ?? r.signalCode})`
   const output = lastLines(r.output, 8)
-  throw new ToolError(`${what} ${why}${output ? `:\n${output}` : ""}`, r.aborted, output)
+  throw new ToolError(`${what} ${why}${output ? `:\n${output}` : ""}`, aborted, output)
 }
 
 /** A failed command; `output` is its last lines, `aborted` whether it was cancelled. */
