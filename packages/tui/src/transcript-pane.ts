@@ -154,8 +154,18 @@ export class TranscriptPane {
 
   remove(block: Block): void {
     if (block.index < 0 || this.blocks[block.index] !== block) return
-    this.blocks.splice(block.index, 1)
-    this.reindex(block.index)
+    const index = block.index
+    this.blocks.splice(index, 1)
+    this.reindex(index)
+    if (!this.following && this.anchor?.block === block) {
+      const next = this.blocks[index]
+      const previous = this.blocks[index - 1]
+      this.anchor = next
+        ? { block: next, offset: 0 }
+        : previous
+          ? { block: previous, offset: Math.max(0, this.rowsOf(previous.index, this.env!) - 1) }
+          : undefined
+    }
     block.index = -1
     if (this.selected === block) this.select(undefined)
     this.changed()

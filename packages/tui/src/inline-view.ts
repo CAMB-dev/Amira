@@ -117,6 +117,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const toolTimes = new Map<string, number>()
   /** A reply's clock is fixed at its first nonempty delta, and committed with its first row. */
   let replyAt: number | undefined
+  let replySeen = false
+  let pendingReplyWhitespace = ""
   let replyStamped = false
   const replyWidth = (width: number) => {
     streaming.firstRowWidth = Math.max(
@@ -634,7 +636,14 @@ export function createInlineView(host: ViewHost): TranscriptView {
       ]),
     user: (m) => commitBlock("user", userLines(theme, m, contentWidth(), messageTimestamp(m) ?? Date.now())),
     replyDelta(text) {
-      if (!text.trim() && (thought || !assistantSeen)) return
+      // Buffer the source prefix without showing a row or ending thinking.
+      if (!text.trim() && (thought || !replySeen)) {
+        pendingReplyWhitespace += text
+        return
+      }
+      text = pendingReplyWhitespace + text
+      pendingReplyWhitespace = ""
+      replySeen = true
       flushDialog()
       // The reply goes on: what it thought, and the calls held before it, go first.
       commitThought()
@@ -650,6 +659,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       renderer.requestRender()
     },
     replyEnd(calls) {
+      pendingReplyWhitespace = ""
+      replySeen = false
       flushDialog()
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
@@ -688,6 +699,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       return commitCalls(toolCalls.end(id, end))
     },
     turnEnd() {
+      pendingReplyWhitespace = ""
+      replySeen = false
       const shown = commitCalls(toolCalls.flush())
       unstartedCalls.clear()
       // A run of exploring calls ends with the turn.
@@ -727,7 +740,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
       pendingDialog = draw
       renderer.requestRender()
     },
-    openSession(boundary, messages: Message[], _switched, compactionInfo) {
+    openSession(boundary, messages: Message[], switched, compactionInfo) {
+      if (switched) {
+        pendingReplyWhitespace = ""
+        replySeen = false
+      }
       // The scrollback keeps what was committed: the boundary says where this session starts.
       flushExplored()
       commit(
@@ -746,6 +763,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       )
     },
     leaveSession() {
+      pendingReplyWhitespace = ""
+      replySeen = false
       pendingDialog = undefined
       toolCalls.flush()
       unstartedCalls.clear()

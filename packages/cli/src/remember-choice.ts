@@ -4,7 +4,14 @@ import os from "node:os"
 import path from "node:path"
 import { isNoModel } from "@amira/ai"
 import type { SessionControl, ShimmerEffect, TuiSettings } from "@amira/api"
-import { type Agent, amiraHome, normalizeShimmer, projectAmiraDir, updateSettingsFile } from "@amira/core"
+import {
+  type Agent,
+  amiraHome,
+  normalizeShimmer,
+  projectAmiraDir,
+  resolveShimmer,
+  updateSettingsFile,
+} from "@amira/core"
 
 /** Only the interactive command surface gets this wrapper, never extensions or RPC. */
 export function rememberingControl(
@@ -76,7 +83,11 @@ export function rememberingControl(
               const effect = theme.shimmer[0]
               const normalized = normalizeShimmer(effect)
               if (!normalized || !Object.keys(normalized).length) delete next.shimmer
-              else next.shimmer = typeof effect === "string" ? effect : normalized
+              else if (typeof effect === "string") next.shimmer = effect
+              // Objects merge across settings layers, so persist every chosen preset knob.
+              else if (normalized.preset)
+                next.shimmer = { ...normalized, ...resolveShimmer(undefined, normalized) }
+              else next.shimmer = normalized
             }
             return { ...settings, tui: next }
           },

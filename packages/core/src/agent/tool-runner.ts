@@ -91,16 +91,21 @@ export class ToolRunner {
         }
         if (turn.signal.aborted) break
 
-        const key = serial ? undefined : concurrencyKey(tool, call, this.#deps.cwd)
-        const before = key === undefined ? undefined : lastByKey.get(key)
         const task: Promise<void> = (async () => {
-          if (before) await before
-          const r = await this.#runTool(turn, run, runs)
+          const r = await this.#runTool(turn, run, runs, async (authorizedTool, args) => {
+            if (serial || turn.signal.aborted || run.finished) return
+            // Reserve only authorized calls, using the arguments their gates approved.
+            // Async gates may clear out of order; do not stall unrelated keys behind them.
+            const key = concurrencyKey(authorizedTool, { ...call, args }, this.#deps.cwd)
+            if (key === undefined) return
+            const before = lastByKey.get(key)
+            lastByKey.set(key, task)
+            if (before) await this.#untilDoneOrAbandoned(turn.signal, before)
+          })
           if (!run.finished) run.result = r
         })().finally(() => running.delete(task))
         running.add(task)
         started.push(task)
-        if (key !== undefined) lastByKey.set(key, task)
         if (serial) await this.#untilDoneOrAbandoned(turn.signal, task)
       }
       await this.#untilDoneOrAbandoned(turn.signal, Promise.all(started))
@@ -138,7 +143,12 @@ export class ToolRunner {
   }
 
   /** Never rejects: every failure becomes an error result for the model. */
-  async #runTool(turn: Turn, run: CallRun, batch: readonly CallRun[]): Promise<ToolResultMessage> {
+  async #runTool(
+    turn: Turn,
+    run: CallRun,
+    batch: readonly CallRun[],
+    waitForKey: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<void>,
+  ): Promise<ToolResultMessage> {
     const call = run.call
     // Every outcome goes through tool.call.after (skipped once the turn is interrupted), then
     // tool.execute.end.
@@ -219,6 +229,9 @@ export class ToolRunner {
       }
       const problem = checkArgs(tool.parameters, args)
       if (problem) return await reject("invalidArgs", `Invalid arguments for ${call.name}: ${problem}`, args)
+      await waitForKey(tool, args)
+      if (turn.signal.aborted || run.finished)
+        return await reject("aborted", "Aborted by the user before this tool ran.", args)
       const paths = await writtenPaths(tool, args, this.#deps.cwd)
       if (paths !== undefined) run.writtenPaths = paths
 

@@ -1,4 +1,5 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, expect, spyOn, test } from "bun:test"
+import { existsSync, realpathSync } from "node:fs"
 import {
   chmod,
   type FileHandle,
@@ -223,6 +224,43 @@ test("sequential update blocks match earlier results through normalized paths", 
   expect(result.isError).toBeUndefined()
   expect(await readFile(join(dir, "a"))).toEqual(Buffer.from(encodeText("final\r\nkeep", format)))
   expect((result.details as ApplyPatchDetails).files.map((file) => file.action)).toEqual(["update", "update"])
+})
+
+test("delete through a modeled 8.3 alias retains its planning key for a later add", async () => {
+  const dir = await tmp.make()
+  const alias = join(dir, "LONGFI~1.TXT")
+  const canonical = join(realpathSync(dir), "Long filename.txt")
+  await writeFile(alias, "old\n")
+  const native = realpathSync.native
+  // Model NTFS's key expansion only: the alias resolves to its long name while it exists,
+  // then realpath fails after deletion and fileKey falls back to the literal short name.
+  // All actual I/O uses an ordinary file in the temporary fixture, not native 8.3 support.
+  const expandAlias = spyOn(realpathSync, "native").mockImplementation(
+    new Proxy(native, {
+      apply(target, thisArg, args) {
+        if (String(args[0]) === alias && existsSync(alias)) {
+          const encoding = typeof args[1] === "string" ? args[1] : args[1]?.encoding
+          return encoding === "buffer" ? Buffer.from(canonical) : canonical
+        }
+        return Reflect.apply(target, thisArg, args)
+      },
+    }),
+  )
+  try {
+    const result = await applyPatchTool.execute(
+      { patch: envelope("*** Delete File: LONGFI~1.TXT\n*** Add File: Long filename.txt\n+replacement") },
+      makeCtx(dir),
+    )
+    expect(result.isError, toolResultText(result)).toBeUndefined()
+    expect((result.details as ApplyPatchDetails).files.map((file) => [file.path, file.action])).toEqual([
+      [alias, "delete"],
+      [alias, "add"],
+    ])
+    expect(await readFile(alias, "utf8")).toBe("replacement\n")
+    expect(await readdir(dir)).toEqual(["LONGFI~1.TXT"])
+  } finally {
+    expandAlias.mockRestore()
+  }
 })
 
 const move = (from: string, to: string, old = "old", next = "new") =>

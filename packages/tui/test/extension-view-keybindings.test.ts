@@ -167,6 +167,53 @@ test("declarative inputs keep q and printable back bindings; a remapped back rel
   expect(closed).toBe(1)
 })
 
+test("focused declarative input owns a printable tool-output binding", () => {
+  const { keys, warnings } = parseKeybindings(
+    { "tool-output": ["x", "ctrl+o"] },
+    "keybindings.json",
+    defaults,
+  )
+  expect(warnings).toEqual([])
+  const submitted: string[] = []
+  const viewer = new ExtensionViewer(
+    {
+      ...view,
+      ui: (_data, opts) => ({
+        type: "column",
+        children: [
+          { node: { type: "input", id: "input", activate: "/" } },
+          { node: { type: "text", id: "output", lines: [{ kind: "text", text: opts.toolDetail! }] } },
+        ],
+      }),
+      onEvent: (event) => {
+        if (event.type === "submit") submitted.push(event.value)
+      },
+    },
+    {},
+    { state: { focused: "input" }, keys },
+  )
+  try {
+    expect(viewer.render(100, ctx).join("\n")).toContain("summary")
+    expect(viewer.handleInput(textKey("a"))).toBe(true)
+    expect(viewer.handleInput(textKey("x"))).toBe(true)
+    expect(viewer.handleInput(textKey("b"))).toBe(true)
+    expect(viewer.handleInput(key("enter"))).toBe(true)
+    expect(submitted).toEqual(["axb"])
+    expect(viewer.render(100, ctx).join("\n")).toContain("summary")
+
+    expect(viewer.handleInput(key("o", { ctrl: true }))).toBe(true)
+    expect(viewer.render(100, ctx).join("\n")).toContain("full")
+    expect(viewer.handleInput(key("o", { ctrl: true }))).toBe(true)
+    expect(viewer.render(100, ctx).join("\n")).toContain("summary")
+
+    expect(viewer.handleInput(key("escape"))).toBe(true)
+    expect(viewer.handleInput(textKey("x"))).toBe(true)
+    expect(viewer.render(100, ctx).join("\n")).toContain("full")
+  } finally {
+    viewer.dispose()
+  }
+})
+
 test("extension-defined shortcuts take precedence over shared scroll keys", () => {
   for (const declarative of [false, true]) {
     let ran = 0

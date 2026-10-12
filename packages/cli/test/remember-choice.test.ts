@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, isNoModel } from "@amira/ai"
 import type { ExtensionAPI } from "@amira/api"
-import { Agent } from "@amira/core"
+import { Agent, loadSettings, resolveShimmer } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
 import { parseCliArgs } from "../src/args.ts"
 import { resolveConfig } from "../src/config.ts"
@@ -185,10 +185,38 @@ test.each(["soft", { preset: "soft" }, { preset: "sweep" }] as const)(
       expect(json(file).tui).toEqual({
         theme: "custom",
         themeVariant: "dark",
-        shimmer: typeof shimmer === "string" ? "soft" : { preset: "soft" },
+        shimmer:
+          typeof shimmer === "string"
+            ? "soft"
+            : { preset: "soft", style: "sweep", width: 6, period: 1800, edge: "soft", direction: "ltr" },
       })
   },
 )
+
+test("customized shimmer preset survives an actual three-layer settings reload", async () => {
+  const projectFile = path.join(cwd, ".amira", "settings.json")
+  const project = {
+    tui: { shimmer: { style: "pulse", period: 4000, width: 12, edge: "hard", direction: "rtl" } },
+  }
+  writeFileSync(projectFile, JSON.stringify(project))
+  const { commands } = await start()
+  commands.rememberTheme("amira", "dark", { preset: "off", width: 7 })
+  await commands.flushChoices()
+
+  const reloaded = loadSettings({ cwd, home })
+  expect(reloaded.files).toEqual([globalFile(), projectFile, localFile()])
+  const knobs = { style: "off", width: 7, period: 1800, edge: "soft", direction: "ltr" } satisfies ReturnType<
+    typeof resolveShimmer
+  >
+  expect(resolveShimmer("wave", reloaded.settings.tui?.shimmer)).toEqual(knobs)
+  for (const file of [globalFile(), localFile()])
+    expect(json(file).tui).toEqual({
+      theme: "amira",
+      themeVariant: "dark",
+      shimmer: { preset: "off", ...knobs },
+    })
+  expect(json(projectFile)).toEqual(project)
+})
 
 test("shimmer choices remain ordered across a delayed project eligibility probe", async () => {
   const { commands } = await start(["--rpc"])

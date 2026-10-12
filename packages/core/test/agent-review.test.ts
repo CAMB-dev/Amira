@@ -313,6 +313,145 @@ test("parallel calls sharing a key run in order while other keys run alongside",
   expect(ids).toEqual(["1", "2", "3"])
 })
 
+for (const blockedBy of ["interceptor", "plan", "approval"] as const) {
+  test(`concurrency keys are not invoked for calls blocked by ${blockedBy}`, async () => {
+    const { agent } = setup([{ toolCalls: [call("write", { path: "blocked" })] }, { text: "done" }])
+    let keys = 0
+    let executions = 0
+    agent.tools.register(
+      defineTool<{ path: string }>({
+        name: "write",
+        description: "",
+        parameters: {},
+        concurrency: "parallel",
+        traits: { writesFiles: true },
+        concurrencyKey: (args) => {
+          keys++
+          return args.path
+        },
+        execute: async () => {
+          executions++
+          return textResult("must not run")
+        },
+      }),
+      "t",
+    )
+    if (blockedBy === "interceptor") {
+      agent.interceptors.add("tool.call.before", () => ({ action: "block", reason: "blocked" }))
+    } else if (blockedBy === "plan") {
+      agent.permissions.setMode("plan")
+    } else {
+      // With no approver attached, an interceptor's question cannot be approved.
+      agent.interceptors.add("tool.call.before", () => ({ action: "ask", reason: "check first" }))
+    }
+    await agent.prompt("go")
+    expect(agent.messages.find((m) => m.role === "toolResult")?.rejected).toBe("blocked")
+    expect(executions).toBe(0)
+    expect(keys).toBe(0)
+  })
+}
+
+test("authorized calls serialize by interceptor-transformed paths in request order", async () => {
+  const { agent } = setup([
+    { toolCalls: [call("write", { path: "first" }, "1"), call("write", { path: "second" }, "2")] },
+    { text: "done" },
+  ])
+  const keys: string[] = []
+  const log: string[] = []
+  agent.interceptors.add("tool.call.before", (value) => ({
+    action: "modify",
+    value: { ...value, args: { path: "authorized" } },
+  }))
+  agent.tools.register(
+    defineTool<{ path: string }>({
+      name: "write",
+      description: "",
+      parameters: {},
+      concurrency: "parallel",
+      concurrencyKey: (args) => {
+        keys.push(args.path)
+        return args.path
+      },
+      execute: async (_args, context) => {
+        log.push(`start ${context.toolCallId}`)
+        await Bun.sleep(10)
+        log.push(`end ${context.toolCallId}`)
+        return textResult("done")
+      },
+    }),
+    "t",
+  )
+  await agent.prompt("go")
+  expect(keys).toEqual(["authorized", "authorized"])
+  expect(log).toEqual(["start 1", "end 1", "start 2", "end 2"])
+  expectValidHistory(agent)
+})
+
+test("an independent key runs while an earlier call is waiting on its interceptor", async () => {
+  const { agent } = setup([
+    { toolCalls: [call("write", { path: "a" }, "1"), call("write", { path: "b" }, "2")] },
+    { text: "done" },
+  ])
+  const independent = Promise.withResolvers<void>()
+  const log: string[] = []
+  agent.interceptors.add("tool.call.before", async (value) => {
+    if (value.toolCallId === "1") await independent.promise
+    return { action: "pass" }
+  })
+  agent.tools.register(
+    defineTool<{ path: string }>({
+      name: "write",
+      description: "",
+      parameters: {},
+      concurrency: "parallel",
+      concurrencyKey: (args) => args.path,
+      execute: async (_args, context) => {
+        log.push(context.toolCallId)
+        if (context.toolCallId === "2") independent.resolve()
+        return textResult("done")
+      },
+    }),
+    "t",
+  )
+  await agent.prompt("go")
+  expect(log).toEqual(["2", "1"])
+  expectValidHistory(agent)
+})
+
+test("aborting a same-key wait does not execute it after its abandoned predecessor returns", async () => {
+  const { agent } = setup(
+    [{ toolCalls: [call("write", { path: "same" }, "1"), call("write", { path: "same" }, "2")] }],
+    10,
+  )
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const log: string[] = []
+  agent.tools.register(
+    defineTool<{ path: string }>({
+      name: "write",
+      description: "",
+      parameters: {},
+      concurrency: "parallel",
+      concurrencyKey: (args) => args.path,
+      execute: async (_args, context) => {
+        log.push(context.toolCallId)
+        entered.resolve()
+        await release.promise
+        return textResult("done")
+      },
+    }),
+    "t",
+  )
+  const prompted = agent.prompt("go")
+  await entered.promise
+  agent.abort()
+  expect((await prompted).reason).toBe("aborted")
+  expectValidHistory(agent)
+  release.resolve()
+  await Bun.sleep(20)
+  expect(log).toEqual(["1"])
+})
+
 test("at most maxParallelTools calls run at once", async () => {
   const mock = createMockDialect([
     { toolCalls: Array.from({ length: 6 }, (_, i) => ({ name: "p", args: {}, id: `c${i}` })) },
