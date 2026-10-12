@@ -1,4 +1,4 @@
-import { expect, setDefaultTimeout, test } from "bun:test"
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test"
 import { commandWorkerStatus, resetCommandWorker, runCommand } from "../src/index.ts"
 
 // Spawns can take seconds on Windows machines with antivirus scanning.
@@ -20,6 +20,45 @@ test("runs a command in the worker and streams its output in chunks", async () =
   expect(run.truncated).toBe(false)
   expect(chunks.join("")).toBe(run.output)
 })
+
+test.each([
+  [0, null, 0],
+  [7, null, 7],
+  [137, null, 137],
+  [137, "SIGKILL", null],
+] as const)(
+  "collects an immediate command that exited during spawn (code %s, signal %s)",
+  async (exitCode, signalCode, expectedCode) => {
+    // A real completed child at the spawn boundary reproduces the fast POSIX git race without
+    // relying on scheduler timing. This is not a standby waiting to execute a command.
+    const proc = Bun.spawn([bun, "-e", `console.log('fast'); process.exit(${exitCode})`], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+    })
+    await proc.exited
+    // Exercise Bun's POSIX signal metadata on Windows too, without inferring it from 137.
+    Object.defineProperty(proc, "signalCode", { value: signalCode })
+    const spawn = spyOn(Bun, "spawn").mockReturnValue(proc)
+    try {
+      const run = await runCommand([bun, "-e", "unused"], {
+        ...opts(),
+        trackTree: () => ({ contained: true, kill() {}, terminate: () => false, dispose() {} }),
+      })
+      expect(run).toMatchObject({
+        exitCode: expectedCode,
+        signalCode,
+        timedOut: false,
+        aborted: false,
+        settled: true,
+      })
+      expect(run.output.trim()).toBe("fast")
+    } finally {
+      spawn.mockRestore()
+    }
+  },
+)
 
 test("stdoutOnly drops stderr", async () => {
   const run = await runCommand([bun, "-e", "console.log('out'); console.error('err')"], {

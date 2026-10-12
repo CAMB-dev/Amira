@@ -23,6 +23,7 @@ import {
 } from "../../../packages/proc/src/index.ts"
 import { bashTool, createPowershellTool } from "../src/bash.ts"
 import {
+  endText,
   jobListTool,
   jobOutputTool,
   jobStopTool,
@@ -67,6 +68,21 @@ afterEach(async () => {
   jobRegistry = hostBackgroundJobs()
 })
 afterAll(() => tmp.cleanup())
+
+test.each([
+  ["SIGKILL", "was killed by SIGKILL"],
+  [null, "exited with code 137"],
+] as const)("background exit reporting uses signal metadata (%s)", (signal, expected) => {
+  const registry = new JobRegistry({
+    start(_spec, emit) {
+      emit({ type: "spawned", pid: 123, contained: true })
+      emit({ type: "exit", code: 137, signal })
+      return { stop() {} }
+    },
+  })
+  const job = registry.start({ command: "ignored", argv: [], cwd: process.cwd() })
+  expect(endText(job)).toBe(expected)
+})
 
 interface Delivered {
   message: UserMessage

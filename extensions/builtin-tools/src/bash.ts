@@ -199,7 +199,7 @@ export const powershellTool = createPowershellTool()
 function statusLine(run: HostRunResult, timeoutMs: number): string {
   if (run.timedOut) return `Command timed out after ${timeoutMs} ms and was killed.`
   if (run.aborted) return "Command was aborted."
-  if (run.exitCode === null)
+  if (run.signalCode || run.exitCode === null)
     return `Command was killed by signal${run.signalCode ? ` ${run.signalCode}` : ""}.`
   return `Exit code: ${run.exitCode}`
 }

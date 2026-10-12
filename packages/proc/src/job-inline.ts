@@ -120,6 +120,8 @@ export function startJobInline(spec: JobSpec, emit: (e: JobEvent) => void): JobH
   proc.exited.then(
     async () => {
       exited = true
+      const signal = proc.signalCode
+      const code = signal ? null : proc.exitCode
       clearTimeout(killTimer)
       // The job is its main process: what it left running goes with it.
       tree.kill()
@@ -130,8 +132,8 @@ export function startJobInline(spec: JobSpec, emit: (e: JobEvent) => void): JobH
       const logError = await log.close()
       emit({
         type: "exit",
-        code: proc.exitCode,
-        signal: proc.signalCode,
+        code,
+        signal,
         ...(logError ? { logError } : {}),
       })
     },

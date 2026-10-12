@@ -15,6 +15,28 @@ const timedOut: api.HostRunResult = {
   contained: true,
 }
 
+test.each([
+  ["SIGKILL", "Command was killed by signal SIGKILL."],
+  [null, "Exit code: 137"],
+] as const)(
+  "signal metadata, not a numeric exit status, determines shell reporting (%s)",
+  async (signalCode, expected) => {
+    const direct = spyOn(api, "hostRunCommand").mockResolvedValue({
+      ...timedOut,
+      timedOut: false,
+      exitCode: 137,
+      signalCode,
+    })
+    try {
+      const result = await bashTool.execute({ command: "ignored" }, makeCtx(process.cwd()))
+      expect(result.isError).toBe(true)
+      expect(textOf(result)).toEndWith(expected)
+    } finally {
+      direct.mockRestore()
+    }
+  },
+)
+
 for (const tool of [bashTool, powershellTool]) {
   test(`${tool.name}: timeout default, bounds, and recovery guidance reach the runner and model`, async () => {
     // Observe the real tool's runner boundary without waiting ten minutes or spawning a shell.

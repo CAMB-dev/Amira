@@ -300,7 +300,8 @@ was identified from scheduling and history, not independently reproduced. A repr
 slow Windows process probe and a background-job startup assumption were made deterministic.
 
 Validation is for Windows/Bun 1.4.2. A supplementary WSL/Bun 1.3.14 run exposed that
-older runtime's cached os.homedir() behavior; that compatibility issue is not fixed.
+older runtime's cached os.homedir() behavior. The test-home preload now redirects the
+node:os function too, before Bun snapshots named imports; changing HOME alone is insufficient.
 
 The following files are ranked by baseline duration; the after column is the first
 final serial verification run. Individual-test durations below are from baseline JUnit.
