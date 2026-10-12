@@ -730,7 +730,7 @@ test("an unknown provider is a usage error", async () => {
 test("the amira command: help, version and usage errors have the right exit codes and streams", async () => {
   const main = path.join(here, "..", "src", "main.ts")
   const run = async (...args: string[]) => {
-    const p = Bun.spawn(["bun", main, ...args], {
+    const p = Bun.spawn([process.execPath, main, ...args], {
       stdout: "pipe",
       stderr: "pipe",
       // An empty home, so the user's own settings cannot pick a model.

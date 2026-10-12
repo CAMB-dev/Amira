@@ -1,8 +1,12 @@
 import { afterAll } from "bun:test"
+import { setClockPreference } from "../packages/tui/src/clock.ts"
 import { isolateTestHome } from "./test-home"
 
 // Capture the launching shell's homes before sanitizing any environment variables.
 afterAll(isolateTestHome())
+
+// Transcript assertions use a 24-hour clock regardless of the runner's Intl defaults.
+setClockPreference({ locale: "en-GB", hourCycle: "h23" })
 
 // Tests must not depend on the shell that runs them. They decide colors, the terminal and
 // Amira's settings themselves (passing `color`, an `env` or a home where it matters).

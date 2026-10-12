@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { symlinkSync } from "node:fs"
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -43,6 +44,20 @@ test("deprecated gitInfo still probes git standalone, without any provider", asy
     expect((await gitInfo(d, 15_000, { dirty: true })).dirty).toBe(true)
     expect((await gitInfo(d)).dirty).toBeUndefined()
   } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+}, 60_000)
+
+test("deprecated gitInfo detects a plain repository through a directory link", async () => {
+  const d = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-link-"))
+  const linkDir = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-alias-"))
+  try {
+    expect(Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: d }).exitCode).toBe(0)
+    const link = path.join(linkDir, "repo")
+    symlinkSync(d, link, process.platform === "win32" ? "junction" : "dir")
+    expect(await gitInfo(link)).toMatchObject({ branch: "main", isWorktree: false })
+  } finally {
+    await rm(linkDir, { recursive: true, force: true })
     await rm(d, { recursive: true, force: true })
   }
 }, 60_000)

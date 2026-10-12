@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
@@ -12,7 +20,7 @@ import { createSession } from "../src/session.ts"
 
 const dirs: string[] = []
 const temporary = () => {
-  const dir = mkdtempSync(join(tmpdir(), "amira-rewind-control-"))
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "amira-rewind-control-")))
   dirs.push(dir)
   return dir
 }

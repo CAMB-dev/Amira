@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
@@ -16,7 +16,7 @@ afterAll(async () => {
 })
 
 test("a third-party path writer is captured and restored by file rewind", async () => {
-  const cwd = await mkdtemp(path.join(os.tmpdir(), "amira-tool-traits-"))
+  const cwd = await realpath(await mkdtemp(path.join(os.tmpdir(), "amira-tool-traits-")))
   dirs.push(cwd)
   const session = SessionStore.create({ cwd, dir: path.join(cwd, "sessions") })
   const rewind = new FileRewind(session)
@@ -70,7 +70,7 @@ test("a third-party path writer is captured and restored by file rewind", async 
 })
 
 test("a captured writer that uses mutateFiles keeps its stale-read guard; an empty report captures nothing", async () => {
-  const cwd = await mkdtemp(path.join(os.tmpdir(), "amira-tool-traits-"))
+  const cwd = await realpath(await mkdtemp(path.join(os.tmpdir(), "amira-tool-traits-")))
   dirs.push(cwd)
   await writeFile(path.join(cwd, "a.txt"), "current")
   const session = SessionStore.create({ cwd, dir: path.join(cwd, "sessions") })

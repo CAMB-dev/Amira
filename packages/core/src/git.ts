@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises"
 import path from "node:path"
 import { runCommand } from "@amira/proc"
 import type { EventBus } from "./event-bus.ts"
@@ -63,10 +64,14 @@ export async function gitInfo(
   const [repoRoot, rawGitDir, rawCommonDir] = dirs.split(/\r?\n/)
   const info: GitInfo = {}
   if (repoRoot) info.repoRoot = path.normalize(repoRoot)
-  const gitDir = rawGitDir ? path.normalize(rawGitDir) : undefined
-  // --git-common-dir may be relative to cwd.
-  const commonDir = rawCommonDir ? path.resolve(cwd, rawCommonDir) : gitDir
-  if (gitDir && commonDir) info.isWorktree = gitDir !== commonDir
+  const canonicalDir = (dir: string) => realpath(dir).catch(() => dir)
+  const gitDir = rawGitDir ? await canonicalDir(path.normalize(rawGitDir)) : undefined
+  // --git-common-dir may be relative to cwd, including a symlink or junction.
+  const commonDir = rawCommonDir ? await canonicalDir(path.resolve(cwd, rawCommonDir)) : gitDir
+  if (gitDir && commonDir) {
+    info.isWorktree =
+      process.platform === "win32" ? gitDir.toLowerCase() !== commonDir.toLowerCase() : gitDir !== commonDir
+  }
   if (branch) info.branch = branch
   if (head) info.head = head
   if (status !== undefined) info.dirty = status !== ""

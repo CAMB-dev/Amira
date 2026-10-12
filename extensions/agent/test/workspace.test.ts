@@ -1,4 +1,5 @@
 import { afterAll, expect, setDefaultTimeout, test } from "bun:test"
+import { symlinkSync } from "node:fs"
 import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -55,6 +56,13 @@ test("a repository with commits reports root, branch and head with native separa
   expect(info.branch).toBe("trunk")
   expect(info.head).toMatch(/^[0-9a-f]{4,}$/)
   expect(info.isWorktree).toBe(false)
+})
+
+test("a repository reached through a directory link is not a linked worktree", async () => {
+  const d = await repo()
+  const link = path.join(await tempDir(), "repo")
+  symlinkSync(d, link, process.platform === "win32" ? "junction" : "dir")
+  expect(await gitInfo(link)).toMatchObject({ branch: "trunk", isWorktree: false })
 })
 
 test("a repository without commits still reports root and branch", async () => {
@@ -171,6 +179,27 @@ test("dirty probes report untracked, staged and unstaged files without rewriting
   expect((await provider.probe(cwd, signal, "dirty"))!.dirty).toBe(true)
   expect(await readFile(index)).toEqual(before)
   expect((await stat(index)).mtimeMs).toBe(mtime)
+})
+
+test("missing metadata paths keep probes best-effort and path comparisons respect the platform", async () => {
+  const cwd = await tempDir()
+  const gitDir = path.join(cwd, ".git")
+  let commonDir = gitDir
+  const runCommand: ExtensionAPI["runCommand"] = async (argv) => ({
+    output: argv[2] === "--show-toplevel" ? [cwd, gitDir, commonDir].join("\n") : "",
+    exitCode: 0,
+    truncated: false,
+    signalCode: null,
+    timedOut: false,
+    aborted: false,
+    settled: true,
+    contained: true,
+  })
+  expect((await probeInfo({ runCommand }, cwd)).isWorktree).toBe(false)
+  commonDir = gitDir.toUpperCase()
+  expect((await probeInfo({ runCommand }, cwd)).isWorktree).toBe(process.platform !== "win32")
+  commonDir = path.join(cwd, "shared.git")
+  expect((await probeInfo({ runCommand }, cwd)).isWorktree).toBe(true)
 })
 
 test("probes use the host runner with timeout, cancellation, stdout-only and Windows viaCmd", async () => {

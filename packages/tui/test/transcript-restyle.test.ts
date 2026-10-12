@@ -52,16 +52,9 @@ const assistant: AssistantMessage & { timestamp: number } = {
   timestamp: at,
 }
 
-test("clocks use the local timezone and system locale's hour cycle", () => {
-  const cycle = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions().hourCycle
-  const hour12 = cycle ? cycle === "h11" || cycle === "h12" : true
-  const expected = new Intl.DateTimeFormat(undefined, {
-    hour: hour12 ? "numeric" : "2-digit",
-    minute: "2-digit",
-    hour12,
-  })
-  for (const time of [at, new Date(2026, 9, 10, 0, 4).getTime()])
-    expect(localClock(time)).toBe(expected.format(time).replace(/[\u00a0\u202f]/g, " "))
+test("clocks use the local timezone and the injected hour cycle", () => {
+  expect(localClock(at)).toBe("20:09")
+  expect(localClock(new Date(2026, 9, 10, 0, 4).getTime())).toBe("00:04")
   expect(messageTimestamp(user)).toBe(at)
   expect(messageTimestamp({ timestamp: 0 })).toBe(0)
   for (const message of [{}, { timestamp: "20:09" }, { timestamp: Number.NaN }])

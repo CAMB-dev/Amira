@@ -54,6 +54,23 @@ function setup(sessionInfo?: Partial<SessionInfo>) {
 const texts = (host: ExtensionHost) => host.status.snapshot().map((i) => [i.id, i.align, i.text])
 const item = (host: ExtensionHost, id: string) => host.status.snapshot().find((i) => i.id === id)
 
+async function afterRender(bus: EventBus, action: () => unknown) {
+  let unsubscribe = () => {}
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const rendered = new Promise<void>((resolve, reject) => {
+    unsubscribe = bus.subscribe(() => resolve(), { types: ["ui.render"] })
+    timer = setTimeout(() => reject(new Error("timed out waiting for ui.render")), 1000)
+  })
+  try {
+    await action()
+    await rendered
+    await bus.flush()
+  } finally {
+    clearTimeout(timer)
+    unsubscribe()
+  }
+}
+
 test("shows (no model) until one is picked, and follows a model switch at once", async () => {
   const { bus, host, agent, ai } = setup()
   await host.load(statusExtension, "builtin:status")
@@ -118,22 +135,24 @@ test("shows only the effort sent to the model, and follows effort, model and ses
 
 test("effort changes request a redraw for the top-level session only", async () => {
   const { bus, host, agent, info } = setup({ supportsThinking: true, thinking: "high" })
-  await host.load(statusExtension, "builtin:status")
-  agent.start("startup")
-  await Bun.sleep(5)
-  await bus.flush()
+  await afterRender(bus, async () => {
+    await host.load(statusExtension, "builtin:status")
+    agent.start("startup")
+  })
   const renders: AnyEvent[] = []
   bus.subscribe((e) => void renders.push(e), { types: ["ui.render"] })
 
   info.thinking = "low"
-  bus.emit("thinking.changed", { thinking: "low" }, { sessionId: agent.sessionId })
-  await Bun.sleep(5)
-  await bus.flush()
+  await afterRender(bus, () => {
+    bus.emit("thinking.changed", { thinking: "low" }, { sessionId: agent.sessionId })
+  })
   expect(renders).toHaveLength(1)
   expect(item(host, "model")?.text).toBe("m1 (low)")
 
   bus.emit("thinking.changed", { thinking: "max" }, { sessionId: "child", parentSessionId: agent.sessionId })
-  await Bun.sleep(5)
+  await bus.flush()
+  // Let any render timer incorrectly requested by the child run before checking the count.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
   await bus.flush()
   expect(renders).toHaveLength(1)
   expect(item(host, "model")?.text).toBe("m1 (low)")
@@ -364,17 +383,15 @@ test("render requests are coalesced, and unload triggers a redraw", async () => 
   const { bus, host } = setup()
   const renders: AnyEvent[] = []
   bus.subscribe((e) => void renders.push(e), { types: ["ui.render"] })
-  await host.load((api) => {
-    api.registerStatusItem({ id: "a", text: () => "a" })
-    api.registerStatusItem({ id: "b", text: () => "b" })
-    for (let i = 0; i < 50; i++) api.requestRender()
-  }, "x")
-  await Bun.sleep(5)
-  await bus.flush()
+  await afterRender(bus, () =>
+    host.load((api) => {
+      api.registerStatusItem({ id: "a", text: () => "a" })
+      api.registerStatusItem({ id: "b", text: () => "b" })
+      for (let i = 0; i < 50; i++) api.requestRender()
+    }, "x"),
+  )
   expect(renders).toHaveLength(1)
-  host.unload("x")
-  await Bun.sleep(5)
-  await bus.flush()
+  await afterRender(bus, () => host.unload("x"))
   expect(renders).toHaveLength(2)
 })
 

@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test"
 import "../../../packages/core/src/index.ts"
 import { existsSync } from "node:fs"
-import { mkdir, rename, writeFile } from "node:fs/promises"
+import { mkdir, realpath, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { prepareCommand, runCommand } from "../../../packages/proc/src/index.ts"
 import { createPowershellTool, powershellDescription } from "../src/bash.ts"
@@ -312,6 +312,8 @@ for (const path of editions) {
 
     describe("working directory", () => {
       const temp = tempDirs()
+      // PowerShell reports expanded long paths even when TMP/TEMP uses an 8.3 alias.
+      const makeDir = async () => realpath(await temp.make())
       afterAll(() => temp.cleanup())
       const shell = gatedPowerShell(path)
       const lf = (s: string) => s.replaceAll("\r\n", "\n")
@@ -334,7 +336,7 @@ for (const path of editions) {
         return { pool, counts, run }
       }
       const special = async () => {
-        const dir = join(await temp.make(), "we [x] 'q' $y `b é你 ;&(%) ~")
+        const dir = join(await makeDir(), "we [x] 'q' $y `b é你 ;&(%) ~")
         await mkdir(dir)
         await writeFile(join(dir, "rel.txt"), "hi")
         return dir
@@ -357,7 +359,7 @@ for (const path of editions) {
       })
 
       test("a working directory that is gone fails before the command runs", async () => {
-        const parent = await temp.make()
+        const parent = await makeDir()
         const dir = join(parent, "gone [x] 'q' $y é")
         const marker = join(parent, "ran.txt")
         const runCold = (cwd: string) => {
@@ -384,7 +386,7 @@ for (const path of editions) {
       })
 
       test("a working directory longer than MAX_PATH runs cmdlets there, or fails cleanly", async () => {
-        let dir = await temp.make()
+        let dir = await makeDir()
         while (dir.length < 300) dir = join(dir, "d".repeat(40))
         await mkdir(dir, { recursive: true })
         await writeFile(join(dir, "rel.txt"), "long")
@@ -404,7 +406,7 @@ for (const path of editions) {
         const { pool, counts, run } = countingPool()
         try {
           const a = await special()
-          const b = await temp.make()
+          const b = await makeDir()
           pool.fill(shell.command("", a))
           expect((await run(a, "(Get-Location).ProviderPath")).output.trim()).toBe(a)
           expect((await run(b, "(Get-Location).ProviderPath")).output.trim()).toBe(b)
@@ -418,7 +420,7 @@ for (const path of editions) {
       test("an idle standby does not hold the session directory", async () => {
         const { pool, counts, run } = countingPool()
         try {
-          const parent = await temp.make()
+          const parent = await makeDir()
           let [from, to] = [join(parent, "project"), join(parent, "renamed")]
           await mkdir(from)
           pool.fill(shell.command("", from))
