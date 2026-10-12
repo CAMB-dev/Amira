@@ -32,6 +32,8 @@ interface Snapshot {
 }
 
 interface Change {
+  /** Stable identity from planning, even if an earlier operation removes a path alias. */
+  key: string
   before: Snapshot
   after?: Uint8Array
   mode?: number
@@ -165,10 +167,11 @@ export async function applyPatch(
     staged.set(key, before)
     return before
   }
-  function stage(change: Change) {
-    changes.push(change)
+  function stage(change: Omit<Change, "key">) {
+    const key = fileKey(cwd, change.before.path)!
+    changes.push({ ...change, key })
     staged.set(
-      fileKey(cwd, change.before.path)!,
+      key,
       change.after
         ? { ...change.before, bytes: Buffer.from(change.after), mode: change.mode ?? change.before.mode }
         : { path: change.before.path },
@@ -258,7 +261,7 @@ async function commitPatch(
   try {
     for (const planned of changes) {
       signal.throwIfAborted()
-      const key = fileKey(cwd, planned.before.path)!
+      const key = planned.key
       const change = { ...planned, before: currentState.get(key)! }
       await unchanged(cwd, change.before)
       if (change.after) {

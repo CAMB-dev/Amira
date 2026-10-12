@@ -1,7 +1,7 @@
 import { visibleWidth } from "@amira/tui-kit"
 import type { Block, BlockEnv } from "../blocks.ts"
-import { userBandPaddingIn } from "../format.ts"
-import { ESCAPE } from "../text-selection.ts"
+import { timestampIn, userBandPaddingIn } from "../format.ts"
+import { ESCAPE, sliceCells } from "../text-selection.ts"
 import type { Match, PaneRow } from "../transcript-pane.ts"
 
 interface FindView {
@@ -125,7 +125,14 @@ export class PaneFind {
       if (found?.query !== q) {
         found = {
           query: q,
-          matches: findIn(block, this.view.plain(block, env), q, exact, userBandPaddingIn(d.lines)),
+          matches: findIn(
+            block,
+            this.view.plain(block, env),
+            q,
+            exact,
+            userBandPaddingIn(d.lines),
+            timestampIn(d.lines),
+          ),
         }
         this.found.set(d, found)
       }
@@ -183,6 +190,7 @@ function findIn(
   q: string,
   exact: boolean,
   padding: number,
+  stamp: ReturnType<typeof timestampIn>,
 ): Match[][] {
   let text = ""
   /** The line and column of each character of `text`; -1 for what joins lines. */
@@ -190,7 +198,8 @@ function findIn(
   const colOf: number[] = []
   // Painted breathing room is not text or a line break in the searchable message.
   for (let line = padding; line < plain.length - padding; line++) {
-    const raw = plain[line]!
+    // The clock is trailing chrome in display cells; matches keep their string offsets.
+    const raw = stamp?.line === line ? sliceCells(plain[line]!, 0, stamp.to) : plain[line]!
     const start = raw.length - raw.trimStart().length
     const body = raw.slice(start).trimEnd()
     // Text wraps after a wide (CJK) character without dropping a space: those rows join as is.

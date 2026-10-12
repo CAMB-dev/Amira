@@ -77,6 +77,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** Calls of the running step, in call order. */
   let stepCalls: ToolBlock[] = []
   let reply: ReplyBlock | undefined
+  let pendingReplyWhitespace = ""
   /** The first visible assistant row owns the turn's clock, even when it is not text. */
   let assistantSeen = false
   const firstAssistantTime = () => {
@@ -284,6 +285,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   function clearTranscript(): void {
     settleStep()
     reply = undefined
+    pendingReplyWhitespace = ""
     assistantSeen = false
     findSelect.closeFind()
     pane.clear((b) => b.kind === "banner")
@@ -372,8 +374,13 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       pane.changed()
     },
     replyDelta(text) {
-      // Empty deltas create no visible reply and cannot claim a clock or end thinking.
-      if (!reply && !text.trim()) return
+      // Leading whitespace is source, but cannot claim a clock or end thinking yet.
+      if (!reply && !text.trim()) {
+        pendingReplyWhitespace += text
+        return
+      }
+      text = pendingReplyWhitespace + text
+      pendingReplyWhitespace = ""
       endReasoning()
       if (!reply) {
         reply = new ReplyBlock("", true, host.hyperlinks, firstAssistantTime())
@@ -384,6 +391,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       pane.changed()
     },
     replyEnd(calls) {
+      pendingReplyWhitespace = ""
       let shown = endReasoning()
       if (reply) {
         reply.finish()
@@ -438,6 +446,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       return true
     },
     turnEnd() {
+      pendingReplyWhitespace = ""
       assistantSeen = false
       settleStep()
       subagents.tick()
@@ -477,6 +486,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       renderer.requestRender()
     },
     leaveSession() {
+      pendingReplyWhitespace = ""
       assistantSeen = false
       settleStep()
       endReasoning()

@@ -11,6 +11,8 @@ import {
   ReplyBlock,
   userBlock,
 } from "../src/blocks.ts"
+import { localClock, timestampIn } from "../src/format.ts"
+import { sliceCells } from "../src/text-selection.ts"
 import type { BlockKind } from "../src/transcript.ts"
 import { highlight, TranscriptPane } from "../src/transcript-pane.ts"
 
@@ -92,6 +94,59 @@ test("scrolling up keeps rows in place while blocks arrive; scrolling to the end
   expect(p.render(env(), 4)).toEqual(["b0 l0", "b0 l1", "b0 l2", ""])
   p.pageDown()
   expect(p.render(env(), 4)[0]).toBe("")
+})
+
+test("removing the paused separator anchor retains the start of the tall block below it", () => {
+  const p = new TranscriptPane()
+  const separator = new Counted("notice", ["  ---"])
+  const output = new Counted(
+    "tool",
+    Array.from({ length: 30 }, (_, i) => `out ${i}`),
+  )
+  p.add(new Counted("assistant", ["reply"]))
+  p.add(separator)
+  p.add(output)
+  p.render(env(), 5)
+  p.toBlock(separator)
+  expect(p.render(env(), 5)).toEqual(["  ---", "", "out 0", "out 1", "out 2"])
+  expect(p.following).toBe(false)
+  p.remove(separator)
+  const shown = p.render(env(), 5)
+  expect(p.following).toBe(false)
+  expect(shown).toEqual(["", "out 0", "out 1", "out 2", "out 3"])
+  expect(p.layout[0]).toEqual({ block: output, line: -1 })
+  p.add(new Counted("tool", ["later output"]))
+  expect(p.render(env(), 5)).toEqual(shown)
+  expect(p.unseen).toBe(true)
+})
+
+test("removing a paused last block anchors the preceding block's final row", () => {
+  const p = new TranscriptPane()
+  const previous = new Counted("assistant", ["previous 0", "previous 1", "previous 2"])
+  const last = new Counted("tool", ["last 0", "last 1", "last 2"])
+  p.add(previous)
+  p.add(last)
+  p.render(env(), 1)
+  p.toBlock(last)
+  expect(p.render(env(), 1)).toEqual(["last 0"])
+  expect(p.following).toBe(false)
+  p.remove(last)
+  expect(p.render(env(), 1)).toEqual(["previous 2"])
+  expect(p.following).toBe(false)
+  p.add(new Counted("tool", ["new 0", "new 1"]))
+  expect(p.render(env(), 1)).toEqual(["previous 2"])
+})
+
+test("removing the only paused block returns to an empty following pane", () => {
+  const p = new TranscriptPane()
+  const only = new Counted("assistant", ["row 0", "row 1"])
+  p.add(only)
+  p.render(env(), 1)
+  p.toTop()
+  expect(p.following).toBe(false)
+  p.remove(only)
+  expect(p.render(env(), 1)).toEqual([""])
+  expect(p.following).toBe(true)
 })
 
 test("a changed width draws blocks again at that width; the cache keeps both while selected", () => {
@@ -205,6 +260,50 @@ test("find matches text that wraps over rows, and so at any width", () => {
   p.find("quick brown")
   expect(p.matchCount).toBe(2)
 })
+
+for (const kind of ["assistant", "user"] as const) {
+  for (const source of [
+    "alpha beta gamma delta epsilon zeta",
+    "看看 🧪 alpha beta gamma delta epsilon zeta",
+  ]) {
+    test(`find excludes ${kind} timestamps while preserving wrapped phrase highlights: ${source}`, () => {
+      const p = new TranscriptPane()
+      const at = new Date(2026, 9, 10, 20, 0).getTime()
+      const block =
+        kind === "assistant"
+          ? new ReplyBlock(source, false, false, at)
+          : userBlock({ role: "user", content: [{ type: "text", text: source }] }, at)
+      p.add(block)
+      const e = {
+        ...env(source.startsWith("看看") ? 40 : 30),
+        // The user's actual band has padding, so its stamp is not on row zero.
+        theme: kind === "user" ? { ...defaultTheme, ...surfaceTheme("light") } : plain.theme,
+      }
+      p.render(e, 10)
+      const lines = p.lines(block, e)
+      const stamp = timestampIn(lines)!
+      expect(stamp).toBeDefined()
+      const first = sliceCells(stripAnsi(lines[stamp.line]!), 0, stamp.to).trimEnd()
+      const lastWord = first.split(" ").at(-1)!
+      const nextWord = stripAnsi(lines[stamp.line + 1]!)
+        .trim()
+        .split(" ")[0]!
+      p.find(`${lastWord} ${nextWord}`)
+      expect(p.matchCount).toBe(1)
+      const highlighted = p.render(e, 10)
+      const firstMarked = highlighted.find((row) => stripAnsi(row) === stripAnsi(lines[stamp.line]!))!
+      expect(firstMarked).toContain(`\x1b[7;4m${lastWord}\x1b[27;24m`)
+      expect(stripAnsi(firstMarked.slice(0, firstMarked.indexOf("\x1b[7;4m")))).toBe(
+        first.slice(0, first.length - lastWord.length),
+      )
+      expect(highlighted.some((row) => row.includes(`\x1b[7;4m${nextWord}\x1b[27;24m`))).toBe(true)
+      for (const query of [localClock(at), `${lastWord} ${localClock(at)}`]) {
+        p.find(query)
+        expect(p.matchCount).toBe(0)
+      }
+    })
+  }
+}
 
 test("find matches CJK text that wraps between characters, with no space put in", () => {
   const p = new TranscriptPane()

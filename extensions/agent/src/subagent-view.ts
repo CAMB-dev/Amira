@@ -118,7 +118,7 @@ function transcriptLines(
   messages: readonly Message[],
   kids: SubagentInfo[],
   opts: ViewRenderOptions,
-  started: ReadonlyMap<string, { startedAt: number; partial?: ToolResult }>,
+  started: (toolCallId: string) => { startedAt: number; partial?: ToolResult } | undefined,
 ): ViewLine[] {
   const own = messages.slice(
     Math.max(
@@ -187,11 +187,7 @@ function transcriptLines(
       if (block.status === "running" && live(info)) {
         flush()
         out.push(
-          ...(opts.renderRunningTool?.(
-            block.name,
-            { args: block.input, ...started.get(block.id) },
-            { last },
-          ) ?? [
+          ...(opts.renderRunningTool?.(block.name, { args: block.input, ...started(block.id) }, { last }) ?? [
             {
               kind: "text",
               text: `  ${last ? symbols.treeLast : symbols.treeBranch} ${block.name}  running`,
@@ -215,11 +211,7 @@ function transcriptLines(
       } else if (live(info)) {
         flush()
         out.push(
-          ...(opts.renderRunningTool?.(
-            block.name,
-            { args: block.args, ...started.get(block.id) },
-            { last },
-          ) ?? [
+          ...(opts.renderRunningTool?.(block.name, { args: block.args, ...started(block.id) }, { last }) ?? [
             {
               kind: "text",
               text: `  ${last ? symbols.treeLast : symbols.treeBranch} ${block.name}${summarizeArgs(block.args) ? ` ${summarizeArgs(block.args)}` : ""}  running`,
@@ -257,6 +249,7 @@ function transcriptLines(
 export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
   const streams = new Map<string, Streaming>()
   const started = new Map<string, { startedAt: number; partial?: ToolResult }>()
+  const toolKey = (sessionId: string, toolCallId: string) => `${sessionId}\0${toolCallId}`
   let shown: SubagentData | undefined
   const infoFor = (data: SubagentData) =>
     api
@@ -272,19 +265,21 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
     if (event.parentSessionId !== undefined) {
       switch (event.type) {
         case "tool.execute.start":
-          started.set(event.data.toolCallId, { startedAt: event.ts })
+          started.set(toolKey(event.sessionId, event.data.toolCallId), { startedAt: event.ts })
           if (started.size > 128) started.delete(started.keys().next().value!)
           break
-        case "tool.execute.update":
-          started.set(event.data.toolCallId, {
-            ...started.get(event.data.toolCallId),
-            startedAt: started.get(event.data.toolCallId)?.startedAt ?? event.ts,
+        case "tool.execute.update": {
+          const key = toolKey(event.sessionId, event.data.toolCallId)
+          started.set(key, {
+            ...started.get(key),
+            startedAt: started.get(key)?.startedAt ?? event.ts,
             partial: event.data.partial,
           })
           if (started.size > 128) started.delete(started.keys().next().value!)
           break
+        }
         case "tool.execute.end":
-          started.delete(event.data.toolCallId)
+          started.delete(toolKey(event.sessionId, event.data.toolCallId))
           break
         case "message.start":
           remember(event.sessionId, { text: "", thinking: false })
@@ -392,7 +387,7 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
         session?.subagentMessages(info.id) ?? [],
         list.filter((s) => s.parentSessionId === info.id),
         opts,
-        started,
+        (toolCallId) => started.get(toolKey(info.id, toolCallId)),
       )
       const stream = streams.get(info.id)
       if (stream?.text.trim()) out.push(...replyLines(stream.text, opts), { kind: "text", text: "" })

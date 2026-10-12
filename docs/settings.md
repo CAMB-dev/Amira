@@ -334,4 +334,6 @@ Use a preset (`"shimmer": "pulse"`), disable animation (`"shimmer": "off"`), or 
 
 `"shimmer": { "width": 4 }` keeps the theme's style, period and colors. Optional colors accept a shared pair (`"colors": ["#78dbe2", "#6fb3e8"]`) or separate `dark`/`light` pairs. Invalid fields fall back individually and numbers are clamped, with one notice per invalid block. See [Shimmer animation](themes.md#shimmer-animation) for all knobs and merge rules. The `/theme` picker previews and saves changes; choosing `theme` removes the user override. Named presets, including `soft`, are saved unless `soft` already matches the active theme’s plain soft effect. `/reload` applies all three theme settings live.
 
+Known limitation: choosing `theme` for shimmer cannot clear an override in the tracked project file (`.amira/settings.json`), so that override applies again after `/reload` or restart.
+
 Related: [Getting started](getting-started.md) · [Providers](providers.md) · [Usage](usage.md) · [Sub-agents](subagents.md) · [Extensions](extensions.md) · [Keybindings](keybindings.md).

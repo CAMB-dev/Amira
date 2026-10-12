@@ -300,13 +300,13 @@ export class ExtensionViewer implements Component {
       this.#opts.requestRender?.()
       return true
     }
-    if (this.#keys.is(e, "tool-output")) {
+    const typing = this.#ui?.typing && isTypingKey(e)
+    if (this.#keys.is(e, "tool-output") && !typing) {
       this.#toolDetail = toggleDetail(this.#toolDetail ?? this.#opts.toolDetail?.() ?? "summary")
       this.#uiDirty = true
       this.#opts.requestRender?.()
       return true
     }
-    const typing = this.#ui?.typing && isTypingKey(e)
     if (this.#keys.is(e, "view.back") && !typing) {
       if (this.#ui?.releaseInput()) {
         this.#uiDirty = true

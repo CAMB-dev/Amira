@@ -1044,6 +1044,67 @@ test("restyled viewer frame uses the main transcript renderers and keeps its own
   s.host.unload("builtin:agent")
 })
 
+test("viewer keeps equal live tool call IDs separate across concurrent children", async () => {
+  const s = await snapshotView()
+  const toolCallId = "call_1"
+  const runningFor = (sessionId: string) => {
+    const calls: unknown[] = []
+    s.definition.render(
+      { sessionId },
+      {
+        width: 80,
+        now: 6500,
+        renderRunningTool: (_name, call) => {
+          calls.push(call)
+          return []
+        },
+      },
+    )
+    return calls
+  }
+  try {
+    for (const [index, sessionId] of ["a", "b"].entries()) {
+      s.histories.get(sessionId)!.push({
+        role: "assistant",
+        model: { provider: "mock", model: "m1" },
+        content: [{ type: "toolCall", id: toolCallId, name: "bash", args: { command: sessionId } }],
+      })
+      const meta = { ...s.meta, sessionId }
+      const start = s.bus.emit(
+        "tool.execute.start",
+        { toolCallId, name: "bash", args: { command: sessionId } },
+        meta,
+      )
+      start.ts = 1000 + index * 1000
+      s.bus.emit(
+        "tool.execute.update",
+        { toolCallId, name: "bash", partial: textResult(`output ${sessionId}`) },
+        meta,
+      )
+    }
+    await s.bus.flush()
+    expect(runningFor("a")).toEqual([
+      { args: { command: "a" }, startedAt: 1000, partial: textResult("output a") },
+    ])
+    expect(runningFor("b")).toEqual([
+      { args: { command: "b" }, startedAt: 2000, partial: textResult("output b") },
+    ])
+
+    s.bus.emit(
+      "tool.execute.end",
+      { toolCallId, name: "bash", result: textResult("done a"), durationMs: 3000 },
+      s.meta,
+    )
+    await s.bus.flush()
+    expect(runningFor("a")).toEqual([{ args: { command: "a" } }])
+    expect(runningFor("b")).toEqual([
+      { args: { command: "b" }, startedAt: 2000, partial: textResult("output b") },
+    ])
+  } finally {
+    s.host.unload("builtin:agent")
+  }
+})
+
 test("viewer streams partial tool output through the host's running renderer", async () => {
   const s = await snapshotView()
   s.histories.get("a")!.push({

@@ -334,4 +334,6 @@ MCP 扩展依次从工作目录的 `.mcp.json`、用户文件、项目文件和 
 
 `"shimmer": { "width": 4 }` 会保留主题的样式、周期和颜色。可选颜色接受共享颜色对（`"colors": ["#78dbe2", "#6fb3e8"]`），也可分别指定 `dark`/`light` 颜色对。无效字段逐项回退，数值限制在范围内；每个无效配置块只提示一次。所有参数与合并规则见[微光动画](themes.md#微光动画)。`/theme` 选择器可预览并保存更改；选择 `theme` 时会移除用户覆盖值。命名预设（包括 `soft`）会保存，除非 `soft` 已与当前主题的普通 soft 效果一致。`/reload` 会实时应用这三个主题设置。
 
+已知限制：为微光动画选择 `theme` 无法清除已被 Git 跟踪的项目文件（`.amira/settings.json`）中的覆盖值，因此该覆盖值会在 `/reload` 或重启后再次生效。
+
 相关文档：[快速开始](getting-started.md) · [Provider](providers.md) · [使用说明](usage.md) · [子 agent](subagents.md) · [扩展](extensions.md) · [快捷键](keybindings.md)。
