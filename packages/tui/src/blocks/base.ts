@@ -142,7 +142,7 @@ export abstract class Block {
   abstract lines(env: BlockEnv): string[]
 
   /** The text "copy selected block" puts on the clipboard. */
-  abstract copyText(): string
+  abstract copyText(env?: BlockEnv): string
 
   /**
    * How each of its lines copies when text is selected with the mouse: `lines` as `lines`
@@ -151,6 +151,11 @@ export abstract class Block {
    */
   copyRows(plain: readonly string[], _lines: readonly string[]): CopyRow[] {
     return chromeRows(plain)
+  }
+
+  /** Search removes only renderer-owned chrome, never glyph-shaped content. */
+  searchRows(_plain: readonly string[], _lines: readonly string[]): CopyRow[] {
+    return []
   }
 
   /** Whether folding it shows less; folding does nothing to other blocks. */

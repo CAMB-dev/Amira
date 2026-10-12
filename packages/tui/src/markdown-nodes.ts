@@ -1,4 +1,4 @@
-import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult, ToolLine } from "@amira/api"
+import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult } from "@amira/api"
 import {
   type ImageOpener,
   type ImageStore,
@@ -11,6 +11,7 @@ import {
   type Theme,
   truncateToWidth,
 } from "@amira/tui-kit"
+import { renderToolLines, type ToolLayoutLine } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
 
 /** Where replies' nodes get rendered by extensions (D88): the host's MarkdownRendererRegistry. */
@@ -153,8 +154,10 @@ export class ReplyRenderers {
 }
 
 /** A rendered node's lines as rows of `width`: plain text as it is, other kinds in the theme's colors. */
-export function nodeRows(lines: ToolLine[], theme: Theme, width: number, segments = false): string[] {
-  return lines.map((l) => {
+export function nodeRows(lines: ToolLayoutLine[], theme: Theme, width: number, segments = false): string[] {
+  return lines.flatMap((l) => {
+    if (!segments && (l.wrap || l.marker || l.description !== undefined || l.continuationMarker))
+      return renderToolLines([l], theme, width)
     const text = segments
       ? stripAnsi(l.text)
       : truncateToWidth(stripAnsi(l.text).replace(/\s+$/, ""), Math.max(1, width), glyphs.more)

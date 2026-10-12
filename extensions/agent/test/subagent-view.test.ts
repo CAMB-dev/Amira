@@ -544,6 +544,52 @@ test("the extension associates nested children with calls and delegates complete
   expect(child[0]?.kind === "segments" && child[0].parts[0]).toEqual({ kind: "text", text: "  │  " })
 })
 
+test("the agents viewer forwards durable ask details at full detail", async () => {
+  const s = await snapshotView()
+  const questions = [
+    {
+      question: "Which?",
+      header: "Choice",
+      options: [
+        { label: "a, b", description: "Together" },
+        { label: "b", description: "Alone" },
+      ],
+    },
+  ]
+  const details = { questions, outcome: { answers: [{ selected: ["a, b"], other: "Keep it small" }] } }
+  const history = s.histories.get("a")!
+  history.push(
+    {
+      role: "assistant",
+      model: { provider: "mock", model: "m1" },
+      content: [{ type: "toolCall", id: "ask1", name: "ask_user", args: { questions } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "ask1",
+      toolName: "ask_user",
+      content: [{ type: "text", text: "answered" }],
+      isError: false,
+      details,
+    },
+  )
+  let presented = false
+  s.definition.render(s.data, {
+    width: 90,
+    now: 6500,
+    toolDetail: "full",
+    renderTool: (name, call, detail) => {
+      expect(name).toBe("ask_user")
+      expect(detail).toBe("full")
+      expect(call.args).toEqual({ questions })
+      expect(call.result.details).toEqual(details)
+      presented = true
+      return []
+    },
+  })
+  expect(presented).toBe(true)
+})
+
 const statuses: {
   status: SubagentInfo["status"]
   text: string

@@ -28,6 +28,7 @@ import { runInteractive } from "../src/app.ts"
 import { ExtensionViewer, wrapViewLines } from "../src/extension-view.ts"
 import { userLines } from "../src/format.ts"
 import { finishedToolLines } from "../src/tool-view.ts"
+import { renderViewLines } from "../src/view-lines.ts"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -336,6 +337,46 @@ test("long text lines wrap under their text; code lines are cut", () => {
     "  ran out of time the reviewer",
     "  ran out of time",
     "x".repeat(60),
+  ])
+})
+
+test("wrapped view choices show their marker and description once, after the complete label", () => {
+  const lines = wrapViewLines(
+    [
+      {
+        kind: "text",
+        text: "A very long option label with several words",
+        marker: "success",
+        description: "One explanation",
+        wrap: true,
+      },
+    ],
+    20,
+  )
+  expect(renderViewLines(lines, monoTheme, 20)).toEqual([
+    "✓ A very long option",
+    "  label with several",
+    "  words",
+    `  ${monoTheme.muted("One explanation")}`,
+  ])
+})
+
+test("view descriptions follow the complete wrapped label without an explicit wrap flag or marker", () => {
+  const lines = wrapViewLines(
+    [
+      {
+        kind: "text",
+        text: "A very long option label with several words",
+        description: "One explanation",
+      },
+    ],
+    20,
+  )
+  expect(renderViewLines(lines, monoTheme, 20)).toEqual([
+    `${monoTheme.muted("")}A very long option`,
+    "label with several",
+    "words",
+    monoTheme.muted("One explanation"),
   ])
 })
 

@@ -24,7 +24,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { renderToolLines, terminalText } from "./diff-view.ts"
+import { renderToolLines, type ToolLayoutLine, terminalText } from "./diff-view.ts"
 import { formatDuration, formatElapsed, stampRows, summarizeArgs, timestampRoom } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 
@@ -69,6 +69,10 @@ export interface ToolViewOptions {
   expanded?: boolean
   /** Only the first visible assistant row of a turn owns a clock. */
   timestamp?: number
+  /** Host-only continuation boundaries, with the separator removed by wrapping. */
+  onWrap?: (row: number, join: "" | " ") => void
+  /** Host-only content columns, excluding only chrome this renderer added. */
+  onRow?: (row: number, from: number) => void
 }
 
 /** Most lines of a failure's body in `summary` detail: its start and its end. */
@@ -385,6 +389,8 @@ export function finishedToolLines(
     }),
   ]
 
+  opts.onRow?.(0, 3 + Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast)))
+
   let result: string
   /** The result line says what the presenter made of a call cut short. */
   let saidResult = false
@@ -413,7 +419,7 @@ export function finishedToolLines(
   }${approval}`
   const prefix = `${continuation}  `
   const failed = outcome !== "done"
-  let body: ToolLine[] = []
+  let body: ToolLayoutLine[] = []
   if ((ran || cutShort) && detail !== "collapsed") {
     const bodyOpts = {
       detail,
@@ -433,8 +439,28 @@ export function finishedToolLines(
     if (failed && !body.length) body = cutShort ? output() : fallbackPresenter.body(view, bodyOpts)
     // A one-line output the result line already says (e.g. "Aborted by the user …") is not
     // said twice.
-    body = body.flatMap((line) => line.text.split(/\r?\n/).map((text) => ({ ...line, text })))
-    if (body.length === 1 && withoutMark(body[0]!.text.trim(), mark) === withoutMark(result.trim(), mark))
+    body = body.flatMap(({ text, marker, description, ...line }) => {
+      const rows = text.split(/\r?\n/)
+      const effectiveWrap = line.wrap || description !== undefined
+      const hangingIndent = marker ? visibleWidth(`${glyphs[marker]} `) : 0
+      return rows.map((text, i) => ({
+        ...line,
+        text,
+        ...(effectiveWrap ? { wrap: true } : {}),
+        ...(i === 0 && marker !== undefined ? { marker } : {}),
+        ...(i > 0 && hangingIndent ? { hangingIndent } : {}),
+        ...(i === rows.length - 1 && description !== undefined ? { description } : {}),
+      }))
+    })
+    const single = body.length === 1 ? body[0] : undefined
+    // Only plain output can repeat the result. Choice metadata, gutters and explicit styles
+    // carry information even when their label is the same as the result text.
+    if (
+      single &&
+      (single.kind === "text" || single.kind === "code") &&
+      Object.keys(single).every((key) => key === "kind" || key === "text") &&
+      withoutMark(single.text.trim(), mark) === withoutMark(result.trim(), mark)
+    )
       body = []
   }
 
@@ -456,28 +482,37 @@ export function finishedToolLines(
     out[0] = `${out[0]!}  ${resultText}`
   } else {
     const rows = wrapText(resultText, Math.max(1, width - visibleWidth(prefix)))
-    out.push(
-      ...cutBody(
-        rows.map((text) => ({ kind: "text", text })),
-        detail === "full" ? "full" : "summary",
-        failed,
-      ).map((line) =>
+    const resultRows = cutBody(
+      rows.map((text) => ({ kind: "text", text })),
+      detail === "full" ? "full" : "summary",
+      failed,
+    )
+    for (const [i, line] of resultRows.entries()) {
+      const markWidth = i === 0 && !diffOutcome ? visibleWidth(mark) + (result ? 1 : 0) : 0
+      opts.onRow?.(out.length, visibleWidth(prefix) + markWidth)
+      out.push(
         truncateToWidth(
           `${prefix}${line.kind === "muted" ? theme.muted(line.text) : line.text}`,
           width,
           glyphs.more,
         ),
-      ),
-    )
+      )
+    }
   }
-  out.push(
-    ...renderToolLines(
-      cutBody(body, detail, failed),
-      theme,
-      Math.max(0, width - visibleWidth(continuation)),
-      "  ",
-    ).map((line) => truncateToWidth(`${continuation}${line}`, width, glyphs.more)),
+  const bodyOffset = out.length
+  const onWrap = opts.onWrap && ((row: number, join: "" | " ") => opts.onWrap!(bodyOffset + row, join))
+  const onRow =
+    opts.onRow &&
+    ((row: number, from: number) => opts.onRow!(bodyOffset + row, visibleWidth(continuation) + from))
+  const bodyRows = renderToolLines(
+    cutBody(body, detail, failed),
+    theme,
+    Math.max(0, width - visibleWidth(continuation)),
+    "  ",
+    onWrap,
+    onRow,
   )
+  for (const line of bodyRows) out.push(truncateToWidth(`${continuation}${line}`, width, glyphs.more))
   return stampRows(out, theme, width, opts.timestamp)
 }
 
@@ -494,7 +529,7 @@ export function runningToolLines(
   now: number,
   spinner: string,
   width: number,
-  opts: Pick<ToolViewOptions, "last" | "timestamp"> & { liveOutputLines?: number } = {},
+  opts: Pick<ToolViewOptions, "last" | "timestamp" | "onRow"> & { liveOutputLines?: number } = {},
 ): string[] {
   const summary = callSummary(presenter, call.args)
   const right = theme.muted(formatElapsed(now - call.startedAt))
@@ -518,6 +553,10 @@ export function runningToolLines(
         ).slice(-limit)
       : []
   const prefix = `    ${theme.muted(glyphs.treePipe)} `
+  opts.onRow?.(0, visibleWidth(`  ${spinner} `))
+  live.forEach((_, i) => {
+    opts.onRow?.(i + 1, visibleWidth(prefix))
+  })
   return stampRows(
     [
       head,
@@ -639,27 +678,28 @@ export function exploredLines(
 ): string[] {
   const explored = calls.flatMap(({ call, presenter }) => explorationOf(presenter, call) ?? [])
   // Do not hide a failed or otherwise ineligible call, even if a caller supplies one by mistake.
-  if (explored.length !== calls.length)
-    return calls.flatMap(({ call, presenter }, i) =>
-      finishedToolLines(theme, presenter, call, expanded ? "full" : detail, width, {
-        ...opts,
-        timestamp: i === 0 ? opts.timestamp : undefined,
-        last: i === calls.length - 1 && opts.last,
-      }),
-    )
-  if (!expanded)
+  const eligible = explored.length === calls.length
+  if (eligible && !expanded) {
+    opts.onRow?.(0, 3 + Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast)))
     return stampRows(
       [exploredLine(theme, explored, timestampRoom(width, opts.timestamp), opts)],
       theme,
       width,
       opts.timestamp,
     )
-  return calls.flatMap(({ call, presenter }, i) =>
-    finishedToolLines(theme, presenter, call, "full", width, {
+  }
+  let offset = 0
+  return calls.flatMap(({ call, presenter }, i) => {
+    const start = offset
+    const rows = finishedToolLines(theme, presenter, call, expanded ? "full" : detail, width, {
       ...opts,
       timestamp: i === 0 ? opts.timestamp : undefined,
-      expanded: true,
+      ...(eligible && expanded ? { expanded: true } : {}),
       last: i === calls.length - 1 && opts.last,
-    }),
-  )
+      onRow: opts.onRow && ((row, from) => opts.onRow!(start + row, from)),
+      onWrap: opts.onWrap && ((row, join) => opts.onWrap!(start + row, join)),
+    })
+    offset += rows.length
+    return rows
+  })
 }

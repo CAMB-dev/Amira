@@ -1,6 +1,5 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { type ChildSession, defineTool, type SpawnGroup, textResult } from "@amira/api"
-import { localClock } from "../src/format.ts"
 import { closeImageApp, parallel, setup, waitFor } from "./app-harness.ts"
 
 function delegateTool(role = "explorer") {
@@ -37,26 +36,35 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
   // The first one runs its tool; the second waits for the slot.
-  await waitFor(
-    () =>
-      new RegExp(
-        `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s {2}${localClock(Date.now())}\\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend · explorer · \\d+s · 4\\.1k tok\\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\\.ts\\n {5}└ Add status bar test · coder · queued\\n`,
-        "m",
-      ).test(live()),
-    "rows under the call",
-  )
+  let firstReplyClock = ""
+  await waitFor(() => {
+    const match =
+      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend · explorer · \d+s · 4\.1k tok\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\.ts\n {5}└ Add status bar test · coder · queued\n/m.exec(
+        live(),
+      )
+    if (!match) return false
+    firstReplyClock = match[1]!
+    return true
+  }, "rows under the call")
   // No list of sub-agents at the bottom of the live region: only the activity line is there.
   expect(live().match(/(?:├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend|└ Add status bar test) ·/g)).toHaveLength(2)
   await shows("all done")
   await idle()
   const text = all()
-  // Each one's rows became its end line, committed with the call right under its head, in order.
-  expect(text).toMatch(
-    new RegExp(
-      `^ {2}└ delegate {2}✓ trend is up \\(\\+1 line\\) · \\d+\\.\\ds +${localClock(Date.now())}\\n {5}├ ✓ US market trend · explorer · \\d+\\.\\ds · 4\\.1k tok\\n {5}└ ✓ Add status bar test · coder · \\d+\\.\\ds · 1\\.2k tok$`,
-      "m",
-    ),
-  )
+  // Cross a minute boundary after rendering: a committed row must keep its original clock.
+  const now = Date.now
+  const shiftedClock = spyOn(Date, "now").mockImplementation(() => now() + 60_000)
+  try {
+    // Each one's rows became its end line, committed with the call right under its head, in order.
+    expect(text).toMatch(
+      new RegExp(
+        `^ {2}└ delegate {2}✓ trend is up \\(\\+1 line\\) · \\d+\\.\\ds +${firstReplyClock}\\n {5}├ ✓ US market trend · explorer · \\d+\\.\\ds · 4\\.1k tok\\n {5}└ ✓ Add status bar test · coder · \\d+\\.\\ds · 1\\.2k tok$`,
+        "m",
+      ),
+    )
+  } finally {
+    shiftedClock.mockRestore()
+  }
   expect(text.match(/✓ US market trend ·/g)).toHaveLength(1)
   // Nothing is left of them in the live region below the transcript.
   expect(live().split("  all done")[1]).not.toMatch(/[├└] (?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓✗⊘]|Add status bar test)/)
@@ -138,21 +146,23 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
   // The child is done and so is its call, but both wait below the running slow call.
-  await waitFor(
-    () =>
-      new RegExp(
-        `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\\.log +\\d+s {2}${localClock(Date.now())}\\n {2}└ delegate {2}✓ child answer\\n {5}└ ✓ Look around · explorer · \\d+\\.\\ds · 0 tok`,
-        "m",
-      ).test(live()),
-    "held",
-  )
+  let firstReplyClock = ""
+  await waitFor(() => {
+    const match =
+      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s {2}(\d{2}:\d{2})\n {2}└ delegate {2}✓ child answer\n {5}└ ✓ Look around · explorer · \d+\.\ds · 0 tok/m.exec(
+        live(),
+      )
+    if (!match) return false
+    firstReplyClock = match[1]!
+    return true
+  }, "held")
   release()
   await shows("all done")
   await idle()
   const text = all()
   expect(text).toMatch(
     new RegExp(
-      `^ {2}├ slow big\\.log {2}✓ slow result +${localClock(Date.now())}\\n {2}└ delegate {2}✓ child answer\\n {5}└ ✓ Look around · explorer · \\d+\\.\\ds · 0 tok$`,
+      `^ {2}├ slow big\\.log {2}✓ slow result +${firstReplyClock}\\n {2}└ delegate {2}✓ child answer\\n {5}└ ✓ Look around · explorer · \\d+\\.\\ds · 0 tok$`,
       "m",
     ),
   )
@@ -178,19 +188,21 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   )
   agent.tools.register(delegateTool(), "test")
   terminal.send("go\r")
-  await waitFor(
-    () =>
-      new RegExp(
-        `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s {2}${localClock(Date.now())}\\n {2}│ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] First pass · explorer · \\d+s · 0 tok\\n {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Second pass · explorer · \\d+s · 0 tok$`,
-        "m",
-      ).test(live()),
-    "each under its own call",
-  )
+  let firstReplyClock = ""
+  await waitFor(() => {
+    const match =
+      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {2}│ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] First pass · explorer · \d+s · 0 tok\n {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Second pass · explorer · \d+s · 0 tok$/m.exec(
+        live(),
+      )
+    if (!match) return false
+    firstReplyClock = match[1]!
+    return true
+  }, "each under its own call")
   await shows("all done")
   await idle()
   expect(all()).toMatch(
     new RegExp(
-      `^ {2}├ delegate {2}✓ one +${localClock(Date.now())}\\n {2}│ {2}└ ✓ First pass · explorer · \\d+\\.\\ds · 0 tok\\n {2}└ delegate {2}✓ two\\n {5}└ ✓ Second pass · explorer · \\d+\\.\\ds · 0 tok$`,
+      `^ {2}├ delegate {2}✓ one +${firstReplyClock}\\n {2}│ {2}└ ✓ First pass · explorer · \\d+\\.\\ds · 0 tok\\n {2}└ delegate {2}✓ two\\n {5}└ ✓ Second pass · explorer · \\d+\\.\\ds · 0 tok$`,
       "m",
     ),
   )
@@ -213,11 +225,13 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   terminal.send("go\r")
   let firstReplyClock = ""
   await waitFor(() => {
-    firstReplyClock = localClock(Date.now())
-    return new RegExp(
-      `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s {2}${firstReplyClock}\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Outer task · explorer · \\d+s · 0 tok\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Inner check · explorer · \\d+s · 0 tok\\n`,
-      "m",
-    ).test(live())
+    const match =
+      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Outer task · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Inner check · explorer · \d+s · 0 tok\n/m.exec(
+        live(),
+      )
+    if (!match) return false
+    firstReplyClock = match[1]!
+    return true
   }, "nested rows")
   await shows("all done")
   await idle()
@@ -282,6 +296,7 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
 
 test("sub-agents that outlive their call run on under a head shaped like the call, with no end line", async () => {
   let finish!: () => void
+  let firstReplyClock = ""
   // The child and the commander ask in no fixed order: each reply goes by who asks.
   const reply = (req: { messages: { role: string; content: unknown }[] }) => {
     const child = JSON.stringify(req.messages[0]?.content).includes('"scan"')
@@ -295,6 +310,10 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   const { terminal, live, all, shows, idle, exited, agent, bus } = await setup([reply, reply, reply, reply], {
     cols: 80,
     tree: true,
+    onWrite: (screen) => {
+      firstReplyClock ||=
+        /^ {2}└ launch {2}✓ Started in the background +(\d{2}:\d{2})$/m.exec(screen.text)?.[1] ?? ""
+    },
   })
   const gate = new Promise<void>((r) => {
     finish = r
@@ -328,9 +347,8 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   await shows("started it")
   await idle()
   // The call is committed; its sub-agent runs on in the live region.
-  expect(all()).toMatch(
-    new RegExp(`^ {2}└ launch {2}✓ Started in the background +${localClock(Date.now())}$`, "m"),
-  )
+  expect(firstReplyClock).toMatch(/^\d{2}:\d{2}$/)
+  expect(all()).toMatch(new RegExp(`^ {2}└ launch {2}✓ Started in the background +${firstReplyClock}$`, "m"))
   await waitFor(
     () =>
       /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] launch · 1 sub-agent · running in background · \d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(

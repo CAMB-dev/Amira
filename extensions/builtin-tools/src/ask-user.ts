@@ -81,8 +81,9 @@ export const askUserTool = defineTool<AskUserParams>({
       ? await ask(questions, ctx.signal)
       : { unavailable: "nobody can answer questions here" }
     const details: AskUserDetails = { questions, outcome }
-    if (ctx.signal.aborted) return { ...textResult("Aborted by the user.", true), details }
-    return { ...textResult(describeOutcome(questions, outcome)), details }
+    if (ctx.signal.aborted)
+      return { ...textResult("Aborted by the user.", true), details, persistDetails: true }
+    return { ...textResult(describeOutcome(questions, outcome)), details, persistDetails: true }
   },
 })
 
@@ -140,10 +141,7 @@ function clipLabel(s: string, max: number): string {
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : chars.join("")
 }
 
-/**
- * The call shows its first question; the result, each question's label (its header, cut short)
- * with the answer under it, whole: a long label is cut, never the answer.
- */
+/** Summary keeps the answers compact; full detail retains every question and offered option. */
 export const askUserPresenter: ToolPresenter<AskUserParams, AskUserDetails> = {
   verbs: { past: "Asked", running: "Asking" },
   summary(args) {
@@ -162,8 +160,43 @@ export const askUserPresenter: ToolPresenter<AskUserParams, AskUserDetails> = {
     if (o.answers.length === 1) return `${answerText(o.answers[0]!)}${by}`
     return `${o.answers.length} answers${by}`
   },
-  body(call) {
+  body(call, { detail }) {
     const d = detailsOf(call)
+    if (detail === "full") {
+      // Text-only history is not a reversible answer encoding. Its first line is the result.
+      if (!d)
+        return call.text
+          .split("\n")
+          .slice(1)
+          .map((text) => ({ kind: "text", text, wrap: true }))
+      const answers = "answers" in d.outcome ? d.outcome.answers : []
+      return d.questions.flatMap((q, i): ToolLine[] => {
+        const answer = answers[i]
+        const lines: ToolLine[] = []
+        if (i) lines.push({ kind: "text", text: "" })
+        if (q.header) lines.push({ kind: "muted", text: q.header, wrap: true })
+        lines.push({ kind: "text", text: q.question, wrap: true })
+        for (const option of q.options) {
+          const chosen = answer?.selected.includes(option.label) ?? false
+          lines.push({
+            kind: chosen ? "text" : "muted",
+            text: option.label,
+            marker: chosen ? "success" : "unchecked",
+            description: option.description,
+            wrap: true,
+          })
+        }
+        if (answer?.other !== undefined) {
+          lines.push({
+            kind: "text",
+            text: `(own words) ${JSON.stringify(answer.other)}`,
+            marker: "success",
+            wrap: true,
+          })
+        }
+        return lines
+      })
+    }
     if (!d || !("answers" in d.outcome) || d.outcome.answers.length < 2) return []
     const answers = d.outcome.answers
     return d.questions.flatMap((q, i): ToolLine[] => {

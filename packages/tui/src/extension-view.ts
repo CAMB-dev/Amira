@@ -108,7 +108,14 @@ const HANG = /^(\s*)((?:[^\p{L}\p{N}\s]{1,2}|\d{1,3}[.)])\s+)?/u
 export function wrapViewLines(lines: readonly ViewLine[], width: number): ViewLine[] {
   const out: ViewLine[] = []
   for (const l of lines) {
-    if (l.kind === "segments" || l.kind === "user-message") {
+    // Presenter metadata needs the complete label to place its marker and description once.
+    if (
+      l.kind === "segments" ||
+      l.kind === "user-message" ||
+      l.wrap ||
+      l.marker ||
+      l.description !== undefined
+    ) {
       out.push(l)
       continue
     }

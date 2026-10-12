@@ -11,6 +11,7 @@ import {
   themeToken,
   truncateToWidth,
   visibleWidth,
+  wrapText,
 } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 import { type Range, wordDiff } from "./word-diff.ts"
@@ -96,6 +97,13 @@ function cleanText(text: string): string {
   return terminalText(text)
 }
 
+/** Host-only layout of newline fragments; not part of the extension ToolLine contract. */
+export interface ToolLayoutLine extends ToolLine {
+  hangingIndent?: number
+  /** Set by the Markdown registry for later fragments of one marked logical label. */
+  continuationMarker?: ToolLine["marker"]
+}
+
 /**
  * Presenter lines as terminal rows, each fitted to `width` after `indent`.
  *
@@ -106,9 +114,17 @@ function cleanText(text: string): string {
  * removed line followed by the added line that replaced it, the words that changed are on a
  * stronger one; otherwise they are colored as text, the signs saying what they are (so they
  * read without colors too). A hunk gap shows as "⋯" in the number column. Other lines take
- * one row each, cut to the width.
+ * one row each, cut to the width, unless the presenter requests wrapping. Marked rows keep
+ * their glyph separate from the text's color and hang descriptions under the label.
  */
-export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, indent = ""): string[] {
+export function renderToolLines(
+  lines: ToolLayoutLine[],
+  theme: Theme,
+  width: number,
+  indent = "",
+  onWrap?: (row: number, join: "" | " ") => void,
+  onRow?: (row: number, from: number) => void,
+): string[] {
   const numbered = lines.filter((l) => l.lineNo !== undefined)
   const gutter = numbered.length ? Math.max(...numbered.map((l) => String(l.lineNo).length)) : 0
   const texts = lines.map((l) => cleanText(l.text))
@@ -116,11 +132,25 @@ export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, 
   const words = themeToken(theme, "diffAddedWordBg") ? changedWords(lines, texts) : new Map<number, Range[]>()
   const signed = lines.some((l) => SIGNS[l.kind] !== undefined)
   const out: string[] = []
+  const append = (rows: string[], from = visibleWidth(indent)) => {
+    for (const row of rows) {
+      onRow?.(out.length, from)
+      out.push(row)
+    }
+  }
   lines.forEach((l, i) => {
     const text = texts[i]!
     const sign = SIGNS[l.kind]
     if (sign !== undefined) {
-      out.push(...diffRows(l, text, sign, words.get(i) ?? [], { theme, width, indent, gutter }))
+      append(diffRows(l, text, sign, words.get(i) ?? [], { theme, width, indent, gutter }))
+      return
+    }
+    if (l.wrap || l.marker || l.description !== undefined || l.hangingIndent || l.continuationMarker) {
+      const offset = out.length
+      const record = onWrap && ((row: number, join: "" | " ") => onWrap(offset + row, join))
+      const content = onRow && ((row: number, from: number) => onRow(offset + row, from))
+      // A live answer can wrap to hundreds of thousands of rows: never pass them as arguments.
+      for (const row of presenterRows(l, text, theme, width, indent, record, content)) out.push(row)
       return
     }
     if (l.kind === "diff-hunk" && (text === "⋮" || text.startsWith(HUNK_GAP))) {
@@ -128,9 +158,9 @@ export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, 
       const about = text.slice(HUNK_GAP.length).trim()
       const mark = gutter ? `${" ".repeat(Math.max(0, gutter - 1))}${HUNK_GAP}` : HUNK_GAP
       const at = about ? `${mark}${" ".repeat(signed ? 3 : 1)}${about}` : mark
-      out.push(
+      append([
         `${indent}${theme.muted(truncateToWidth(at, Math.max(1, width - indent.length), glyphs.more))}`,
-      )
+      ])
       return
     }
     // A file's header starts at the edge, above the numbers of its lines; other lines (a note
@@ -139,10 +169,48 @@ export function renderToolLines(lines: ToolLine[], theme: Theme, width: number, 
     const no = header ? "" : `${gutter ? `${" ".repeat(gutter)} ` : ""}${signed ? "  " : ""}`
     const row = truncateToWidth(`${indent}${no}${text}`, width, glyphs.more)
     const style = header ? (themeToken(theme, "path") ?? theme.muted) : styleOf(l.kind, theme)
-    out.push(`${indent}${theme.muted(no)}${style(row.slice(indent.length + no.length))}`)
+    append([`${indent}${theme.muted(no)}${style(row.slice(indent.length + no.length))}`])
   })
   // Narrower than the indent and the gutter: cut, as the terminal would otherwise wrap them.
   return out.map((r) => (visibleWidth(r) > width ? truncateToWidth(r, Math.max(0, width)) : r))
+}
+
+/** Wrapped presenter prose and choices, with descriptions and glyphs styled independently. */
+function presenterRows(
+  line: ToolLayoutLine,
+  text: string,
+  theme: Theme,
+  width: number,
+  indent: string,
+  onWrap?: (row: number, join: "" | " ") => void,
+  onRow?: (row: number, from: number) => void,
+): string[] {
+  const continuation = line.continuationMarker ? visibleWidth(`${glyphs[line.continuationMarker]} `) : 0
+  indent += " ".repeat(line.hangingIndent ?? continuation)
+  const marker = line.marker ? glyphs[line.marker] : ""
+  const lead = marker ? `${marker} ` : ""
+  const hanging = " ".repeat(visibleWidth(lead))
+  const room = Math.max(1, width - visibleWidth(indent) - visibleWidth(lead))
+  const labelRows = wrapText(text, room, room, onWrap)
+  const style = styleOf(line.kind, theme)
+  const rows = labelRows.map((row, i) => {
+    onRow?.(i, visibleWidth(indent) + (i ? visibleWidth(hanging) : 0))
+    return `${indent}${i ? hanging : line.marker === "success" ? theme.success(lead) : theme.muted(lead)}${style(row)}`
+  })
+  if (line.description) {
+    const description = cleanText(line.description)
+    if (rows.length === 1 && visibleWidth(text) + 2 + visibleWidth(description) <= room) {
+      rows[0] += theme.muted(`  ${description}`)
+    } else {
+      const offset = rows.length
+      const record = onWrap && ((row: number, join: "" | " ") => onWrap(offset + row, join))
+      for (const [i, row] of wrapText(description, room, room, record).entries()) {
+        onRow?.(offset + i, visibleWidth(indent + hanging))
+        rows.push(`${indent}${hanging}${theme.muted(row)}`)
+      }
+    }
+  }
+  return rows
 }
 
 /**

@@ -257,8 +257,21 @@ export class MarkdownRendererRegistry {
   #lines(entry: RendererEntry, rawLines: unknown[]): ToolLine[] {
     const lines: ToolLine[] = []
     for (const raw of rawLines) {
-      const line = checkedLine(raw)
-      for (const text of line.text.split("\n")) lines.push({ kind: line.kind, text })
+      const { text, marker, description, ...line } = checkedLine(raw)
+      const rows = text.split("\n")
+      const effectiveWrap = line.wrap || description !== undefined
+      for (const [i, text] of rows.entries()) {
+        lines.push({
+          ...line,
+          text,
+          ...(effectiveWrap ? { wrap: true } : {}),
+          ...(i === 0 && marker !== undefined ? { marker } : {}),
+          // Host-only provenance: continuation glyph width belongs to the frontend's theme.
+          ...(i > 0 && marker !== undefined ? { continuationMarker: marker } : {}),
+          ...(i === rows.length - 1 && description !== undefined ? { description } : {}),
+        })
+        if (lines.length > MAX_LINES) break
+      }
       if (lines.length > MAX_LINES) break
     }
     if (lines.length > MAX_LINES) {
@@ -280,15 +293,26 @@ export class MarkdownRendererRegistry {
 
 /** Keep known styles and plain text, leaving line breaks for the result's shape to handle. */
 function checkedLine(raw: unknown): ToolLine {
-  const line = (raw ?? {}) as { kind?: unknown; text?: unknown }
+  const line = (raw ?? {}) as {
+    kind?: unknown
+    text?: unknown
+    marker?: unknown
+    description?: unknown
+    wrap?: unknown
+  }
   return {
     kind: KINDS.has(line.kind as ToolLine["kind"]) ? (line.kind as ToolLine["kind"]) : "text",
-    text: String(line.text ?? "")
-      .replace(/\r\n?/g, "\n")
-      .replace(/\t/g, "  ")
-      .replace(ESCAPES, "")
-      .replace(CONTROLS, ""),
+    text: checkedText(String(line.text ?? "")),
+    ...(line.marker === "success" || line.marker === "unchecked" ? { marker: line.marker } : {}),
+    ...(typeof line.description === "string"
+      ? { description: checkedText(line.description).replace(/\n/g, " ") }
+      : {}),
+    ...(typeof line.wrap === "boolean" ? { wrap: line.wrap } : {}),
   }
+}
+
+function checkedText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").replace(/\t/g, "  ").replace(ESCAPES, "").replace(CONTROLS, "")
 }
 
 /** Each renderer gets its own copy, so none can change what the next one sees. */

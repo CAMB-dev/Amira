@@ -7,6 +7,9 @@ import type {
   ShimmerPreset,
   ShimmerStyle,
   ThemeDefinition,
+  ToolLine,
+  ToolResult,
+  ToolResultMessage,
   TuiSettings,
 } from "../src/index.ts"
 
@@ -260,6 +263,57 @@ test("the public shimmer types are shared by theme definitions and TUI settings"
   `)
   const alias: ShimmerEffect = { preset: "sweep", edge: "linear" }
   expect(alias).toEqual({ preset: "sweep", edge: "linear" })
+})
+
+test("presenter choices and opt-in durable details are public additive contracts", () => {
+  const line: ToolLine = {
+    kind: "text",
+    text: "Patch",
+    marker: "success",
+    description: "Fix it in place",
+    wrap: true,
+  }
+  const result: ToolResult = { content: [], details: { selected: ["Patch"] }, persistDetails: true }
+  const message: ToolResultMessage = {
+    role: "toolResult",
+    toolCallId: "c1",
+    toolName: "ask_user",
+    content: [],
+    isError: false,
+    details: result.details,
+  }
+  expect({ line, result, message }).toMatchInlineSnapshot(`
+    {
+      "line": {
+        "description": "Fix it in place",
+        "kind": "text",
+        "marker": "success",
+        "text": "Patch",
+        "wrap": true,
+      },
+      "message": {
+        "content": [],
+        "details": {
+          "selected": [
+            "Patch",
+          ],
+        },
+        "isError": false,
+        "role": "toolResult",
+        "toolCallId": "c1",
+        "toolName": "ask_user",
+      },
+      "result": {
+        "content": [],
+        "details": {
+          "selected": [
+            "Patch",
+          ],
+        },
+        "persistDetails": true,
+      },
+    }
+  `)
 })
 
 test("the canonical theme glyph export includes the layout symbols", async () => {
