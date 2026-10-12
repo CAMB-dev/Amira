@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { gitCachePins, gitUrlsInUse, packageScope, writeLock } from "../src/index.ts"
 
+const temporary = (prefix: string) => realpathSync.native(mkdtempSync(path.join(os.tmpdir(), prefix)))
+
 test("recorded project junctions or symlinks protect nested locks without following other links", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-project-links-"))
+  const dir = temporary("amira-project-links-")
   const home = path.join(dir, "home")
   const target = path.join(dir, "target")
   const recorded = path.join(dir, "recorded-link")
@@ -42,7 +44,7 @@ test("recorded project junctions or symlinks protect nested locks without follow
 })
 
 test("an unreadable project lock is reported so prune keeps every cache", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-project-locks-bad-"))
+  const dir = temporary("amira-project-locks-bad-")
   const home = path.join(dir, "home")
   const cwd = path.join(dir, "project")
   try {
@@ -59,7 +61,7 @@ test("an unreadable project lock is reported so prune keeps every cache", () => 
 })
 
 test("nested projects are looked for only a few levels below a recorded path", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-project-depth-"))
+  const dir = temporary("amira-project-depth-")
   const home = path.join(dir, "home")
   const near = path.join(dir, "root", "a", "b")
   const far = path.join(dir, "root", "a", "b", "c", "d", "e", "f")
@@ -86,7 +88,7 @@ test("nested projects are looked for only a few levels below a recorded path", (
 })
 
 test("a missing lock is empty, a lock that is not a readable file is reported", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-project-locks-missing-"))
+  const dir = temporary("amira-project-locks-missing-")
   const home = path.join(dir, "home")
   const cwd = path.join(dir, "project")
   try {
@@ -101,7 +103,7 @@ test("a missing lock is empty, a lock that is not a readable file is reported", 
 })
 
 test("the current project's lock is read even when the directory budget is spent", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-project-locks-cap-"))
+  const dir = temporary("amira-project-locks-cap-")
   const home = path.join(dir, "home")
   const cwd = path.join(dir, "project")
   try {

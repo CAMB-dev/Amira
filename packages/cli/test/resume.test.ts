@@ -202,7 +202,7 @@ test("quitting says how to continue the session, then a blank line before the sh
 test("amira -p -r lists this directory's sessions and exits", async () => {
   const main = path.join(here, "..", "src", "main.ts")
   const run = async (...args: string[]) => {
-    const p = Bun.spawn(["bun", main, ...args], {
+    const p = Bun.spawn([process.execPath, main, ...args], {
       stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, AMIRA_MODEL: "", AMIRA_HOME: home },

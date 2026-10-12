@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep, userMessage } from "@amira/ai"
@@ -29,7 +29,7 @@ function spawnRpc(
   writeFileSync(settingsFile, JSON.stringify({ ...settings, sessions: { autoTitle: false } }))
   const p = Bun.spawn(
     [
-      "bun",
+      process.execPath,
       main,
       "--rpc",
       "-m",
@@ -374,7 +374,7 @@ test("amira --rpc: settings aliases are listed, completed and run", async () => 
 }, 60_000)
 
 test("amira --rpc-schema prints a JSON Schema covering every command", async () => {
-  const p = Bun.spawn(["bun", main, "--rpc-schema"], { stdout: "pipe", stderr: "pipe" })
+  const p = Bun.spawn([process.execPath, main, "--rpc-schema"], { stdout: "pipe", stderr: "pipe" })
   const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited])
   expect(code).toBe(0)
   const schema = JSON.parse(out)
@@ -487,10 +487,15 @@ test("a slow client loses deltas, gets events.lost, and can resync with state", 
 
 test("amira --rpc drops deltas when the client stops reading stdout", async () => {
   const total = 100_000
+  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-backpressure-"))
+  const preload = path.join(home, "mock.ts")
+  // Build the large reply in the child to avoid Linux's per-argument/environment entry size limit.
+  writeFileSync(preload, `process.env.AMIRA_TEST_MOCK = JSON.stringify([{ text: "x".repeat(${total * 8}) }])`)
+  writeFileSync(path.join(home, "settings.json"), JSON.stringify({ sessions: { autoTitle: false } }))
   // Bun.spawn reads a child's pipe eagerly, so only node's paused stream leaves it full.
-  const p = spawn("bun", [main, "--rpc", "-m", "mock/m", "--no-builtins"], {
+  const p = spawn(process.execPath, ["--preload", preload, main, "--rpc", "-m", "mock/m", "--no-builtins"], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, AMIRA_TEST_MOCK: JSON.stringify([{ text: "x".repeat(total * 8) }]) },
+    env: { ...process.env, AMIRA_HOME: home },
   })
   p.stdout.pause()
   let err = ""
@@ -515,7 +520,9 @@ test("amira --rpc drops deltas when the client stops reading stdout", async () =
     if (out.some((l) => l.type === "turn.end") && out.some((l) => l.id === 2)) p.stdin.end()
   })
   p.stdout.resume()
-  expect(await exited).toBe(0)
+  const code = await exited
+  rmSync(home, { recursive: true, force: true })
+  expect(code).toBe(0)
   expect(err).toBe("")
   const deltas = out.filter((l) => l.type === "message.delta").length
   const lost = out.filter((l) => l.type === "events.lost")

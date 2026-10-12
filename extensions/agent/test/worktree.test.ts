@@ -1,5 +1,15 @@
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
-import { cpSync, existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import {
+  cpSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -34,7 +44,7 @@ setDefaultTimeout(60_000)
 const git = hostGit({ runCommand })
 const dirs: string[] = []
 async function tempDir(prefix: string) {
-  const d = await mkdtemp(path.join(os.tmpdir(), prefix))
+  const d = realpathSync.native(await mkdtemp(path.join(os.tmpdir(), prefix)))
   dirs.push(d)
   return d
 }
@@ -140,6 +150,17 @@ test("the worktree starts from uncommitted changes and the child works in the sa
   expect(read(path.join(root, "src", "g.txt"))).toBe("G\n")
   // The parent's own uncommitted change is untouched.
   expect(read(path.join(root, "f.txt"))).toBe("a\nb\nc\nd\nE\n")
+})
+
+test("a parent reached through a directory link keeps the child's subdirectory", async () => {
+  const { root, home } = await setup()
+  const alias = path.join(await tempDir("amira-wt-alias-"), "repo")
+  symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir")
+  const wt = await worktree(path.join(alias, "src"), home)
+  expect(wt.root).toBe(root)
+  expect(wt.cwd).toBe(path.join(wt.dir, "src"))
+  expect(read(path.join(wt.cwd, "g.txt"))).toBe("g\n")
+  expect((await mergeWorktree(git, wt)).outcome).toBe("empty")
 })
 
 test("no changes: nothing to merge, the worktree is removed", async () => {

@@ -1,6 +1,15 @@
 import { afterEach, expect, spyOn, test } from "bun:test"
 import { execSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { ToolDefinition } from "@amira/api"
@@ -318,7 +327,8 @@ test.skipIf(!symbolicLinks || process.platform === "win32")(
     const link = path.join(owner.dataDir, "link")
     symlinkSync(path.join(outside, "child"), link, "dir")
     const reported = `${link}/../state.json`
-    expect(realpathSync.native(reported)).toBe(realpathSync.native(target))
+    // Bun's realpath can normalize link/.. lexically; an actual read proves native traversal.
+    expect(readFileSync(reported, "utf8")).toBe("outside state")
     expect(extensionDataContainment(owner, cwd, reported)).toBe("unknown")
     expect((await check([reported])).decision).toBe("ask")
   },

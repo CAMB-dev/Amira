@@ -447,7 +447,7 @@ test("amira sessions rm deletes stored sessions without loading models or keys",
   const store = SessionStore.create({ cwd, dir: path.join(home, "sessions", projectKey(cwd)) })
   store.appendMessage(userMessage("delete me"))
   const child = Bun.spawn(
-    ["bun", path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
+    [process.execPath, path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
     {
       env: { ...process.env, AMIRA_HOME: home },
       stdout: "pipe",
@@ -484,7 +484,7 @@ test("amira sessions rm refuses a session leased by another process", async () =
   writeFileSync(lock, `${process.pid}\n`)
   try {
     const child = Bun.spawn(
-      ["bun", path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
+      [process.execPath, path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
       {
         env: { ...process.env, AMIRA_HOME: home },
         stdout: "pipe",

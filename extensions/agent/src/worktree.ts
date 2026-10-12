@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   utimesSync,
@@ -95,7 +96,13 @@ export async function createWorktree(
   mkdirSync(path.dirname(dir), { recursive: true })
   const add = await git(["worktree", "add", "--detach", dir, base], root)
   if (!add.ok) return { error: `git worktree add failed: ${add.output.trim()}` }
-  const rel = path.relative(root, path.resolve(opts.cwd))
+  let rel = path.relative(root, path.resolve(opts.cwd))
+  try {
+    // Git expands symlink/junction and short-name aliases; cwd must use the same identity.
+    rel = path.relative(realpathSync.native(root), realpathSync.native(opts.cwd))
+  } catch {
+    // Keep worktree creation best-effort if the parent's directory disappeared meanwhile.
+  }
   const cwd = rel && !rel.startsWith("..") && !path.isAbsolute(rel) ? path.join(dir, rel) : dir
   const meta: WorktreeMeta = { ...opts.about, base }
   try {

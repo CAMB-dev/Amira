@@ -20,6 +20,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { localClock } from "./clock.ts"
 import { glyphs } from "./glyphs.ts"
 
 /** Arguments that say what a call is about; the first one present leads the summary. */
@@ -51,27 +52,7 @@ export function summarizeArgs(args: Record<string, unknown>, max = 80): string {
   return clip(parts.join(" · "), max)
 }
 
-export { formatDuration, formatElapsed }
-
-/** Detect the system's clock preference once; missing locale data falls back to 12-hour. */
-const clockFormat = (() => {
-  try {
-    const cycle = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).resolvedOptions().hourCycle
-    const hour12 = cycle ? cycle === "h11" || cycle === "h12" : true
-    return new Intl.DateTimeFormat(undefined, {
-      hour: hour12 ? "numeric" : "2-digit",
-      minute: "2-digit",
-      hour12,
-    })
-  } catch {
-    return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
-  }
-})()
-
-/** Display times use the local timezone and the system locale's hour cycle. */
-export function localClock(at: number): string {
-  return clockFormat.format(at).replace(/[\u00a0\u202f]/g, " ")
-}
+export { formatDuration, formatElapsed, localClock }
 
 const storedClocks = new WeakMap<object, number>()
 
