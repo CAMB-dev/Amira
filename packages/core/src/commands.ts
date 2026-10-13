@@ -586,10 +586,43 @@ export class CommandHost {
 
   /** What a command (or `$skill`) prints: collected, and sent out as command.output. */
   #printer(command: string, output: string[]) {
-    return (text: string, level: CommandOutputLevel = "info") => {
+    // Retained printers (e.g. a dock's onClose) belong to the command's original session.
+    const agent = this.#agent
+    return (
+      text: string,
+      level: CommandOutputLevel = "info",
+      options?: Parameters<CommandContext["print"]>[2],
+    ) => {
       const s = String(text)
       output.push(s)
-      this.#opts.bus.emit("command.output", { command, text: s, level }, { sessionId: this.#agent.sessionId })
+      if (options?.persist) {
+        try {
+          agent.session?.appendDisplay({
+            type: "display",
+            text: s,
+            level,
+            details: options.details,
+            markdown: options.markdown,
+          })
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          this.#opts.bus.emit(
+            "extension.notice",
+            {
+              source: "commands",
+              level: "warning",
+              text: `Could not save display output to session ${agent.sessionId}: ${reason}. The entry was dropped.`,
+            },
+            { sessionId: agent.sessionId },
+          )
+          return
+        }
+      }
+      this.#opts.bus.emit(
+        "command.output",
+        { command, text: s, level, ...options },
+        { sessionId: agent.sessionId },
+      )
     }
   }
 

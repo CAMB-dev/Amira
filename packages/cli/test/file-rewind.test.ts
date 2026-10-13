@@ -265,7 +265,7 @@ test("session resume finishes an interrupted restore and reports its coverage", 
   session.agent.bus.subscribe((event) => {
     if (event.type === "extension.notice") notices.push(event.data.text)
   })
-  const resumed = session.resume(SessionStore.open(store.file))
+  const resumed = await session.resume(SessionStore.open(store.file))
   await session.agent.bus.flush()
   expect(resumed.messages).toHaveLength(0)
   expect(existsSync(join(cwd, "a"))).toBe(false)
@@ -341,7 +341,7 @@ test("a session with an unfinishable restore still opens, warns, and conversatio
   session.agent.bus.subscribe((event) => {
     if (event.type === "extension.notice") notices.push(event.data.text)
   })
-  const resumed = session.resume(SessionStore.open(store.file))
+  const resumed = await session.resume(SessionStore.open(store.file))
   host.switchTo(resumed)
   await session.agent.bus.flush()
   expect(notices.join(" ")).toContain("could not finish")

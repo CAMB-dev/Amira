@@ -184,7 +184,7 @@ amira
 | `session` | 在命令之外访问当前顶层 `SessionControl`；宿主注入前可能为 undefined |
 | `ui` | 通过选择、确认、输入、表单和审阅对话框询问用户，命令上下文也提供 UI 请求 |
 | `registerPanel` | 在活动行上方渲染实时内容 |
-| `registerView` | 注册全屏视图类型，命令在前端支持时通过 `openView` 打开 |
+| `registerView` | 注册全屏或停靠视图类型，命令在前端支持时通过 `openView` 打开 |
 | `registerToolRenderer`、`decorateToolRenderer` | 展示工具调用和结果，或包装已有展示器 |
 | `serverToolView` | 将 provider 托管的工具块（如原生网页搜索）转换为与展示器共用的工具调用视图形状 |
 | `registerMarkdownRenderer`、`registerImageProvider` | 渲染回复中匹配的代码块、数学公式或独立图片，并提供终端图片数据 |
@@ -238,7 +238,7 @@ TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次
 
 命令默认会将输入的 slash 命令行回显到对话记录中。在传给 `api.registerCommand()` 的 `CommandDefinition` 上设置 `echo: false`，即可在内联和全屏 TUI 模式下省略这一行，例如用于 `/btw <question>`。这只隐藏前端的输入回显：命令自身的输出（`ctx.print`、通知和视图）仍照常显示，输入历史（↑）也仍会记录该行。打印模式和 RPC 的行为不变。
 
-### 全屏视图
+### 全屏与停靠视图
 
 通过 `api.registerView()` 注册 `ViewDefinition`，命令用 `ctx.openView?.({ kind, data, state })` 打开它，可选的 `state` 为初始 `Partial<UiState>`。视图返回结构化的 `ViewLine` 对象；前端负责终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。
 
@@ -276,6 +276,55 @@ TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次
 D105 增加宿主管理的页面，无需注册另一种视图：调用 `view.pushPage({ title?, state?, data? })` 和 `view.popPage()`。推入页面后，render 和 ui 上下文包含 `page: { depth, data? }`，depth 从 1 开始；根页面不提供 page，回调的第一个参数仍为原视图数据。可选的页面标题替代旧式标题，或在声明式正文上方增加一行标题。每页独立保存选中项、展开项、标签页、输入、焦点和滚动状态，包括旧式 `scrollKey` 位置；弹出页面后恢复上一页。Esc 先取消当前提问，否则弹出页面，在根页面则关闭视图；宿主按键栏在子页面显示 `Esc back`，在根页面显示 `Esc close`。Ctrl+C 始终关闭整个视图，即使正在输入或确认；q 保持原有行为。切换页面会取消尚未回答的提问。
 
 可选的 `onOpen(data, control)` 和 `onClose(data)` 在每次打开和关闭时各调用一次，重绘及页面切换不会触发。初始状态在 onOpen 之前应用，onOpen 可调用 setState 或 close。同类型视图已打开时再次打开，只替换数据，不关闭或重新打开；未提供显式初始状态时保留状态，提供初始状态则从新的根页面开始。替换为其他类型会关闭原视图。
+
+### 旁支问题：临时子 agent、停靠视图与显示块
+
+`SpawnOptions.ephemeral?: boolean` 创建只存在于内存中的子 agent，并自动启用 persistent（即使传入 `persistent: false`）。保留 `ChildSession`，通过 `send(text)` 发送追问；`stop()` 在当前轮结束后停止，`abort()` 立即停止。父会话退出或切换时也会中止它。它及其后代不生成会话或输出文件，不记录父会话的 `subagent` 条目，不出现在公共列表或主对话事件中；流式内容通过 `child.events` 读取。用量计入 agent 树，并像 `api.complete` 一样保存为所属会话的 `side_usage`（首次写入会话前暂存）。临时/persistent 子 agent 不能使用 schema 结果。
+
+`SpawnOptions.callableTools?: string[]` 限制本地执行，不删除或重排本地工具声明。被拒绝的本地调用在执行或审批前返回简短工具错误。provider 托管工具在远端执行，因此被排除的工具**不会加入请求**，而不是返回本地错误。OpenAI Responses、Anthropic 和 Gemini 的内置托管搜索共用名称 `web_search`（包括 Gemini 的 Google Search）；加入此名称即可允许使用。省略列表则不限制工具。此限制也适用于子 agent 的压缩请求及审批/提问咨询。后代不能扩大继承的调用权限。
+
+为保留 fork 的**本地**工具声明，请使用 `callableTools` 而不是 `tools`/`excludeTools`：临时子 agent 保留 `mainOnly` 声明，但不能调用。fork 按父会话的顺序复制已加载的 deferred 工具；尚未加载的仍不提供。排除托管搜索会移除其声明，也可能将继承的托管结果转换成文本，因此完整请求/缓存前缀不再与提供托管搜索的父会话相同。角色指令、按会话运行的拦截器、不同模型、子 agent 专属工具及对父会话未完成调用的裁剪，也可能改变前缀。
+
+临时子 agent **不绕过 `maxConcurrent`**、深度、分组限制或 token/费用预算。当树的并发上限至少为 2 时，普通子 agent 最多占用 `maxConcurrent - 1` 个忙碌位置，为临时子 agent 的首轮或追问保留一个位置。临时工作也可使用其他空闲位置，但不能超过总并发上限或分组上限。`maxConcurrent: 1` 时仍正常排队。spawn 返回后立即读取 `child.state === "queued"`，以显示首轮等待状态。初始 `subagent.start` 事件在 `spawn()` 返回前发出，不会向新订阅者重放。订阅 `child.events` 可接收后续的 `subagent.state` 变化，包括追问排队。空闲子 agent 会释放并发位置。咨询用量（包括失败尝试和重试）以咨询模型的身份保存为发起请求的临时子 agent 的 `side_usage`。
+
+使用 `ctx.openView?.({ kind, data, placement: "dock", maxHeight?: number })` 打开停靠视图；省略 placement 时仍为全屏。高度包含标题、header 和底部按键栏，默认约为终端可用行数的 40%，至少 5 行（输入区域留下不足 5 行时除外）。内联和全屏模式均在保持焦点的输入框正上方显示同一实时区域，使用当前主题和边距。配置的 `scroll.page-up`/`scroll.page-down` 按键滚动停靠视图（默认 PgUp/PgDn）；鼠标滚轮只在指针位于该区域时滚动它；`scroll.bottom` 恢复跟随末尾（默认 End）。内联停靠视图只占用自身有界的行数，保留上方对话的可见内容。文字、方向键、Tab 和 Enter 仍交给主输入框，不激活视图组件或扩展快捷键。停靠视图的 prompt/confirm 会取消，不替换主输入框。**Esc 先关闭停靠视图**，再按一次才取消命令或中断当前轮。覆盖其上的全屏视图和表单保留原有按键优先级。`follow`、用于 Markdown 的 `renderReply` 和 `onClose` 与全屏视图共用。
+
+`ctx.print(text, level?, { details?: string; markdown?: boolean; persist?: boolean })` 和 `api.notify(text, level?, options?)` 输出只供显示的块。text 是标题；details 在 summary 时折叠，在 full 时展开（Ctrl+O）。`markdown: true` 将详情渲染为 Markdown。`persist: true` 保存 `display` 会话条目，恢复时按对话顺序重新显示，但上下文构建会跳过它。标题和详情均不会发给模型，包括会话 fork、子 agent fork 和压缩请求。只有显示条目的会话也会在启动恢复时显示。保留的 `ctx.print` 始终绑定到命令运行时的会话，即使停靠视图因会话切换而关闭，也不会写入另一个会话。全屏模式保留可折叠的块；内联模式在有界的近期记录中保留语义化重绘，Ctrl+O 可原位重绘近期块；较旧的原生终端滚动记录不可修改。打印模式输出标题，RPC 还携带可选的详情字段。
+
+以下 `/btw` 风格示例仅使用公共 API，是文档草图，不是内置扩展。实际扩展还需处理子 agent 已结束、追问未送达以及卸载清理。
+
+```ts
+import { defineExtension, type ChildSession, type SpawnGroup, type CommandContext } from "@amira/api"
+export default defineExtension((api) => {
+  type Side = { question: string; answer: string; child: ChildSession; group: SpawnGroup; print: CommandContext["print"] }
+  let side: Side | undefined
+  api.registerView({
+    kind: "btw", title: (d: Side) => `btw: ${d.question}${d.child.state === "queued" ? " (waiting)" : ""}`, follow: true,
+    render: (d: Side, opts) => opts.renderReply?.(d.answer) ?? [{ kind: "text", text: d.answer }],
+    onClose(d: Side) { d.child.abort(); d.group.end()
+      if (side !== d) return
+      side = undefined
+      d.print(`btw: ${d.question}`, "info", { details: d.answer, markdown: true, persist: true })
+    },
+  })
+  api.on("session.end", () => { side?.child.abort(); side?.group.end(); side = undefined })
+  api.registerCommand({
+    name: "btw", description: "Ask a side question", echo: false,
+    run(question, ctx) {
+      if (side) { side.answer += `\n\nFollow-up: ${question}\n\n`; side.child.send(question); return }
+      if (!ctx.openView || !ctx.session.createGroup) throw new Error("Side questions need the TUI and an agent tree")
+      const group = ctx.session.createGroup({ name: "Side question" })
+      const child = group.spawn({ prompt: question, context: "fork", ephemeral: true, callableTools: ["read", "grep", "glob"], systemPrompt: "Answer this side question; do not change files." })
+      const d: Side = { question, answer: "", child, group, print: ctx.print }; side = d
+      void (async () => {
+        for await (const e of child.events) {
+          if (e.type === "message.delta" && e.data.kind === "text") { d.answer += e.data.text; api.requestRender() }
+        }
+      })().catch((error) => api.reportError(String(error)))
+      if (!ctx.openView({ kind: "btw", data: d, placement: "dock" })) { side = undefined; child.abort(); group.end() }
+    } })
+})
+```
 
 ### 子 agent 控制
 

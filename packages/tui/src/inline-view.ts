@@ -31,6 +31,7 @@ import {
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { historyLines } from "./history.ts"
+import { displayCommit } from "./inline-display.ts"
 import { ACTIONS, type Action } from "./keybindings.ts"
 import { contentGeometry, marginView } from "./margins.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
@@ -160,7 +161,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
    * Lines to print above the live region, sent with the next frame: running a command commits
    * its echo and then each thing it prints, and a redraw for each of those flickered.
    */
-  const pendingCommits: string[] = []
+  const pendingCommits: (
+    | { lines: string[] }
+    | { redraw: (width: number, ctx: RenderContext) => string[] }
+  )[] = []
   /** An answered picker stays live until output follows; a session boundary replaces it. */
   let pendingDialog: ((width: number) => string[]) | undefined
   function flushDialog(): void {
@@ -170,7 +174,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     commit(transcript.block("dialog", draw(Math.max(1, contentWidth()))))
   }
   const commit = (lines: string[]) => {
-    pendingCommits.push(...lines)
+    if (lines.length) pendingCommits.push({ lines })
     renderer.requestRender()
   }
   /**
@@ -365,7 +369,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
   // transcript's rule. A dialog gets what the rest leaves, so its title is never cut off the top.
   const root = new View((width, ctx) => {
     // Lines committed since the last frame go out with this one: one redraw, not one each.
-    if (pendingCommits.length) ctx.commit?.(pendingCommits.splice(0))
+    for (const block of pendingCommits.splice(0)) {
+      if ("lines" in block) ctx.commit?.(block.lines)
+      else ctx.commit?.(block.redraw(width, ctx), block.redraw)
+    }
     // Live tool rows sit above the dialog (often the call that asked it), with the blank row
     // before the rest; the dialog fits in what they leave. No reply streams while tools are live.
     // Many calls at once take at most half the screen, so the input stays where it is.
@@ -415,7 +422,16 @@ export function createInlineView(host: ViewHost): TranscriptView {
       : ctx
     const reply = streaming.render(replyWidth(width), replyCtx)
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
-    return [...dialog, ...thinking, ...lead, ...drawReply(reply, width, ctx.theme), ...tools, "", ...rest]
+    const rows = [
+      ...dialog,
+      ...thinking,
+      ...lead,
+      ...drawReply(reply, width, ctx.theme),
+      ...tools,
+      "",
+      ...rest,
+    ]
+    return rows
   })
   const reflow = host.settings.reflow ?? DEFAULT_TUI_REFLOW
   const renderer = new LiveRenderer(terminal, marginView(root, host.settings, false), {
@@ -425,6 +441,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
     glyphs: host.glyphs,
     // "auto" assumes a re-wrapping terminal, as Windows Terminal, VS Code and most others are.
     reflow: reflow !== "off",
+  })
+  // A resize can rewrap native history above the live frame: establish its screen origin again.
+  const offDockResize = terminal.onResize(() => {
+    if (host.dockOpen?.()) renderer.redraw()
   })
 
   /**
@@ -576,6 +596,20 @@ export function createInlineView(host: ViewHost): TranscriptView {
   /** Whether a key of the full-screen view was pressed here and the note said so. */
   let fullscreenNoted = false
   let overlayMouse = false
+  let displayDetail = host.detail()
+  let hasDisplays = false
+  let historyDirty = false
+  const redrawHistory = () => {
+    if (renderer.isSuspended) historyDirty = true
+    else renderer.redraw()
+  }
+  const display: TranscriptView["display"] = (level, text, options) => {
+    flushDialog()
+    flushExplored()
+    hasDisplays = true
+    pendingCommits.push({ redraw: displayCommit(host, transcript, level, text, options) })
+    renderer.requestRender()
+  }
 
   return {
     get runningTools() {
@@ -583,7 +617,13 @@ export function createInlineView(host: ViewHost): TranscriptView {
     },
     capturing: false,
     start: () => renderer.start(),
-    requestRender: () => renderer.requestRender(),
+    requestRender() {
+      const next = host.detail()
+      if (hasDisplays && next !== displayDetail) {
+        displayDetail = next
+        redrawHistory()
+      } else renderer.requestRender()
+    },
     render: () => renderer.render(),
     setTheme(next, nextGlyphs) {
       theme = next
@@ -592,9 +632,9 @@ export function createInlineView(host: ViewHost): TranscriptView {
       renderer.context = { ...renderer.context, theme: next, glyphs: nextGlyphs }
       fullScreen.context = { ...fullScreen.context, theme: next, glyphs: nextGlyphs }
       if (fullScreen.isOpen) fullScreen.redraw()
-      else renderer.redraw()
+      redrawHistory()
     },
-    redraw: () => renderer.redraw(),
+    redraw: redrawHistory,
     openOverlay(pointer = false) {
       renderer.suspend()
       fullScreen.open()
@@ -606,12 +646,18 @@ export function createInlineView(host: ViewHost): TranscriptView {
       if (overlayMouse) terminal.disableMode(modes.mouse)
       overlayMouse = false
       fullScreen.close()
-      renderer.resume()
+      renderer.resume(historyDirty || host.dockOpen?.())
+      historyDirty = false
     },
+    dockInput: (event) =>
+      event.type === "mouse"
+        ? { ...event, y: event.y - renderer.screenTop + renderer.context.rows - renderer.liveRows }
+        : event,
     requestOverlayRender: () => fullScreen.requestRender(),
     redrawOverlay: () => fullScreen.redraw(),
     renderOverlay: () => fullScreen.render(),
     stop() {
+      offDockResize()
       subagents.clear()
       spawnGroups.clear()
       tickSubagents()
@@ -726,6 +772,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
           ? noticeDetailLines(theme, level, detail, contentWidth())
           : []),
       ]),
+    display,
     commandEcho: (line) => commitBlock("command", commandEchoLines(theme, line, contentWidth())),
     commandOutput(level, text) {
       flushDialog()
@@ -740,7 +787,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       pendingDialog = draw
       renderer.requestRender()
     },
-    openSession(boundary, messages: Message[], switched, compactionInfo) {
+    openSession(boundary, messages: Message[], switched, compactionInfo, displays) {
       if (switched) {
         pendingReplyWhitespace = ""
         replySeen = false
@@ -754,6 +801,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
           detail: host.detail(),
           session: boundary,
           transcript,
+          displays,
+          onDisplay: (d, preceding) => {
+            commit(preceding)
+            display(d.level, d.text, d.options)
+          },
           hyperlinks: host.hyperlinks,
           nodes,
           glyphs: host.glyphs,

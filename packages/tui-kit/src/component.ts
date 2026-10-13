@@ -23,9 +23,10 @@ export interface RenderContext {
   /**
    * Moves lines into the scrollback from within a frame: they are printed above the live region
    * in the frame being drawn, before it. For content that no longer fits but will never change,
-   * such as the finished rows of a streaming reply. Only the renderer's own frames provide it.
+   * such as the finished rows of a streaming reply. Optional semantic rows repaint while
+   * retained in history. Only the renderer's own frames provide it.
    */
-  commit?: (lines: string[]) => void
+  commit?: (lines: string[], redraw?: (width: number, ctx: RenderContext) => string[]) => void
   /**
    * Shows an image over the frame's rows (the full-screen renderer's frames provide it): its row
    * is the index of the line in what the root component returns. The rows under it should be

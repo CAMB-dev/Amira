@@ -89,6 +89,8 @@ export interface AgentOptions {
   bus?: EventBus
   interceptors?: InterceptorRegistry
   tools?: ToolRegistry
+  /** Execution allowlist; does not alter the tool declarations offered to the model. */
+  callableTools?: ReadonlySet<string>
   /** Per-provider and per-model choices, shared with sub-agents. */
   providerSettings?: Record<string, ProviderSettings>
   /** Upper bound on model calls per turn. Default 200. */
@@ -115,6 +117,8 @@ export interface AgentOptions {
    * child's requests carry what the parent's did.
    */
   views?: ReadonlyMap<Message, ContextView>
+  /** Private sessions may read inherited artifacts, but never save output files of their own. */
+  outputsReadOnly?: boolean
   /** The artifacts of the session this one was started from: output_read finds them too. */
   outputsParent?: OutputStore
   /** Sub-agent nesting depth; 0 (the default) for a top-level session. */

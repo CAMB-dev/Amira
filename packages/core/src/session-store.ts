@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import {
   appendFileSync,
   closeSync,
+  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
@@ -11,23 +12,39 @@ import {
 } from "node:fs"
 import path from "node:path"
 import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@amira/ai"
-import type { CompactionInfo, CompactionReason } from "@amira/api"
+import type { CompactionInfo, CompactionReason, NoticeLevel, PrintOptions } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
-import { type FileLock, tryFileLock } from "./file-lock.ts"
+import { type FileLock, pendingOwnedLockCleanup, SessionWriteGuardError, tryFileLock } from "./file-lock.ts"
 import type { FileJournalEntry } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
+import {
+  type SessionAcquisitionOptions,
+  sessionClaimAcquired,
+  withSessionClaim,
+} from "./session-acquisition.ts"
+import { canonicalSessionFile } from "./session-path.ts"
 
 /** A live session refreshes this lease; a dead process is safe to replace immediately. */
 export const SESSION_LOCK_STALE_MS = 30_000
 export const SESSION_LOCK_HEARTBEAT_MS = 10_000
 
-const sessionLocks = new Map<string, { lock: FileLock; refs: number }>()
+// Claimed views share a process lease, not independent write authority. Only writer may
+// append; a fresh claimed view can take over, but a stale model conversation never merges.
+const sessionLocks = new Map<
+  string,
+  { lock: FileLock; owners: Map<SessionStore, number>; writer: SessionStore }
+>()
 let releaseOnExit = false
+
+function sessionFileKey(file: string): string {
+  const resolved = path.resolve(file)
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
 
 /** The lease next to a stored session file. It is not a session file itself. */
 export function sessionLockFile(file: string): string {
-  return `${file}.lock`
+  return `${canonicalSessionFile(file)}.lock`
 }
 
 /** The pid recorded by an active-session lease, if it is readable. */
@@ -42,7 +59,11 @@ export function sessionLockPid(file: string): number | undefined {
 
 /** A stored session cannot be opened while another Amira process owns its lease. */
 export class SessionInUseError extends Error {
-  constructor(file: string, pid?: number) {
+  constructor(
+    file: string,
+    pid?: number,
+    readonly pendingOwnedCleanup = false,
+  ) {
     super(
       `session ${path.basename(file, ".jsonl")} is open in another Amira process${pid ? ` (pid ${pid})` : ""}; close it before deleting or resuming it`,
     )
@@ -64,6 +85,8 @@ export type SessionEntryData =
   | { type: "title"; title: string; source: "manual" | "auto" }
   /** `label` says what the side request was for; entries without one are session titles. */
   | { type: "side_usage"; model: ModelRef; usage: Usage; label?: string }
+  /** Display-only transcript content, skipped when restoring the model conversation. */
+  | ({ type: "display"; text: string; level: NoticeLevel } & Omit<PrintOptions, "persist">)
   | { type: "message"; message: Message }
   | { type: "model_change"; model: ModelRef }
   /**
@@ -164,7 +187,7 @@ export class SessionStore {
   #size = 0
 
   private constructor(file: string, header: SessionHeader, written: boolean) {
-    this.file = file
+    this.file = canonicalSessionFile(file)
     this.header = header
     this.#written = written
   }
@@ -185,6 +208,10 @@ export class SessionStore {
 
   /** Reads a session file. Lines that do not parse, such as a torn last line, are skipped. */
   static open(file: string): SessionStore {
+    return SessionStore.#read(file)
+  }
+
+  static #read(file: string): SessionStore {
     const bytes = readFileSync(file)
     const raw = bytes.toString("utf8")
     const lines = raw.split("\n")
@@ -206,21 +233,27 @@ export class SessionStore {
 
   /** Holds a crash-safe lease while this session is open in an Amira process. */
   claim(): boolean {
-    const held = sessionLocks.get(this.file)
+    if (sessionFileKey(canonicalSessionFile(this.file)) !== sessionFileKey(this.file))
+      throw new SessionConflictError(this.file)
+    const key = sessionFileKey(this.file)
+    const held = sessionLocks.get(key)
     if (held) {
-      held.refs++
+      sessionClaimAcquired(this)
+      // A new claimed view restores under authority before Agent builds model history.
+      // An existing view must not merge underneath its still-live Agent's history.
+      this.#refresh(!held.owners.has(this))
+      held.owners.set(this, (held.owners.get(this) ?? 0) + 1)
       return true
     }
-    const lock = tryFileLock(sessionLockFile(this.file), SESSION_LOCK_STALE_MS, SESSION_LOCK_HEARTBEAT_MS)
-    if (!lock) {
-      const pid = sessionLockPid(this.file)
-      // A second Agent in this process can reuse the same lease. A live pid from elsewhere is
-      // the case deletion and a new process must refuse.
-      if (pid !== undefined && pid !== process.pid) throw new SessionInUseError(this.file, pid)
-      if (pid === undefined) throw new SessionInUseError(this.file)
-      return false
+    const lock = this.#takeLease()
+    sessionClaimAcquired(this)
+    try {
+      this.#refresh()
+    } catch (error) {
+      lock.release()
+      throw error
     }
-    sessionLocks.set(this.file, { lock, refs: 1 })
+    sessionLocks.set(key, { lock, owners: new Map([[this, 1]]), writer: this })
     if (!releaseOnExit) {
       releaseOnExit = true
       // A normal exit leaves no lease behind; a crash leaves one a dead pid makes stale.
@@ -231,27 +264,148 @@ export class SessionStore {
     return true
   }
 
-  /** Gives up this process's lease, so another Amira may open or delete the session. */
-  release(): void {
-    const held = sessionLocks.get(this.file)
-    if (!held) return
-    held.refs--
-    if (held.refs > 0) return
-    held.lock.release()
-    sessionLocks.delete(this.file)
+  /** Await at startup/resume; only exact requested cleanup or raw sharing errors may wait. */
+  withClaim<T>(construct: () => T, options?: SessionAcquisitionOptions): T | Promise<T> {
+    return withSessionClaim(this, construct, options)
   }
 
-  /** The mutation journal must reach disk before a tool can change a file. */
-  appendDurable(data: SessionEntryData): string {
-    if (!this.#written) throw new Error("Cannot capture file changes before the session is stored")
-    const id = this.append(data)
-    const fd = openSync(this.file, "r+")
-    try {
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
+  /** Gives up this process's lease, so another Amira may open or delete the session. */
+  release(): void {
+    const key = sessionFileKey(this.file)
+    const held = sessionLocks.get(key)
+    const refs = held?.owners.get(this)
+    if (!held || refs === undefined) return
+    if (refs > 1) held.owners.set(this, refs - 1)
+    else held.owners.delete(this)
+    if (held.owners.size > 0) {
+      // Do not retain a released view through the canonical writer reference.
+      if (held.writer === this && !held.owners.has(this)) held.writer = held.owners.keys().next().value!
+      return
     }
-    return id
+    held.lock.release()
+    sessionLocks.delete(key)
+  }
+
+  /** Backwards-compatible display entry point; all appends use the same authority. */
+  appendDisplay(data: Extract<SessionEntryData, { type: "display" }>): string {
+    return this.append(data)
+  }
+
+  /** The mutation journal must reach the actual writer's disk before a tool changes a file. */
+  appendDurable(data: SessionEntryData): string {
+    return this.#withWriter(data, (writer) => {
+      if (!writer.#written) throw new Error("Cannot capture file changes before the session is stored")
+      const id = writer.#append(data)
+      const fd = openSync(writer.file, "r+")
+      try {
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+      return id
+    })
+  }
+
+  #takeLease(): FileLock {
+    const lock = tryFileLock(
+      sessionLockFile(this.file),
+      SESSION_LOCK_STALE_MS,
+      SESSION_LOCK_HEARTBEAT_MS,
+      true,
+      (gate) => {
+        throw new SessionWriteGuardError(gate)
+      },
+    )
+    if (!lock)
+      throw new SessionInUseError(
+        this.file,
+        sessionLockPid(this.file),
+        pendingOwnedLockCleanup(sessionLockFile(this.file)),
+      )
+    return lock
+  }
+
+  /** Revalidate under the lease. Contextual appends may validate, but never merge history. */
+  #refresh(merge = true): void {
+    if (!this.#written) {
+      if (existsSync(this.file)) throw new SessionConflictError(this.file)
+      return
+    }
+    const fresh = SessionStore.#read(this.file)
+    if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
+      throw new Error("session file belongs to a different session")
+    }
+    const unchanged =
+      fresh.#size === this.#size && JSON.stringify(fresh.#entries) === JSON.stringify(this.#entries)
+    if (unchanged) {
+      // A failed append may conservatively request a newline even if no bytes landed.
+      this.#needsNewline ||= fresh.#needsNewline
+      return
+    }
+    if (!merge) throw new SessionConflictError(this.file)
+    this.#entries.length = 0
+    this.#byId.clear()
+    this.#tipBefore.clear()
+    this.#leaf = null
+    for (const entry of fresh.#entries) this.#add(entry)
+    this.#size = fresh.#size
+    this.#needsNewline = fresh.#needsNewline
+  }
+
+  /** Only out-of-band metadata can follow another view; a model context cannot. */
+  #withWriter<T>(data: SessionEntryData, write: (writer: SessionStore) => T): T {
+    if (sessionFileKey(canonicalSessionFile(this.file)) !== sessionFileKey(this.file))
+      throw new SessionConflictError(this.file)
+    const metadata = data.type === "display" || data.type === "side_usage" || data.type === "title"
+    const key = sessionFileKey(this.file)
+    const held = sessionLocks.get(key)
+    if (held) {
+      if (metadata) {
+        if (held.owners.size !== 1) throw new Error("session has multiple live store owners")
+        const owner = held.owners.keys().next().value!
+        if (JSON.stringify(owner.header) !== JSON.stringify(this.header))
+          throw new Error("session file belongs to a different session")
+        owner.#refresh(false)
+        held.writer = owner
+      } else {
+        if (!held.owners.has(this)) throw new SessionConflictError(this.file)
+        this.#refresh(false)
+        held.writer = this
+      }
+      return write(held.writer)
+    }
+    // An unwritten, unowned origin may buffer entries without creating even its directory.
+    // No file writer is used here; the first durable entry revalidates under a lease.
+    if (
+      !this.#written &&
+      data.type !== "message" &&
+      data.type !== "display" &&
+      !existsSync(this.file) &&
+      !existsSync(sessionLockFile(this.file))
+    ) {
+      return write(this)
+    }
+    // Even unclaimed stores must serialize with other processes. Refresh retained metadata,
+    // but preserve the conflict for an unclaimed stale appendMessage/model mutation.
+    const lock = this.#takeLease()
+    try {
+      if (metadata && this.#written) {
+        const fresh = SessionStore.#read(this.file)
+        if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
+          throw new Error("session file belongs to a different session")
+        }
+        // Keep captured stale views unchanged. The temporary writer owns the fresh disk
+        // snapshot; a current unclaimed view may keep its existing message identities.
+        const current =
+          fresh.#size === this.#size && JSON.stringify(fresh.#entries) === JSON.stringify(this.#entries)
+        if (current) this.#needsNewline ||= fresh.#needsNewline
+        return write(current ? this : fresh)
+      }
+      this.#refresh(false)
+      return write(this)
+    } finally {
+      lock.release()
+    }
   }
 
   get entries(): readonly SessionEntry[] {
@@ -313,15 +467,20 @@ export class SessionStore {
         e.type === "file_prune" ||
         (i <= end && (e.type === "title" || e.type === "side_usage")),
     )
-    const text = `${[JSON.stringify(next.header), ...entries.map((e) => JSON.stringify(e))].join("\n")}\n`
-    mkdirSync(path.dirname(next.file), { recursive: true })
-    writeFileSync(next.file, text, { flag: "wx" })
-    next.#written = true
-    next.#size = Buffer.byteLength(text)
-    for (const e of entries) next.#add(e)
-    if (next.leafId !== target) next.append({ type: "checkout", target })
-    next.rename(`${this.title ?? this.id} (fork)`)
-    return next
+    next.claim()
+    try {
+      const text = `${[JSON.stringify(next.header), ...entries.map((e) => JSON.stringify(e))].join("\n")}\n`
+      mkdirSync(path.dirname(next.file), { recursive: true })
+      writeFileSync(next.file, text, { flag: "wx" })
+      next.#written = true
+      next.#size = Buffer.byteLength(text)
+      for (const e of entries) next.#add(e)
+      if (next.leafId !== target) next.append({ type: "checkout", target })
+      next.rename(`${this.title ?? this.id} (fork)`)
+      return next
+    } finally {
+      next.release()
+    }
   }
 
   /** The tip of the current branch. */
@@ -335,6 +494,11 @@ export class SessionStore {
 
   /** Appends an entry as a child of the current tip and returns its id. */
   append(data: SessionEntryData): string {
+    return this.#withWriter(data, (writer) => writer.#append(data))
+  }
+
+  /** The single append implementation, reachable only while holding write authority. */
+  #append(data: SessionEntryData): string {
     const entry = {
       ...data,
       id: `e_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`,
@@ -345,7 +509,7 @@ export class SessionStore {
       throw new Error(`unknown entry ${entry.target}`)
     }
     // Written first, so a failed write leaves no entry behind for later ones to point at.
-    this.#write(JSON.stringify(entry), entry.type === "message")
+    this.#write(JSON.stringify(entry), entry.type === "message" || entry.type === "display")
     this.#add(entry)
     return entry.id
   }
@@ -600,6 +764,7 @@ const ENTRY_TYPES = new Set<unknown>([
   "file_prune",
   "title",
   "side_usage",
+  "display",
   "message",
   "model_change",
   "compaction",

@@ -1,5 +1,5 @@
 import { DEFAULT_TUI_MARGIN, DEFAULT_TUI_MARGIN_ROWS, type TuiSettings } from "@amira/api"
-import { type Component, type MouseInput, truncateToWidth } from "@amira/tui-kit"
+import { type Component, type MouseInput, type RenderContext, truncateToWidth } from "@amira/tui-kit"
 
 /** One content column shared by transcript, chrome and full-screen overlays. */
 export function contentGeometry(columns: number, rows: number, settings: TuiSettings, fullscreen: boolean) {
@@ -28,11 +28,23 @@ export function marginView(content: Component, settings: TuiSettings, fullscreen
   return {
     render(columns, ctx) {
       const geometry = contentGeometry(columns, ctx.rows, settings, fullscreen)
-      if (!geometry.left && !geometry.rows) return content.render(columns, ctx)
       const inner = {
         ...ctx,
         rows: geometry.height,
-        ...(ctx.commit ? { commit: (lines: string[]) => ctx.commit!(insetLines(lines, geometry.left)) } : {}),
+        ...(ctx.commit
+          ? {
+              commit: ((lines, redraw) =>
+                ctx.commit!(
+                  insetLines(lines, geometry.left),
+                  redraw
+                    ? (columns, ctx) => {
+                        const next = contentGeometry(columns, ctx.rows, settings, fullscreen)
+                        return insetLines(redraw(next.width, { ...ctx, rows: next.height }), next.left)
+                      }
+                    : undefined,
+                )) satisfies NonNullable<RenderContext["commit"]>,
+            }
+          : {}),
         ...(ctx.place
           ? {
               place: (p: Parameters<NonNullable<typeof ctx.place>>[0]) =>

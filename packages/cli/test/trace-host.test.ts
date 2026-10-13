@@ -40,7 +40,7 @@ test("one host recorder follows stored agents across resume and backs control sn
     expect(first[0]).toMatchObject({ type: "trace", sessionId: store.id })
     expect(first.some((record) => record.type === "turn")).toBe(true)
     await active.dispose("switch")
-    active = session.resume(SessionStore.open(store.file))
+    active = await session.resume(SessionStore.open(store.file))
     commands.switchTo(active)
     active.start("resume")
     await active.prompt("second")

@@ -31,6 +31,8 @@ export interface ArtifactStoreOptions {
   limits?: Partial<OutputLimits>
   /** Most bytes of artifact text the session keeps. */
   quotaBytes?: number
+  /** A private session only reads inherited outputs; it never scans or writes its own files. */
+  readOnly?: boolean
   /** The store of the session this one was started from: find() falls back to it. */
   parent?: OutputStore
 }
@@ -60,6 +62,7 @@ export class ArtifactStore implements OutputStore {
   readonly limits: OutputLimits
   readonly quotaBytes: number
   readonly #parent: OutputStore | undefined
+  readonly #readOnly: boolean
   readonly #known = new Map<string, StoredArtifact>()
   #scanned = false
   #used = 0
@@ -73,12 +76,14 @@ export class ArtifactStore implements OutputStore {
     }
     this.quotaBytes = opts.quotaBytes ?? DEFAULT_ARTIFACT_QUOTA_MB * 1024 * 1024
     this.#parent = opts.parent
+    this.#readOnly = opts.readOnly === true
   }
 
   /** Reads what an earlier run saved, once. */
   #scan() {
     if (this.#scanned) return
     this.#scanned = true
+    if (this.#readOnly) return
     let names: string[]
     try {
       names = readdirSync(this.dir)
@@ -120,6 +125,7 @@ export class ArtifactStore implements OutputStore {
   }
 
   async save(opts: SaveOutputOptions): Promise<ArtifactInfo> {
+    if (this.#readOnly) throw new Error("Private sessions cannot save output files")
     this.#scan()
     let text = opts.text
     let incomplete = opts.incomplete
@@ -168,7 +174,7 @@ export class ArtifactStore implements OutputStore {
 
   find(id: string): StoredArtifact | undefined {
     if (!ID.test(id)) return undefined
-    const known = this.#known.get(id) ?? this.#readMeta(id)
+    const known = this.#known.get(id) ?? (this.#readOnly ? undefined : this.#readMeta(id))
     if (known) return known
     const inherited = this.#parent?.find(id)
     return inherited ? { ...inherited } : undefined

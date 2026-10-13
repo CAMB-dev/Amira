@@ -3,6 +3,7 @@ import type { FrontendView, KeyHelp, UserMessage } from "@amira/api"
 import type { CommandHost } from "@amira/core"
 import { userText } from "../format.ts"
 import { ACTIONS, type Action, type Keybindings, type KeySpec } from "../keybindings.ts"
+import { dockKeyHelp } from "./dock.ts"
 
 export interface CommandRunner {
   /** Runs at once, even during a turn; commands that need an idle session say so. */
@@ -61,13 +62,15 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
    * The common keys, for /help: the actions with a help line, with their keys as bound now;
    * the transcript's only in full-screen mode, where they work.
    */
-  const keyHelp = (): KeyHelp[] =>
-    (Object.keys(ACTIONS) as Action[]).flatMap((action) => {
+  const keyHelp = (): KeyHelp[] => [
+    ...(Object.keys(ACTIONS) as Action[]).flatMap((action) => {
       const info: { scope: string; help?: string } = ACTIONS[action]
       if (!info.help || (info.scope === "transcript" && options.mode !== "fullscreen")) return []
       const label = options.keys.label(action, (spec) => action !== "newline" || options.reaches(spec))
       return label ? [{ keys: label, description: info.help }] : []
-    })
+    }),
+    ...dockKeyHelp(options.keys),
+  ]
 
   return {
     async run(line) {

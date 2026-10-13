@@ -9,6 +9,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { dockKeyHelp } from "./app/dock.ts"
 import { glyphs } from "./glyphs.ts"
 import {
   ACTIONS,
@@ -120,6 +121,7 @@ export class KeyReference implements Component {
         )
         .map((a) => ({ keys: this.#labels(a), description: `${ACTIONS[a].description} · ${a}` })),
     }))
+    groups.push({ scope: "view", title: "Docked views", rows: dockKeyHelp(this.keys) })
     const widest = Math.max(...groups.flatMap((g) => g.rows.map((r) => visibleWidth(r.keys ?? "not bound"))))
     // Two spaces of indent, the keys column, two spaces, then the description.
     const keysWidth = Math.max(4, Math.min(MAX_KEYS_WIDTH, widest, Math.floor((width - 4) / 3)))

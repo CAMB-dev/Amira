@@ -6,7 +6,6 @@ import {
   type Editor,
   type RenderContext,
   type Spinner,
-  Stack,
   type Theme,
   truncateToWidth,
 } from "@amira/tui-kit"
@@ -22,6 +21,7 @@ import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
 import type { TurnActivity } from "./activity.ts"
+import type { DockedView } from "./dock.ts"
 import { type NoticeStrip, type Outgoing, otherWay, pendingMessageRows, type WhileWorking } from "./outbox.ts"
 
 /** The items of a hint line, most useful ones with the highest priority. */
@@ -51,6 +51,8 @@ export interface BottomAreaDeps {
   status: StatusRegistry
   header?: (width: number, ctx: RenderContext) => string[]
   panels?: PanelRegistry
+  dock?: () => DockedView | undefined
+  renderDock?: (width: number, ctx: RenderContext, available: number) => string[]
   editor: Editor
   keys: Keybindings
   reaches: (spec: KeySpec) => boolean
@@ -130,7 +132,9 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       .filter((rows) => rows.length > 0)
       .flatMap((rows, i) => (i > 0 && !collapsed ? ["", ...rows] : rows))
 
-  const bottom = new Stack([
+  let dockRoom = 0
+  const dock = new View((width, ctx) => deps.renderDock?.(width, ctx, dockRoom) ?? [])
+  const bottom = [
     new View((width, ctx) => (deps.mode() === "inline" ? (deps.header?.(width, ctx) ?? []) : [])),
     // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
     // They give way to everything else under the transcript: folded, then cut, when rows are short.
@@ -166,9 +170,13 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         waiting: deps.dialogs().length > 0 && !deps.themePreview?.(),
         preview: deps.themePreview?.(),
         spinner,
-        stop: `${keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
+        stop: deps.dock?.()
+          ? `${keyLabel({ name: "escape" })} close dock`
+          : `${keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
       })
     }),
+    // A live dock is immediately above the input, but never owns its editor or completion keys.
+    dock,
     // The input box carries the status in its bottom border. A dialog takes the box's place;
     // the status then gets a line of its own under it.
     new View((width, ctx) => {
@@ -208,15 +216,28 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         ` ${fitHint(inputHint(ctx.theme), Math.max(0, width - 1), ctx.theme.muted(`  ${glyphs.treePipe}  `))}`,
       ]
     }),
-  ])
+  ]
 
   /**
    * The bottom area under `top`, fitted into `budget` rows: live panels give way first (to the
    * dialog at its full size too), then the dialog is fitted into what the rest leaves.
    */
   function layoutBottom(width: number, ctx: RenderContext, budget: number, top?: Component): string[] {
-    const parts = top ? [top, bottom] : [bottom]
-    const draw = () => parts.flatMap((c) => c.render(width, ctx))
+    const parts = top ? [top, ...bottom] : bottom
+    const draw = () => {
+      let afterDock = 0
+      let passedDock = false
+      const rows = parts.flatMap((c) => {
+        const lines = c.render(width, ctx)
+        if (passedDock) afterDock += lines.length
+        if (c === dock) passedDock = true
+        return lines
+      })
+      deps.dock?.()?.place(afterDock, ctx.rows)
+      return rows
+    }
+    // First fit the ordinary bottom area, then give the dock only the rows it leaves.
+    dockRoom = 0
     const dialog = deps.dialogs()[0]
     if (dialog) dialog.maxRows = Math.max(1, budget)
     panelRoom = Number.POSITIVE_INFINITY
@@ -233,6 +254,10 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     }
     if (dialog && rest.length > budget) {
       dialog.maxRows = Math.max(1, budget - (rest.length - dialogRows))
+      rest = draw()
+    }
+    if (deps.dock?.()) {
+      dockRoom = Math.max(0, budget - rest.length)
       rest = draw()
     }
     return rest
@@ -252,7 +277,9 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const stop = cancellable ? "cancel command" : waiting ? "send queued" : "stop"
     return [
       item(keys.label("permissions.mode"), "mode", 5),
-      (working || cancellable || deps.activity().compacting) && item(interruptKey, stop, 6),
+      deps.dock?.()
+        ? item(keyLabel({ name: "escape" }), "close dock", 6)
+        : (working || cancellable || deps.activity().compacting) && item(interruptKey, stop, 6),
       item(keys.label("tool-output"), "detail", 5),
       item(keys.label("help"), "keys", 5),
       !editor.isEmpty && item(newlineKey, "newline", 1),

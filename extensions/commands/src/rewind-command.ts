@@ -109,7 +109,7 @@ export function registerRewindCommands(api: ExtensionAPI): void {
         }
       }
       const restoreFiles = !!plan && restoresFiles(plan)
-      await rewind(pick.index, { restoreFiles })
+      await rewind(pick.index, { restoreFiles, signal: ctx.signal })
       const files =
         !plan || !restoreFiles
           ? "Files were not restored."

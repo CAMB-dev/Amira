@@ -157,7 +157,7 @@ for (const scenario of ["print", "disabled", "manual", "subagent", "resumed"] as
             parentSessionId: "parent",
           })
         : scenario === "resumed"
-          ? session.resume(store)
+          ? await session.resume(store)
           : session.agent
     await agent.prompt(userMessage("new question"))
     await Bun.sleep(20)
@@ -480,8 +480,7 @@ test("amira sessions rm refuses a session leased by another process", async () =
   const cwd = path.join(home, "project")
   const store = SessionStore.create({ cwd, dir: path.join(home, "sessions", projectKey(cwd)) })
   store.appendMessage(userMessage("keep me"))
-  const lock = sessionLockFile(store.file)
-  writeFileSync(lock, `${process.pid}\n`)
+  store.claim()
   try {
     const child = Bun.spawn(
       [process.execPath, path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
@@ -501,6 +500,6 @@ test("amira sessions rm refuses a session leased by another process", async () =
     expect(error).toContain("open in another Amira process")
     expect(existsSync(store.file)).toBe(true)
   } finally {
-    rmSync(lock, { force: true })
+    store.release()
   }
 }, 15_000)

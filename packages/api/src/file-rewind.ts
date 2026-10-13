@@ -20,6 +20,7 @@ export interface FileRewindPlan {
 }
 
 export interface RewindOptions {
+  signal?: AbortSignal
   /** Defaults to true. An extension owner replaces the core restore, never supplements it. */
   restoreFiles?: boolean
 }

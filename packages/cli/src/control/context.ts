@@ -22,7 +22,17 @@ export interface ControlContext {
   readonly agent: () => Agent
   readonly directory: () => string | undefined
   readonly idle: (what: string) => void
-  readonly switchTo: (rootSessionId: string, makeNext: () => Agent, reason: SwitchReason) => Promise<void>
+  /** Select immediately; wait for an already committed handover before touching sessions. */
+  readonly select: (
+    signal: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<void>,
+  ) => Promise<void>
+  readonly switchTo: (
+    rootSessionId: string,
+    makeNext: (continueAfterAcquisition: (construct: () => Agent) => Agent) => Agent | Promise<Agent>,
+    reason: SwitchReason,
+    signal: AbortSignal,
+  ) => Promise<void>
   readonly rewindEntry: (index: number) => {
     a: Agent
     store: SessionStore

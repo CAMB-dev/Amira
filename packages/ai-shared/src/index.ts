@@ -5,6 +5,8 @@
  * packages re-export these functions typed with their own types.
  */
 
+import { sumUsageAccounting } from "./usage-accounting.ts"
+
 /** The name a hosted web search goes by, in blocks and in frontends. */
 export const NATIVE_WEB_SEARCH = "web_search"
 
@@ -41,13 +43,9 @@ export function addUsage(a: UsageCounts, b: UsageCounts): UsageCounts {
     cacheRead: a.cacheRead + b.cacheRead,
     cacheWrite: a.cacheWrite + b.cacheWrite,
   }
-  if (a.cost !== undefined || b.cost !== undefined) sum.cost = (a.cost ?? 0) + (b.cost ?? 0)
   if (a.webSearchRequests !== undefined || b.webSearchRequests !== undefined)
     sum.webSearchRequests = (a.webSearchRequests ?? 0) + (b.webSearchRequests ?? 0)
-  const unknownSearch = [a, b].some((u) => (u.webSearchRequests ?? 0) > 0 && u.webSearchCost === undefined)
-  if (unknownSearch) delete sum.cost
-  else if (a.webSearchCost !== undefined || b.webSearchCost !== undefined)
-    sum.webSearchCost = (a.webSearchCost ?? 0) + (b.webSearchCost ?? 0)
+  sumUsageAccounting(a, b, sum)
   return sum
 }
 

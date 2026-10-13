@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test"
 import type {
+  CommandContext,
   EventMap,
+  ExtensionView,
+  PrintOptions,
   ShimmerColors,
   ShimmerEffect,
   ShimmerOptions,
   ShimmerPreset,
   ShimmerStyle,
+  SpawnOptions,
   ThemeDefinition,
   ToolLine,
   ToolResult,
@@ -174,6 +178,52 @@ test("the public API exports stay stable", async () => {
     "toolResultText",
     "withSection",
   ])
+})
+
+test("the public side-question API contract is additive without a version bump", () => {
+  const spawn: SpawnOptions = {
+    prompt: "side question",
+    context: "fork",
+    ephemeral: true,
+    callableTools: ["read", "grep", "glob"],
+  }
+  const view: ExtensionView = { kind: "btw", placement: "dock", maxHeight: 12 }
+  const options: PrintOptions = { details: "side answer", markdown: true, persist: true }
+  const output: unknown[] = []
+  const print: CommandContext["print"] = (text, level, opts) => {
+    output.push({ text, level, options: opts })
+  }
+  print("btw: question", "info", options)
+  expect({ spawn, view, output }).toMatchInlineSnapshot(`
+    {
+      "output": [
+        {
+          "level": "info",
+          "options": {
+            "details": "side answer",
+            "markdown": true,
+            "persist": true,
+          },
+          "text": "btw: question",
+        },
+      ],
+      "spawn": {
+        "callableTools": [
+          "read",
+          "grep",
+          "glob",
+        ],
+        "context": "fork",
+        "ephemeral": true,
+        "prompt": "side question",
+      },
+      "view": {
+        "kind": "btw",
+        "maxHeight": 12,
+        "placement": "dock",
+      },
+    }
+  `)
 })
 
 test("the additive provider-stream event contract preserves optional timing metadata", () => {
