@@ -22,7 +22,7 @@ function pages(dir = "docs"): string[] {
     return e.name.endsWith(".md") ? [file] : []
   })
 }
-const PAGES = ["README.md", "README.zh-CN.md", ...pages()]
+const PAGES = ["README.md", "README.zh-CN.md", "README.ja.md", ...pages()]
 
 /** GitHub's heading anchors: lowercase, punctuation dropped, spaces to hyphens. */
 function anchors(markdown: string): Set<string> {
@@ -55,10 +55,41 @@ test("every local link and anchor in the docs resolves", () => {
   expect(broken).toEqual([])
 })
 
-test("every English doc page has a Chinese one and the reverse", () => {
-  const en = PAGES.filter((p) => p.startsWith("docs/") && !p.startsWith("docs/zh/")).map((p) => p.slice(5))
-  const zh = PAGES.filter((p) => p.startsWith("docs/zh/")).map((p) => p.slice(8))
-  expect(zh.sort()).toEqual(en.sort())
+test.each(["zh", "ja"])("every English doc page has a %s one and the reverse", (language) => {
+  const en = PAGES.filter((p) => /^docs\/[^/]+\.md$/.test(p)).map((p) => p.slice(5))
+  const translated = PAGES.filter((p) => p.startsWith(`docs/${language}/`)).map((p) => p.slice(8))
+  expect(translated.sort()).toEqual(en.sort())
+})
+
+test("every page links to its other two languages and documentation home", () => {
+  const readmes = { en: "README.md", zh: "README.zh-CN.md", ja: "README.ja.md" }
+  for (const page of PAGES) {
+    const language =
+      page.startsWith("docs/zh/") || page === readmes.zh
+        ? "zh"
+        : page.startsWith("docs/ja/") || page === readmes.ja
+          ? "ja"
+          : "en"
+    const navigation = read(page).split(/\r?\n/)[2]!
+    for (const other of ["en", "zh", "ja"] as const) {
+      if (other === language) continue
+      const target = page.startsWith("docs/")
+        ? `docs/${other === "en" ? "" : `${other}/`}${path.posix.basename(page)}`
+        : readmes[other]
+      expect(navigation).toContain(`](${path.posix.relative(path.posix.dirname(page), target)})`)
+    }
+    if (page.startsWith("docs/")) {
+      expect(navigation).toContain(`](${path.posix.relative(path.posix.dirname(page), readmes[language])})`)
+    }
+  }
+})
+
+test("Japanese code samples match the English sources", () => {
+  const fences = (text: string) => [...text.matchAll(/```[^\n]*\n[\s\S]*?```/g)].map((m) => m[0])
+  for (const page of PAGES.filter((p) => /^docs\/[^/]+\.md$/.test(p))) {
+    expect(fences(read(`docs/ja/${path.posix.basename(page)}`)), page).toEqual(fences(read(page)))
+  }
+  expect(fences(read("README.ja.md"))).toEqual(fences(read("README.md")))
 })
 
 test("the JSON examples parse, and the settings ones are valid settings", () => {
@@ -81,7 +112,9 @@ const isSettingsExtensions = (v: Record<string, unknown>) =>
 
 test("the example extension in docs/extensions.md loads, runs and typechecks", async () => {
   const code = read("docs/extensions.md").match(/```ts\n([\s\S]*?)\n```/)![1]!
-  expect(read("docs/zh/extensions.md").match(/```ts\n([\s\S]*?)\n```/)![1]).toBe(code)
+  for (const language of ["zh", "ja"]) {
+    expect(read(`docs/${language}/extensions.md`).match(/```ts\n([\s\S]*?)\n```/)![1]).toBe(code)
+  }
 
   const dir = mkdtempSync(path.join(os.tmpdir(), "amira-doc-example-"))
   try {

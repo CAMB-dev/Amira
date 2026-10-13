@@ -87,7 +87,7 @@ export const settingsDefaults = {
 export type DefaultKey = keyof typeof settingsDefaults
 
 /** Unit hints are derived too, so changing a timeout cannot leave a stale parenthetical. */
-export function documentedDefault(key: DefaultKey): string | { en: string; zh: string } {
+export function documentedDefault(key: DefaultKey): string | { en: string; zh: string; ja: string } {
   const value = settingsDefaults[key]
   const code = `\`${JSON.stringify(value)}\``
   switch (key) {
@@ -102,10 +102,15 @@ export function documentedDefault(key: DefaultKey): string | { en: string; zh: s
       return {
         en: `${code} (${Number(value) / 60_000} minutes)`,
         zh: `${code}（${Number(value) / 60_000} 分钟）`,
+        ja: `${code}（${Number(value) / 60_000} 分）`,
       }
     case "providers.<id>.models[].contextWindow":
     case "providers.<id>.models[].maxOutput":
-      return { en: `catalog, else ${code}`, zh: `取模型目录，否则为 ${code}` }
+      return {
+        en: `catalog, else ${code}`,
+        zh: `取模型目录，否则为 ${code}`,
+        ja: `カタログの値、なければ ${code}`,
+      }
     case "web.search.exa.url":
     case "web.search.brave.apiKeyEnv":
     case "web.search.tavily.apiKeyEnv":

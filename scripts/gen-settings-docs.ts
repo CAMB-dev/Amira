@@ -1,8 +1,11 @@
-// Generates the key tables of docs/settings.md and docs/zh/settings.md from the settings types
+// Generates the key tables of docs/settings.md, docs/zh/settings.md and docs/ja/settings.md from the settings types
 // (packages/api/src/settings.ts and the types it uses) and the reviewed defaults, descriptions
 // and translations in settings-docs-data.ts. `bun scripts/gen-settings-docs.ts` rewrites the
 // generated blocks; `--check` only reports whether they are stale. settings-docs.test.ts fails
 // when they are.
+// Japanese glossary: provider = プロバイダー, sub-agent = サブエージェント,
+// compaction = 圧縮, rewind = 巻き戻し, reasoning effort = 推論の強度,
+// transcript = 会話記録, shimmer = シマー; commands, keys and worktree stay unchanged.
 import { readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -24,7 +27,11 @@ export const typeFiles = [
   "packages/ai/src/dialect.ts",
   "packages/ai/src/types.ts",
 ]
-export const docFiles = { en: "docs/settings.md", zh: "docs/zh/settings.md" } as const
+export const docFiles = {
+  en: "docs/settings.md",
+  zh: "docs/zh/settings.md",
+  ja: "docs/ja/settings.md",
+} as const
 export type Language = keyof typeof docFiles
 
 export interface Type {
@@ -271,7 +278,9 @@ export const endMarker = "<!-- settings:generated:end -->"
 const headers = {
   en: ["Key", "Type", "Default", "Description", "User file only"],
   zh: ["键", "类型", "默认值", "说明", "仅用户文件"],
+  ja: ["キー", "型", "デフォルト", "説明", "ユーザーファイルのみ"],
 }
+const userOnlyYes = { en: "Yes", zh: "是", ja: "はい" }
 
 /** The generated block of one document. Throws for a key without reviewed annotations. */
 export function renderReference(language: Language, rows = settingsRows()): string {
@@ -303,7 +312,7 @@ export function renderReference(language: Language, rows = settingsRows()): stri
       const a: Annotation | undefined = annotations[row.key]
       if (!a) throw new Error(`Add a reviewed default, description and translation for ${row.key}`)
       const fallback = typeof a.default === "string" ? a.default : a.default[language]
-      const only = a.userOnly ? (language === "en" ? "Yes" : "是") : ""
+      const only = a.userOnly ? userOnlyYes[language] : ""
       lines.push(
         `| \`${cell(row.key)}\` | \`${cell(row.type)}\` | ${cell(fallback)} | ${cell(a[language])} | ${only} |`,
       )
@@ -327,7 +336,7 @@ export function updateReference(document: string, generated: string): string {
 if (import.meta.main) {
   const rows = settingsRows()
   let stale = false
-  for (const language of ["en", "zh"] as const) {
+  for (const language of Object.keys(docFiles) as Language[]) {
     const file = path.join(root, docFiles[language])
     const document = readFileSync(file, "utf8").replace(/\r\n/g, "\n")
     const updated = updateReference(document, renderReference(language, rows))

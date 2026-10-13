@@ -1,6 +1,6 @@
 # Getting started
 
-[简体中文](zh/getting-started.md) · [Documentation](../README.md)
+[简体中文](zh/getting-started.md) · [日本語](ja/getting-started.md) · [Documentation](../README.md)
 
 ## Install and open a project
 

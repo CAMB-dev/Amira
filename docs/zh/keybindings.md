@@ -1,6 +1,6 @@
 # 快捷键
 
-[English](../keybindings.md) · [文档首页](../../README.zh-CN.md)
+[English](../keybindings.md) · [日本語](../ja/keybindings.md) · [文档首页](../../README.zh-CN.md)
 
 交互界面的快捷键都对应一个 action。要修改绑定，在 `~/.amira/keybindings.json`（或 `$AMIRA_HOME/keybindings.json`）中写入 JSON 对象，将 action 名称映射为一个按键或按键列表：
 

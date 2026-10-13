@@ -1,5 +1,7 @@
 # Building Amira
 
+[简体中文](zh/building.md) · [日本語](ja/building.md) · [Documentation](../README.md)
+
 Use Bun **1.4.2** in a checkout of this repository:
 
 ```sh

@@ -1,6 +1,6 @@
 # Themes
 
-[简体中文](zh/themes.md) · [Documentation](../README.md)
+[简体中文](zh/themes.md) · [日本語](ja/themes.md) · [Documentation](../README.md)
 
 Themes change semantic colors and symbols without changing the terminal's own background or foreground. Built-ins are `amira` (the default cyan palette), `amber`, `burnt`, `lavender`, `mono` (neutral accents with colored status indicators), and `ascii` (default colors with ASCII glyphs). Built-in definitions live in [`packages/cli/themes`](../packages/cli/themes).
 

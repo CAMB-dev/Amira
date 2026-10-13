@@ -1,6 +1,6 @@
 # 快速开始
 
-[English](../getting-started.md) · [文档首页](../../README.zh-CN.md)
+[English](../getting-started.md) · [日本語](../ja/getting-started.md) · [文档首页](../../README.zh-CN.md)
 
 ## 安装并进入项目
 
