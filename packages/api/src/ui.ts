@@ -1,4 +1,6 @@
+import type { ExtensionSettingField, ExtensionSettingsValues } from "./extension-settings.ts"
 import type { FormSchema, FormSpec, FormValues } from "./form.ts"
+import type { SettingsLayerScope } from "./settings.ts"
 import type { ToolLine } from "./tool-renderers.ts"
 
 /** Semantic color for status text; frontends map it to their theme. */
@@ -83,6 +85,18 @@ export type UiRequest =
    * host (rpc: ui.action); the answer is checked there and refused with the problems.
    */
   | ({ kind: "form" } & FormSchema)
+  /** Extension settings edited as a draft; preview callbacks remain with the host. */
+  | {
+      kind: "extension-settings"
+      name: string
+      title: string
+      fields: ExtensionSettingField[]
+      values: ExtensionSettingsValues
+      /** Highest explicit source of each field; omitted keys use the default. */
+      sources?: Record<string, SettingsLayerScope>
+      /** Initially selected destination, from the effective settings' provenance. */
+      scope: "user" | "project"
+    }
 
 export type UiRequestKind = UiRequest["kind"]
 
@@ -166,6 +180,7 @@ export interface UiAnswer {
   "diff-review": string
   ask: AskAnswer[]
   form: FormValues
+  "extension-settings": { values: ExtensionSettingsValues; scope: "user" | "project" }
 }
 
 export interface UiRequestOptions {
@@ -223,4 +238,9 @@ export interface UiApi {
    * available it is asked one field at a time (runFormDialogs).
    */
   form(spec: FormSpec, opts?: UiRequestOptions): Promise<FormValues | undefined>
+  /** Edits a declared extension's settings. Only saving commits the draft; Esc discards it. */
+  extensionSettings(
+    name: string,
+    opts?: UiRequestOptions,
+  ): Promise<UiAnswer["extension-settings"] | undefined>
 }

@@ -42,7 +42,13 @@ function setup(enabled?: boolean) {
   const render = mock(() => {})
   const api: Pick<ExtensionAPI, "onEvents" | "settings" | "registerStatusItem" | "requestRender" | "onExit"> =
     {
-      settings: { tui: enabled === undefined ? {} : { tokenSpeed: enabled }, layers: () => [] },
+      settings: {
+        tui: enabled === undefined ? {} : { tokenSpeed: enabled },
+        layers: () => [],
+        declare: () => {
+          throw new Error("not used")
+        },
+      },
       onEvents: (types, handler) => bus.subscribe(handler, { types: [...types] }),
       registerStatusItem: (value) => {
         item = value

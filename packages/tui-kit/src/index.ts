@@ -96,6 +96,7 @@ export {
   blue,
   bold,
   colorSupported,
+  colourSwatch,
   compose,
   createTheme,
   cyan,

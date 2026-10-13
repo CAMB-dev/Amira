@@ -8,6 +8,7 @@ export * from "./config/index.ts"
 export * from "./context.ts"
 export * from "./deferred-tools.ts"
 export * from "./event-bus.ts"
+export type { ExtensionSettingsRegistration } from "./extension-settings.ts"
 export * from "./extensions.ts"
 export {
   type FileLock,

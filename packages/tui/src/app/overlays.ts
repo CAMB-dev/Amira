@@ -7,8 +7,14 @@ import {
   type ToolDetailLevel,
 } from "@amira/api"
 import type { UiRequests } from "@amira/core"
-import { type InputEvent, matchesKey, type RenderContext, type Theme } from "@amira/tui-kit"
+import { type ImageStore, type InputEvent, matchesKey, type RenderContext, type Theme } from "@amira/tui-kit"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "../dialog.ts"
+import {
+  type ExtensionSettingsRequest,
+  ExtensionSettingsView,
+  type ExtensionSettingsViewOptions,
+  uiExtensionSettingsBackend,
+} from "../extension-settings-view.ts"
 import { ExtensionViewer, type ViewSource } from "../extension-view.ts"
 import { type FormRequest, FormView, uiFormBackend } from "../form-view.ts"
 import { KeyReference } from "../key-reference.ts"
@@ -24,6 +30,8 @@ export interface OverlayManagerDeps {
   keys: Keybindings
   theme: Theme
   presenters?: PresenterSource
+  images?: () => ImageStore | undefined
+  previewTheme?: ExtensionSettingsViewOptions["previewTheme"]
   toolDetail?: () => ToolDetailLevel
   mode: "inline" | "fullscreen"
   env: Record<string, string | undefined>
@@ -57,8 +65,8 @@ export class OverlayManager {
    * `form` is set. A form waits while an inline dialog or the viewer is up, and inline dialogs
    * that arrive while a form is open wait behind it.
    */
-  private readonly forms: FormRequest[] = []
-  private form: FormView | undefined
+  private readonly forms: (FormRequest | ExtensionSettingsRequest)[] = []
+  private form: FormView | ExtensionSettingsView | undefined
 
   constructor(private readonly deps: OverlayManagerDeps) {}
 
@@ -257,17 +265,25 @@ export class OverlayManager {
     const ui = this.deps.ui
     const next = this.forms[0]
     if (!ui || !next || this.form || this.viewer || this.dialogs.length) return
-    this.form = new FormView(uiFormBackend(ui, next), {
+    const options = {
       requestRender: () => this.deps.view().requestOverlayRender(),
       waiting: this.waitingTitles,
       onClose: () => this.closeForm(next),
-    })
+    }
+    this.form =
+      next.kind === "extension-settings"
+        ? new ExtensionSettingsView(uiExtensionSettingsBackend(ui, next), {
+            ...options,
+            images: this.deps.images,
+            previewTheme: this.deps.previewTheme,
+          })
+        : new FormView(uiFormBackend(ui, next), options)
     this.deps.view().openOverlay()
     this.deps.view().renderOverlay()
   }
 
   /** The open form was answered, cancelled, or resolved elsewhere: back to the conversation. */
-  private closeForm(request: FormRequest) {
+  private closeForm(request: FormRequest | ExtensionSettingsRequest) {
     const i = this.forms.indexOf(request)
     if (i !== -1) this.forms.splice(i, 1)
     if (!this.form) return
@@ -305,7 +321,7 @@ export class OverlayManager {
   onUiRequest(data: EventMap["ui.request"]) {
     const ui = this.deps.ui
     if (!ui) return
-    if (data.kind === "form") {
+    if (data.kind === "form" || data.kind === "extension-settings") {
       this.forms.push(data)
       this.openNextForm()
       this.waitingChanged("opened")

@@ -5,14 +5,32 @@ import {
   blue,
   bold,
   colorSupported,
+  colourSwatch,
   defaultTheme,
+  isColorEnabled,
   monoTheme,
   red,
+  setColorEnabled,
   stripColors,
   surfaceTheme,
   type Theme,
   themeToken,
 } from "../src/style.ts"
+
+test("user colour swatches validate input and respect disabled colours", () => {
+  const previous = isColorEnabled()
+  try {
+    setColorEnabled(true)
+    expect(colourSwatch("#112233", "██")).toBe("\x1b[38;2;17;34;51m██\x1b[39m")
+    expect(colourSwatch("#abcdef", "##")).toBe("\x1b[38;2;171;205;239m##\x1b[39m")
+    expect(colourSwatch("#abc", "██")).toBe("██")
+    expect(colourSwatch("red", "██")).toBe("██")
+    setColorEnabled(false)
+    expect(colourSwatch("#112233", "██")).toBe("██")
+  } finally {
+    setColorEnabled(previous)
+  }
+})
 
 test("styles wrap text and survive nesting", () => {
   expect(red("x")).toBe("\x1b[31mx\x1b[39m")

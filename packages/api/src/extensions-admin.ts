@@ -22,6 +22,17 @@ export interface ManagedExtension {
   error?: string
   /** A user package hidden by a project package of the same name. */
   shadowed?: boolean
+  /** A loaded extension in this package declares configurable settings. */
+  settings?: boolean
+}
+
+/** A loaded declaration's command address and stable host-owned storage identity. */
+export interface ExtensionSettingsTarget {
+  name: string
+  identity: string
+  source: string
+  /** A standalone file, not a package managed by install/update/remove. */
+  standalone: boolean
 }
 
 /** An entry of the extensions index. */
@@ -59,6 +70,8 @@ export interface ExtensionUpdate {
 export interface ExtensionAdmin {
   /** Every installed package of both scopes, user scope first. */
   list(): ManagedExtension[]
+  /** Loaded settings declarations, including standalone files, when this host supports them. */
+  settings?(): ExtensionSettingsTarget[]
   /** Searches the index; an empty query lists it. Throws when it cannot be loaded. */
   search(
     query: string,

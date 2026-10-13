@@ -52,10 +52,11 @@ amira ext cache prune --all
 
 ### 在 Amira 中管理扩展包
 
-`/ext` 无需离开会话就能完成同样的操作。不带参数时，它打开一个列表：先是已安装的包（显示作用域、是否启用、是否受信任，以及索引中是否有新版本），然后是索引中可安装的包。在已安装的包上按 Enter 可以更新、启用或禁用、删除、查看详情；在可安装的包上按 Enter 会询问安装到用户作用域还是项目作用域，然后安装。按 `d` 查看详情。列表中的按键见[快捷键](keybindings.md#对话框)。
+`/ext` 无需离开会话就能完成同样的操作。不带参数时，它打开一个列表：先是已安装的包（显示作用域、是否启用、是否受信任，以及索引中是否有新版本），然后是索引中可安装的包。在已安装的包上按 Enter 可以打开设置（已加载扩展声明设置时才显示）、更新、启用或禁用、删除、查看详情；在可安装的包上按 Enter 会询问安装到用户作用域还是项目作用域，然后安装。按 `d` 查看详情。列表中的按键见[快捷键](keybindings.md#对话框)。
 
 ```text
 /ext
+/ext config hello-extension
 /ext search lsp
 /ext install todo
 /ext install todo --project
@@ -66,7 +67,7 @@ amira ext cache prune --all
 
 `install`、`remove`、`disable` 和 `enable` 只接受一个包名；`update` 可以接受任意数量的包名，不带包名时更新该作用域的全部包；`--project` 为 install、update 和 remove 选择项目作用域。规则与 CLI 相同：安装到项目中的包仍需信任该项目才会加载，disable 和 enable 通过用户设置同时作用于两个作用域。安装和更新时会显示进度面板，期间可以继续输入。Esc 或 Ctrl+C 取消正在进行的操作并保留草稿；安装要么完整完成要么不生效，已经完成的更新会保留。
 
-`/ext` 不会自动重新加载。有改动时，它会提示运行 `/reload`，或在当前轮次结束后再运行。`/ext` 操作进行中时 `/reload` 会拒绝执行。安装到未受信任项目的包，要等下次启动时信任该项目，或运行 `amira ext trust` 并重启后才会加载。打印模式和 RPC 模式中可以用带引号的斜杠命令执行这些子命令；列表需要交互界面。
+`/ext` 不会自动重新加载扩展代码。包有改动时，它会提示运行 `/reload`，或在当前轮次结束后再运行；保存设置则立即通知扩展，无需重新加载。`/ext` 操作进行中时 `/reload` 会拒绝执行。安装到未受信任项目的包，要等下次启动时信任该项目，或运行 `amira ext trust` 并重启后才会加载。打印模式和 RPC 模式中可以用带引号的斜杠命令执行这些子命令；列表需要交互界面。
 
 ## 用户范围、项目范围与信任
 
@@ -125,8 +126,13 @@ amira ext untrust
 import { defineExtension } from "@amira/api"
 
 export default defineExtension((api) => {
-  const configured = api.settings.extensions?.["hello-extension"]?.message
-  const message = typeof configured === "string" ? configured : "Hello from an extension."
+  const settings = api.settings.declare({
+    fields: [
+      { key: "message", type: "text", label: "Greeting", default: "Hello from an extension.", maxLength: 120 },
+    ],
+    preview: (draft) => ({ lines: [{ kind: "text", text: draft.message }] }),
+  })
+  settings.onChange(() => api.requestRender())
   let greetings = 0
 
   api.registerStatusItem({
@@ -140,7 +146,7 @@ export default defineExtension((api) => {
     description: "Print a greeting and update its status counter",
     run(_args, ctx) {
       greetings += 1
-      ctx.print(message)
+      ctx.print(settings.get().message)
       api.requestRender()
     },
   })
@@ -166,7 +172,7 @@ amira
 }
 ```
 
-修改此设置后重启。开发独立文件时，也可以运行 `amira --extension ./hello-extension/index.ts`，直接加载文件而不安装清单。该选项可重复，相对路径以命令启动目录为准。Amira 在运行时提供 `@amira/api` 导入，独立文件也无需另行安装这个运行时包。
+运行 `/ext config hello-extension` 可以在实时预览中编辑问候语。保存后，下次 `/hello` 立即读取新值，无需重启。开发独立文件时，也可以运行 `amira --extension ./hello-extension/index.ts`，直接加载文件而不安装清单。该选项可重复，相对路径以命令启动目录为准。Amira 在运行时提供 `@amira/api` 导入，独立文件也无需另行安装这个运行时包。
 
 ## API 概览
 
@@ -189,12 +195,63 @@ amira
 | `serverToolView` | 将 provider 托管的工具块（如原生网页搜索）转换为与展示器共用的工具调用视图形状 |
 | `registerMarkdownRenderer`、`registerImageProvider` | 渲染回复中匹配的代码块、数学公式或独立图片，并提供终端图片数据 |
 | `provideService`、`useService` | 共享具名服务；使用时再查找，提供方可能未加载或已卸载 |
+| `settings.declare` | 声明有序设置字段和可选的隔离预览，通过 `get()` 读取类型化值，通过 `onChange()` 订阅保存后的变化 |
 | `settings`、`cwd`、`home`、`apiVersion` | 读取合并后的设置、每个顶层键的来源层、工作目录、用户目录和 API 版本 |
 | `dataDir` | 必需的只读绝对路径，指向本扩展的持久状态目录，首次访问时创建 |
 | `backgroundJobs` | 启动并查看本扩展自己启动的后台任务；内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力 |
 | `runCommand`、`openPipe`、`onExit` | 运行受管理的子进程、启动长期管道进程，或注册短时退出工作 |
 | `notify`、`reportError` | 显示提示或报告后台错误 |
 | `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
+
+### 声明扩展设置
+
+使用 `api.settings.declare(...)` 声明一次设置。宿主决定扩展身份：已安装包写入 `extensions.<包名>.<键>`，独立文件在 `extensions` 下使用宿主已知的绝对路径作为键（Windows 上统一为小写）。命令别名不会改变存储身份。同一身份只能声明一次，重复声明会导致加载失败。字段顺序就是页面顺序。`settings.get()` 返回只读、经过校验的对象，键和值的类型自动推导；缺失或无效的文件值回退到声明的默认值。无效值按现有设置问题的方式报告，包含文件和键。
+
+```ts
+import { defineExtension, type MarkdownRenderContext, type MarkdownRenderResult } from "@amira/api"
+
+export default defineExtension((api) => {
+  // 与实际渲染器共用纯函数，始终显式传入设置。
+  const renderSample = (
+    mode: "text" | "image",
+    size: number,
+    ctx: MarkdownRenderContext,
+  ): MarkdownRenderResult => ({
+    lines: [{ kind: "text", text: `Sample: ${mode}, ${size}px (${ctx.width} columns)` }],
+  })
+  const settings = api.settings.declare({
+    fields: [
+      { key: "size", type: "number", label: "Size", description: "Font size in pixels.", default: 16, min: 8, max: 64, step: 1 },
+      { key: "mode", type: "choice", label: "Mode", default: "text", options: ["text", "image"] },
+      { key: "enabled", type: "toggle", label: "Render samples", default: true },
+      { key: "colour", type: "colour", label: "Colour", default: "#88aaff" },
+    ],
+    preview: (draft, ctx) => renderSample(draft.mode, draft.size, ctx),
+  })
+  settings.onChange(() => {
+    // 如有扩展自己维护的渲染缓存，在此使缓存失效。
+    api.requestRender()
+  })
+  api.registerCommand({
+    name: "sample",
+    description: "Print the saved sample settings",
+    run(_args, ctx) {
+      const values = settings.get()
+      ctx.print(`${values.mode}: ${values.size}px`)
+    },
+  })
+})
+```
+
+五种字段类型：`number`（可选 `min`、`max`、`step`）、`toggle`、`choice`（`options` 为字符串或 `{ value, label?, description? }`）、`text`（可选 `placeholder`、匹配整个值的 `pattern`、`maxLength`）和 `colour`（`#rrggbb`）。每个字段必须有扁平的 `key`、`type`、`label`、`default`，`description` 可选。声明时校验默认值和约束。有效保存值发生变化时，设置页面或宿主设置重新加载会触发 `onChange`；它返回取消订阅函数，卸载时自动清理。使用时调用 `get()`，或在回调中更新扩展状态。这并不意味着自动监听文件：手动编辑文件后，由宿主设置重新加载（`/reload`）读取。
+
+文本的 `maxLength` 按 Unicode 码点计数，而不是 UTF-16 代码单元：`🚀` 计为一个，`e` 加组合重音计为两个。编辑只在码点之间截断，默认值、文件值和保存草稿中的未配对代理项都会被校验拒绝。`onChange` 回调可以是异步函数；同步抛出的异常和返回 promise 的拒绝都按扩展错误报告。保存和其他通知不会等待异步回调完成。
+
+预览可选。回调收到草稿和渲染上下文（`width`、`theme`、`images`、`maxImageRows`、`signal`），返回现有的 `MarkdownRenderResult`：带样式的 `lines`、行内 `segments`，或带 `alt` / `fallback` 的 `image`。可以返回 promise，例如异步生成的 KaTeX 图片。宿主在结果到达后重绘，替换草稿或关闭页面时中止旧预览；即使回调忽略 signal，也不会显示过期结果。通过显式传入设置，与真正的渲染器共用渲染函数。这比临时向普通 Markdown 渲染器注入草稿更简单、安全：保存值的读取、通知、普通渲染和缓存都不会接触未保存草稿。预览回调不能修改扩展的普通渲染状态。
+
+`/ext` 中，已加载且声明设置的包提供 **Settings** 操作；声明设置的独立文件列在单独的 **Standalone** 分组中，只提供 **Settings** 和 **Show details**，不提供包的安装、更新、移除操作。`/ext config <name>` 直接打开页面，config 补全也包含独立文件名称。宿主从不含扩展名的文件名生成名称，将 ASCII 字母、数字、`_`、`-` 之外的连续字符替换为 `-`（例如 `my extension.ts` 变为 `my-extension`），空名称使用 `extension`。与其他文件或包名重名时，按绝对路径顺序追加 `-2`、`-3` 等后缀。使用 `/ext` 显示的名称，或用引号包住绝对路径：`/ext config "/path/to/my extension.ts"`、`/ext config "C:\\extensions\\my extension.ts"`。也支持单引号，反斜杠保持原样。加载文件或已安装包发生变化时别名可能改变，但保存的设置始终使用原始路径身份。预览位于控件上方，没有预览则只显示控件。上下键移动焦点，左右键或 `-` / `+` 按步长调整数字，输入数字设置值并限制在范围内，左右键循环选项，空格切换 on/off。文本和颜色是单行输入。焦点行显示自动换行的说明。`ctrl+r` 将当前行重置为默认值，标记指出哪些值不同于默认值。
+
+修改只更新预览，不写文件。Enter 在页面内询问保存到用户还是项目设置，默认选当前来源层（未设置时选用户）；再次 Enter 才保存到该层，保留其他键以及现有设置写入器支持的格式。Esc 丢弃整个草稿。优先级更高的 project-local 或命令行值可能仍覆盖保存的用户/项目值；页面显示来源，便于明确选择。
 
 ### 扩展状态目录
 

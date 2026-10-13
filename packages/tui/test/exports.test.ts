@@ -4,6 +4,7 @@ test("the public TUI exports stay stable", async () => {
   const actual = Object.keys(await import("../src/index.ts")).sort()
   expect(actual).toEqual([
     "ACTIONS",
+    "ExtensionSettingsView",
     "ExtensionViewer",
     "FormView",
     "HISTORY_LIMIT",
@@ -20,6 +21,7 @@ test("the public TUI exports stay stable", async () => {
     "statusBorder",
     "statusLine",
     "summarizeArgs",
+    "uiExtensionSettingsBackend",
     "uiFormBackend",
     "userLines",
   ])

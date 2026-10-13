@@ -10,6 +10,7 @@ import {
   type CompleteResult,
   type Extension,
   type ExtensionAPI,
+  type ExtensionSettingsTarget,
   type FileRestorationOwner,
   hostBackgroundJobs,
   installHostNet,
@@ -36,8 +37,10 @@ import {
 import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
+import type { SettingsSources } from "./config/load.ts"
 import type { EventBus } from "./event-bus.ts"
 import { extensionDataOwner } from "./extension-data.ts"
+import { ExtensionSettingsRegistry, type ExtensionSettingsRegistryOptions } from "./extension-settings.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { PanelRegistry } from "./panel-registry.ts"
@@ -98,6 +101,10 @@ export interface ExtensionHostOptions {
   settings?: Settings
   /** Explicit settings values by source layer, matching `settings`. */
   settingsLayers?: SettingsLayers
+  /** Settings write locations; defaults to cwd and amiraHome(). */
+  settingsSources?: SettingsSources
+  /** Flag-aware reload after a declared settings page saves. */
+  reloadSettings?: ExtensionSettingsRegistryOptions["reloadSettings"]
   interceptors: InterceptorRegistry
   tools: ToolRegistry
   status?: StatusRegistry
@@ -133,6 +140,8 @@ export class ExtensionHost {
   fileRestoration: (FileRestorationOwner & { source: string }) | undefined
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  #identities = new Map<string, string>()
+  #settingsPackageNames: () => readonly string[] = () => []
   #exitHandlers = new Set<{ source: string; run: (signal: AbortSignal) => void | Promise<void> }>()
   #renderPending = false
   /** Extension files imported before, which a reload must import anew. */
@@ -161,6 +170,8 @@ export class ExtensionHost {
   readonly images: ImageProviderRegistry
   /** What extensions offer each other (D88). */
   readonly services: ServiceRegistry
+  /** Declared extension settings, live values and settings-page persistence. */
+  readonly extensionSettings: ExtensionSettingsRegistry
   /** The host-level job view used by built-in frontends and host lifecycle code. */
   readonly backgroundJobs: BackgroundJobHost
 
@@ -189,10 +200,68 @@ export class ExtensionHost {
     this.markdown = new MarkdownRendererRegistry((source, error) => void this.#fail(source, error))
     this.images = new ImageProviderRegistry()
     this.services = new ServiceRegistry()
+    this.extensionSettings = new ExtensionSettingsRegistry({
+      settings: opts.settings,
+      layers: opts.settingsLayers,
+      settingsSources: opts.settingsSources ?? { cwd: opts.cwd ?? process.cwd(), home: amiraHome() },
+      reloadSettings: opts.reloadSettings,
+      warning: (error) => opts.bus.emit("extension.error", { source: "settings", error }, this.#meta()),
+      failure: (source, error) => void this.#fail(source, error),
+      onReload: (settings, layers) => this.setSettings(settings, layers),
+    })
+    this.ui.setExtensionSettingsAccessor((name) => {
+      const identity = path.isAbsolute(name)
+        ? process.platform === "win32"
+          ? path.resolve(name).toLowerCase()
+          : path.resolve(name)
+        : name
+      return (
+        this.extensionSettings.get(identity) ??
+        this.extensionSettings.get(
+          this.extensionSettingsTargets().find((target) => target.name === name)?.identity ?? "",
+        )
+      )
+    })
   }
 
   get loaded(): string[] {
     return [...this.#disposers.keys()]
+  }
+
+  /** Reserves installed package names, including disabled packages, for settings addresses. */
+  setExtensionSettingsPackageNames(names: () => readonly string[]): void {
+    this.#settingsPackageNames = names
+  }
+
+  /** File aliases are display addresses only: settings continue using the host-known identity. */
+  extensionSettingsTargets(): ExtensionSettingsTarget[] {
+    const entries = this.extensionSettings.list()
+    const taken = new Set([
+      ...this.#settingsPackageNames(),
+      ...[...this.#identities.values()].filter((name) => !path.isAbsolute(name)),
+      ...entries.filter((entry) => !path.isAbsolute(entry.name)).map((entry) => entry.name),
+    ])
+    const aliases = new Map<string, string>()
+    for (const entry of entries
+      .filter((entry) => path.isAbsolute(entry.name))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const stem =
+        path
+          .basename(entry.name, path.extname(entry.name))
+          .replace(/[^a-zA-Z0-9_-]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "extension"
+      let alias = stem
+      let suffix = 2
+      while (taken.has(alias)) alias = `${stem}-${suffix++}`
+      taken.add(alias)
+      aliases.set(entry.name, alias)
+    }
+    return entries.map((entry) => ({
+      name: aliases.get(entry.name) ?? entry.name,
+      identity: entry.name,
+      source: entry.source,
+      standalone: path.isAbsolute(entry.name),
+    }))
   }
 
   /** Binds the interactive sink; existing extension proxies follow it without reloading. */
@@ -203,9 +272,15 @@ export class ExtensionHost {
     }
   }
 
-  /** The settings handed to extensions loaded from now on (e.g. on a reload). */
+  /** Updates live declared settings and snapshots handed to extensions loaded from now on. */
   setSettings(settings: Settings, settingsLayers: SettingsLayers = {}): void {
+    const before = JSON.stringify(this.extensionSettings.list().map((entry) => entry.get()))
     this.#opts = { ...this.#opts, settings, settingsLayers }
+    this.extensionSettings.setSettings(settings, settingsLayers)
+    if (before !== JSON.stringify(this.extensionSettings.list().map((entry) => entry.get()))) {
+      this.markdown.invalidate()
+      this.#requestRender()
+    }
   }
 
   /** Injects the active session control after the CLI has built its command surface. */
@@ -226,6 +301,7 @@ export class ExtensionHost {
       return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
     this.#disposers.set(source, disposers)
+    this.#identities.set(source, name)
     this.#opts.bus.emit("extension.loaded", { source }, this.#meta())
     return true
   }
@@ -276,6 +352,7 @@ export class ExtensionHost {
     if (!disposers) return false
     for (const d of disposers.reverse()) d()
     this.#disposers.delete(source)
+    this.#identities.delete(source)
     this.#requestRender()
     return true
   }
@@ -607,7 +684,16 @@ export class ExtensionHost {
         ),
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
       // Each extension gets its own frozen copy, so none can change what another reads.
-      settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}),
+      settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}, (declaration) => {
+        if (!active) throw new Error("Cannot declare settings after extension unload")
+        const registered = this.extensionSettings.register(name, source, declaration)
+        track(() => {
+          registered.dispose()
+          this.ui.cancelExtensionSettings(name)
+        })
+        this.#requestRender()
+        return registered.handle
+      }),
       complete: (request) => this.#complete(request, source, disposers),
       session: () => this.#session,
       registerStatusItem: (item) => {
@@ -714,13 +800,18 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * The frozen settings snapshot with `layers` as a non-enumerable method, so spreading,
- * `Object.keys`, JSON and `structuredClone` still see plain settings.
+ * The frozen settings snapshot with non-enumerable methods, so spreading, `Object.keys`,
+ * JSON and `structuredClone` still see plain settings.
  */
-function settingsView(settings: Settings, layers: SettingsLayers): SettingsView {
+function settingsView(
+  settings: Settings,
+  layers: SettingsLayers,
+  declare: SettingsView["declare"],
+): SettingsView {
   const view = structuredClone(settings)
   const layerSnapshot = deepFreeze(structuredClone(layers))
   const emptyLayers: readonly SettingsLayer[] = Object.freeze([])
+  Object.defineProperty(view, "declare", { value: declare })
   Object.defineProperty(view, "layers", {
     value: <K extends keyof Settings>(key: K) =>
       (Object.hasOwn(layerSnapshot, key) ? layerSnapshot[key] : emptyLayers) as readonly SettingsLayer<

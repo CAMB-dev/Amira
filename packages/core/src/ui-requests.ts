@@ -5,24 +5,47 @@ import {
   checkForm,
   describeFormErrors,
   type EventMap,
+  type ExtensionSettingField,
+  type ExtensionSettingsPreviewContext,
+  type ExtensionSettingsScope,
+  type ExtensionSettingsValues,
   type FormActionResult,
   type FormOption,
   type FormSpec,
   type FormValues,
+  type MarkdownRenderResult,
   runFormAction,
   runFormDialogs,
   type SelectChoice,
   type SelectSection,
+  type SettingsLayer,
   sectionOf,
   toFormSchema,
   type UiAnswer,
   type UiApi,
   type UiRequest,
   type UiRequestOptions,
+  validateExtensionSetting,
 } from "@amira/api"
 import type { EventBus } from "./event-bus.ts"
 
 type Value = UiAnswer[keyof UiAnswer]
+
+/** Host-only settings callbacks. Drafts never replace the extension's effective settings. */
+export interface ExtensionSettingsBackend {
+  /** Canonical host identity, even when the page was opened through a display alias. */
+  name?: string
+  title?: string
+  sources?: Readonly<Record<string, readonly SettingsLayer[]>>
+  fields: readonly ExtensionSettingField[]
+  get(): ExtensionSettingsValues
+  defaultScope: ExtensionSettingsScope
+  preview?(
+    draft: ExtensionSettingsValues,
+    context: ExtensionSettingsPreviewContext,
+  ): MarkdownRenderResult | Promise<MarkdownRenderResult>
+  save(values: ExtensionSettingsValues, scope: "user" | "project"): void | Promise<void>
+}
 
 interface Pending {
   request: EventMap["ui.request"]
@@ -30,6 +53,8 @@ interface Pending {
   cleanup: () => void
   /** For a form: the spec with its validators and actions, which never leave the host. */
   form?: FormState
+  settings?: ExtensionSettingsBackend
+  saving?: boolean
 }
 
 interface FormState {
@@ -59,6 +84,7 @@ export class UiRequests {
   #pending = new Map<string, Pending>()
   #sourceLabels = new Map<string, string>()
   #seq = 0
+  #settings: ((name: string) => ExtensionSettingsBackend | undefined) | undefined
   formMode: FormMode = "native"
   /**
    * Why no frontend can answer (e.g. "print mode"), set by a frontend that cancels every
@@ -77,13 +103,51 @@ export class UiRequests {
     else this.#sourceLabels.set(source, label)
   }
 
+  /** Binds the host registry; functions and preview images do not cross the event boundary. */
+  setExtensionSettingsAccessor(accessor: (name: string) => ExtensionSettingsBackend | undefined): void {
+    this.#settings = accessor
+  }
+
+  /** A pending settings page's callbacks; undefined once resolved or for another request kind. */
+  extensionSettingsBackend(requestId: string): ExtensionSettingsBackend | undefined {
+    return this.#pending.get(requestId)?.settings
+  }
+
+  extensionSettings(
+    name: string,
+    opts: UiRequestOptions & { source?: string } = {},
+  ): Promise<UiAnswer["extension-settings"] | undefined> {
+    if (opts.signal?.aborted) return Promise.resolve(undefined)
+    const settings = this.#settings?.(name)
+    if (!settings) throw new Error(`there are no settings for extension "${name}"`)
+    return this.#ask(
+      {
+        kind: "extension-settings",
+        name: settings.name ?? name,
+        title: settings.title ?? name,
+        fields: structuredClone([...settings.fields]),
+        values: structuredClone(settings.get()),
+        sources: Object.fromEntries(
+          Object.entries(settings.sources ?? {}).flatMap(([key, layers]) => {
+            const scope = layers.at(-1)?.scope
+            return scope ? [[key, scope]] : []
+          }),
+        ),
+        scope: settings.defaultScope === "user" ? "user" : "project",
+      },
+      opts,
+      undefined,
+      settings,
+    ) as Promise<UiAnswer["extension-settings"] | undefined>
+  }
+
   /** Dialogs still waiting, oldest first. */
   get pending(): EventMap["ui.request"][] {
     return [...this.#pending.values()].map((p) => p.request)
   }
 
   /** Resolves with the answer, or undefined when cancelled, aborted or timed out. */
-  ask<K extends Exclude<keyof UiAnswer, "form">>(
+  ask<K extends Exclude<keyof UiAnswer, "form" | "extension-settings">>(
     request: Extract<UiRequest, { kind: K }>,
     opts: UiRequestOptions & { source?: string } = {},
   ): Promise<UiAnswer[K] | undefined> {
@@ -101,7 +165,12 @@ export class UiRequests {
     return this.#ask({ kind: "form", ...toFormSchema(spec) }, opts, form) as Promise<FormValues | undefined>
   }
 
-  #ask(request: UiRequest, opts: UiRequestOptions & { source?: string }, form?: FormState) {
+  #ask(
+    request: UiRequest,
+    opts: UiRequestOptions & { source?: string },
+    form?: FormState,
+    settings?: ExtensionSettingsBackend,
+  ) {
     if (opts.signal?.aborted) return Promise.resolve(undefined)
     const requestId = `ui_${++this.#seq}_${crypto.randomUUID().slice(0, 6)}`
     const sourceLabel = opts.source ? this.#sourceLabels.get(opts.source) : undefined
@@ -124,6 +193,7 @@ export class UiRequests {
           for (const c of form?.running ?? []) c.abort()
         },
         ...(form ? { form } : {}),
+        ...(settings ? { settings } : {}),
       })
       this.#bus.emit("ui.request", event, { sessionId: this.#sessionId })
     })
@@ -150,7 +220,45 @@ export class UiRequests {
     }
     const problem = checkValue(p.request, value)
     if (problem) return problem
+    if (p.settings) {
+      if (p.saving) return "settings are being saved"
+      // RPC responders keep their synchronous contract. Native pages await this operation below.
+      void this.submitExtensionSettings(requestId, value as UiAnswer["extension-settings"]).then((error) => {
+        if (error && this.#pending.has(requestId))
+          this.#bus.emit(
+            "ui.progress",
+            { requestId, action: "save", text: error },
+            { sessionId: this.#sessionId },
+          )
+      })
+      return undefined
+    }
     this.#settle(requestId, value as Value)
+    return undefined
+  }
+
+  /** Saves a settings draft, resolving the request only after the host accepts and persists it. */
+  async submitExtensionSettings(
+    requestId: string,
+    answer: UiAnswer["extension-settings"],
+  ): Promise<string | undefined> {
+    const pending = this.#pending.get(requestId)
+    if (!pending?.settings) return `no pending extension settings "${requestId}"`
+    const problem = checkValue(pending.request, answer)
+    if (problem) return problem
+    if (pending.saving) return "settings are being saved"
+    pending.saving = true
+    const values = structuredClone(answer.values)
+    const scope = answer.scope
+    try {
+      await pending.settings.save(values, scope)
+      // A cancelled/unloaded request must not settle a second time.
+      if (this.#pending.get(requestId) === pending) this.#settle(requestId, { values, scope })
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    } finally {
+      pending.saving = false
+    }
     return undefined
   }
 
@@ -212,6 +320,13 @@ export class UiRequests {
     if (!this.#pending.has(requestId)) return false
     this.#settle(requestId, undefined)
     return true
+  }
+
+  /** Cancels pages whose settings owner unloaded, even when another extension opened them. */
+  cancelExtensionSettings(name: string): void {
+    for (const [id, pending] of this.#pending) {
+      if (pending.request.kind === "extension-settings" && pending.request.name === name) this.cancel(id)
+    }
   }
 
   /** Cancels every dialog, or only those asked by one extension. */
@@ -283,6 +398,7 @@ export class UiRequests {
         return this.ask(request, o(rest))
       },
       form: (spec, opts) => this.form(spec, o(opts)),
+      extensionSettings: (name, opts) => this.extensionSettings(name, o(opts)),
     }
   }
 
@@ -349,6 +465,25 @@ function checkValue(request: UiRequest, value: unknown): string | undefined {
       return typeof value === "string" ? undefined : "value must be a string"
     case "form":
       return "value must be an object of field values"
+    case "extension-settings": {
+      if (typeof value !== "object" || value === null || Array.isArray(value))
+        return "value must contain settings values and scope"
+      const answer = value as Partial<UiAnswer["extension-settings"]>
+      if (answer.scope !== "user" && answer.scope !== "project") return "scope must be user or project"
+      if (typeof answer.values !== "object" || answer.values === null || Array.isArray(answer.values))
+        return "values must be an object of settings values"
+      const values = answer.values
+      for (const key of Object.keys(values))
+        if (!request.fields.some((field) => field.key === key)) return `unknown setting "${key}"`
+      for (const field of request.fields) {
+        const problem = validateExtensionSetting(
+          field,
+          Object.hasOwn(values, field.key) ? values[field.key] : undefined,
+        )
+        if (problem) return `${field.label}: ${problem}`
+      }
+      return undefined
+    }
   }
 }
 
