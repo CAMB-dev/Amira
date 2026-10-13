@@ -684,8 +684,8 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.title": {
     default: documentedDefault("tui.title"),
-    en: "Set the title to `Amira · session title`, falling back to the cwd name when untitled. Markdown markers are stripped. `●` marks running work; `?` remains while a dialog is unanswered, even when focused; a background-completion marker clears on return. Waiting-state transitions and final status update immediately; other running-title updates occur at most once per second.",
-    zh: "标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；对话框未回答时，即使终端有焦点也保留 `?`；后台轮次结束的标记在返回终端后清除。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。",
+    en: "Set the title to `Amira · session title`, falling back to the cwd name when untitled. Markdown markers are stripped. `●` marks running work; `✓` marks a turn finished while you were away and clears when the terminal regains focus; `◆` marks a dialog waiting for your answer or confirmation, remains even when focused, and takes priority over `✓`. No marker means idle/seen. Waiting-state transitions and final status update immediately; other running-title updates occur at most once per second.",
+    zh: "标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；`✓` 表示终端失去焦点期间轮次已结束，终端重新获得焦点后清除；`◆` 表示对话框等待回答或确认，即使终端有焦点也保留，且优先于 `✓`。无标记表示空闲或已查看。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。",
   },
   "tui.progress": {
     default: documentedDefault("tui.progress"),

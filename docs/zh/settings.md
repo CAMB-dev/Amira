@@ -264,7 +264,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `tui.colorDepth` | `"auto" \| "truecolor" \| "256" \| "16"` | `"auto"` | 颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。所有值均为字符串，包括 `"256"` 和 `"16"`。 |  |
 | `tui.bell` | `boolean` | `true` | 终端失去焦点时，轮次结束或对话框需要输入，每次等待只响铃一次。焦点未知时，轮次结束从不响铃，仅权限或提问对话框提醒。设为 `false` 可关闭 BEL 响铃；桌面通知由 `tui.notify` 单独控制。 |  |
 | `tui.notify` | `"auto" \| "off"` | `"auto"` | `"auto"` 按 `tui.bell` 相同的焦点规则，每次等待发送一次桌面通知：iTerm2/Ghostty 使用 OSC 9，WezTerm 使用 OSC 777，kitty 使用 OSC 99。Windows Terminal 仅使用 BEL/任务栏提醒，不发送桌面通知 OSC。未知终端、dumb 终端及 tmux/screen 不发送通知 OSC。通知仍受终端和操作系统设置限制。`"off"` 关闭桌面通知，不影响响铃。 |  |
-| `tui.title` | `boolean` | `true` | 标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；对话框未回答时，即使终端有焦点也保留 `?`；后台轮次结束的标记在返回终端后清除。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。 |  |
+| `tui.title` | `boolean` | `true` | 标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；`✓` 表示终端失去焦点期间轮次已结束，终端重新获得焦点后清除；`◆` 表示对话框等待回答或确认，即使终端有焦点也保留，且优先于 `✓`。无标记表示空闲或已查看。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。 |  |
 | `tui.progress` | `boolean` | `true` | 在标签页和任务栏进度指示器上显示工作状态（OSC 9;4）。 |  |
 | `tui.tokenSpeed` | `boolean` | `true` | 在状态栏右侧显示实时 token 速度：`~N tok/s` 根据可见回复文字和工具参数估算，`thinking Ns` 显示思考时长；请求结束后，若有用量报告则改为精确的输出速度。空闲时保留上次速度，空间不足时优先隐藏此项。设为 `false` 可关闭。 |  |
 | `tui.reflow` | `"auto" \| "on" \| "off"` | `"auto"` | 终端在变窄时不会重新折行（旧版 conhost、部分 tmux 配置）时设为 `"off"`。 |  |
