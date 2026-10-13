@@ -2,7 +2,7 @@ import { cursor, erase, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 import type { Glyphs } from "./glyphs.ts"
 import { findImageMarker, imageState, onImageSettled, placeImage, releaseImage } from "./images/placement.ts"
-import type { ImageBlock } from "./images/types.ts"
+import { type Commit, fitScreen, type Line, lineRows, RendererHistory, rowsFor } from "./renderer-history.ts"
 import { defaultTheme, isColorEnabled, stripColors, type Theme } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
 import { closeStyles, presentEmoji, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
@@ -31,16 +31,6 @@ interface Frame {
   cursor: { row: number; col: number } | undefined
 }
 
-/** An image going to the scrollback: the text before it on its row, and its fallback rows. */
-interface ImageLine {
-  prefix: string
-  block: ImageBlock
-  fallback: string[]
-}
-
-/** A line going to the scrollback. */
-type Line = string | ImageLine
-
 /**
  * Draws a component as the live region at the bottom of an inline terminal UI. Lines committed
  * with `commit()` are printed above it once and left to scroll into the scrollback. The live
@@ -58,6 +48,8 @@ export class LiveRenderer {
   /** Row and column of the terminal cursor, relative to the top of the live region. */
   private row = 0
   private col = 0
+  /** Absolute origin established by redraw; subsequent commits/growth account for terminal scrolling. */
+  private top = 0
   private width = 0
   private forceFull = false
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -66,20 +58,18 @@ export class LiveRenderer {
   private stopped = false
   /** See `RendererOptions.reflow`. */
   reflow: boolean
-  /** Committed blocks, one per frame that committed lines, oldest first; see `redraw()`. */
-  private history: Line[][] = []
-  private historyCount = 0
-  private historyLimit: number
+  /** Committed blocks and their semantic identities, oldest first; see `redraw()`. */
+  private history: RendererHistory
   /** The next frame clears the screen and prints recent history first. */
   private clearScreen = false
   private suspended = false
   /** Lines committed while suspended, printed in order on `resume()`. */
-  private held: string[] = []
+  private held: Commit<string>[] = []
   /**
    * Committed lines held back behind an image still loading (the first of them), in order.
    * Meanwhile they are drawn at the top of the live region, the image as its fallback.
    */
-  private waiting: string[] = []
+  private waiting: Commit<string>[] = []
   private offWait: (() => void) | undefined
   private waitTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -91,7 +81,7 @@ export class LiveRenderer {
     this.synchronizedOutput = opts.synchronizedOutput ?? false
     this.frameIntervalMs = opts.frameIntervalMs ?? 16
     this.reflow = opts.reflow ?? true
-    this.historyLimit = Math.max(0, opts.historyLines ?? 1000)
+    this.history = new RendererHistory(Math.max(0, opts.historyLines ?? 1000))
     this.context = {
       theme: opts.theme ?? defaultTheme,
       glyphs: opts.glyphs,
@@ -124,13 +114,34 @@ export class LiveRenderer {
     this.draw([])
   }
 
-  /** Prints lines permanently above the live region, then redraws the live region below them. */
-  commit(lines: string[]): void {
-    this.draw(lines.flatMap(safeLines))
+  /** Prints above the live region; optional semantic rows repaint on redraw while retained in history. */
+  commit(lines: string[], redraw?: (width: number, ctx: RenderContext) => string[]): void {
+    this.draw([this.prepareCommit(lines, redraw)])
+  }
+
+  private prepareCommit(
+    lines: string[],
+    redraw?: (width: number, ctx: RenderContext) => string[],
+  ): Commit<string> {
+    const safe = lines.flatMap(safeLines)
+    const semantic =
+      redraw && this.history.limit && !this.stopped
+        ? { redraw, remaining: safe.length, remembered: false, truncated: false }
+        : undefined
+    return { lines: safe, semantic }
   }
 
   get isSuspended(): boolean {
     return this.suspended
+  }
+
+  /** Screen row of the live frame, for pointer coordinates after establishing the origin with redraw(). */
+  get screenTop(): number {
+    return this.top
+  }
+
+  get liveRows(): number {
+    return this.prev?.lines.length ?? 0
   }
 
   /**
@@ -159,10 +170,11 @@ export class LiveRenderer {
    * left to replace, so a terminal resized in between (which may have re-wrapped the main
    * screen, or not moved the cursor it saved along with it) leaves no stale copy behind.
    */
-  resume(): void {
+  resume(redraw = false): void {
     if (!this.suspended) return
     this.suspended = false
     this.forceFull = true
+    this.clearScreen ||= redraw
     const held = this.held
     this.held = []
     this.draw(held)
@@ -206,13 +218,13 @@ export class LiveRenderer {
     this.row = 0
   }
 
-  private draw(incoming: string[], release = false): void {
+  private draw(incoming: Commit<string>[], release = false): void {
     if (this.stopped) {
-      dropImages(incoming)
+      dropImages(incoming.flatMap((block) => block.lines))
       return
     }
     if (this.suspended) {
-      for (const line of incoming) this.held.push(line)
+      this.held.push(...incoming)
       return
     }
     clearTimeout(this.timer)
@@ -221,7 +233,8 @@ export class LiveRenderer {
     const width = this.terminal.columns
     const height = this.terminal.rows
     const frame = this.layout(width, height, incoming)
-    const committed = this.settle(incoming, frame, width, height, release)
+    const settled = this.settle(incoming, frame, width, height, release)
+    const committed = settled.flatMap((block) => block.lines)
     const full =
       !this.prev || committed.length > 0 || this.forceFull || this.clearScreen || width !== this.width
     let body = this.clearScreen
@@ -229,7 +242,7 @@ export class LiveRenderer {
       : full
         ? this.fullBody(frame, committed, width)
         : this.diffBody(frame)
-    this.remember(committed)
+    this.history.remember(settled)
     if (body === undefined) {
       if (sameCursor(frame.cursor, this.prev?.cursor)) return
       body = ""
@@ -243,16 +256,16 @@ export class LiveRenderer {
   }
 
   /** Renders the root. Lines components commit while rendering are added to `committed`. */
-  private layout(width: number, height: number, committed: string[]): Frame {
+  private layout(width: number, height: number, committed: Commit<string>[]): Frame {
     this.context.rows = height
     let open = true
-    const commit = (lines: string[]) => {
+    const commit: NonNullable<RenderContext["commit"]> = (lines, redraw) => {
       // A component that kept the context cannot commit outside the frame it was given for.
       if (!open) {
         dropImages(lines)
         return
       }
-      for (const l of lines) committed.push(...safeLines(l))
+      committed.push(this.prepareCommit(lines, redraw))
     }
     let lines: string[]
     try {
@@ -289,36 +302,57 @@ export class LiveRenderer {
    * `release`, the image goes as its fallback instead of waiting; a ready image that no longer
    * fits the width does too.
    */
-  private settle(incoming: string[], frame: Frame, width: number, height: number, release: boolean): Line[] {
-    const lines = this.waiting.length ? [...this.waiting, ...incoming] : incoming
-    const out: Line[] = []
+  private settle(
+    incoming: Commit<string>[],
+    frame: Frame,
+    width: number,
+    height: number,
+    release: boolean,
+  ): Commit<Line>[] {
+    const blocks = this.waiting.length ? [...this.waiting, ...incoming] : incoming
+    const out: Commit<Line>[] = []
     let i = 0
+    let j = 0
     let force = release
     for (;;) {
-      for (; i < lines.length; i++) {
-        const line = lines[i]!
-        const m = findImageMarker(line)
-        if (!m) {
-          // A marker no longer known (held back past its time) is dropped with the other escapes.
-          out.push(sanitize(line))
-          continue
+      for (; i < blocks.length; i++, j = 0) {
+        const block = blocks[i]!
+        const lines: Line[] = []
+        for (; j < block.lines.length; j++) {
+          const line = block.lines[j]!
+          const m = findImageMarker(line)
+          if (!m) {
+            // Unknown markers are dropped with the other escapes.
+            lines.push(sanitize(line))
+          } else {
+            const state = imageState(m.id, performance.now(), force)
+            if (state.kind === "wait") break
+            releaseImage(m.id)
+            force = release
+            const fallback = fallbackRows(m.prefix, state.fallback)
+            if (state.kind === "image")
+              lines.push(...fitScreen({ prefix: m.prefix, block: state.block, fallback }, width, height))
+            else if (state.kind === "rows") lines.push(...fallbackRows(m.prefix, state.rows))
+            else lines.push(...fallback)
+          }
+          if (block.semantic) block.semantic.remaining--
         }
-        const state = imageState(m.id, performance.now(), force)
-        if (state.kind === "wait") break
-        releaseImage(m.id)
-        force = release
-        const fallback = fallbackRows(m.prefix, state.fallback)
-        if (state.kind === "image")
-          out.push(...fitScreen({ prefix: m.prefix, block: state.block, fallback }, width, height))
-        else if (state.kind === "rows") out.push(...fallbackRows(m.prefix, state.rows))
-        else out.push(...fallback)
+        if (lines.length || !block.lines.length) {
+          const last = out.at(-1)
+          if (last && last.semantic === block.semantic) last.lines.push(...lines)
+          else out.push({ lines, semantic: block.semantic })
+        }
+        if (j < block.lines.length) break
       }
-      const rest = lines.slice(i)
-      const shown = rest.flatMap((l) => {
-        const m = findImageMarker(l)
-        const rows = m ? fallbackRows(m.prefix, imageState(m.id).fallback) : [l]
-        return rows.map((r) => this.finish(truncateToWidth(r, width)))
-      })
+      const rest = blocks.slice(i)
+      if (rest.length) rest[0] = { ...rest[0]!, lines: rest[0]!.lines.slice(j) }
+      const shown = rest.flatMap((block) =>
+        block.lines.flatMap((line) => {
+          const m = findImageMarker(line)
+          const rows = m ? fallbackRows(m.prefix, imageState(m.id).fallback) : [line]
+          return rows.map((r) => this.finish(truncateToWidth(r, width)))
+        }),
+      )
       if (rest.length && shown.length + frame.lines.length > height) {
         force = true
         continue
@@ -336,7 +370,7 @@ export class LiveRenderer {
   /** Draws again when the image the lines wait for settles or its time is up. */
   private watch(): void {
     this.unwatch()
-    const m = this.waiting.length ? findImageMarker(this.waiting[0]!) : undefined
+    const m = this.waiting.length ? findImageMarker(this.waiting[0]!.lines[0]!) : undefined
     if (!m) return
     this.offWait = onImageSettled(m.id, () => this.requestRender())
     const state = imageState(m.id)
@@ -361,6 +395,8 @@ export class LiveRenderer {
   }
 
   private fullBody(frame: Frame, committed: Line[], width: number): string {
+    const committedRows = committed.reduce((rows, line) => rows + lineRows(line, width), 0)
+    this.top = Math.max(0, Math.min(this.top + committedRows, this.terminal.rows - frame.lines.length))
     let out = this.prev ? this.toTop(width) : "\r"
     out += erase.toScreenEnd
     for (const line of committed) out += `${this.print(line)}\r\n`
@@ -378,9 +414,15 @@ export class LiveRenderer {
     const rows = (lines: Line[]) => lines.reduce((n, l) => n + lineRows(l, width), 0)
     let room = this.terminal.rows - frame.lines.length - rows(committed)
     const shown: Line[][] = []
-    for (let i = this.history.length - 1; i >= 0 && room > 0; i--) {
-      // Images too wide for the screen now are drawn as their fallback.
-      const block = this.history[i]!.flatMap((l) => fitScreen(l, width, this.terminal.rows))
+    for (let i = this.history.blocks.length - 1; i >= 0 && room > 0; i--) {
+      // Only a complete, retained semantic commit can repaint its original boundary.
+      const saved = this.history.blocks[i]!
+      const semantic = saved.semantic
+      const block = (
+        semantic?.remembered && !semantic.truncated
+          ? semantic.redraw(width, this.context).flatMap(safeLines).map(sanitize)
+          : saved.lines
+      ).flatMap((l) => fitScreen(l, width, this.terminal.rows))
       const need = rows(block)
       if (need <= room) {
         shown.unshift(block)
@@ -400,29 +442,17 @@ export class LiveRenderer {
     }
     // ED 0 from the top-left, not ED 2: Windows Terminal and conhost answer ED 2 by scrolling
     // the screen into the scrollback, which would keep a copy of it and the live region there.
+    const above = [...shown.flat(), ...committed]
+    this.top = Math.max(0, Math.min(rows(above), this.terminal.rows - frame.lines.length))
     let out = `${cursor.to(0)}${erase.toScreenEnd}`
-    for (const line of [...shown.flat(), ...committed]) out += `${this.print(line)}\r\n`
+    for (const line of above) out += `${this.print(line)}\r\n`
     out += frame.lines.join("\r\n")
     this.row = Math.max(0, frame.lines.length - 1)
     return out
   }
 
-  /**
-   * Keeps committed lines for `redraw()`, dropping the oldest blocks past the limit. An image
-   * counts as its rows plus one line per 10,000 characters of its sequence, so big images do
-   * not pile up.
-   */
-  private remember(committed: Line[]): void {
-    if (!committed.length || !this.historyLimit) return
-    const block = committed.slice(-this.historyLimit)
-    const weigh = (lines: Line[]) => lines.reduce((n, l) => n + historyWeight(l), 0)
-    this.history.push(block)
-    this.historyCount += weigh(block)
-    while (this.historyCount > this.historyLimit && this.history.length)
-      this.historyCount -= weigh(this.history.shift()!)
-  }
-
   private diffBody(frame: Frame): string | undefined {
+    this.top = Math.max(0, Math.min(this.top, this.terminal.rows - frame.lines.length))
     const prev = this.prev!.lines
     const next = frame.lines
     let out = ""
@@ -477,31 +507,6 @@ export class LiveRenderer {
     this.row = 0
     return `\r${cursor.up(up)}`
   }
-}
-
-function rowsFor(cells: number, width: number): number {
-  return Math.max(1, Math.ceil(cells / width))
-}
-
-/** The rows a committed line takes at `width`. */
-function lineRows(line: Line, width: number): number {
-  return typeof line === "string" ? rowsFor(visibleWidth(line), width) : line.block.rows
-}
-
-/**
- * An image line, or its fallback rows when the image does not fit the screen now: wider than
- * `width`, or not leaving a row below it in `height` (its rows are made by scrolling first, and
- * the cursor is restored to its top afterwards, which must still be on the screen).
- */
-function fitScreen(line: Line, width: number, height: number): Line[] {
-  if (typeof line === "string") return [line]
-  if (visibleWidth(line.prefix) + line.block.cols <= width && line.block.rows < height) return [line]
-  return line.fallback
-}
-
-/** How much of the history's line budget a committed line uses: an image by its size too. */
-function historyWeight(line: Line): number {
-  return typeof line === "string" ? 1 : line.block.rows + Math.ceil(line.block.seq.length / 10_000)
 }
 
 /** Forgets the images of lines that will never be printed, so their markers are not kept. */

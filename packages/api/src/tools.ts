@@ -16,6 +16,11 @@ export interface ToolResult {
   isError?: boolean
   /** Structured data for renderers; never sent to the model. */
   details?: unknown
+  /**
+   * Keep a JSON snapshot of presenter details in history (opt-in). Details over 16 KiB of
+   * serialized UTF-8, or that cannot be serialized, are omitted; history uses the saved text.
+   */
+  persistDetails?: boolean
 }
 
 export interface ToolContext {

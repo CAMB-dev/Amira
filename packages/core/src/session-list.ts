@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs"
 import path from "node:path"
-import { type FileLock, isProcessAlive, tryFileLock } from "./file-lock.ts"
+import { type FileLock, isProcessAlive, SessionWriteGuardError, tryFileLock } from "./file-lock.ts"
 import { fileHistoryDir } from "./file-rewind.ts"
 import {
   SESSION_LOCK_HEARTBEAT_MS,
@@ -112,6 +112,10 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
     sessionLockFile(file),
     SESSION_LOCK_STALE_MS,
     SESSION_LOCK_HEARTBEAT_MS,
+    true,
+    (ownerPath) => {
+      throw new SessionWriteGuardError(ownerPath)
+    },
   )
   if (!deletionLock) {
     const pid = sessionLockPid(file)
@@ -121,8 +125,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
       )
     }
     if (pid === process.pid) {
-      // This process may still hold a lease for a session it switched away from. The public
-      // currentId check above still protects the active one; no other process can be racing it.
+      throw new Error(`cannot delete session ${id}: it is still open in this Amira process`)
     } else {
       // A fresh lock without a readable pid is not safe to interpret as stale. A dead pid should
       // have been taken over by tryFileLock, so reaching this branch means the lease is changing.

@@ -566,6 +566,9 @@ test("notes are restored with the session, and only on the branch that recorded 
   const resumed = setup({ cwd: dir, session: SessionStore.open(session.file) })
   const preview = (await resumed.agent.preview()).messages
   expect(JSON.stringify(preview.slice(0, sentLast.length))).toBe(JSON.stringify(sentLast))
+  // Preview readers relinquish ownership before a separate view mutates the branch.
+  await first.agent.dispose("switch")
+  await resumed.agent.dispose("switch")
   // Back to the second read itself, before the entry that recorded its note: sent whole.
   const store = SessionStore.open(session.file)
   const dupEntry = store.entries.find(

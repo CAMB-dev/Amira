@@ -1,4 +1,5 @@
 import { emptyUsage, addUsage as sumUsage, type Usage } from "@amira/ai"
+import { knownUsageCost, transferUsageAccounting } from "@amira/ai/accounting"
 import type { Budget } from "@amira/api"
 
 /** All tokens a reply used, cache included: what a token budget counts. */
@@ -11,6 +12,7 @@ export function addUsage(to: Usage, u: Usage) {
   if (sum.cost === undefined) delete to.cost
   if (sum.webSearchCost === undefined) delete to.webSearchCost
   Object.assign(to, sum)
+  transferUsageAccounting(sum, to)
 }
 
 /** Why `used` is over `limit`, if it is. */
@@ -19,8 +21,9 @@ export function overBudget(used: Usage, limit: Budget | undefined): string | und
   const tokens = usageTokens(used)
   if (limit.tokens !== undefined && tokens > limit.tokens)
     return `${tokens} tokens used, limit ${limit.tokens}`
-  if (limit.costUsd !== undefined && used.cost !== undefined && used.cost > limit.costUsd) {
-    return `$${used.cost.toFixed(4)} spent, limit $${limit.costUsd}`
+  const knownCost = knownUsageCost(used)
+  if (limit.costUsd !== undefined && knownCost !== undefined && knownCost > limit.costUsd) {
+    return `$${knownCost.toFixed(4)} spent, limit $${limit.costUsd}`
   }
   return undefined
 }
@@ -50,7 +53,8 @@ export class BudgetLedger {
       out.tokens = Math.max(0, Math.min(asked.tokens, left))
     }
     if (asked.costUsd !== undefined) {
-      const left = this.limit?.costUsd !== undefined ? this.limit.costUsd - (this.usage.cost ?? 0) : Infinity
+      const left =
+        this.limit?.costUsd !== undefined ? this.limit.costUsd - (knownUsageCost(this.usage) ?? 0) : Infinity
       out.costUsd = Math.max(0, Math.min(asked.costUsd, left))
     }
     return out

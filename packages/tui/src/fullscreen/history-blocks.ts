@@ -3,15 +3,18 @@ import { isSummaryMessage } from "@amira/core"
 import type { Terminal } from "@amira/tui-kit"
 import type { Block, BlockEnv, LinesBlock } from "../blocks/base.ts"
 import { userBlock } from "../blocks/base.ts"
+import { DisplayBlock } from "../blocks/display.ts"
 import { ReasoningBlock, SummaryBlock } from "../blocks/reasoning.ts"
 import { ReplyBlock } from "../blocks/reply.ts"
 import { groupExplored, ToolBlock } from "../blocks/tool.ts"
+import type { DisplayHistory } from "../display-history.ts"
 import { messageTimestamp } from "../format.ts"
 import { summaryText } from "../history.ts"
 import { replyCitations, serverToolCall } from "../server-tools.ts"
 import { type NoticeLevel, replyEndNotice } from "../transcript.ts"
 
 export interface HistoryBlocksDeps {
+  displays?: readonly DisplayHistory[]
   compactionInfo?: (message: Message) => CompactionInfo | undefined
   hyperlinks: boolean
   noticeBlock: (level: NoticeLevel, text: string) => LinesBlock
@@ -35,7 +38,13 @@ export function historyBlocks(
     assistantSeen = true
     return timestamp
   }
-  for (const m of messages) {
+  const displayAt = (before: number) => {
+    for (const d of deps.displays ?? []) {
+      if (d.before === before) blocks.push(new DisplayBlock(d.level, d.text, d.options))
+    }
+  }
+  for (const [index, m] of messages.entries()) {
+    displayAt(index)
     // A compaction's summary is a folded block of its own; the reply that took it goes with it.
     if (isSummaryMessage(m)) {
       if (m.role === "user") blocks.push(new SummaryBlock(summaryText(m), deps.compactionInfo?.(m)))
@@ -74,7 +83,11 @@ export function historyBlocks(
           // all (the turn was cut short) means it never ran to completion either.
           call.end = result
             ? {
-                result: { content: result.content, isError: result.isError },
+                result: {
+                  content: result.content,
+                  isError: result.isError,
+                  ...(result.details !== undefined ? { details: result.details } : {}),
+                },
                 ...(result.rejected ? { rejected: result.rejected } : {}),
               }
             : { result: { content: [], isError: true }, rejected: "aborted" }
@@ -86,5 +99,6 @@ export function historyBlocks(
       if (end) blocks.push(deps.noticeBlock(end.level, end.text))
     }
   }
+  displayAt(messages.length)
   return groupExplored(blocks, env(deps.terminal.columns))
 }

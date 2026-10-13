@@ -188,7 +188,7 @@ export function createFindSelect(deps: FindSelectDeps) {
       } else showNote(`Nothing in this ${block.label} folds.`)
     } else if (keys.is(e, "select.open")) openBlock(block, renv)
     else if (keys.is(e, "select.copy"))
-      copyToClipboard(terminal, block.copyText(), `the ${block.label}`, showNote)
+      copyToClipboard(terminal, block.copyText(renv), `the ${block.label}`, showNote)
     else {
       // Typing goes back to the input.
       if (e.type === "paste" || (e.type === "key" && e.text !== undefined && !e.ctrl && !e.alt))

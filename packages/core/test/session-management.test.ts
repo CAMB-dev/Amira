@@ -13,6 +13,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
 import { artifactDir } from "../src/artifacts.ts"
+import { leaseOwner } from "../src/file-lock-owner.ts"
 import { deleteSession, listSessions, sessionSnippet } from "../src/session-list.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 
@@ -241,12 +242,21 @@ test("delete refuses a live session lease, then takes over a stale crash lease",
     return true
   })
   try {
-    writeFileSync(lock, `${holder}\n`)
+    const owner = { ...leaseOwner(), pid: holder }
+    writeFileSync(lock, `${holder}\n${owner.nonce}\n${JSON.stringify(owner)}\n`)
     expect(() => deleteSession("/project", s.id, undefined, dir)).toThrow("open in another Amira process")
     expect(existsSync(s.file)).toBe(true)
     expect(probe).toHaveBeenCalledWith(holder, 0)
 
     utimesSync(lock, new Date(0), new Date(0))
+    expect(() => deleteSession("/project", s.id, undefined, dir)).toThrow("open in another Amira process")
+    expect(existsSync(s.file)).toBe(true)
+    // A crashed holder is proven dead, not merely a live holder with an old heartbeat.
+    probe.mockImplementation((pid, signal) => {
+      expect(pid).toBe(holder)
+      expect(signal).toBe(0)
+      throw Object.assign(new Error("holder exited"), { code: "ESRCH" })
+    })
     deleteSession("/project", s.id, undefined, dir)
     expect(existsSync(s.file)).toBe(false)
     rmSync(lock, { force: true })

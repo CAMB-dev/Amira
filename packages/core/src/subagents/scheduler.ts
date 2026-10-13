@@ -3,74 +3,175 @@ import type { Child } from "./child.ts"
 /** Queues children and gives them places to run within the tree's and their groups' limits (D63). */
 export class Admission {
   /** Children waiting for a place to run, in order, with what starts them. */
-  #queue: { child: Child; go: () => void }[] = []
+  #queue: { child: Child; go: () => void; consultation?: boolean }[] = []
   /** Children whose turn is running (or about to start). */
   #running = new Set<Child>()
-  /** How many queued or running children each session has; sessions without any are left out. */
-  #liveKids = new Map<string, number>()
+  /** Physical consultation streams, retained even after their requester's turn ends. */
+  #consulting = new Set<Child>()
+  /** Children executing a tool batch, which may wait for descendants. */
+  #toolWaits = new Set<Child>()
+  /** Tool-waiting children that yielded their place; they must reacquire before another call. */
+  #yielded = new Set<Child>()
+  /** Live children's parents, including idle ones, for tracing queued/running descendants. */
+  #parents = new Map<string, string>()
 
   constructor(private deps: { maxConcurrent: number }) {}
 
-  /** Counts the child under its parent and queues it with what starts it; then admits. */
+  /** Tracks the child and queues it with what starts it; then admits. */
   enqueue(child: Child, parentSessionId: string, go: () => void): void {
-    this.#liveKids.set(parentSessionId, (this.#liveKids.get(parentSessionId) ?? 0) + 1)
+    this.#parents.set(child.id, parentSessionId)
     this.#queue.push({ child, go })
-    // A parent with children is waiting for them, so it stops counting against the limit.
+    this.#yieldToolParents(child)
     this.admit()
   }
 
-  /** Busy children: running a turn, and not just waiting for children of their own. */
+  #under(child: Child, ancestor: Child): boolean {
+    for (let id: string | undefined = child.parentSessionId; id; ) {
+      if (id === ancestor.id) return true
+      id = this.#parents.get(id)
+    }
+    return false
+  }
+
+  /** New spawns and existing descendants' follow-ups both let tool-waiting ancestors yield. */
+  #yieldToolParents(child: Child): void {
+    for (const parent of this.#toolWaits) if (this.#under(child, parent)) this.#yielded.add(parent)
+  }
+
+  /** Consultations cannot yield their physical stream; turn reservations count only once. */
   #busy(among: Iterable<Child>): number {
     let n = 0
     for (const c of among)
-      if (this.#running.has(c) && (c.agent.execution.paused || !this.#liveKids.has(c.id))) n++
+      if (
+        this.#consulting.has(c) ||
+        (this.#running.has(c) && (c.agent.execution.paused || !this.#yielded.has(c)))
+      )
+        n++
     return n
   }
 
   /**
    * Starts queued children, oldest first, while fewer than maxConcurrent are busy tree-wide
-   * (D63) and in each of their groups. A running child that has children of its own is not
-   * busy: it waits for them, and counting it could leave its children queued forever behind
-   * it. A child whose group is full waits without holding up those behind it.
+   * (D63) and in each of their groups. A child waiting inside tools can yield to its own
+   * children, avoiding deadlock; it reacquires before returning to model work. Paused
+   * children retain their places. At limits of two or more, ordinary work leaves one place
+   * for private interactive turns, inside the total limit. A child whose group or ordinary
+   * capacity is full waits without holding up those behind it; private turns can also use
+   * otherwise free places.
    */
   admit(): void {
-    let busy = this.#busy(this.#running)
+    const occupants = new Set([...this.#running, ...this.#consulting])
+    let busy = this.#busy(occupants)
+    let ordinary = this.#busy([...occupants].filter((c) => !c.ephemeral))
+    const ordinaryLimit = Math.max(1, this.deps.maxConcurrent - 1)
     for (let i = 0; i < this.#queue.length && busy < this.deps.maxConcurrent; ) {
       const entry = this.#queue[i]!
-      const full = entry.child.groups.some(
-        (g) => g.limits.maxConcurrent !== undefined && this.#busy(g.live) >= g.limits.maxConcurrent,
-      )
+      const full =
+        this.#consulting.has(entry.child) ||
+        (!entry.child.ephemeral && ordinary >= ordinaryLimit) ||
+        entry.child.groups.some(
+          (g) =>
+            g.limits.maxConcurrent !== undefined &&
+            this.#busy(new Set([...g.live, ...[...this.#consulting].filter((c) => c.groups.includes(g))])) >=
+              g.limits.maxConcurrent,
+        )
       if (full) {
         i++
         continue
       }
       this.#queue.splice(i, 1)
-      entry.child.admitted = true
-      this.#running.add(entry.child)
+      if (entry.consultation) this.#consulting.add(entry.child)
+      else {
+        entry.child.admitted = true
+        this.#running.add(entry.child)
+      }
       busy++
-      // Started a microtask later, so the caller can subscribe to child.events first.
-      queueMicrotask(entry.go)
+      if (!entry.child.ephemeral) ordinary++
+      // Grant consultations atomically; an abort before a later microtask must not lose the permit.
+      // Turns start a microtask later, so the caller can subscribe to child.events first.
+      if (entry.consultation) entry.go()
+      else queueMicrotask(entry.go)
     }
   }
 
-  /** Waits for a place to run the child's next turn; a stop or an abort ends the wait too. */
-  acquire(child: Child): Promise<void> {
+  /** A tool batch may wait for descendants; only then can those descendants use its place. */
+  beginTools(child: Child): void {
+    this.#toolWaits.add(child)
+    if (
+      [...this.#running].some((c) => this.#under(c, child)) ||
+      this.#queue.some((entry) => this.#under(entry.child, child))
+    )
+      this.#yielded.add(child)
+    this.admit()
+  }
+
+  /** Tools returned: no longer able to yield to new spawns, but not yet doing model work. */
+  endTools(child: Child): void {
+    this.#toolWaits.delete(child)
+  }
+
+  /** Return to model work through the same FIFO and group limits as any other admission. */
+  reenter(child: Child, signal: AbortSignal): Promise<void> | undefined {
+    if (!this.#yielded.delete(child)) return
+    this.release(child)
+    if (!signal.aborted) return this.acquire(child, signal)
+  }
+
+  /** Waits for a next turn, or a model re-entry. Clean stops cancel only between-turn waits. */
+  acquire(child: Child, signal?: AbortSignal): Promise<void> {
+    let cancel: () => void
     return new Promise<void>((resolve) => {
       const entry = { child, go: resolve }
-      child.waiting = () => {
+      cancel = () => {
         this.#queue = this.#queue.filter((e) => e !== entry)
         resolve()
       }
+      if (signal) signal.addEventListener("abort", cancel, { once: true })
+      else child.waiting = cancel
+      if (signal?.aborted) return cancel()
       this.#queue.push(entry)
+      this.#yieldToolParents(child)
       this.admit()
     }).finally(() => {
-      child.waiting = undefined
+      if (signal) signal.removeEventListener("abort", cancel)
+      else child.waiting = undefined
     })
+  }
+
+  /** A requester's consultation uses its held turn place, or waits through the same admission. */
+  acquireConsultation(child: Child, signal: AbortSignal): Promise<() => void> {
+    const release = () => {
+      this.#consulting.delete(child)
+      // A live turn keeps its reservation, including a user pause, until model re-entry.
+      if (this.#parents.has(child.id)) this.#running.add(child)
+      this.admit()
+    }
+    if (signal.aborted) return Promise.resolve(() => {})
+    if (this.#running.has(child) && !this.#yielded.has(child)) {
+      this.#consulting.add(child)
+      return Promise.resolve(release)
+    }
+    // Preserve tool-wait/yield state: after the consultation, its own model must reacquire.
+    this.#running.delete(child)
+    let cancel: () => void
+    return new Promise<() => void>((resolve) => {
+      const entry = { child, consultation: true, go: () => resolve(release) }
+      cancel = () => {
+        this.#queue = this.#queue.filter((e) => e !== entry)
+        resolve(() => {})
+      }
+      signal.addEventListener("abort", cancel, { once: true })
+      this.#queue.push(entry)
+      this.#yieldToolParents(child)
+      this.admit()
+    }).finally(() => signal.removeEventListener("abort", cancel))
   }
 
   /** Its turn ended or it went idle: no longer running. Does not admit by itself. */
   release(child: Child): void {
     this.#running.delete(child)
+    this.#toolWaits.delete(child)
+    this.#yielded.delete(child)
   }
 
   /** Drops a not-yet-started child from the queue. */
@@ -78,10 +179,8 @@ export class Admission {
     this.#queue = this.#queue.filter((e) => e.child !== child)
   }
 
-  /** One fewer live child under its parent. */
+  /** No longer needed when tracing live descendants. */
   childEnded(child: Child): void {
-    const kids = (this.#liveKids.get(child.parentSessionId) ?? 1) - 1
-    if (kids > 0) this.#liveKids.set(child.parentSessionId, kids)
-    else this.#liveKids.delete(child.parentSessionId)
+    this.#parents.delete(child.id)
   }
 }

@@ -318,8 +318,16 @@ function usageTotal(usages: Usage[]): Usage {
     total = addUsage(total, usage)
     if (hasReasoning) total.reasoning = reasoning
   }
-  // A partial known price is not the total price. Preserve unknown search prices as well.
-  if (usages.some((usage) => usage.cost === undefined)) delete total.cost
+  // A standalone reply without a price still makes the total unknown. Counted search
+  // prices (including their signed corrections) are already reconciled by addUsage.
+  if (
+    usages.some(
+      (usage) =>
+        usage.cost === undefined &&
+        ((usage.webSearchRequests ?? 0) === 0 || usage.webSearchCost !== undefined),
+    )
+  )
+    delete total.cost
   return total
 }
 

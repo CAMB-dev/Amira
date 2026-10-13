@@ -11,7 +11,7 @@ import type {
   Usage,
   UserMessage,
 } from "@amira/ai"
-import type { CommandOutputLevel } from "./commands.ts"
+import type { CommandOutputLevel, PrintOptions } from "./commands.ts"
 import type { Budget, ChildState, SpawnContext, SpawnGroupInfo, SubagentStatus } from "./subagents.ts"
 import type { ToolResult, ToolTraits } from "./tools.ts"
 import type { UiRequest } from "./ui.ts"
@@ -230,7 +230,7 @@ export interface EventMap {
    * Something an extension tells the user (ExtensionAPI.notify), e.g. how a hook it ran went.
    * Frontends show it as a notice in the transcript; `source` is the extension.
    */
-  "extension.notice": { source: string; text: string; level: NoticeLevel }
+  "extension.notice": { source: string; text: string; level: NoticeLevel } & PrintOptions
   /** A slow subscriber's queue overflowed and events were dropped for it. */
   "events.lost": { dropped: number }
   /** The session switched models; later turns use `to`. */
@@ -305,7 +305,7 @@ export interface EventMap {
   /** Progress of a form action (a button such as "Fetch models") running on the host. */
   "ui.progress": { requestId: string; action: string; text: string }
   /** Text a slash command shows the user; `command` is its name, without the slash. */
-  "command.output": { command: string; text: string; level: CommandOutputLevel }
+  "command.output": { command: string; text: string; level: CommandOutputLevel } & PrintOptions
   /**
    * A session started a sub-agent (D12). Sent with the parent's session id; the child's own
    * events carry `parentSessionId`. A `queued` child waits for a free slot (D63). `toolCallId`

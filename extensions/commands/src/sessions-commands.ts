@@ -25,7 +25,7 @@ export function clearCommand(): CommandDefinition {
     aliases: ["new", "reset"],
     description: "Start a new session with an empty conversation",
     async run(_args, ctx) {
-      await ctx.session.newSession()
+      await ctx.session.newSession({ signal: ctx.signal })
       // The TUI names the new session in the boundary line it starts the transcript with.
       if (ctx.frontend !== "tui") ctx.print(`Started a new session (${ctx.session.info().id}).`)
     },
@@ -52,7 +52,7 @@ export function forkCommand(): CommandDefinition {
     description: "Continue this conversation in a new session",
     async run(_args, ctx) {
       if (!ctx.session.fork) throw new Error("this host cannot fork sessions")
-      await ctx.session.fork()
+      await ctx.session.fork(undefined, { signal: ctx.signal })
       ctx.print(`Forked into session ${ctx.session.info().id}.`)
     },
   }
@@ -116,7 +116,7 @@ export function resumeCommand(): CommandDefinition {
         }
         id = chosen
       }
-      await ctx.session.resume(id)
+      await ctx.session.resume(id, { signal: ctx.signal })
       // As for /clear, the TUI names the resumed session in its boundary line.
       if (ctx.frontend !== "tui")
         ctx.print(`Resumed session ${id} (${ctx.session.messages().length} messages).`)

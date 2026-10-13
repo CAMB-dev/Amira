@@ -4,11 +4,16 @@ import type { ToolResult } from "./tools.ts"
 import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.ts"
 
 /**
- * Experimental: full-screen views extensions add to frontends, such as a workflow's progress
- * tree or a swarm's timeline. An extension registers a view kind (ExtensionAPI.registerView)
- * and a command opens it with data of its own (CommandContext.openView). The frontend owns
- * the screen, scrolling and the keys to leave; the view only turns the data into lines, which
- * describe what they are rather than how they look (as tool presenters do).
+ * Experimental: views extensions add to frontends, such as a workflow's progress tree or a
+ * swarm's timeline. An extension registers a view kind (ExtensionAPI.registerView) and a
+ * command opens it with data of its own (CommandContext.openView). Fullscreen is the default;
+ * placement "dock" shows a bounded live viewport directly above the input in either TUI mode.
+ * The frontend owns scrolling and leaving; the view turns data into semantic lines or widgets.
+ * Docks reuse follow, renderReply and lifecycle hooks, but keep keyboard focus in the main
+ * input: typing, arrows, Tab and Enter do not activate view widgets or extension shortcuts.
+ * PgUp/PgDn scroll the dock, wheel events scroll only over it, and End resumes following.
+ * Esc closes the dock before cancelling a command or interrupting a turn; the next Esc takes
+ * the usual input action. Fullscreen forms and views retain priority while covering a dock.
  */
 
 /** A piece of a line, styled by meaning rather than by a frontend-specific color. */

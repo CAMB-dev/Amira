@@ -69,6 +69,7 @@ export async function* withRetry(
     }
     let content = false
     let active = false
+    let attemptObserved = false
     let failed: ErrorEvent | undefined
     let partial: AssistantMessage | undefined
     const runningServerTools = new Set<string>()
@@ -145,11 +146,19 @@ export async function* withRetry(
         const { value, done } = outcome.result
         if (done) break
         const ev = value
+        // Non-start events distinguish an opened retry from backoff, except an abort:
+        // it looks just like the synthetic backoff abort below. Give that first event
+        // an explicit boundary, without splitting an already-observed attempt or
+        // changing real request.start events (including their metadata).
+        if (attempt > 0 && !attemptObserved && ev.type === "error" && ev.error.code === "aborted") {
+          yield { type: "request.start" }
+        }
         if (ev.type === "start") {
           if (!started) yield ev
           started = true
           continue
         }
+        attemptObserved = true
         if (ev.type === "error" && ev.retryable && !content && attempt < retries && !signal.aborted) {
           failed = ev
           break

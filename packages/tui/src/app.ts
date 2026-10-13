@@ -20,6 +20,7 @@ import {
   ImageStore,
   type InputEvent,
   InputReader,
+  modes,
   ProcessTerminal,
   Spinner,
   setupTerminalInput,
@@ -45,6 +46,7 @@ import {
 import { interactiveTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
+import { displayHistory, displayOutput } from "./display-history.ts"
 import { compactionNotice, rememberMessageTime } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
@@ -200,6 +202,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     view: () => view,
     noticeStrip: () => noticeStrip,
     dialogs: () => overlays.dialogs,
+    dock: () => overlays.dock,
+    renderDock: (width, ctx, available) => overlays.renderDock(width, ctx, available),
     steering: () => outbox.steering,
     queued: () => outbox.queued,
     mode: () => mode,
@@ -238,6 +242,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     working: () => activity.working,
     interrupt: () => outbox.interrupt(),
     quitting: () => quitting,
+    dockChanged: (open) => {
+      if (mode !== "inline") return
+      if (open) terminal.enableMode(modes.mouse)
+      else if (!overlays.hasFullscreen) terminal.disableMode(modes.mouse)
+      view.redraw()
+    },
   })
   // Turn display state: the detail level read by the transcript view.
   let detail: ToolDetailLevel = "summary"
@@ -258,6 +268,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     bottom: bottomArea.layout,
     header,
     overlay: new View((width, ctx) => overlays.render(width, ctx)),
+    dockOpen: () => !!overlays.dock,
     editorEmpty: () => editor.isEmpty,
     showNote,
     openSubagent: (sessionId: string) => {
@@ -500,7 +511,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         )
         break
       case "extension.notice":
-        view.notice(e.data.level, e.data.text)
+        displayOutput(view, e.data)
         break
       case "turn.steer": {
         // A notice (background sub-agents' results) is not the user's steering. It waits in the
@@ -520,7 +531,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         overlays.onUiResolved(e.data)
         break
       case "command.output":
-        view.commandOutput(e.data.level, e.data.text)
+        displayOutput(view, e.data)
         break
     }
     view.requestRender()
@@ -663,24 +674,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       .then(() => view.requestRender())
   }
 
-  /**
-   * Shows the session `a` from here: the boundary with its id (and last write, resumed), then
-   * its history. `switched` by a command, full screen starts the transcript afresh.
-   */
+  /** Shows this session's boundary and history; switched full-screen sessions start afresh. */
   function showSession(a: Agent, switched: boolean) {
+    const displays = displayHistory(a)
+    const resumed = a.messages.length > 0 || displays.length > 0
     let updatedAt: number | undefined
     try {
-      if (a.session?.file && a.messages.length) updatedAt = statSync(a.session.file).mtimeMs
+      if (a.session?.file && resumed) updatedAt = statSync(a.session.file).mtimeMs
     } catch {}
     const boundary = {
       id: a.sessionId,
-      resumed: a.messages.length > 0,
+      resumed,
       ...(updatedAt !== undefined ? { updatedAt } : {}),
     }
     for (const entry of a.session?.branch() ?? []) {
       if (entry.type === "message") rememberMessageTime(entry.message, entry.ts)
     }
-    view.openSession(boundary, a.messages, switched, (m) => a.compactionInfo(m))
+    view.openSession(boundary, a.messages, switched, (m) => a.compactionInfo(m), displays)
   }
 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
@@ -688,6 +698,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     termStatus.setRunning(false, true)
     composer.cancelClipboard()
     outbox.reset()
+    overlays.sessionChanged()
     view.leaveSession()
     agent = next
     commandRunner.clearEchoes()
@@ -750,6 +761,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       e = translated
     }
     if (overlays.handleInput(e)) return
+    // Docks use content-relative pointer coordinates, but leave transcript events unchanged.
+    const dockEvent =
+      e.type === "mouse"
+        ? contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings, mode === "fullscreen"))
+        : e
+    if (dockEvent && overlays.handleDockInput(view.dockInput?.(dockEvent) ?? dockEvent)) return redraw()
     const dialog = overlays.dialogs[0]
     if (!dialog) composer.prepareInput(e)
     if (keys.is(e, "redraw")) {
@@ -863,7 +880,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     helpKey && `${helpKey} keys`,
   ].filter(Boolean)
   view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
-  if (agent.messages.length) showSession(agent, false)
+  if (agent.messages.length || displayHistory(agent).length) showSession(agent, false)
   for (const e of opts.startupEvents ?? []) onEvent(e)
   // With no provider yet, a welcome card with the steps to a first message replaces the notice.
   const welcome = isNoModel(agent.model) && noProviders()

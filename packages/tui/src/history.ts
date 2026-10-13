@@ -17,6 +17,8 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
+import { DisplayBlock } from "./blocks/display.ts"
+import type { DisplayHistory } from "./display-history.ts"
 import {
   compactionReason,
   compactionSizes,
@@ -28,6 +30,7 @@ import {
   userLines,
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { displayEnv } from "./inline-display.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import {
   explorationOf,
@@ -39,6 +42,9 @@ import {
 import { type BlockKind, noticeLines, replyEndNotice, Transcript } from "./transcript.ts"
 
 export interface HistoryOptions {
+  displays?: readonly DisplayHistory[]
+  /** Allows inline resume to retain semantic display blocks instead of immutable rows. */
+  onDisplay?: (display: DisplayHistory, preceding: string[]) => void
   presenters?: PresenterSource
   width: number
   detail?: ToolDetailLevel
@@ -78,7 +84,11 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
   const rejections = new Map<string, ToolRejection>()
   for (const m of messages) {
     if (m.role === "toolResult") {
-      results.set(m.toolCallId, { content: m.content, isError: m.isError })
+      results.set(m.toolCallId, {
+        content: m.content,
+        isError: m.isError,
+        ...(m.details !== undefined ? { details: m.details } : {}),
+      })
       if (m.rejected) rejections.set(m.toolCallId, m.rejected)
     }
   }
@@ -120,7 +130,22 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     assistantSeen = true
     return timestamp
   }
-  for (const m of messages) {
+  const displayAt = (before: number) => {
+    for (const d of opts.displays ?? []) {
+      if (d.before !== before) continue
+      flush()
+      if (opts.onDisplay) opts.onDisplay(d, out.splice(0))
+      else
+        block(
+          "notice",
+          new DisplayBlock(d.level, d.text, d.options).lines(
+            displayEnv(theme, opts.width, detail, opts.hyperlinks),
+          ),
+        )
+    }
+  }
+  for (const [index, m] of messages.entries()) {
+    displayAt(index)
     if (isSummaryMessage(m)) {
       // The summary reads as what it is, not as a message of the user's; its reply goes with it.
       if (m.role === "user") {
@@ -209,6 +234,7 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     }
   }
   flush()
+  displayAt(messages.length)
   return out
 }
 

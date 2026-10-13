@@ -208,19 +208,32 @@ const SGR = /^\x1b\[[0-9;:]*m$/
 /**
  * Wraps text to `width` cells. Breaks at spaces when possible, after wide (CJK) characters,
  * and hard-breaks longer words. `firstWidth` applies only to the first rendered row.
- * Styles are closed at each line end and re-opened on the next line.
+ * Styles are closed at each line end and re-opened on the next line. `onWrap` records the
+ * continuation row and the separator removed at its break (empty for a hard or CJK wrap).
  */
-export function wrapText(text: string, width: number, firstWidth = width): string[] {
+export function wrapText(
+  text: string,
+  width: number,
+  firstWidth = width,
+  onWrap?: (row: number, join: "" | " ") => void,
+): string[] {
   const w = Math.max(1, width)
   const raw: Token[][] = []
   for (const para of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const offset = raw.length
+    const record = onWrap && ((row: number, join: "" | " ") => onWrap(offset + row, join))
     // Pushed one by one: spreading a huge paragraph's rows as arguments overflows the stack.
-    for (const row of wrapParagraph(tokenize(para), w, raw.length ? w : firstWidth)) raw.push(row)
+    for (const row of wrapParagraph(tokenize(para), w, raw.length ? w : firstWidth, record)) raw.push(row)
   }
   return carryStyles(raw)
 }
 
-function wrapParagraph(tokens: Token[], width: number, firstWidth = width): Token[][] {
+function wrapParagraph(
+  tokens: Token[],
+  width: number,
+  firstWidth = width,
+  onWrap?: (row: number, join: "" | " ") => void,
+): Token[][] {
   let room = Math.max(1, firstWidth)
   const lines: Token[][] = []
   let line: Token[] = []
@@ -238,6 +251,7 @@ function wrapParagraph(tokens: Token[], width: number, firstWidth = width): Toke
     if (used + t.width > room) {
       if (isSpace) {
         lines.push(line)
+        onWrap?.(lines.length, " ")
         room = width
         line = []
         used = 0
@@ -250,11 +264,13 @@ function wrapParagraph(tokens: Token[], width: number, firstWidth = width): Toke
         const head = line.slice(0, breakAt)
         const tail = line.slice(breakIsSpace ? breakAt + 1 : breakAt)
         lines.push(head)
+        onWrap?.(lines.length, breakIsSpace ? " " : "")
         room = width
         line = tail
         used = tail.reduce((n, x) => n + x.width, 0)
       } else if (line.some((x) => !x.ansi)) {
         lines.push(line)
+        onWrap?.(lines.length, "")
         room = width
         line = []
         used = 0

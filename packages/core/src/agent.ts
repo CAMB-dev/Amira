@@ -68,19 +68,9 @@ import {
 } from "./agent/types.ts"
 import type { ArtifactScope, ArtifactStore, ArtifactUsage } from "./artifacts.ts"
 
-export {
-  AgentAbortedError,
-  AgentBusyError,
-  type AgentOptions,
-  type ApprovalDecision,
-  type Approver,
-  type Asker,
-  NOTICE_RETRY_MS,
-  newTurnId,
-  type PromptOptions,
-  type TurnResult,
-} from "./agent/types.ts"
+export * from "./agent/exports.ts"
 
+import { withCallableServerTools } from "./callable-server-tools.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions, ContextView } from "./context.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
@@ -107,6 +97,7 @@ export class Agent {
   readonly bus: EventBus
   readonly interceptors: InterceptorRegistry
   readonly tools: ToolRegistry
+  readonly callableTools: ReadonlySet<string> | undefined
   readonly cwd: string
   readonly messages: Message[]
   readonly session: SessionStore | undefined
@@ -172,186 +163,200 @@ export class Agent {
   // Lifecycle: disposal and ownership of the session lease.
   #disposePromise: Promise<void> | undefined
   #disposed = false
-  #sessionLease = false
+  #releaseSessionLease: (() => void) | undefined
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
     this.depth = opts.depth ?? 0
-    if (this.session && this.depth === 0 && !opts.parentSessionId) this.#sessionLease = this.session.claim()
-    this.fileRewindSettings = opts.fileRewindSettings
-    this.fileRewind =
-      opts.fileRewind ?? (opts.session ? new FileRewind(opts.session, opts.fileRewindSettings) : undefined)
-    const rewind = recoverFileRewind(this.fileRewind, opts)
-    this.sessionId = opts.session?.id ?? opts.sessionId ?? newSessionId()
-    this.parentSessionId = opts.parentSessionId
-    this.backgroundJobsHost = opts.backgroundJobs
-    this.bus = opts.bus ?? new EventBus()
-    reportFileRewind(this.bus, this.sessionId, rewind)
-    this.interceptors = opts.interceptors ?? new InterceptorRegistry()
-    this.tools = opts.tools ?? new ToolRegistry()
-    this.permissions = opts.permissions ?? new Permissions()
-    this.cwd = opts.cwd
-    this.model = opts.model
-    this.providerSettings = opts.providerSettings ?? {}
-    this.thinking = new Thinking(opts, (data) => this.#emit(undefined, "thinking.changed", data))
-    this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
-    this.#compaction = opts.compaction ?? {}
-    this.#context = opts.context ?? {}
-    const ai = opts.ai
-    const maxSteps = opts.maxSteps ?? 200
-    const maxTokens = opts.maxTokens
-    const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
-    this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
-    this.tree = opts.tree
-    this.backgroundJobs = opts.backgroundJobs?.forSession({
-      sessionId: this.sessionId,
-      depth: this.depth,
-      ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
-    })
-    this.#approvals = new ApprovalGate({
-      sessionId: this.sessionId,
-      depth: this.depth,
-      approve: opts.approve,
-      inheritedApprover: opts.permissionApprover,
-      ask: opts.ask,
-      forwardAsk: opts.ask?.bind(this),
-      resolvePermissionApprover: () => this.permissionApprover,
-      permissions: this.permissions,
-      isCurrentTurn: (turn) => this.#turnState.turn === turn,
-      blocked: (turn, reason, pending) => {
-        this.#status = "blocked"
-        this.#emit(turn, "status.changed", { status: "blocked", reason, pending })
-      },
-      working: (turn) => this.#setStatus(turn, "working"),
-    })
-    const toolRunner = new ToolRunner({
-      tools: this.tools,
-      interceptors: this.interceptors,
-      permissions: this.permissions,
-      approvals: this.#approvals,
-      cwd: this.cwd,
-      sessionId: this.sessionId,
-      maxParallelTools: this.#maxParallelTools,
-      abortGraceMs: opts.abortGraceMs ?? 2000,
-      fileRewind: this.fileRewind,
-      backgroundJobs: this.backgroundJobs,
-      allowsTool: (tool) => this.#allowsTool(tool),
-      steerSignal: () => this.#turnState.steerAbort?.signal,
-      storeFailed: () => this.#history.storeFailed,
-      callSession: (turn, toolCallId) => this.#callSession(turn, toolCallId),
-      keepLarge: (call, result) => this.#contextManager.keepLarge(call, result),
-      interruptTurn: (turn) => {
-        if (this.#turnState.turn === turn) this.#turnState.abort?.abort()
-      },
-      emit: (turn, type, data) => this.#emit(turn, type, data),
-    })
-    this.#onIdleNotice = opts.onIdleNotice
-    this.#inbox = new NoticeInbox({
-      retryMs,
-      disposed: () => this.#disposed,
-      turn: () => this.#turnState.turn,
-      holding: () => this.#holding,
-      busy: () => this.#turnState.abort !== undefined,
-      onIdleNotice: this.#onIdleNotice?.bind(this),
-      prompt: (message) => this.prompt(message),
-      emit: (turn, type, data) => this.#emit(turn, type, data),
-    })
-    this.#endTurn = opts.endTurn
+    if (this.session) {
+      if (this.depth === 0 && !opts.parentSessionId) {
+        this.session.claim()
+        this.#releaseSessionLease = () => this.session!.release()
+      } else this.#releaseSessionLease = this.session.claimOnWrite()
+    }
+    try {
+      this.fileRewindSettings = opts.fileRewindSettings
+      this.fileRewind =
+        opts.fileRewind ?? (opts.session ? new FileRewind(opts.session, opts.fileRewindSettings) : undefined)
+      const rewind = recoverFileRewind(this.fileRewind, opts)
+      this.sessionId = opts.session?.id ?? opts.sessionId ?? newSessionId()
+      this.parentSessionId = opts.parentSessionId
+      this.backgroundJobsHost = opts.backgroundJobs
+      this.bus = opts.bus ?? new EventBus()
+      reportFileRewind(this.bus, this.sessionId, rewind)
+      this.interceptors = opts.interceptors ?? new InterceptorRegistry()
+      this.tools = opts.tools ?? new ToolRegistry()
+      this.callableTools = opts.callableTools
+      this.permissions = opts.permissions ?? new Permissions()
+      this.cwd = opts.cwd
+      this.model = opts.model
+      this.providerSettings = opts.providerSettings ?? {}
+      this.thinking = new Thinking(opts, (data) => this.#emit(undefined, "thinking.changed", data))
+      this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
+      this.#compaction = opts.compaction ?? {}
+      this.#context = opts.context ?? {}
+      const ai = withCallableServerTools(opts.ai, this.callableTools)
+      const maxSteps = opts.maxSteps ?? 200
+      const maxTokens = opts.maxTokens
+      const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
+      this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
+      this.tree = opts.tree
+      this.backgroundJobs = opts.backgroundJobs?.forSession({
+        sessionId: this.sessionId,
+        depth: this.depth,
+        ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
+      })
+      this.#approvals = new ApprovalGate({
+        sessionId: this.sessionId,
+        depth: this.depth,
+        approve: opts.approve,
+        inheritedApprover: opts.permissionApprover,
+        ask: opts.ask,
+        forwardAsk: opts.ask?.bind(this),
+        resolvePermissionApprover: () => this.permissionApprover,
+        permissions: this.permissions,
+        isCurrentTurn: (turn) => this.#turnState.turn === turn,
+        blocked: (turn, reason, pending) => {
+          this.#status = "blocked"
+          this.#emit(turn, "status.changed", { status: "blocked", reason, pending })
+        },
+        working: (turn) => this.#setStatus(turn, "working"),
+      })
+      const toolRunner = new ToolRunner({
+        tools: this.tools,
+        interceptors: this.interceptors,
+        permissions: this.permissions,
+        approvals: this.#approvals,
+        cwd: this.cwd,
+        sessionId: this.sessionId,
+        maxParallelTools: this.#maxParallelTools,
+        abortGraceMs: opts.abortGraceMs ?? 2000,
+        fileRewind: this.fileRewind,
+        backgroundJobs: this.backgroundJobs,
+        allowsTool: (tool) => this.#allowsTool(tool),
+        callableTools: this.callableTools,
+        isSubAgent: this.depth > 0,
+        steerSignal: () => this.#turnState.steerAbort?.signal,
+        storeFailed: () => this.#history.storeFailed,
+        callSession: (turn, toolCallId) => this.#callSession(turn, toolCallId),
+        keepLarge: (call, result) => this.#contextManager.keepLarge(call, result),
+        interruptTurn: (turn) => {
+          if (this.#turnState.turn === turn) this.#turnState.abort?.abort()
+        },
+        emit: (turn, type, data) => this.#emit(turn, type, data),
+      })
+      this.#onIdleNotice = opts.onIdleNotice
+      this.#inbox = new NoticeInbox({
+        retryMs,
+        disposed: () => this.#disposed,
+        turn: () => this.#turnState.turn,
+        holding: () => this.#holding,
+        busy: () => this.#turnState.abort !== undefined,
+        onIdleNotice: this.#onIdleNotice?.bind(this),
+        prompt: (message) => this.prompt(message),
+        emit: (turn, type, data) => this.#emit(turn, type, data),
+      })
+      this.#endTurn = opts.endTurn
 
-    const { history, tokens, restoredTools } = restoreHistory(opts, this.#loadedTools)
-    this.#restoredTools = restoredTools
-    this.#history = new History(
-      {
-        session: this.session,
-        reportStoreError: (error) =>
-          this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId }),
-        originals: opts.originals?.bind(this),
-      },
-      history,
-    )
-    this.messages = this.#history.messages
-    this.data = this.#history.data
-    this.artifacts = createSessionArtifacts(opts, this.sessionId, this.#context)
-    const { contextManager, compactor } = setupContext(
-      {
-        ai,
-        model: () => this.model,
-        context: this.#context,
-        compaction: this.#compaction,
+      const { history, tokens, restoredTools } = restoreHistory(opts, this.#loadedTools)
+      this.#restoredTools = restoredTools
+      this.#history = new History(
+        {
+          session: this.session,
+          reportStoreError: (error) =>
+            this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId }),
+          originals: opts.originals?.bind(this),
+        },
+        history,
+      )
+      this.messages = this.#history.messages
+      this.data = this.#history.data
+      this.artifacts = createSessionArtifacts(opts, this.sessionId, this.#context)
+      const { contextManager, compactor } = setupContext(
+        {
+          ai,
+          model: () => this.model,
+          context: this.#context,
+          compaction: this.#compaction,
+          history: this.#history,
+          artifacts: this.artifacts,
+          tools: this.tools,
+          toolFor: (call) => toolRunner.toolFor(call),
+          cwd: this.cwd,
+          interceptors: this.interceptors,
+          session: this.session,
+          sessionId: this.sessionId,
+          isSubAgent: this.parentSessionId !== undefined,
+          execution: this.execution,
+          buildContext: (signal) => this.#buildContext(signal),
+          renderSections: () => renderPrompt(this.#sections),
+          offeredTools: () => this.#offeredTools(),
+          recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+          emit: (turn, type, data) => this.#emit(turn, type, data),
+        },
+        tokens,
+      )
+      this.#contextManager = contextManager
+      this.#compactor = compactor
+      const stored = opts.session?.model()
+      // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
+      const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
+      if (opts.session && changed && !isNoModel(this.model)) {
+        this.#history.store({ type: "model_change", model: modelRef(this.model) })
+      }
+      const tree = opts.tree
+      this.#toolSession = setupToolSession({
+        sessionId: this.sessionId,
+        tools: this.tools,
+        loadedTools: this.#loadedTools,
+        allowsTool: (tool) => this.#allowsTool(tool),
+        session: opts.session,
         history: this.#history,
         artifacts: this.artifacts,
-        tools: this.tools,
-        toolFor: (call) => toolRunner.toolFor(call),
-        cwd: this.cwd,
-        interceptors: this.interceptors,
-        session: this.session,
-        sessionId: this.sessionId,
-        isSubAgent: this.parentSessionId !== undefined,
+        contextHas: (text) => this.contextHas(text),
+        depth: this.depth,
+        maxDepth: () => tree?.maxDepth ?? 0,
+        model: () => this.model,
+        spawning: tree
+          ? {
+              spawn: (o) => tree.spawn(this, o),
+              createGroup: (o) => tree.createGroup(this, o),
+              groups: () => tree.groups(),
+            }
+          : undefined,
+        expectNotice:
+          this.depth === 0 || this.#onIdleNotice ? () => this.#inbox.target().expect() : undefined,
+      })
+      this.#turnRunner = new TurnRunner(this.#turnState, {
+        ai,
+        history: this.#history,
+        compactor: this.#compactor,
+        contextManager: this.#contextManager,
+        toolRunner,
+        inbox: this.#inbox,
         execution: this.execution,
+        tools: this.tools,
+        thinking: this.thinking,
+        model: () => this.model,
+        maxSteps,
+        maxTokens,
+        depth: this.depth,
+        compaction: this.#compaction,
         buildContext: (signal) => this.#buildContext(signal),
-        renderSections: () => renderPrompt(this.#sections),
         offeredTools: () => this.#offeredTools(),
-        recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+        checkRestoredTools: () => this.#checkRestoredTools(),
         emit: (turn, type, data) => this.#emit(turn, type, data),
-      },
-      tokens,
-    )
-    this.#contextManager = contextManager
-    this.#compactor = compactor
-    const stored = opts.session?.model()
-    // NO_MODEL is a placeholder until one is picked, not a model the session ran on.
-    const changed = stored?.provider !== this.model.provider || stored.model !== this.model.id
-    if (opts.session && changed && !isNoModel(this.model)) {
-      this.#history.store({ type: "model_change", model: modelRef(this.model) })
+        setStatus: (turn, status, reason) => this.#setStatus(turn, status, reason),
+        prompt: (input, options) => this.prompt(input, options),
+        disposed: () => this.#disposed,
+        ownsIdleNotices: () => !!this.#onIdleNotice,
+        endTurn: () => this.#endTurn?.(),
+        recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+      })
+    } catch (error) {
+      this.#releaseSessionLease?.()
+      throw error
     }
-    const tree = opts.tree
-    this.#toolSession = setupToolSession({
-      sessionId: this.sessionId,
-      tools: this.tools,
-      loadedTools: this.#loadedTools,
-      allowsTool: (tool) => this.#allowsTool(tool),
-      session: opts.session,
-      history: this.#history,
-      artifacts: this.artifacts,
-      contextHas: (text) => this.contextHas(text),
-      depth: this.depth,
-      maxDepth: () => tree?.maxDepth ?? 0,
-      model: () => this.model,
-      spawning: tree
-        ? {
-            spawn: (o) => tree.spawn(this, o),
-            createGroup: (o) => tree.createGroup(this, o),
-            groups: () => tree.groups(),
-          }
-        : undefined,
-      expectNotice: this.depth === 0 || this.#onIdleNotice ? () => this.#inbox.target().expect() : undefined,
-    })
-    this.#turnRunner = new TurnRunner(this.#turnState, {
-      ai,
-      history: this.#history,
-      compactor: this.#compactor,
-      contextManager: this.#contextManager,
-      toolRunner,
-      inbox: this.#inbox,
-      execution: this.execution,
-      tools: this.tools,
-      thinking: this.thinking,
-      model: () => this.model,
-      maxSteps,
-      maxTokens,
-      depth: this.depth,
-      compaction: this.#compaction,
-      buildContext: (signal) => this.#buildContext(signal),
-      offeredTools: () => this.#offeredTools(),
-      checkRestoredTools: () => this.#checkRestoredTools(),
-      emit: (turn, type, data) => this.#emit(turn, type, data),
-      setStatus: (turn, status, reason) => this.#setStatus(turn, status, reason),
-      prompt: (input, options) => this.prompt(input, options),
-      disposed: () => this.#disposed,
-      ownsIdleNotices: () => !!this.#onIdleNotice,
-      endTurn: () => this.#endTurn?.(),
-      recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
-    })
   }
 
   /**
@@ -754,10 +759,8 @@ export class Agent {
     const jobs = this.backgroundJobsHost
     if (jobs && this.depth > 0) await jobs.closeSession(this.sessionId).catch(() => {})
     else if (jobs && reason !== "switch") await jobs.closeRoot(this.sessionId).catch(() => {})
-    if (this.#sessionLease) {
-      this.#sessionLease = false
-      this.session?.release()
-    }
+    this.#releaseSessionLease?.()
+    this.#releaseSessionLease = undefined
   }
 
   /**

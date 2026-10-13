@@ -296,8 +296,14 @@ export class UiRuntime {
 
   handleScroll(e: InputEvent): boolean {
     if (this.#dirty) this.#prepare()
-    const plan = this.#widgets.find((p) => widgetId(p.node) === this.state.focused)
-    if (!plan || !scrollable(plan.node)) return false
+    const focused = this.#widgets.find((p) => widgetId(p.node) === this.state.focused)
+    // Anonymous content and non-scrolling widgets (e.g. tabs) still need a keyboard path.
+    // Keep an identified scroll widget's navigation local; otherwise use visible reading order.
+    const plan =
+      focused && scrollable(focused.node)
+        ? focused
+        : (this.#scrollables.find((p) => p.total > p.viewport) ?? this.#scrollables[0])
+    if (!plan) return false
     const action = viewScrollAction(this.keys, e)
     if (action === "page-up" || action === "page-down") {
       this.#scroll(plan, Math.max(1, plan.viewport) * (action === "page-up" ? -1 : 1))

@@ -117,7 +117,6 @@ export const HOST_EVENTS = new Set<string>([
   "extension.loaded",
   "ui.request",
   "ui.resolved",
-  "command.output",
 ])
 
 /** How long a note such as "Tool output: full" replaces the key hints. */

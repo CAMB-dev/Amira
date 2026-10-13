@@ -85,7 +85,7 @@ export function restoreHistory(source: HistorySource, loadedTools: Set<string>) 
 
 /** A fork still finds the artifacts named by its copied history beside the new session. */
 export function createSessionArtifacts(
-  source: { session?: SessionStore; outputsParent?: OutputStore },
+  source: { session?: SessionStore; outputsParent?: OutputStore; outputsReadOnly?: boolean },
   sessionId: string,
   context: ContextOptions,
 ): ArtifactStore {
@@ -101,6 +101,7 @@ export function createSessionArtifacts(
   return new ArtifactStore({
     dir: artifactDir(source.session?.file, sessionId),
     sessionId,
+    ...(source.outputsReadOnly ? { readOnly: true } : {}),
     limits: {
       ...(context.saveAbove !== undefined ? { saveAbove: context.saveAbove } : {}),
       ...(context.previewChars !== undefined ? { previewChars: context.previewChars } : {}),

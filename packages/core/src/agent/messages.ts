@@ -63,7 +63,24 @@ export function normalizeResult(r: unknown): ToolResult {
   const out: ToolResult = { content: valid.length ? valid : [{ type: "text", text: "(no output)" }] }
   if ((r as ToolResult).isError) out.isError = true
   if ((r as ToolResult).details !== undefined) out.details = (r as ToolResult).details
+  if ((r as ToolResult).persistDetails) out.persistDetails = true
   return out
+}
+
+/** Most serialized UTF-8 bytes of opt-in presenter metadata kept per result. */
+const MAX_PERSISTED_DETAILS_BYTES = 16 * 1024
+
+/** Oversized or non-JSON details stay live only; history falls back to the saved result text. */
+function persistedDetails(r: ToolResult): unknown {
+  if (!r.persistDetails || r.details === undefined) return undefined
+  try {
+    const json = JSON.stringify(r.details)
+    if (json === undefined || Buffer.byteLength(json, "utf8") > MAX_PERSISTED_DETAILS_BYTES) return undefined
+    // Freeze the serialized value in time: later mutation or a changing toJSON cannot bypass the cap.
+    return JSON.parse(json)
+  } catch {
+    return undefined
+  }
 }
 
 /** A call's result, with why it was rejected, so a resumed session renders the call as the live one did. */
@@ -73,7 +90,13 @@ export function resultMessage(
   rejected?: ToolRejection,
 ): ToolResultMessage {
   const m = { role: "toolResult" as const, toolCallId: call.id, toolName: call.name, content: r.content }
-  return { ...m, isError: r.isError ?? false, ...(rejected && { rejected }) }
+  const details = persistedDetails(r)
+  return {
+    ...m,
+    isError: r.isError ?? false,
+    ...(rejected && { rejected }),
+    ...(details !== undefined ? { details } : {}),
+  }
 }
 
 export function toolError(call: ToolCallBlock, text: string, rejected?: ToolRejection): ToolResultMessage {

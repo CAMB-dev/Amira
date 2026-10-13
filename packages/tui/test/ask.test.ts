@@ -222,6 +222,43 @@ for (const mode of MODES) {
     await s.exited
   })
 
+  test(`${mode}: full detail commits all offered choices and selected marks, including own words`, async () => {
+    const s = await setup([askUser(), { text: "Done." }], { mode, cols: 60, rows: 40 })
+    s.terminal.send("\x0f")
+    s.terminal.send("go\r")
+    await waitFor(() => s.dialog().length > 0, "the dialog")
+    s.terminal.send("2")
+    await waitFor(() => s.dialog()[0] === "┃ 2/2 · Extras", "the second question")
+    s.terminal.send(" ")
+    s.terminal.send("2")
+    s.terminal.send("4")
+    await waitFor(() => s.dialog().some((line) => line.includes("Type your answer")), "own words")
+    s.terminal.send("Keep it small\r")
+    await waitFor(
+      () => s.dialog().some((line) => line.includes('[x] Other… "Keep it small"')),
+      "saved own words",
+    )
+    s.terminal.send("\r")
+    await s.shows("Done.")
+    await s.idle()
+    expect(s.all()).toContain("[ ] Rewrite (Recommended)  Start over")
+    expect(s.all()).toContain("✓ Patch  Fix it in place")
+    expect(s.all()).toContain("✓ Tests")
+    expect(s.all()).toContain("✓ Docs")
+    expect(s.all()).toContain("[ ] Changelog")
+    expect(s.all()).toContain('✓ (own words) "Keep it small"')
+    const message = s.agent.messages.find((message) => message.role === "toolResult")
+    expect(message?.role === "toolResult" && message.details).toMatchObject({
+      questions: QUESTIONS,
+      outcome: {
+        answers: [{ selected: ["Patch"] }, { selected: ["Tests", "Docs"], other: "Keep it small" }],
+      },
+    })
+    expect(s.dialog()).toEqual([])
+    s.terminal.send("\x03")
+    await s.exited
+  })
+
   test(`${mode}: Other takes free text; Esc leaves the field, a second Esc declines`, async () => {
     const s = await setup(
       [askUser([QUESTIONS[0]!]), { text: "ok" }, askUser([QUESTIONS[0]!]), { text: "fine" }],

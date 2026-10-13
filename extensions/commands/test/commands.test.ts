@@ -195,8 +195,8 @@ async function setup(
     },
     { types: ["ui.request"] },
   )
-  const run = async (line: string, frontend: "tui" | "rpc" | "print" = "tui") => {
-    const r = await host.run(line, { frontend })
+  const run = async (line: string, frontend: "tui" | "rpc" | "print" = "tui", signal?: AbortSignal) => {
+    const r = await host.run(line, { frontend, signal })
     return { ...r, text: r.output.join("\n") }
   }
   return { host, run, calls, asked, requests, bus, ext }
@@ -259,7 +259,7 @@ test("/rewind n confirms its plan, and --yes is required without a responder", a
     { role: "user", content: [{ type: "text", text: "older" }] },
     { role: "user", content: [{ type: "text", text: "newer" }] },
   ]
-  const rewinds: { index: number; restoreFiles?: boolean }[] = []
+  const rewinds: { index: number; restoreFiles?: boolean; signal?: AbortSignal }[] = []
   let plan = {
     owner: "core",
     enabled: true,
@@ -274,8 +274,9 @@ test("/rewind n confirms its plan, and --yes is required without a responder", a
     rewind: async (index, options) => void rewinds.push({ index, ...options }),
   }
   const interactive = await setup(control, [true, false])
-  expect((await interactive.run("/rewind 2")).text).toContain("2nd most recent")
-  expect(rewinds).toEqual([{ index: 0, restoreFiles: true }])
+  const signal = new AbortController().signal
+  expect((await interactive.run("/rewind 2", "tui", signal)).text).toContain("2nd most recent")
+  expect(rewinds).toEqual([{ index: 0, restoreFiles: true, signal }])
   expect(interactive.requests[0]).toMatchObject({
     kind: "confirm",
     title: "Rewind to before the 2nd most recent user message?",
@@ -295,10 +296,10 @@ test("/rewind n confirms its plan, and --yes is required without a responder", a
   expect(rewinds).toHaveLength(1)
   // Nothing captured to restore: conversation only, as the picker would default to.
   plan = { ...plan, restored: 0, removed: 0, conflicts: [] }
-  const yes = await headless.run("/rewind 1 --yes", "print")
+  const yes = await headless.run("/rewind 1 --yes", "print", signal)
   expect(yes.ok).toBe(true)
   expect(yes.text).toContain("Files were not restored.")
-  expect(rewinds.at(-1)).toEqual({ index: 1, restoreFiles: false })
+  expect(rewinds.at(-1)).toEqual({ index: 1, restoreFiles: false, signal })
   expect(headless.requests).toEqual([])
 
   for (const bad of ["/rewind 0", "/rewind two", "/rewind 1 --force", "/rewind --yes"])

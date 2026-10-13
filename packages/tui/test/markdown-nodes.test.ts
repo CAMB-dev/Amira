@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult } from "@amira/api"
 import { MarkdownRendererRegistry } from "@amira/core"
-import { defaultTheme, ImageStore, renderMarkdown, stripAnsi } from "@amira/tui-kit"
+import { defaultTheme, ImageStore, renderMarkdown, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { findImageMarker, imageState, releaseImage } from "../../tui-kit/src/images/placement.ts"
 import { fakeProvider } from "../../tui-kit/test/fake-images.ts"
 import { setImageFallback } from "../src/blocks/base.ts"
@@ -77,6 +77,94 @@ test("math renderers receive the session theme and distinct inline/display conte
   expect(contexts.every((ctx) => !ctx.images && !ctx.theme.dark)).toBe(true)
   const block = new ReplyBlock("A \\(x^2\\) B\n\n\\[x^2\\]", false, false)
   expect(plain(block.lines(env(renders)))).toBe("  A x² B\n\n  x²")
+})
+
+test("block Markdown choice lines render their retained metadata with wrapping and ANSI styles", () => {
+  const renders = new ReplyRenderers(
+    registry({
+      lines: [
+        {
+          kind: "text",
+          text: "A very long option label with several words",
+          marker: "success",
+          description: "One explanation",
+          wrap: true,
+        },
+        { kind: "muted", text: "Other", marker: "unchecked", description: "No change" },
+        { kind: "text", text: "Plain text also wraps when requested", wrap: true },
+      ],
+    }),
+  )
+  const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
+  const rows = renderMarkdown("$$x^2$$", 20, defaultTheme, { nodes })
+  expect(rows).toEqual([
+    `${defaultTheme.success("✓ ")}${defaultTheme.text("A very long option")}`,
+    `  ${defaultTheme.text("label with several")}`,
+    `  ${defaultTheme.text("words")}`,
+    `  ${defaultTheme.muted("One explanation")}`,
+    `${defaultTheme.muted("[ ] ")}${defaultTheme.muted("Other")}${defaultTheme.muted("  No change")}`,
+    `${defaultTheme.muted("")}${defaultTheme.text("Plain text also")}`,
+    defaultTheme.text("wraps when requested"),
+  ])
+  expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true)
+})
+
+test("Markdown multiline choices hang continuations and descriptions under the complete label", () => {
+  const renders = new ReplyRenderers(
+    registry({
+      lines: [
+        { kind: "text", text: "First\nsecond", marker: "success", description: "One explanation" },
+        { kind: "muted", text: "Else\ncontinued", marker: "unchecked", description: "Not chosen" },
+      ],
+    }),
+  )
+  const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
+  for (const width of [20, 90]) {
+    const rows = renderMarkdown("$$x^2$$", width, defaultTheme, { nodes })
+    expect(rows.map(stripAnsi)).toEqual(
+      width === 90
+        ? ["✓ First", "  second  One explanation", "[ ] Else", "    continued  Not chosen"]
+        : ["✓ First", "  second", "  One explanation", "[ ] Else", "    continued", "    Not chosen"],
+    )
+    expect(rows[0]).toBe(`${defaultTheme.success("✓ ")}${defaultTheme.text("First")}`)
+    expect(rows.find((row) => stripAnsi(row).includes("second"))).toContain(defaultTheme.text("second"))
+    expect(rows.find((row) => stripAnsi(row).includes("continued"))).toContain(
+      defaultTheme.muted("continued"),
+    )
+    expect(rows.find((row) => stripAnsi(row).includes("One explanation"))).toContain(
+      defaultTheme.muted(width === 90 ? "  One explanation" : "One explanation"),
+    )
+    expect(rows.filter((row) => stripAnsi(row).includes("✓"))).toHaveLength(1)
+    expect(rows.filter((row) => stripAnsi(row).includes("[ ]"))).toHaveLength(1)
+    expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true)
+  }
+})
+
+test("description-implied wrapping survives every multiline Markdown-label fragment", () => {
+  const label = `${"A ".repeat(40)}\ntail`
+  const render = (wrap?: boolean) => {
+    const renders = new ReplyRenderers(
+      registry({
+        lines: [
+          { kind: "text", text: label, description: "Explanation", ...(wrap !== undefined ? { wrap } : {}) },
+        ],
+      }),
+    )
+    const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
+    return renderMarkdown("$$x^2$$", 20, defaultTheme, { nodes })
+  }
+  const explicit = render(true)
+  for (const wrap of [undefined, false]) {
+    const rows = render(wrap)
+    const text = rows.map(stripAnsi)
+    expect(text.join("\n").match(/A/g)).toHaveLength(40)
+    expect(rows).toEqual(explicit)
+    expect(text.filter((row) => row.includes("Explanation"))).toHaveLength(1)
+    expect(rows[0]).toContain(defaultTheme.text("A A A A A A A A A A"))
+    expect(rows.at(-1)).toContain(defaultTheme.text("tail"))
+    expect(rows.at(-1)).toContain(defaultTheme.muted("  Explanation"))
+    expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true)
+  }
 })
 
 test("rendering cache distinguishes theme and preserves inline segment spaces", () => {

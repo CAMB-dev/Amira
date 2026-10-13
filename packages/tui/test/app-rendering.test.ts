@@ -893,6 +893,7 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
   for (const mode of ["inline", "fullscreen"] as const) {
     const { terminal, shows, all, exited } = await setup([], {
       cols: 120,
+      rows: 32,
       settings: { mode },
       commands: [
         {
@@ -910,6 +911,7 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
       "esc=Cancel a command or stop the turn; twice in a row, rewind to an earlier message",
     )
     expect(all()).toContain("?=Every key and what it does")
+    expect(all()).toContain("Esc=Close the dock first; the next Esc cancels or interrupts")
     if (mode === "fullscreen") expect(all()).toContain("ctrl+f=Find text in the transcript")
     else expect(all()).not.toContain("Find text in the transcript")
     terminal.send("\x03")

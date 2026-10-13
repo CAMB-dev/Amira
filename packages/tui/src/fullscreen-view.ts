@@ -10,6 +10,7 @@ import {
   stripColors,
   truncateToWidth,
 } from "@amira/tui-kit"
+import { DisplayBlock } from "./blocks/display.ts"
 import {
   type Block,
   type BlockEnv,
@@ -454,6 +455,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     },
     subagentEvent: subagents.event,
     notice,
+    display: (level, text, options) => add(new DisplayBlock(level, text, options)),
     commandEcho(line) {
       add(new LinesBlock("command", (width, t) => commandEchoLines(t, line, width), line))
     },
@@ -471,11 +473,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           stripAnsi(draw(Number.POSITIVE_INFINITY).join("\n")),
         ),
       ),
-    openSession(boundary, messages: Message[], switched, compactionInfo) {
+    openSession(boundary, messages: Message[], switched, compactionInfo, displays) {
       if (switched) clearTranscript()
       add(new LinesBlock("history", (w, t) => [sessionBoundary(t, boundary, w)], ""))
       for (const b of historyBlocks(messages, env, {
         compactionInfo,
+        displays,
         hyperlinks: host.hyperlinks,
         noticeBlock,
         sessionId: () => host.sessionId(),

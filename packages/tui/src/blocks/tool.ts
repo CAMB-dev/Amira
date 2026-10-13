@@ -7,11 +7,11 @@ import {
   type ToolResult,
   toolResultText,
 } from "@amira/api"
-import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { timestampIn } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { childrenOf, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
-import { type CopyRow, chromeRows } from "../text-selection.ts"
+import { type CopyRow, chromeRows, sliceCells } from "../text-selection.ts"
 import {
   explorationOf,
   exploredLines,
@@ -31,6 +31,35 @@ const NEXT_DETAIL: Record<ToolDetailLevel, ToolDetailLevel> = {
 
 /** How much each tool output level shows, least first. */
 const DETAIL_RANK: Record<ToolDetailLevel, number> = { collapsed: 0, summary: 1, full: 2 }
+
+/** Only the renderer knows which columns are chrome and how a continuation joins. */
+const rowContent = new WeakMap<readonly string[], ReadonlyMap<number, CopyRow>>()
+
+function rowRecorder() {
+  const rows = new Map<number, CopyRow>()
+  const rowAt = (row: number) => {
+    let value = rows.get(row)
+    if (!value) {
+      value = { from: 0 }
+      rows.set(row, value)
+    }
+    return value
+  }
+  return {
+    rows,
+    onRow: (row: number, from: number) => {
+      rowAt(row).from = from
+    },
+    onWrap: (row: number, join: "" | " ") => {
+      rowAt(row).joinBefore = join
+    },
+  }
+}
+
+function contentRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
+  const content = rowContent.get(lines)
+  return plain.map((_, i) => content?.get(i) ?? { from: 0 })
+}
 
 /** A tool call: its head, its output while it runs, then its result, with its sub-agents under it. */
 export class ToolBlock extends Block {
@@ -104,6 +133,7 @@ export class ToolBlock extends Block {
     const treeWidth = Math.max(0, width - visibleWidth(continuation))
     const nested = (rows: string[]) =>
       rows.map((row) => truncateToWidth(`${continuation}${row}`, width, glyphs.more))
+    const record = rowRecorder()
     if (!this.end) {
       const call = {
         name: this.name,
@@ -114,8 +144,10 @@ export class ToolBlock extends Block {
       const rows = runningToolLines(theme, presenter, call, now, env.spinner, width, {
         timestamp: this.timestamp,
         liveOutputLines: env.liveOutputLines,
+        onRow: record.onRow,
       })
       rows.push(...nested(treeRows(tree, now, treeWidth, theme, env.groups, true, env.spinner)))
+      rowContent.set(rows, record.rows)
       return rows
     }
     const detail = this.detail(env)
@@ -123,6 +155,8 @@ export class ToolBlock extends Block {
       last: this.last,
       timestamp: this.timestamp,
       ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
+      onRow: record.onRow,
+      onWrap: record.onWrap,
     }
     const lines = finishedToolLines(theme, presenter, this.finished(), detail, width, opts)
     let rows: string[]
@@ -144,6 +178,10 @@ export class ToolBlock extends Block {
       rows = treeRows(tree, now, treeWidth, theme, env.groups, true, env.spinner)
     }
     lines.splice(1, 0, ...nested(rows))
+    rowContent.set(
+      lines,
+      new Map([...record.rows].map(([row, content]) => [row === 0 ? 0 : row + rows.length, content])),
+    )
     return lines
   }
 
@@ -164,18 +202,37 @@ export class ToolBlock extends Block {
     const rows = chromeRows(plain)
     const stamp = timestampIn(lines)
     if (stamp) rows[stamp.line]!.to = stamp.to
-    const prefix = 4 + Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
-    if (this.last) {
-      for (let i = 1; i < rows.length; i++) {
-        if (plain[i]!.startsWith(" ".repeat(prefix))) rows[i]!.from = Math.max(rows[i]!.from, prefix)
-      }
-    }
+    for (const [i, content] of rowContent.get(lines) ?? []) Object.assign(rows[i]!, content)
     return rows
   }
 
-  copyText(): string {
+  override searchRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
+    return contentRows(plain, lines)
+  }
+
+  copyText(env?: BlockEnv): string {
     const head = `${this.name} ${JSON.stringify(this.args)}`
     if (!this.end) return head
+    if (env && this.detail(env) === "full") {
+      const presenter = env.presenters?.get(this.name)
+      const view = { args: this.args, result: this.end.result, text: toolResultText(this.end.result) }
+      try {
+        // Choice transcripts retain their offered options and marks when copied unfolded.
+        const body = presenter?.body?.(view, { detail: "full", width: env.width })
+        if (body?.some((line) => line.marker)) {
+          const lines = this.lines(env)
+          const plain = lines.map(stripAnsi)
+          const rows = this.copyRows(plain, lines)
+          return plain
+            .map((row, i) =>
+              sliceCells(row, rows[i]!.from, rows[i]!.to ?? Number.POSITIVE_INFINITY).trimEnd(),
+            )
+            .join("\n")
+        }
+      } catch {
+        // As when rendering, a broken presenter falls back to the stored output.
+      }
+    }
     return `${head}\n${toolResultText(this.end.result)}`.trim()
   }
 
@@ -256,7 +313,12 @@ export class ExploredBlock extends Block {
     const rows = chromeRows(plain)
     const stamp = timestampIn(lines)
     if (stamp) rows[stamp.line]!.to = stamp.to
+    for (const [i, content] of rowContent.get(lines) ?? []) Object.assign(rows[i]!, content)
     return rows
+  }
+
+  override searchRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
+    return contentRows(plain, lines)
   }
 
   private detail(env: BlockEnv): ToolDetailLevel {
@@ -264,16 +326,21 @@ export class ExploredBlock extends Block {
   }
 
   lines(env: BlockEnv): string[] {
+    const record = rowRecorder()
     const opts = {
       last: this.last,
       timestamp: this.timestamp,
       ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
+      onRow: record.onRow,
+      onWrap: record.onWrap,
     }
     const calls = this.calls.map((b) => ({ call: b.finished(), presenter: env.presenters?.get(b.name) }))
     // Unfolded, each call shows as calls do now (all of it at the "full" level).
     const expanded = this.detail(env) === "full"
     const each = expanded ? "full" : "summary"
-    return exploredLines(env.theme, calls, expanded, each, env.width, opts)
+    const rows = exploredLines(env.theme, calls, expanded, each, env.width, opts)
+    rowContent.set(rows, record.rows)
+    return rows
   }
 
   copyText(): string {

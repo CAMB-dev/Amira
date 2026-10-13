@@ -2,6 +2,7 @@ import type {
   AnyEvent,
   CompactionInfo,
   Message,
+  PrintOptions,
   ToolDetailLevel,
   ToolResult,
   TuiSettings,
@@ -18,6 +19,7 @@ import type {
   Terminal,
   Theme,
 } from "@amira/tui-kit"
+import type { DisplayHistory } from "./display-history.ts"
 import type { SessionBoundary } from "./history.ts"
 import type { Keybindings } from "./keybindings.ts"
 import type { ReplyRenderers } from "./markdown-nodes.ts"
@@ -79,6 +81,8 @@ export interface ViewHost {
   header?(width: number, ctx: RenderContext): string[]
   /** The full-screen view open over the conversation: a form or the sub-agent viewer. */
   overlay: Component
+  /** Whether a dock is part of the live bottom area. */
+  dockOpen?(): boolean
   /** Whether the input box is empty. */
   editorEmpty(): boolean
   /** Shows a short note in place of the key hints for a few seconds. */
@@ -111,6 +115,8 @@ export interface TranscriptView {
   /** Clears the screen and draws the overlay again (Ctrl+L over a form or a viewer). */
   redrawOverlay(): void
   renderOverlay(): void
+  /** Maps content-relative screen input to the bottom area's logical coordinates in inline mode. */
+  dockInput?(event: InputEvent): InputEvent
   /** Leaves the terminal with the conversation in its normal screen; the UI is quitting. */
   stop(): void
 
@@ -138,6 +144,8 @@ export interface TranscriptView {
   commandEcho(line: string): void
   /** What a command printed: under its echo right after it, else as a notice. */
   commandOutput(level: "info" | "warning" | "error", text: string): void
+  /** Foldable, display-only extension output. */
+  display(level: NoticeLevel, text: string, options?: PrintOptions): void
   /** A dialog's questions and answers, once answered, drawn to fit a width. */
   dialogEcho(draw: (width: number) => string[]): void
   /**
@@ -152,6 +160,7 @@ export interface TranscriptView {
     switched: boolean,
     /** Why each compaction happened, by its summary's user message (Agent.compactionInfo). */
     compactionInfo?: (message: Message) => CompactionInfo | undefined,
+    displays?: readonly DisplayHistory[],
   ): void
   /** The UI is about to follow another session: calls of this one end here. */
   leaveSession(): void

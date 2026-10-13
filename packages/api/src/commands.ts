@@ -102,6 +102,16 @@ export type CommandFrontend = "tui" | "rpc" | "print"
 
 export type CommandOutputLevel = "info" | "warning" | "error"
 
+/** Display-only transcript content; never added to the model's conversation. */
+export interface PrintOptions {
+  /** Folded at summary detail, expanded at full detail (Ctrl+O). */
+  details?: string
+  /** Render details as Markdown rather than plain text. Default false. */
+  markdown?: boolean
+  /** Save a display entry so it is rendered again on resume. Default false. */
+  persist?: boolean
+}
+
 export interface CommandCompleteContext {
   readonly cwd: string
   readonly session: SessionControl
@@ -119,8 +129,11 @@ export interface CommandContext extends CommandCompleteContext {
   readonly signal: AbortSignal
   /** Dialogs (select, confirm, input); print mode cancels them. */
   readonly ui: UiApi
-  /** Shows text to the user: in the transcript, on stdout in print mode, as command.output over rpc. */
-  print(text: string, level?: CommandOutputLevel): void
+  /**
+   * Shows display-only text in the transcript, on stdout in print mode, or as command.output over RPC.
+   * Retained printers stay bound to the command's originating session.
+   */
+  print(text: string, level?: CommandOutputLevel, options?: PrintOptions): void
   /** Every registered command, by name. */
   commands(): CommandInfo[]
   /** Every registered skill (run as `$<name>`), by name. */
@@ -135,7 +148,8 @@ export interface CommandContext extends CommandCompleteContext {
    */
   readonly keys?: () => readonly KeyHelp[]
   /**
-   * Shows a full-screen view, on frontends that have them (the TUI does); unset elsewhere.
+   * Shows a view fullscreen (default) or docked above the input, on frontends that have them
+   * (the TUI does); unset elsewhere. A dock leaves the conversation and input usable.
    * Returns once the view is shown (the user leaves it when done): true, or false when it
    * cannot be shown now, e.g. while a form holds the screen. Throws for a view kind no
    * extension registered (see ExtensionAPI.registerView).
@@ -150,7 +164,7 @@ export interface CommandContext extends CommandCompleteContext {
 }
 
 /**
- * A full-screen view an extension registered, over the data given here (see ViewDefinition).
+ * A fullscreen or docked view an extension registered, over its data (see ViewDefinition).
  */
 export type FrontendView = SubagentView | ExtensionView
 
@@ -159,6 +173,10 @@ export interface SubagentView {
   kind: "subagent"
   sessionId: string
   state?: Partial<UiState>
+  /** Where to show it; defaults to fullscreen. A dock leaves the input focused. */
+  placement?: "fullscreen" | "dock"
+  /** Dock height in rows, including chrome. Defaults to 40% of the screen, at least 5, space permitting. */
+  maxHeight?: number
 }
 
 export interface ExtensionView {
@@ -168,6 +186,10 @@ export interface ExtensionView {
   data?: unknown
   /** Initial declarative state, applied before onOpen and the first UI build. */
   state?: Partial<UiState>
+  /** Where to show it; defaults to fullscreen. A dock leaves the input focused. */
+  placement?: "fullscreen" | "dock"
+  /** Dock height in rows, including chrome. Defaults to 40% of the screen, at least 5, space permitting. */
+  maxHeight?: number
 }
 
 /** Whether `view` uses the legacy sub-agent request shape. */
@@ -395,7 +417,7 @@ export interface SessionControl {
    */
   setThinking(level: ReasoningEffort | undefined): void
   /** Starts over with an empty conversation in a new session. */
-  newSession(): Promise<void>
+  newSession(options?: { signal?: AbortSignal }): Promise<void>
   /** Stored sessions of this directory, most recent first. */
   sessions(): StoredSessionInfo[]
   /**
@@ -405,10 +427,10 @@ export interface SessionControl {
    */
   readonly readSession?: (sessionId: string) => StoredSession | undefined
   /** Switches to a stored session of this directory. */
-  resume(sessionId: string): Promise<void>
+  resume(sessionId: string, options?: { signal?: AbortSignal }): Promise<void>
   readonly rename?: (title: string, options?: RenameOptions) => void
   readonly deleteSession?: (sessionId: string) => Promise<void>
-  readonly fork?: (index?: number) => Promise<void>
+  readonly fork?: (index?: number, options?: { signal?: AbortSignal }) => Promise<void>
   /**
    * Cuts the conversation back to just before `messages()[index]`, which must be a user
    * message: it and everything after it are gone from later turns, e.g. to go back to before a

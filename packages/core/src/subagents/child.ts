@@ -1,4 +1,4 @@
-import { emptyUsage, type Message, type UserMessage, userMessage } from "@amira/ai"
+import { emptyUsage, type Message, type Usage, type UserMessage, userMessage } from "@amira/ai"
 import type {
   AnyEvent,
   ChildSession,
@@ -72,6 +72,11 @@ export class Child implements ChildSession {
     readonly parentMeta: EmitMeta,
     private tree: AgentTree,
     readonly persistent: boolean,
+    readonly ephemeral: boolean,
+    /** Where private replies are charged; inherited by private descendants. */
+    readonly usageStore: SessionStore | undefined,
+    /** Receives only aggregate budget updates, never private conversation events. */
+    readonly usageOwner: Agent | undefined,
     readonly maxTurns: number | undefined,
     /** Its own group first, then the groups that one is part of. */
     readonly groups: Group[],
@@ -83,6 +88,27 @@ export class Child implements ChildSession {
     this.#result = new Promise((resolve) => {
       this.settle = resolve
     })
+  }
+
+  /** Private replies count in the owning persisted session without retaining their transcript. */
+  chargeUsage(usage: Usage, model = this.model): void {
+    if (!this.ephemeral || !this.usageStore) return
+    try {
+      this.usageStore.append({ type: "side_usage", model, usage, label: this.title })
+    } catch (error) {
+      // Late receipts can outlive the owner's Agent. Report without disabling the resumed
+      // writer or interrupting the tree/group accounting that still books this usage.
+      const owner = this.usageOwner ?? this.agent
+      owner.bus.emit(
+        "extension.notice",
+        {
+          source: "session",
+          level: "warning",
+          text: `Could not save private usage for session ${this.usageStore.id}: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        metaOf(owner),
+      )
+    }
   }
 
   get model() {
@@ -191,6 +217,7 @@ export class Group implements SpawnGroup {
     private tree: AgentTree,
     /** Set on the children it spawns, e.g. the tool call that created the group. */
     private defaults: { toolCallId?: string },
+    readonly ephemeral: boolean,
   ) {
     this.#ended = new Promise((resolve) => {
       this.settle = resolve
@@ -236,7 +263,7 @@ export class Group implements SpawnGroup {
   }
 
   children(): ChildSession[] {
-    return [...this.live]
+    return [...this.live].filter((c) => !c.ephemeral)
   }
 
   end(reason = "ended by its owner"): void {

@@ -7,7 +7,7 @@ import {
   type ToolDetailLevel,
 } from "@amira/api"
 import type { UiRequests } from "@amira/core"
-import type { InputEvent, RenderContext, Theme } from "@amira/tui-kit"
+import { type InputEvent, matchesKey, type RenderContext, type Theme } from "@amira/tui-kit"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "../dialog.ts"
 import { ExtensionViewer, type ViewSource } from "../extension-view.ts"
 import { type FormRequest, FormView, uiFormBackend } from "../form-view.ts"
@@ -15,6 +15,7 @@ import { KeyReference } from "../key-reference.ts"
 import type { Keybindings, KeySpec } from "../keybindings.ts"
 import type { PresenterSource } from "../tool-view.ts"
 import type { TranscriptView } from "../view.ts"
+import { DockedView } from "./dock.ts"
 import { overlayKeys } from "./startup.ts"
 
 export interface OverlayManagerDeps {
@@ -33,6 +34,8 @@ export interface OverlayManagerDeps {
   working: () => boolean
   interrupt: () => void
   quitting: () => boolean
+  /** Inline mode enables pointer reports only while a dock or fullscreen view uses them. */
+  dockChanged?: (open: boolean) => void
 }
 
 /** Dialogs and full-screen views over the conversation, including forms waiting for their turn. */
@@ -44,6 +47,9 @@ export class OverlayManager {
    * the UI is suspended meanwhile: what the main session commits is held and printed when it closes.
    */
   private viewer: ExtensionViewer | KeyReference | undefined
+  dock: DockedView | undefined
+  private dockTimer: ReturnType<typeof setInterval> | undefined
+  private dockInterval = 1000
   private viewerTimer: ReturnType<typeof setInterval> | undefined
   private viewerInterval = 1000
   /**
@@ -99,6 +105,35 @@ export class OverlayManager {
     const definition = this.deps.views?.get(v.kind)
     if (!definition) throw new Error(`there is no "${v.kind}" view`)
     if (this.deps.quitting() || this.form || env.TERM === "dumb") return false
+    if (v.placement === "dock") {
+      if (this.dock?.viewer.kind === v.kind) {
+        this.dock.viewer.show(v.data, v.state)
+        this.dock.maxHeight = v.maxHeight
+      } else {
+        const next = new ExtensionViewer(definition, v.data, {
+          placement: "dock",
+          keys,
+          toolDetail: this.deps.toolDetail,
+          state: v.state,
+          onClose: () => this.dock?.viewer === next && this.closeDock(),
+          requestRender: () => next.ready && this.deps.view().requestRender(),
+          onError: (error) => this.deps.view().notice("warning", `View ${v.kind}: ${error}`),
+          onPrint: (text, level) => {
+            this.deps.view().commandOutput(level ?? "info", text)
+            this.deps.view().requestRender()
+          },
+          ...(presenters ? { presenters } : {}),
+        })
+        const previous = this.dock
+        this.dock = new DockedView(next, keys, v.maxHeight)
+        previous?.viewer.dispose()
+        if (this.dock?.viewer === next) next.mount()
+        if (this.dock?.viewer === next) this.deps.dockChanged?.(true)
+      }
+      this.syncDockTimer()
+      this.deps.view().requestRender()
+      return true
+    }
     if (this.viewer instanceof ExtensionViewer && this.viewer.kind === v.kind)
       this.viewer.show(v.data, v.state)
     else {
@@ -120,6 +155,52 @@ export class OverlayManager {
     }
     if (!(this.viewer instanceof ExtensionViewer) || this.viewer.ready) this.deps.view().renderOverlay()
     return true
+  }
+
+  renderDock(width: number, ctx: RenderContext, available: number): string[] {
+    if (this.hasFullscreen) return []
+    const rows = this.dock?.render(width, ctx, available) ?? []
+    this.syncDockTimer()
+    return rows
+  }
+
+  /** Fullscreen overlays win; Esc otherwise dismisses the dock before input cancellation. */
+  handleDockInput(e: InputEvent): boolean {
+    if (!this.dock || this.hasFullscreen) return false
+    if (matchesKey(e, "escape")) {
+      this.closeDock()
+      return true
+    }
+    // A question in the input area retains its navigation keys, but the wheel can scroll the dock.
+    if (this.dialogs.length && e.type !== "mouse") return false
+    return this.dock.handleInput(e)
+  }
+
+  private syncDockTimer() {
+    if (!this.dock) return
+    const interval = this.dock.viewer.animating ? 80 : 1000
+    if (this.dockTimer && this.dockInterval === interval) return
+    clearInterval(this.dockTimer)
+    this.dockInterval = interval
+    this.dockTimer = setInterval(() => {
+      if (!this.hasFullscreen) this.deps.view().requestRender()
+    }, interval)
+  }
+
+  private closeDock() {
+    const previous = this.dock
+    if (!previous) return
+    this.dock = undefined
+    clearInterval(this.dockTimer)
+    this.dockTimer = undefined
+    previous.viewer.dispose()
+    this.deps.dockChanged?.(false)
+    this.deps.view().requestRender()
+  }
+
+  /** A side view belongs to the session that opened it. */
+  sessionChanged(): void {
+    this.closeDock()
   }
 
   /** Opens the key reference over the conversation (the help key); a form keeps the screen. */
@@ -165,6 +246,7 @@ export class OverlayManager {
     clearInterval(this.viewerTimer)
     this.viewerTimer = undefined
     this.deps.view().closeOverlay()
+    if (this.dock) this.deps.dockChanged?.(true)
     if (previous instanceof ExtensionViewer) previous.dispose()
     this.openNextForm()
     this.waitingChanged("visibility")
@@ -191,11 +273,13 @@ export class OverlayManager {
     if (!this.form) return
     this.form = undefined
     this.deps.view().closeOverlay()
+    if (this.dock) this.deps.dockChanged?.(true)
     this.openNextForm()
     this.waitingChanged("resolved")
   }
 
   onEvent(e: AnyEvent) {
+    if (this.dock && !this.hasFullscreen) this.deps.view().requestRender()
     // An extension's view may show anything: it is drawn again at each event (at most once a frame).
     if (this.viewer instanceof ExtensionViewer || this.viewer?.handleEvent())
       this.deps.view().requestOverlayRender()
@@ -282,6 +366,7 @@ export class OverlayManager {
 
   /** Closes full-screen overlays; inline dialogs are cancelled at the later shutdown boundary. */
   dispose() {
+    this.closeDock()
     for (const f of this.forms.splice(0)) this.deps.ui?.cancel(f.requestId)
     this.form?.close()
     this.closeView()

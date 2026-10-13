@@ -108,7 +108,8 @@ test("the tree's maxConcurrent still holds over a group, and a full group does n
   expect(a[2]!.state).toBe("queued")
   await Promise.all([...a, ...free].map((k) => k.result()))
   expect(narrowPeak.value).toBe(1)
-  expect(all.value).toBe(3)
+  // The third tree place stays reserved even when public groups have queued work.
+  expect(all.value).toBe(2)
 })
 
 test("maxAgents counts every child the group started, its members' own ones too", async () => {
