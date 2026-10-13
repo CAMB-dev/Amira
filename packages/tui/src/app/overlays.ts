@@ -56,6 +56,7 @@ export class OverlayManager {
    */
   private viewer: ExtensionViewer | KeyReference | undefined
   dock: DockedView | undefined
+  private readonly lifetimes = new WeakMap<ExtensionViewer, { owner?: object; off?: () => void }>()
   private dockTimer: ReturnType<typeof setInterval> | undefined
   private dockInterval = 1000
   private viewerTimer: ReturnType<typeof setInterval> | undefined
@@ -108,13 +109,17 @@ export class OverlayManager {
   /** Shows a full-screen view; false when it cannot be shown now (see CommandContext.openView). */
   openView(v: FrontendView): boolean {
     const { keys, presenters, env } = this.deps
+    const source = this.deps.views
+    if (source?.canOpen?.(v) === false) return false
+    const owner = source?.owner?.(v)
+    const request = v
     // Keep old command requests working through the same extension lookup.
     if (isSubagentView(v)) v = { ...v, data: { sessionId: v.sessionId } }
-    const definition = this.deps.views?.get(v.kind)
+    const definition = source?.get(v.kind)
     if (!definition) throw new Error(`there is no "${v.kind}" view`)
     if (this.deps.quitting() || this.form || env.TERM === "dumb") return false
     if (v.placement === "dock") {
-      if (this.dock?.viewer.kind === v.kind) {
+      if (this.dock?.viewer.uses(definition) && this.lifetimes.get(this.dock.viewer)?.owner === owner) {
         this.dock.viewer.show(v.data, v.state)
         this.dock.maxHeight = v.maxHeight
       } else {
@@ -134,7 +139,11 @@ export class OverlayManager {
         })
         const previous = this.dock
         this.dock = new DockedView(next, keys, v.maxHeight)
-        previous?.viewer.dispose()
+        this.lifetimes.set(next, {
+          owner,
+          off: source?.watch?.(request, () => this.dock?.viewer === next && this.closeDock()),
+        })
+        if (previous) this.disposeViewer(previous.viewer)
         if (this.dock?.viewer === next) next.mount()
         if (this.dock?.viewer === next) this.deps.dockChanged?.(true)
       }
@@ -142,7 +151,11 @@ export class OverlayManager {
       this.deps.view().requestRender()
       return true
     }
-    if (this.viewer instanceof ExtensionViewer && this.viewer.kind === v.kind)
+    if (
+      this.viewer instanceof ExtensionViewer &&
+      this.viewer.uses(definition) &&
+      this.lifetimes.get(this.viewer)?.owner === owner
+    )
       this.viewer.show(v.data, v.state)
     else {
       const next = new ExtensionViewer(definition, v.data, {
@@ -158,6 +171,10 @@ export class OverlayManager {
           this.deps.view().requestRender()
         },
         ...(presenters ? { presenters } : {}),
+      })
+      this.lifetimes.set(next, {
+        owner,
+        off: source?.watch?.(request, () => this.viewer === next && this.closeView()),
       })
       this.showOverlay(next)
     }
@@ -195,13 +212,19 @@ export class OverlayManager {
     }, interval)
   }
 
+  private disposeViewer(viewer: ExtensionViewer) {
+    this.lifetimes.get(viewer)?.off?.()
+    this.lifetimes.delete(viewer)
+    viewer.dispose()
+  }
+
   private closeDock() {
     const previous = this.dock
     if (!previous) return
     this.dock = undefined
     clearInterval(this.dockTimer)
     this.dockTimer = undefined
-    previous.viewer.dispose()
+    this.disposeViewer(previous.viewer)
     this.deps.dockChanged?.(false)
     this.deps.view().requestRender()
   }
@@ -228,7 +251,7 @@ export class OverlayManager {
   private showOverlay(next: ExtensionViewer | KeyReference) {
     const previous = this.viewer
     this.viewer = next
-    if (previous instanceof ExtensionViewer) previous.dispose()
+    if (previous instanceof ExtensionViewer) this.disposeViewer(previous)
     if (this.viewer !== next) return
     if (next instanceof ExtensionViewer) next.mount()
     if (this.viewer !== next) return
@@ -255,7 +278,7 @@ export class OverlayManager {
     this.viewerTimer = undefined
     this.deps.view().closeOverlay()
     if (this.dock) this.deps.dockChanged?.(true)
-    if (previous instanceof ExtensionViewer) previous.dispose()
+    if (previous instanceof ExtensionViewer) this.disposeViewer(previous)
     this.openNextForm()
     this.waitingChanged("visibility")
   }

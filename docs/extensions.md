@@ -200,8 +200,24 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `dataDir` | Required, read-only absolute path to this extension's persistent state directory, created on first access |
 | `backgroundJobs` | Start and inspect only this extension's background jobs; built-in frontend code uses the host-only `hostBackgroundJobs()` capability |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
+| `onUnload` | Register synchronous cleanup for unload, reload and exit |
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
+
+### Unload cleanup
+
+Register `api.onUnload(() => { ... })` for resources you create yourself, such as timers, subscriptions or an `AbortController` for pending work. It returns a function that removes the hook. Each registered hook runs once when this instance unloads: on `/reload`, when a disable/removal takes effect, after a failed load, or on exit. Dock and fullscreen views close first, calling `onClose` once while registrations are still available; unload hooks then run before registrations are removed. A failing hook is reported without stopping the remaining cleanup.
+
+Cleanup is synchronous; returned promises are not awaited. Use synchronous persistence if it must finish during unload, and `api.onExit` for bounded asynchronous work needed only at exit. Exit handlers run before unload cleanup.
+
+```ts
+const pending = new AbortController()
+const timer = setInterval(refresh, 1000)
+api.onUnload(() => {
+  pending.abort()
+  clearInterval(timer)
+})
+```
 
 ### Declared extension settings
 
@@ -338,7 +354,7 @@ plain-line fallback. API version 0.1.15 adds these view capabilities.
 
 D105 adds host-owned pages without registering another view: call `view.pushPage({ title?, state?, data? })` and `view.popPage()`. Render and UI contexts expose `page: { depth, data? }` on pushed pages (depth starts at 1), and omit it at the root; the view's original data remains the first callback argument. An optional page title replaces the legacy title or adds a title row above declarative content. Each page has independent selection, expansion, tabs, inputs, focus and scroll state, including legacy `scrollKey` positions; popping restores the previous page. Esc cancels an active question first, otherwise pops a page, and closes at the root. The host key bar says `Esc back` on a page and `Esc close` at the root. Ctrl+C always closes the whole view, even during a prompt or confirmation; q keeps its existing behavior. Page transitions cancel pending questions.
 
-Optional `onOpen(data, control)` and `onClose(data)` hooks run once for each opening and closing, not on redraws or page changes. Initial state is applied before `onOpen`, which may call `setState` or `close`. Opening the same kind while it is visible replaces its data without closing/reopening; state is retained unless explicit initial state is supplied, which starts a fresh root page. Replacing it with another kind closes the previous view.
+Optional `onOpen(data, control)` and `onClose(data)` hooks run once for each opening and closing, not on redraws or page changes. Initial state is applied before `onOpen`, which may call `setState` or `close`. Opening the same kind from the same extension instance and registration while it is visible replaces its data without closing/reopening; state is retained unless explicit initial state is supplied, which starts a fresh root page. Replacing it with another kind or extension instance closes the previous view and mounts a fresh viewer. Unloading either the opening extension or the view's provider closes its dock and fullscreen views before removing registrations; retained command contexts cannot reopen views after unload.
 
 ### Side questions: ephemeral agents, docks and display blocks
 

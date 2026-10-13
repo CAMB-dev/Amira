@@ -6,6 +6,7 @@ import {
   type AnyEvent,
   API_VERSION,
   type BackgroundJobHost,
+  type CommandContext,
   type CompleteRequest,
   type CompleteResult,
   type Extension,
@@ -140,6 +141,7 @@ export class ExtensionHost {
   fileRestoration: (FileRestorationOwner & { source: string }) | undefined
   #opts: ExtensionHostOptions
   #disposers = new Map<string, (() => void)[]>()
+  #unloaders = new Map<string, () => void>()
   #identities = new Map<string, string>()
   #settingsPackageNames: () => readonly string[] = () => []
   #exitHandlers = new Set<{ source: string; run: (signal: AbortSignal) => void | Promise<void> }>()
@@ -293,14 +295,30 @@ export class ExtensionHost {
   async load(ext: Extension, source: string, name = source): Promise<boolean> {
     if (this.#disposers.has(source)) return this.#fail(source, "already loaded")
     const disposers: (() => void)[] = []
+    const lifetime = new AbortController()
+    const handlers = new Set<() => void>()
+    const unload = () => {
+      if (lifetime.signal.aborted) return
+      lifetime.abort()
+      for (const run of [...handlers]) {
+        handlers.delete(run)
+        try {
+          run()
+        } catch (err) {
+          this.#fail(source, `unload handler failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    }
     try {
-      await ext(this.#apiFor(source, disposers, name))
+      await ext(this.#apiFor(source, disposers, name, lifetime.signal, handlers))
     } catch (err) {
+      unload()
       for (const d of disposers.reverse()) d()
       this.#requestRender()
       return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
     this.#disposers.set(source, disposers)
+    this.#unloaders.set(source, unload)
     this.#identities.set(source, name)
     this.#opts.bus.emit("extension.loaded", { source }, this.#meta())
     return true
@@ -350,8 +368,11 @@ export class ExtensionHost {
   unload(source: string): boolean {
     const disposers = this.#disposers.get(source)
     if (!disposers) return false
-    for (const d of disposers.reverse()) d()
     this.#disposers.delete(source)
+    const unload = this.#unloaders.get(source)
+    this.#unloaders.delete(source)
+    unload?.()
+    for (const d of disposers.reverse()) d()
     this.#identities.delete(source)
     this.#requestRender()
     return true
@@ -372,13 +393,15 @@ export class ExtensionHost {
    */
   async runExitHandlers(timeoutMs = 4000, graceMs = 1000): Promise<void> {
     const handlers = [...this.#exitHandlers]
-    if (!handlers.length) {
-      await this.backgroundJobs.stopAll(() => true, 0)
-      return
-    }
+    this.#exitHandlers.clear()
     // Only once the extensions got what was emitted before (session.end): the bus delivers
     // asynchronously. A subscriber that is stuck holds this up for a moment at most.
     await Promise.race([this.#opts.bus.flush(), Bun.sleep(500)])
+    if (!handlers.length) {
+      this.unloadAll()
+      await this.backgroundJobs.stopAll(() => true, 0)
+      return
+    }
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<void>((resolve) => {
@@ -398,6 +421,7 @@ export class ExtensionHost {
       await Promise.race([Promise.all(runs), late])
     } finally {
       clearTimeout(timer)
+      this.unloadAll()
       // An extension may have been unloaded before it could register its own exit handler. The
       // host still owns the process trees, so force any remaining job down before returning.
       await this.backgroundJobs.stopAll(() => true, 0)
@@ -546,7 +570,13 @@ export class ExtensionHost {
     }
   }
 
-  #apiFor(source: string, disposers: (() => void)[], name: string): ExtensionAPI {
+  #apiFor(
+    source: string,
+    disposers: (() => void)[],
+    name: string,
+    lifetime: AbortSignal,
+    unloadHandlers: Set<() => void>,
+  ): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
     const home = amiraHome()
     const dataOwner = extensionDataOwner(home, name, false)
@@ -558,19 +588,23 @@ export class ExtensionHost {
     // The jobs and listeners this extension adds through the API end with it.
     const backgroundJobs = new ExtensionBackgroundJobs(this.backgroundJobs)
     track(() => backgroundJobs.dispose())
-    let active = true
-    track(() => {
-      active = false
-    })
+    const withViews = (ctx: CommandContext): CommandContext => {
+      const open = ctx.openView
+      if (!open) return ctx
+      return {
+        ...ctx,
+        openView: (view) => !lifetime.aborted && open(this.views.own(view, lifetime)),
+      }
+    }
     const terminal: TerminalApi = {
       setTitle: (title) => {
-        if (active) this.#terminal?.setTitle(title)
+        if (!lifetime.aborted) this.#terminal?.setTitle(title)
       },
       setProgress: (state) => {
-        if (active) this.#terminal?.setProgress(state)
+        if (!lifetime.aborted) this.#terminal?.setProgress(state)
       },
       bell: () => {
-        if (active) this.#terminal?.bell()
+        if (!lifetime.aborted) this.#terminal?.bell()
       },
     }
     return {
@@ -604,6 +638,11 @@ export class ExtensionHost {
           this.#meta(),
         )
       },
+      onUnload: (run) => {
+        if (lifetime.aborted) return () => {}
+        unloadHandlers.add(run)
+        return () => void unloadHandlers.delete(run)
+      },
       onExit: (run) => {
         const entry = { source, run }
         this.#exitHandlers.add(entry)
@@ -624,7 +663,13 @@ export class ExtensionHost {
       // A taken name skips only this command, not the whole extension.
       registerCommand: (command) => {
         try {
-          return track(this.commands.register(command, source, (w) => void this.#fail(source, w)))
+          return track(
+            this.commands.register(
+              { ...command, run: (args, ctx) => command.run(args, withViews(ctx)) },
+              source,
+              (w) => void this.#fail(source, w),
+            ),
+          )
         } catch (err) {
           this.#fail(source, err instanceof Error ? err.message : String(err))
           return () => {}
@@ -633,19 +678,26 @@ export class ExtensionHost {
       // Likewise a taken skill name skips only that skill.
       registerSkill: (skill) => {
         try {
-          return track(this.skills.register(skill, source))
+          return track(
+            this.skills.register({ ...skill, run: (args, ctx) => skill.run(args, withViews(ctx)) }, source),
+          )
         } catch (err) {
           this.#fail(source, err instanceof Error ? err.message : String(err))
           return () => {}
         }
       },
       registerTheme: (theme) => {
-        if (!active) return () => {}
+        if (lifetime.aborted) return () => {}
         return track(this.themes.register(theme, "extension", source))
       },
       registerInputHandler: (handler) => {
         try {
-          return track(this.inputs.register(handler, source))
+          return track(
+            this.inputs.register(
+              { ...handler, run: (text, ctx) => handler.run(text, withViews(ctx)) },
+              source,
+            ),
+          )
         } catch (err) {
           this.#fail(source, err instanceof Error ? err.message : String(err))
           return () => {}
@@ -685,7 +737,7 @@ export class ExtensionHost {
       intercept: (point, handler, options) => track(interceptors.add(point, handler, options, source)),
       // Each extension gets its own frozen copy, so none can change what another reads.
       settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}, (declaration) => {
-        if (!active) throw new Error("Cannot declare settings after extension unload")
+        if (lifetime.aborted) throw new Error("Cannot declare settings after extension unload")
         const registered = this.extensionSettings.register(name, source, declaration)
         track(() => {
           registered.dispose()
@@ -724,7 +776,8 @@ export class ExtensionHost {
       // A kind that cannot be taken skips only that view.
       registerView: (view) => {
         try {
-          return track(this.views.register(view))
+          if (lifetime.aborted) return () => {}
+          return track(this.views.register(view, lifetime))
         } catch (err) {
           this.#fail(source, err instanceof Error ? err.message : String(err))
           return () => {}

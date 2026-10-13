@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import type {
   CommandContext,
   EventMap,
+  ExtensionAPI,
   ExtensionView,
   PrintOptions,
   ShimmerColors,
@@ -180,6 +181,32 @@ test("the public API exports stay stable", async () => {
     "validateExtensionSetting",
     "withSection",
   ])
+})
+
+test("the public unload hook contract is additive without a version bump", () => {
+  const hooks = new Set<() => void>()
+  const lifecycle: Pick<ExtensionAPI, "onUnload"> = {
+    onUnload: (hook) => {
+      hooks.add(hook)
+      return () => void hooks.delete(hook)
+    },
+  }
+  const off = lifecycle.onUnload(() => {})
+  expect({
+    methods: Object.keys(lifecycle),
+    registered: hooks.size,
+    disposer: typeof off,
+  }).toMatchInlineSnapshot(`
+    {
+      "disposer": "function",
+      "methods": [
+        "onUnload",
+      ],
+      "registered": 1,
+    }
+  `)
+  off()
+  expect(hooks.size).toBe(0)
 })
 
 test("the public side-question API contract is additive without a version bump", () => {

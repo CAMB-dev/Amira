@@ -213,7 +213,10 @@ async function run(argv: string[]): Promise<number> {
         await commands.flushChoices()
         await closeTrace(last.bus, session.traceRecorder, 125)
       })
-      .finally(() => process.exit(code))
+      .finally(() => {
+        host.unloadAll()
+        process.exit(code)
+      })
   }
   try {
     if (args.rpc) {
