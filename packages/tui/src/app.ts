@@ -230,6 +230,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     keys,
     theme,
     presenters,
+    images,
+    previewTheme: () => renders.theme,
     mode,
     env,
     reaches,

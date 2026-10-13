@@ -131,6 +131,7 @@ test("the public API exports stay stable", async () => {
     "diffToolLines",
     "draftFromValues",
     "emptyUsage",
+    "extensionSettingsDefaults",
     "fallbackTitle",
     "fetchPublic",
     "fieldDefault",
@@ -176,6 +177,7 @@ test("the public API exports stay stable", async () => {
     "toFormSchema",
     "tokenWeight",
     "toolResultText",
+    "validateExtensionSetting",
     "withSection",
   ])
 })

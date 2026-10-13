@@ -95,7 +95,7 @@ test("the example extension in docs/extensions.md loads, runs and typechecks", a
       cwd: dir,
       settings: { extensions: { "hello-extension": { message: "Configured greeting." } } },
     })
-    expect(await host.loadFile(entry)).toBe(true)
+    expect(await host.loadFile(entry, { name: "hello-extension" })).toBe(true)
     expect(host.status.snapshot()).toHaveLength(0)
     const printed: string[] = []
     const ctx = { print: (s: string) => void printed.push(s) } as CommandContext

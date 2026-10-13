@@ -34,6 +34,7 @@ test("the public theme exports are part of the stable package surface", async ()
     "chooseImageSupport",
     "closeStyles",
     "colorSupported",
+    "colourSwatch",
     "compose",
     "createTheme",
     "cyan",

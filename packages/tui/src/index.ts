@@ -1,4 +1,11 @@
 export { type InteractiveOptions, runInteractive } from "./app.ts"
+export {
+  type ExtensionSettingsRequest,
+  ExtensionSettingsView,
+  type ExtensionSettingsViewOptions,
+  type SettingsPageBackend,
+  uiExtensionSettingsBackend,
+} from "./extension-settings-view.ts"
 export { ExtensionViewer, type ExtensionViewerOptions, type ViewSource } from "./extension-view.ts"
 export {
   type FormBackend,

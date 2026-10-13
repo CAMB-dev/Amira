@@ -234,6 +234,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     ai,
     settings: extensionSettings(settings),
     settingsLayers: opts.settingsLayers,
+    reloadSettings: opts.reloadSettings
+      ? () => {
+          const loaded = opts.reloadSettings!()
+          return { ...loaded, settings: extensionSettings(withPackageSkills(loaded.settings, packages)) }
+        }
+      : undefined,
     cwd: opts.cwd,
   })
   const startupEvents: AnyEvent[] = []
@@ -442,12 +448,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       for (const error of reloaded?.warnings ?? []) {
         bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
       }
-      host.unloadAll()
-      reloadThemes()
       host.setSettings(
         extensionSettings(withPackageSkills(reloaded?.settings ?? opts.settings ?? {}, packages)),
         reloaded?.layers ?? opts.settingsLayers,
       )
+      host.unloadAll()
+      reloadThemes()
       host.replayOnLoad(reloadReplay(current))
       let failed: string[]
       try {

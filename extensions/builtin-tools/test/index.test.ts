@@ -38,7 +38,12 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     provideService: () => () => {},
     useService: () => undefined,
     requestRender: () => {},
-    settings: { layers: () => [] },
+    settings: {
+      layers: () => [],
+      declare: () => {
+        throw new Error("not used")
+      },
+    },
     complete: () => Promise.reject(new Error("not used")),
     session: () => undefined,
     backgroundJobs: hostBackgroundJobs(),
@@ -56,6 +61,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
       reviewDiff: async () => undefined,
       ask: async () => undefined,
       form: async () => undefined,
+      extensionSettings: async () => undefined,
     },
   }
   await extension(api)

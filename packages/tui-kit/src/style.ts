@@ -65,6 +65,16 @@ export const fg256 = (n: number): StyleFn => sgr(`38;5;${n}`, 39)
 export const bg256 = (n: number): StyleFn => sgr(`48;5;${n}`, 49)
 export const rgb = (r: number, g: number, b: number): StyleFn => sgr(`38;2;${r};${g};${b}`, 39)
 
+/** A swatch of a user-entered colour, not an interface colour token. Invalid input stays plain. */
+export function colourSwatch(hex: string, text: string): string {
+  if (!colorOn || /^#[\da-f]{6}$/i.exec(hex)?.[0] !== hex) return text
+  return rgb(
+    Number.parseInt(hex.slice(1, 3), 16),
+    Number.parseInt(hex.slice(3, 5), 16),
+    Number.parseInt(hex.slice(5, 7), 16),
+  )(text)
+}
+
 export function compose(...fns: StyleFn[]): StyleFn {
   return (text) => fns.reduceRight((acc, fn) => fn(acc), text)
 }

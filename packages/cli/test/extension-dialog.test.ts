@@ -90,7 +90,8 @@ for (const kind of ["relative file", "absolute file", "package", "scoped package
           data: expect.objectContaining({ source, error: expect.stringContaining("fixture diagnostic") }),
         }),
       )
-      const dialog = new Dialog(request!, (answer) => session!.host.ui.respond(request!.requestId, answer))
+      if (request?.kind !== "confirm") throw new Error("expected confirmation request")
+      const dialog = new Dialog(request, (answer) => session!.host.ui.respond(request.requestId, answer))
       expect(dialog.render(120, plain)[0]).toBe(`┃ ? Continue? (${label})`)
 
       // A display name must never become the cancellation identity.
