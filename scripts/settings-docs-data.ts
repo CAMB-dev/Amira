@@ -830,9 +830,9 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.title": {
     default: documentedDefault("tui.title"),
-    en: "Set the title to `Amira · session title`, falling back to the cwd name when untitled. Markdown markers are stripped. `●` marks running work; `?` remains while a dialog is unanswered, even when focused; a background-completion marker clears on return. Waiting-state transitions and final status update immediately; other running-title updates occur at most once per second.",
-    zh: "标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；对话框未回答时，即使终端有焦点也保留 `?`；后台轮次结束的标记在返回终端后清除。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。",
-    ja: "タイトルを `Amira · session title` に設定し、タイトルがなければ cwd の名前を使います。Markdown の記号は除去します。`●` は実行中を示し、ダイアログが未回答の間は、フォーカスがあっても `?` が残ります。バックグラウンドでの完了を示す記号は、端末に戻ると消えます。待機状態の切り替えと最終状態は即座に更新し、それ以外の実行中タイトルの更新は最大で 1 秒に 1 回です。",
+    en: "Set the title to `Amira · session title`, falling back to the cwd name when untitled. Markdown markers are stripped. `●` marks running work; `✓` marks a turn finished while you were away and clears when the terminal regains focus; `◆` marks a dialog waiting for your answer or confirmation, remains even when focused, and takes priority over `✓`. No marker means idle/seen. Waiting-state transitions and final status update immediately; other running-title updates occur at most once per second.",
+    zh: "标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；`✓` 表示终端失去焦点期间轮次已结束，终端重新获得焦点后清除；`◆` 表示对话框等待回答或确认，即使终端有焦点也保留，且优先于 `✓`。无标记表示空闲或已查看。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。",
+    ja: "タイトルを `Amira · session title` に設定し、タイトルがなければ cwd の名前を使います。Markdown の記号は除去します。`●` は実行中を示します。`✓` は端末から離れている間にターンが完了したことを示し、端末にフォーカスが戻ると消えます。`◆` はダイアログが回答や確認を待っていることを示し、フォーカスがあっても残り、`✓` より優先されます。記号がなければアイドルまたは確認済みです。待機状態の切り替えと最終状態は即座に更新し、それ以外の実行中タイトルの更新は最大で 1 秒に 1 回です。",
   },
   "tui.progress": {
     default: documentedDefault("tui.progress"),

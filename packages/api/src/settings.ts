@@ -285,7 +285,11 @@ export interface TuiSettings {
   bell?: boolean
   /** Desktop alerts in supported terminals, independently of the bell. See DEFAULT_TUI_NOTIFY. */
   notify?: "auto" | "off"
-  /** Session title or cwd name: ● while running, ? while waiting; running updates at most once per second. See DEFAULT_TUI_TITLE. */
+  /**
+   * Session title or cwd name: ● while running; ✓ for a turn finished while unfocused, cleared
+   * on focus return; ◆ for an unanswered dialog, even when focused, taking priority over ✓.
+   * No marker when idle/seen. Running updates at most once per second. See DEFAULT_TUI_TITLE.
+   */
   title?: boolean
   /** Show work on the tab and taskbar progress indicator (OSC 9;4). See DEFAULT_TUI_PROGRESS. */
   progress?: boolean
