@@ -1,5 +1,6 @@
 import type {
   CommandOutputLevel,
+  FrontendView,
   ToolDetailLevel,
   ToolLine,
   UiControl,
@@ -54,6 +55,10 @@ import { renderViewLines, viewTitle } from "./view-lines.ts"
 /** Where the TUI finds the view kinds extensions registered. */
 export interface ViewSource {
   get(kind: string): ViewDefinition | undefined
+  /** Host lifecycle support; simple standalone view sources may omit it. */
+  owner?(view: FrontendView): object | undefined
+  canOpen?(view: FrontendView): boolean
+  watch?(view: FrontendView, close: () => void): () => void
 }
 
 interface ViewPage {
@@ -185,6 +190,11 @@ export class ExtensionViewer implements Component {
     this.#keys = opts.keys ?? defaultKeybindings()
     this.#now = opts.now ?? Date.now
     this.#pages = [this.#newPage({ state: opts.state })]
+  }
+
+  /** Reuse is valid only while the same registration still supplies this view. */
+  uses(view: ViewDefinition): boolean {
+    return this.#view === view
   }
 
   /** Called after the frontend installs this overlay, before rendering, so onOpen can close it. */

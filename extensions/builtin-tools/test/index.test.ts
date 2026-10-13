@@ -17,6 +17,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     reportError: () => {},
     notify: () => {},
     onExit: () => () => {},
+    onUnload: () => () => {},
     registerTool: (t) => {
       tools.push(t)
       return () => {}
