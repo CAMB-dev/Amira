@@ -1,0 +1,48 @@
+{
+  "name": "long-output",
+  "description": "Long streamed Markdown with headings, lists, Unicode, tables, code blocks and long unbroken text; large canned shell output for folding and searching.",
+  "prompt": "Show a long fixture report so I can exercise scrolling, folding and search.",
+  "routes": {
+    "main": [
+      {
+        "text": "I’ll show the canned command output first, followed by a longer streamed report.\n",
+        "delayMs": 20,
+        "toolCalls": [
+          {
+            "id": "long-output-shell",
+            "name": "bash",
+            "args": { "command": "bun test --reporter=verbose" },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "fixture run: no command executed\nPASS 01 greeting\nPASS 02 empty name\nPASS 03 Unicode name\nPASS 04 whitespace\nPASS 05 punctuation\nPASS 06 formatting\nPASS 07 long line\nPASS 08 nested list\nPASS 09 code fence\nPASS 10 table\nPASS 11 heading\nPASS 12 block quote\nPASS 13 inline code\nPASS 14 bold text\nPASS 15 italic text\nPASS 16 link label\nPASS 17 progress\nPASS 18 scroll anchor\nPASS 19 search match\nPASS 20 output fold\nPASS 21 tool expansion\nPASS 22 narrow terminal\nPASS 23 wide terminal\nPASS 24 screen resize\nPASS 25 session resume\nPASS 26 input editing\nPASS 27 multiline input\nPASS 28 prompt history\nPASS 29 theme selection\nPASS 30 status bar\nPASS 31 transcript export\nPASS 32 final summary\n\n32 pass\n0 fail\n\nExit code: 0"
+                }
+              ],
+              "details": {
+                "exitCode": 0,
+                "timedOut": false,
+                "aborted": false,
+                "settled": true,
+                "shell": "bash",
+                "shellKind": "bash",
+                "durationMs": 425,
+                "outputLines": 37
+              }
+            }
+          }
+        ]
+      },
+      {
+        "text": "## Fixture report — scrolling and search\n\nThis paragraph has **bold text**, *italic text*, and `inline code`. Search for **scroll-anchor** to move between repeated sections. Unicode names remain intact: Ada, Zoë, 李明, and مرحبا.\n\n### Output details\n\n1. Read the summary.\n2. Expand the canned shell result.\n   - Check a long line at a narrow terminal width.\n   - Collapse it again without losing your place.\n3. Search for the next scroll-anchor.\n\n```ts\nconst message = greeting('Ada')\nconsole.log(message)\n// scroll-anchor: a stable search target\n```\n\n| Check | Status |\n| --- | --- |\n| File reads | Canned |\n| Command output | Canned |\n| Provider | Local SSE |\n\n> The displayed command never ran. This is a report fixture, not a verification result.\n\nLong identifier: ui_walk_scroll_anchor_abcdefghijklmnopqrstuvwxyz_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789\n\n---\n\n",
+        "repeat": 18,
+        "chunkSize": 80,
+        "delayMs": 12
+      },
+      {
+        "text": "The long-output fixture is complete. Search, scroll, or resize the terminal to inspect how the transcript behaves.\n",
+        "delayMs": 25
+      }
+    ]
+  }
+}
