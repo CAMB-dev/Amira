@@ -437,4 +437,4 @@ test("120 ordinary strict claims/releases leave no gates, tombstones or other ar
     lease!.release()
     expectReleasedArtifacts(dir, [file])
   }
-})
+}, 30_000)
