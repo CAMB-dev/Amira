@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { stripAnsi, visibleWidth } from "@amira/tui-kit"
+import { type RenderContext, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { Dialog } from "../src/dialog.ts"
 import { contentGeometry, insetLines, marginView } from "../src/margins.ts"
@@ -222,3 +222,24 @@ test("a margin-wrapped component gets reduced columns and row context, not merel
   expect(lines[1]).toBe(`   ${"x".repeat(64)}`)
   expect(lines.at(-1)).toBe("")
 })
+
+for (const columns of [60, 80]) {
+  test(`queued semantic commits retain dynamic margins after starting at ${columns} columns`, () => {
+    let redraw: Parameters<NonNullable<RenderContext["commit"]>>[1]
+    const component = {
+      render(width: number, ctx: RenderContext) {
+        const draw = (width: number) => [`semantic head at ${width} columns`]
+        ctx.commit?.(draw(width), draw)
+        return []
+      },
+    }
+    marginView(component, { margin: 3 }, false).render(columns, {
+      ...plain,
+      commit: (_lines, draw) => {
+        redraw = draw
+      },
+    })
+    expect(redraw?.(80, plain)).toEqual(["   semantic head at 74 columns"])
+    expect(redraw?.(60, plain)).toEqual(["semantic head at 60 columns"])
+  })
+}

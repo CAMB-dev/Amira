@@ -23,12 +23,14 @@ import {
 import { Agent, type TurnResult } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions } from "./context.ts"
+import { EventBus } from "./event-bus.ts"
 import { instructionsSection, loadInstructions } from "./instructions.ts"
 import { addNonInteractive, defaultSections, type PromptSection, setSection } from "./prompt.ts"
 import { SessionStore } from "./session-store.ts"
 import { addUsage, BudgetLedger, overBudget, usageTokens } from "./subagents/budget.ts"
 import { Child, Group, type SpawnedSubagent } from "./subagents/child.ts"
 import { ParentConsultant, parseParentAnswers } from "./subagents/consult-parent.ts"
+import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
 import { followChild, metaOf, parentMeta } from "./subagents/events.ts"
 import { finalText, forkHistory } from "./subagents/fork.ts"
 import { Admission } from "./subagents/scheduler.ts"
@@ -78,6 +80,7 @@ interface SpawnSetup {
   cwd: string
   context: SpawnContext
   persistent: boolean
+  ephemeral: boolean
   groups: Group[]
   base: PromptSection[]
   extra: NonNullable<SpawnOptions["extraTools"]>
@@ -119,7 +122,18 @@ export class AgentTree {
     this.#ledger = new BudgetLedger(opts.budget)
     this.#consultant = new ParentConsultant({
       ai: opts.ai,
-      recordUsage: (parent, usage) => this.recordUsage(parent, usage),
+      callableTools: (requester) => this.#live.get(requester)?.agent.callableTools,
+      acquire: (requester, signal) => {
+        const child = this.#live.get(requester)
+        return child ? this.#admission.acquireConsultation(child, signal) : Promise.resolve(() => {})
+      },
+      usageRecorder: (parent, requester) => {
+        const requestingChild = this.#live.get(requester)
+        const child = requestingChild?.ephemeral ? requestingChild : this.#live.get(parent.sessionId)
+        const owner = requestingChild?.ephemeral ? requestingChild.agent : parent
+        const model = { provider: parent.model.provider, model: parent.model.id }
+        return consultationUsageRecorder((usage) => this.#recordUsage(owner, usage, model, child))
+      },
     })
     this.resultRetries = Math.max(0, opts.resultRetries ?? 2)
   }
@@ -131,7 +145,7 @@ export class AgentTree {
 
   /** Children that are queued, running or idle, oldest first. */
   get children(): ChildSession[] {
-    return [...this.#live.values()]
+    return [...this.#live.values()].filter((c) => !c.ephemeral)
   }
 
   /** Ids of the sub-agents `parentSessionId` started in this process, finished ones too, in spawn order. */
@@ -184,12 +198,13 @@ export class AgentTree {
 
   /** The tree's spawn groups, active and ended, oldest first. */
   groups(): SpawnGroupInfo[] {
-    return [...this.#groups.values()].map((g) => g.info())
+    return [...this.#groups.values()].filter((g) => !g.ephemeral).map((g) => g.info())
   }
 
   /** A spawn group by id. */
   group(id: string): SpawnGroup | undefined {
-    return this.#groups.get(id)
+    const group = this.#groups.get(id)
+    return group?.ephemeral ? undefined : group
   }
 
   /**
@@ -209,7 +224,8 @@ export class AgentTree {
     const budget = this.#carve(opts.budget)
     if (budget) limits.budget = budget
     const name = opts.name.replace(/\s+/g, " ").trim() || "group"
-    const group = new Group(name, parent, outer, limits, opts.compact === true, this, defaults)
+    const ephemeral = this.#live.get(parent.sessionId)?.ephemeral === true
+    const group = new Group(name, parent, outer, limits, opts.compact === true, this, defaults, ephemeral)
     this.#groups.set(group.id, group)
     parent.bus.emit("group.start", { group: group.info() }, metaOf(parent))
     return group
@@ -238,7 +254,8 @@ export class AgentTree {
         `sub-agents can nest at most ${this.maxDepth} level${this.maxDepth === 1 ? "" : "s"} deep`,
       )
     }
-    if (opts.schema && opts.persistent) {
+    const ephemeral = opts.ephemeral === true || this.#live.get(parent.sessionId)?.ephemeral === true
+    if (opts.schema && (opts.persistent || ephemeral)) {
       throw new SpawnError("a persistent sub-agent cannot have a result schema")
     }
     // A member's own children count against its group.
@@ -263,16 +280,16 @@ export class AgentTree {
     }
     const cwd = opts.cwd ? path.resolve(parent.cwd, opts.cwd) : parent.cwd
     const context = opts.context ?? "fresh"
-    const persistent = opts.persistent === true
+    const persistent = opts.persistent === true || ephemeral
     let base = context === "fork" ? [...parent.sections] : (this.#opts.sections ?? standardSections)(cwd)
     if (parent.nonInteractive) base = addNonInteractive(base)
     const extra = opts.extraTools ?? []
     if (extra.some((t) => t.name === RETURN_RESULT_TOOL)) {
       throw new SpawnError(`an extra tool cannot be named ${RETURN_RESULT_TOOL}`)
     }
-    // A sub-agent never gets a tool only top-level sessions may have (D81), not even as its own.
+    // Private children preserve declarations, but mainOnly calls are still refused by Agent.
     const mainOnly = extra.find((t) => t.mainOnly)
-    if (mainOnly) throw new SpawnError(`${mainOnly.name} is for top-level sessions only`)
+    if (mainOnly && !ephemeral) throw new SpawnError(`${mainOnly.name} is for top-level sessions only`)
     const allow = opts.tools ? new Set(opts.tools) : undefined
     const deny = new Set(opts.excludeTools ?? [])
     // A parent's own tools (its return_result, its extra tools) are its own: never passed down.
@@ -282,22 +299,43 @@ export class AgentTree {
       ? { schema: opts.schema, wrapped: !isObjectSchema(opts.schema), strikes: 0 }
       : undefined
     if (spec) base = setSection(base, "result", resultInstructions())
-    const store = parent.session
-      ? SessionStore.create({
-          cwd,
-          parent: parent.sessionId,
-          dir: path.join(path.dirname(parent.session.file), "subagents"),
-        })
-      : undefined
+    const store =
+      parent.session && !ephemeral
+        ? SessionStore.create({
+            cwd,
+            parent: parent.sessionId,
+            dir: path.join(path.dirname(parent.session.file), "subagents"),
+          })
+        : undefined
     const turnLimits = [opts.maxTurns, ...groups.map((g) => g.limits.maxTurnsPerAgent)].filter(
       (n): n is number => n !== undefined,
     )
     const maxTurns = persistent && turnLimits.length ? Math.max(1, Math.min(...turnLimits)) : undefined
-    return { depth, model, cwd, context, persistent, groups, base, extra, allow, deny, spec, store, maxTurns }
+    return {
+      depth,
+      model,
+      cwd,
+      context,
+      persistent,
+      ephemeral,
+      groups,
+      base,
+      extra,
+      allow,
+      deny,
+      spec,
+      store,
+      maxTurns,
+    }
   }
 
   #createAgent(parent: Agent, opts: SpawnOptions, setup: SpawnSetup, getChild: () => Child): Agent {
-    const { depth, model, cwd, context, persistent, base, extra, allow, deny, spec, store } = setup
+    const { depth, model, cwd, context, persistent, ephemeral, base, extra, allow, deny, spec, store } = setup
+    const callable = opts.callableTools ? new Set(opts.callableTools) : undefined
+    const inherited = parent.callableTools
+    const callableTools = inherited
+      ? new Set([...inherited].filter((name) => callable?.has(name) ?? true))
+      : callable
     return new Agent({
       ai: this.#opts.ai,
       model,
@@ -317,12 +355,15 @@ export class AgentTree {
       ...(context === "fork" ? { views: parent.contextViews } : {}),
       // A child may be pointed at its parent's artifacts (in its task, or in a forked history).
       outputsParent: parent.artifacts,
-      bus: parent.bus,
+      ...(ephemeral ? { outputsReadOnly: true } : {}),
+      bus: ephemeral && !this.#live.get(parent.sessionId)?.ephemeral ? new EventBus() : parent.bus,
+      ...(callableTools ? { callableTools } : {}),
       interceptors: parent.interceptors,
       tools: ToolRegistry.view(
         parent.tools,
-        // Tools only top-level sessions get (ToolDefinition.mainOnly) never reach a child.
-        (n) => (allow?.has(n) ?? true) && !deny.has(n) && parent.tools.get(n)?.mainOnly !== true,
+        // A private child's declarations stay close to its parent's; execution is gated separately.
+        (n) =>
+          (allow?.has(n) ?? true) && !deny.has(n) && (ephemeral || parent.tools.get(n)?.mainOnly !== true),
         [...extra, ...(spec ? [returnResultTool(spec, this.resultRetries)] : [])],
       ),
       ...(store ? { session: store } : {}),
@@ -356,14 +397,16 @@ export class AgentTree {
   }
 
   #registerSpawn(parent: Agent, opts: SpawnOptions, setup: SpawnSetup, agent: Agent): Child {
-    const { depth, cwd, context, persistent, groups, spec, maxTurns } = setup
+    const { depth, cwd, context, persistent, ephemeral, groups, spec, maxTurns } = setup
     const given = opts.title?.replace(/\s+/g, " ").trim()
     const title = !given
       ? fallbackTitle(opts.prompt)
       : given.length > MAX_TITLE_CHARS
         ? `${given.slice(0, MAX_TITLE_CHARS - 1)}…`
         : given
-    parent.recordSubagent(agent.sessionId, opts.role, title)
+    if (!ephemeral) parent.recordSubagent(agent.sessionId, opts.role, title)
+    // Preserve the inherited deferred declarations and their load order before the first call.
+    if (context === "fork" || ephemeral) agent.loadTools(parent.loadedTools)
     const child = new Child(
       agent,
       opts.role,
@@ -374,19 +417,27 @@ export class AgentTree {
       parentMeta(parent),
       this,
       persistent,
+      ephemeral,
+      ephemeral ? (parent.session ?? this.#live.get(parent.sessionId)?.usageStore) : undefined,
+      ephemeral ? (this.#live.get(parent.sessionId)?.usageOwner ?? parent) : undefined,
       maxTurns,
       groups,
     )
     child.result$ = spec
+    agent.execution.onTools = {
+      waiting: () => this.#admission.beginTools(child),
+      returned: () => this.#admission.endTools(child),
+      ready: (signal) => this.#admission.reenter(child, signal),
+    }
     this.#live.set(child.id, child)
-    this.#spawned.set(child.id, child)
+    if (!ephemeral) this.#spawned.set(child.id, child)
     for (const g of groups) {
       g.total++
       g.live.add(child)
     }
     this.#admission.enqueue(child, parent.sessionId, () => void this.#run(child))
     const queued = !child.admitted
-    parent.bus.emit(
+    agent.bus.emit(
       "subagent.start",
       {
         childSessionId: child.id,
@@ -409,17 +460,30 @@ export class AgentTree {
   }
 
   /** Adds a reply's usage to the tree and its groups, reports it, and stops what went over budget. */
-  recordUsage(agent: Agent, usage: Usage): void {
+  recordUsage(agent: Agent, usage: Usage, model?: Child["model"]): void {
+    this.#recordUsage(agent, usage, model, this.#live.get(agent.sessionId))
+  }
+
+  /** A consultation retains its accounting child until late terminal usage arrives. */
+  #recordUsage(
+    agent: Agent,
+    usage: Usage,
+    model: Child["model"] | undefined,
+    child: Child | undefined,
+  ): void {
     this.#ledger.add(usage)
-    const child = this.#live.get(agent.sessionId)
-    if (child) addUsage(child.usage, usage)
+    if (child) {
+      addUsage(child.usage, usage)
+      child.chargeUsage(usage, model)
+    }
     const tokens = usageTokens(this.#ledger.usage)
     const costUsd = this.#ledger.usage.cost
     const limit = this.budget
-    agent.bus.emit(
+    const owner = child?.usageOwner ?? agent
+    owner.bus.emit(
       "budget.update",
       { tokens, ...(costUsd !== undefined ? { costUsd } : {}), ...(limit ? { limit } : {}) },
-      metaOf(agent),
+      metaOf(owner),
     )
     for (const g of child?.groups ?? []) {
       addUsage(g.usage, usage)
@@ -434,10 +498,10 @@ export class AgentTree {
     const over = overBudget(this.#ledger.usage, limit)
     if (!over) return
     this.#ledger.markExceeded(over)
-    agent.bus.emit(
+    owner.bus.emit(
       "budget.exceeded",
       { tokens, ...(costUsd !== undefined ? { costUsd } : {}), limit },
-      metaOf(agent),
+      metaOf(owner),
     )
     this.abortAll(`the agent tree's budget ran out (${over})`)
   }
@@ -472,6 +536,7 @@ export class AgentTree {
     const info = group.info()
     group.parent.bus.emit("group.end", { group: info }, metaOf(group.parent))
     group.settle(info)
+    if (group.ephemeral) this.#groups.delete(group.id)
   }
 
   /** Aborts one live child by id; false when it is not live. */
@@ -737,13 +802,15 @@ export class AgentTree {
     // state; no job owned by the child may survive the end of its session.
     child.ended = result
     // Keep what it did, not the session: one with a file is read back from it when asked for.
-    const done = this.subagent(child.id) as SpawnedSubagent
-    const stored = child.agent.session?.file
-    const file = stored && existsSync(stored) ? stored : undefined
-    this.#spawned.set(child.id, {
-      info: done.info,
-      ...(file ? { file } : { messages: [...child.agent.messages] }),
-    })
+    if (!child.ephemeral) {
+      const done = this.subagent(child.id) as SpawnedSubagent
+      const stored = child.agent.session?.file
+      const file = stored && existsSync(stored) ? stored : undefined
+      this.#spawned.set(child.id, {
+        info: done.info,
+        ...(file ? { file } : { messages: [...child.agent.messages] }),
+      })
+    }
     for (const g of child.groups) g.live.delete(child)
     this.#groupsChanged(child)
     child.settle(result)

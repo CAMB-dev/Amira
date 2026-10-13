@@ -64,6 +64,8 @@ interface ViewPage {
 }
 
 export interface ExtensionViewerOptions {
+  /** A dock is a read-only viewport; the main composer keeps keyboard focus. */
+  placement?: "fullscreen" | "dock"
   /** Host navigation and scrolling; extension-defined shortcuts remain the extension's. */
   keys?: Keybindings
   /** Initial root-page widget state, applied before lifecycle hooks and the first render. */
@@ -278,6 +280,34 @@ export class ExtensionViewer implements Component {
     return state
   }
 
+  /** Dock navigation bypasses widgets, prompts and extension shortcuts entirely. */
+  handleDockInput(e: InputEvent): boolean {
+    if (this.#disposed) return false
+    if (this.#ui) {
+      this.#uiDirty = true
+      const handled =
+        e.type === "mouse"
+          ? !!this.#call("ui scroll", () => this.#ui!.handleInput({ ...e, y: e.y - this.#uiOffset }, false))
+          : !!this.#call("ui scroll", () => this.#ui!.handleScroll(e))
+      if (handled) this.#opts.requestRender?.()
+      return handled
+    }
+    const scroll = this.scroll
+    if (e.type === "mouse") {
+      if (e.action !== "wheel" || (e.button !== "up" && e.button !== "down")) return false
+      scroll.scrollBy(e.button === "up" ? -3 : 3)
+    } else {
+      const action = viewScrollAction(this.#keys, e)
+      const page = Math.max(1, scroll.height - 1)
+      if (action === "page-up") scroll.scrollBy(-page)
+      else if (action === "page-down") scroll.scrollBy(page)
+      else if (action === "bottom") scroll.scrollToEnd()
+      else return false
+    }
+    this.#opts.requestRender?.()
+    return true
+  }
+
   handleInput(e: InputEvent): boolean {
     if (this.#disposed) return false
     if (this.#keys.is(e, "view.close") && !isTypingKey(e)) {
@@ -391,6 +421,7 @@ export class ExtensionViewer implements Component {
       },
       print: (text, level) => this.#opts.onPrint?.(text, level),
       prompt: (title, opts) => {
+        if (this.#opts.placement === "dock") return Promise.resolve(undefined)
         this.#answer(undefined)
         this.#confirmed(false)
         const input = new LineInput()
@@ -401,6 +432,7 @@ export class ExtensionViewer implements Component {
         })
       },
       confirm: (question, opts) => {
+        if (this.#opts.placement === "dock") return Promise.resolve(false)
         this.#answer(undefined)
         this.#confirmed(false)
         const text = `${oneLine(question)} y ${oneLine(opts?.yes ?? "yes")} ${glyphs.separator} any other key ${oneLine(opts?.no ?? "cancels")}`
@@ -472,6 +504,8 @@ export class ExtensionViewer implements Component {
     head.push(...this.#renderLines(extra, width, theme))
     for (const t of this.#opts.waiting?.() ?? []) head.push(waitingLine(theme, t, width))
     head.push(theme.muted(glyphs.rule.repeat(width)))
+    // A bounded dock keeps a body row and its host controls even with a tall header.
+    if (this.#opts.placement === "dock") head.splice(Math.max(0, ctx.rows - 2))
     const state = this.#scrollState()
     const scroll = state.scroll
     scroll.height = Math.max(1, ctx.rows - head.length - this.#footerHeight)
@@ -513,7 +547,7 @@ export class ExtensionViewer implements Component {
           height,
           ctx.theme,
           (lines, w) => this.#renderLines(lines, w, ctx.theme),
-          !this.#prompt && !this.#confirm,
+          this.#opts.placement !== "dock" && !this.#prompt && !this.#confirm,
         )
         if (!runtime.reconciled) return frame
       }
@@ -669,7 +703,9 @@ export class ExtensionViewer implements Component {
   }
 
   get #footerHeight(): number {
-    return this.#prompt || this.#confirm || this.#view.hostKeys !== "none" ? 1 : 0
+    return this.#opts.placement === "dock" || this.#prompt || this.#confirm || this.#view.hostKeys !== "none"
+      ? 1
+      : 0
   }
 
   #footer(theme: Theme, width: number): string[] {
@@ -705,6 +741,23 @@ export class ExtensionViewer implements Component {
   }
 
   #keyBar(theme: Theme, width: number): string {
+    if (this.#opts.placement === "dock") {
+      const follow = this.#keys.label("scroll.bottom")
+      return theme.muted(
+        fitHint(
+          [
+            !this.#ui && { text: scrollPosition(this.scroll), priority: 2 },
+            {
+              text: `${[this.#keys.label("scroll.page-up"), this.#keys.label("scroll.page-down")].filter(Boolean).join("/")} scroll dock`,
+              priority: 3,
+            },
+            follow && { text: `${follow} follow`, priority: 3 },
+            { text: "Esc close dock", priority: 5 },
+          ],
+          width,
+        ),
+      )
+    }
     if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, glyphs.more))
     const asking = this.#prompt
     if (asking) {

@@ -117,6 +117,16 @@ export class TurnRunner {
       /** A request over the window first gets one aging round (A3), once a turn. */
       let overflowAged = false
       while (true) {
+        if (abort.signal.aborted) {
+          result = { reason: "aborted", steps }
+          break
+        }
+        if (steps >= this.#deps.maxSteps) {
+          result = { reason: "error", steps, error: `stopped after ${this.#deps.maxSteps} model calls` }
+          break
+        }
+        const ready = this.#deps.execution.beforeModel(abort.signal)
+        if (ready) await ready
         this.#deps.compactor.noteWindowGuess(turn)
         // Planned synchronously: a turn with nothing to age goes on without waiting.
         const aging = this.#deps.contextManager.age(turn)
@@ -126,10 +136,6 @@ export class TurnRunner {
         }
         if (abort.signal.aborted) {
           result = { reason: "aborted", steps }
-          break
-        }
-        if (steps >= this.#deps.maxSteps) {
-          result = { reason: "error", steps, error: `stopped after ${this.#deps.maxSteps} model calls` }
           break
         }
         steps++
@@ -172,11 +178,13 @@ export class TurnRunner {
           result = { reason: "done", steps }
           break
         }
-        await this.#deps.toolRunner.run(turn, calls, (results) => {
-          const views = this.#deps.contextManager.dedupe(results)
-          this.#deps.history.push(...results)
-          this.#deps.history.storeViews(views)
-        })
+        await this.#deps.execution.tools(() =>
+          this.#deps.toolRunner.run(turn, calls, (results) => {
+            const views = this.#deps.contextManager.dedupe(results)
+            this.#deps.history.push(...results)
+            this.#deps.history.storeViews(views)
+          }),
+        )
         if (this.#deps.execution.paused) await this.#deps.execution.wait(abort.signal)
         if (abort.signal.aborted) {
           result = { reason: "aborted", steps }

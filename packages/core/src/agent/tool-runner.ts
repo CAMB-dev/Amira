@@ -36,6 +36,9 @@ interface ToolRunnerDeps {
   backgroundJobs: BackgroundJobSession | undefined
   /** Re-read per call: the model and its allowed tools can change between batches. */
   allowsTool: (tool: ToolDefinition) => boolean
+  /** Execution policy, independent of the model-visible declarations. */
+  callableTools?: ReadonlySet<string>
+  isSubAgent?: boolean
   /** Read when building each call's context; Agent replaces the controller after a steer. */
   steerSignal: () => AbortSignal | undefined
   /** Read at write time. */
@@ -189,6 +192,12 @@ export class ToolRunner {
           .map((t) => t.name)
           .join(", ")
         return await reject("unknownTool", `Unknown tool "${call.name}". Available tools: ${names}`)
+      }
+      if (
+        (this.#deps.isSubAgent && tool.mainOnly) ||
+        (this.#deps.callableTools && !this.#deps.callableTools.has(call.name))
+      ) {
+        return await reject("blocked", `Tool "${call.name}" is not callable in this session.`)
       }
       const gate = await this.#deps.interceptors.run(
         "tool.call.before",

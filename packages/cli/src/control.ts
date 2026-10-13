@@ -12,6 +12,26 @@ import { rememberingControl } from "./remember-choice.ts"
 import { toolsToDisable } from "./session/settings-adapters.ts"
 import type { Session } from "./session.ts"
 
+/** Waiting for a committed handover must yield, and cancellation must detach its listener. */
+function waitForTransition(tail: Promise<void>, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let listening = true
+    const cleanup = () => {
+      if (listening) signal.removeEventListener("abort", abort)
+      listening = false
+    }
+    const abort = () => {
+      cleanup()
+      reject(signal.reason)
+    }
+    signal.addEventListener("abort", abort, { once: true })
+    tail.then(() => {
+      cleanup()
+      resolve()
+    })
+  })
+}
+
 export interface ControlOptions {
   session: Session
   /** The process-owned recorder, for fresh snapshots and deletion coordination. */
@@ -73,33 +93,90 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
     const running = a.turnId ? "a turn" : `a ${a.holdingFor ?? "compaction"}`
     throw new Error(`${running} is running; ${what} after it ends (or press esc to stop it)`)
   }
+  let selection: { controller: AbortController; cleanup: () => void } | undefined
+  let transitionTail: Promise<void> | undefined
+  const select: ControlContext["select"] = async (callerSignal, run) => {
+    selection?.cleanup()
+    selection?.controller.abort(new Error("cancelled"))
+    const controller = new AbortController()
+    let listening = false
+    const cleanup = () => {
+      if (listening) callerSignal!.removeEventListener("abort", cancel)
+      listening = false
+    }
+    const cancel = () => {
+      cleanup()
+      controller.abort(new Error("cancelled"))
+    }
+    const current = { controller, cleanup }
+    selection = current
+    if (callerSignal?.aborted) cancel()
+    else if (callerSignal) {
+      callerSignal.addEventListener("abort", cancel, { once: true })
+      listening = true
+    }
+    try {
+      controller.signal.throwIfAborted()
+      // A committed winner owns the tree already, even while the host still shows its predecessor.
+      // Only this queued selection is cancellable: never abort the committed winner's disposal.
+      if (transitionTail) await waitForTransition(transitionTail, controller.signal)
+      controller.signal.throwIfAborted()
+      await run(controller.signal)
+    } finally {
+      cleanup()
+      if (selection === current) selection = undefined
+    }
+  }
   const switchTo = async (
     rootSessionId: string,
-    makeNext: () => Agent,
+    makeNext: (continueAfterAcquisition: (construct: () => Agent) => Agent) => Agent | Promise<Agent>,
     reason: "resume" | "clear" | "fork",
+    signal: AbortSignal,
   ) => {
-    // Nobody reads the old conversation any more: no resend of its held notices.
     const old = agent()
-    old.cancelNoticeRetry()
-    // Another session is opened first: if it cannot be (another process holds it), this one
-    // keeps its jobs. The same session (a rewind) is reopened after the hand-over, which would
-    // otherwise close the new agent's job scope too.
-    const other = rootSessionId !== old.sessionId ? makeNext() : undefined
-    // Top-level jobs belong to the active conversation, not to the Agent object that happened to
-    // start them. Sub-agent jobs are still stopped as their old tree is handed over. The
-    // re-rooting and the notice hand-over happen before anything awaits, so a job that ends
-    // meanwhile reports to the new session.
-    const handover = session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
-    const next = other ?? makeNext()
-    // Like the current model, the /thinking choice follows the user to the next conversation.
-    old.thinking.carryTo(next.thinking)
-    old.handoverBackgroundNotices(next)
+    let completeTransition: (() => void) | undefined
+    const different = rootSessionId !== old.sessionId
+    let handover: ReturnType<typeof session.host.backgroundJobs.handoverRoot> | undefined
+    const made = makeNext((construct) => {
+      // Acquisition may wait while RPC processes another switch or a notice starts a turn.
+      // Reject before constructing: disposing an unused candidate would abort the shared tree.
+      signal.throwIfAborted()
+      if (selection?.controller.signal !== signal || agent() !== old) throw new Error("cancelled")
+      if (different) idle("switch sessions")
+      // A different target is constructed first, preserving old jobs if construction fails.
+      // Rewinds hand over first so closing the old scope cannot close the replacement's.
+      const other = different ? construct() : undefined
+      old.cancelNoticeRetry()
+      handover = session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
+      const next = other ?? construct()
+      old.thinking.carryTo(next.thinking)
+      old.handoverBackgroundNotices(next)
+      // Commit is synchronous with acquisition and notice handover. Later selections must wait
+      // for this disposal, and neither they nor the original caller can cancel this winner.
+      selection.cleanup()
+      selection = undefined
+      const tail = new Promise<void>((resolve) => {
+        completeTransition = () => {
+          if (transitionTail === tail) transitionTail = undefined
+          resolve()
+        }
+      })
+      transitionTail = tail
+      return next
+    })
+    // Construction and all hand-over setup share the acquired claim's synchronous continuation.
+    // Do not introduce a microtask gap for a synchronous claim's pending notice deliveries.
+    const next = made instanceof Promise ? await made : made
     try {
       await handover
       await old.dispose("switch")
     } finally {
-      host.switchTo(next)
-      opts.announce?.(next, reason)
+      try {
+        host.switchTo(next)
+        opts.announce?.(next, reason)
+      } finally {
+        completeTransition?.()
+      }
     }
   }
   const rewindEntry = (index: number) => {
@@ -136,6 +213,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
     agent,
     directory,
     idle,
+    select,
     switchTo,
     rewindEntry,
     idleFiles,

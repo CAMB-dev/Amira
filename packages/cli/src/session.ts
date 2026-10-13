@@ -76,6 +76,8 @@ export interface SessionOptions {
   /** Names the user asked to disable and where they came from; ones no tool has are reported. */
   requestedDisabled?: { names: string[]; from: string }
   ai?: Ai
+  /** Cancels startup's awaited session acquisition. */
+  signal?: AbortSignal
   /** Where the conversation is persisted; a stored one is resumed. Omit to keep nothing. */
   store?: SessionStore
   /** Compaction options; unset, they come from settings `compact`. */
@@ -127,7 +129,12 @@ export interface Session {
    * A new agent on this session's bus, registries and settings, for another stored session
    * (rpc session.resume). It starts with `model`, by default the current model.
    */
-  resume(store: SessionStore, model?: ModelInfo): Agent
+  resume(
+    store: SessionStore,
+    model?: ModelInfo,
+    continueAfterAcquisition?: (construct: () => Agent) => Agent,
+    options?: { signal?: AbortSignal },
+  ): Agent | Promise<Agent>
   /**
    * Unloads every extension and loads them again (/reload), with the packages and their skill
    * directories as they are installed now; failures arrive as extension.error. Says what changed.
@@ -353,7 +360,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     approver: approve,
   })
   const ask = userAsker(host.ui, tree)
-  const newAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
+  const constructAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
     if (store) traceRecorder.register(store.id, store.file)
     // A session resumed while no model is selected continues on the one it ran on.
     const stored = isNoModel(picked) ? storedModel(ai, store) : undefined
@@ -390,7 +397,20 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),
     })
   }
-  const agent = newAgent(model, opts.store)
+  const newAgent = (
+    picked: ModelInfo,
+    store: SessionStore | undefined,
+    continueAfterAcquisition?: (construct: () => Agent) => Agent,
+    options?: { signal?: AbortSignal },
+  ) => {
+    const construct = () => constructAgent(picked, store)
+    const acquired = () => {
+      options?.signal?.throwIfAborted()
+      return continueAfterAcquisition?.(construct) ?? construct()
+    }
+    return store ? store.withClaim(acquired, options) : acquired()
+  }
+  const agent = await newAgent(model, opts.store, undefined, { signal: opts.signal })
   // A stale or missing catalog is refreshed in the background; startup never waits for it.
   const catalogRefresh =
     catalogOpts && cached?.stale
@@ -412,7 +432,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     catalogRefresh,
     ai,
     tree,
-    resume: (store, m) => newAgent(m ?? agent.model, store),
+    resume: (store, m, continueAfterAcquisition, options) =>
+      newAgent(m ?? agent.model, store, continueAfterAcquisition, options),
     reload: async (current = agent) => {
       const before = new Set(host.loaded)
       const skillsBefore = new Set(host.skills.list().map((s) => s.name))

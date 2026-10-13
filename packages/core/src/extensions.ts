@@ -510,12 +510,23 @@ export class ExtensionHost {
       backgroundJobs,
       terminal,
       reportError: (error) => void this.#fail(source, error),
-      notify: (text, level = "info") =>
+      notify: (text, level = "info", options) => {
+        const safeLevel = NOTICE_LEVELS.includes(level) ? level : "info"
+        if (options?.persist) {
+          this.#agent?.().session?.append({
+            type: "display",
+            text: String(text),
+            level: safeLevel,
+            details: options.details,
+            markdown: options.markdown,
+          })
+        }
         void bus.emit(
           "extension.notice",
-          { source, text: String(text), level: NOTICE_LEVELS.includes(level) ? level : "info" },
+          { source, text: String(text), level: safeLevel, ...options },
           this.#meta(),
-        ),
+        )
+      },
       onExit: (run) => {
         const entry = { source, run }
         this.#exitHandlers.add(entry)

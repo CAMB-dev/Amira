@@ -19,11 +19,17 @@ type SessionsControl = Pick<
 
 export function createSessionsControl(ctx: ControlContext): SessionsControl {
   return {
-    newSession: async () => {
-      ctx.idle("start a new session")
-      const store = SessionStore.create({ cwd: ctx.cwd, dir: ctx.directory() })
-      await ctx.switchTo(store.id, () => ctx.session.resume(store, ctx.agent().model), "clear")
-    },
+    newSession: (options) =>
+      ctx.select(options?.signal, async (signal) => {
+        ctx.idle("start a new session")
+        const store = SessionStore.create({ cwd: ctx.cwd, dir: ctx.directory() })
+        await ctx.switchTo(
+          store.id,
+          (acquired) => ctx.session.resume(store, ctx.agent().model, acquired, { signal }),
+          "clear",
+          signal,
+        )
+      }),
     sessions: () =>
       listSessions(ctx.cwd, ctx.directory()).map((s) => ({
         id: s.id,
@@ -58,14 +64,20 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
         subagentMessages: (childId: string) => entries.find((e) => e.info.id === childId)?.history(),
       }
     },
-    resume: async (id) => {
-      ctx.idle("resume another session")
-      if (id === ctx.agent().sessionId) throw new Error(`already in session ${id}`)
-      const file = findSession(ctx.cwd, id, ctx.directory())
-      if (!file) throw new Error(`no session ${id} in ${ctx.cwd}`)
-      const store = SessionStore.open(file)
-      await ctx.switchTo(store.id, () => ctx.session.resume(store, ctx.agent().model), "resume")
-    },
+    resume: (id, options) =>
+      ctx.select(options?.signal, async (signal) => {
+        ctx.idle("resume another session")
+        if (id === ctx.agent().sessionId) throw new Error(`already in session ${id}`)
+        const file = findSession(ctx.cwd, id, ctx.directory())
+        if (!file) throw new Error(`no session ${id} in ${ctx.cwd}`)
+        const store = SessionStore.open(file)
+        await ctx.switchTo(
+          store.id,
+          (acquired) => ctx.session.resume(store, ctx.agent().model, acquired, { signal }),
+          "resume",
+          signal,
+        )
+      }),
     rename: (title, options) => {
       const a = ctx.agent()
       if (options?.sessionId && options.sessionId !== a.sessionId) return
@@ -83,26 +95,32 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
         for (const file of files) rmSync(`${file}.trace.jsonl`, { force: true })
       }
     },
-    fork: async (index) => {
-      ctx.idle("fork the conversation")
-      const a = ctx.agent()
-      const store = a.session
-      if (!store) throw new Error("this session is not stored")
-      let target = store.leafId
-      if (index !== undefined) {
-        const message = Number.isInteger(index) ? a.messages[index] : undefined
-        if (message?.role !== "user") throw new Error(`message ${index} is not a user message`)
-        const id = a.entryId(message)
-        const entry = id ? store.get(id) : undefined
-        if (entry?.type !== "message") throw new Error("that message was summarized by a compaction")
-        target = entry.parentId
-      }
-      if (a.fileRewind?.restoring)
-        throw new Error("finish or abandon the interrupted file restore before forking")
-      const forked = store.fork(target)
-      // The copied journal keeps working: the fork gets the captured bytes it refers to.
-      copyFileHistory(store, forked)
-      await ctx.switchTo(forked.id, () => ctx.session.resume(forked, a.model), "fork")
-    },
+    fork: (index, options) =>
+      ctx.select(options?.signal, async (signal) => {
+        ctx.idle("fork the conversation")
+        const a = ctx.agent()
+        const store = a.session
+        if (!store) throw new Error("this session is not stored")
+        let target = store.leafId
+        if (index !== undefined) {
+          const message = Number.isInteger(index) ? a.messages[index] : undefined
+          if (message?.role !== "user") throw new Error(`message ${index} is not a user message`)
+          const id = a.entryId(message)
+          const entry = id ? store.get(id) : undefined
+          if (entry?.type !== "message") throw new Error("that message was summarized by a compaction")
+          target = entry.parentId
+        }
+        if (a.fileRewind?.restoring)
+          throw new Error("finish or abandon the interrupted file restore before forking")
+        const forked = store.fork(target)
+        // The copied journal keeps working: the fork gets the captured bytes it refers to.
+        copyFileHistory(store, forked)
+        await ctx.switchTo(
+          forked.id,
+          (acquired) => ctx.session.resume(forked, a.model, acquired, { signal }),
+          "fork",
+          signal,
+        )
+      }),
   }
 }

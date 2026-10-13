@@ -1,6 +1,6 @@
 import type { AssistantMessage, Message, Usage } from "@amira/ai"
 import type { BackgroundJobExtension } from "./background-jobs.ts"
-import type { CommandDefinition, InputHandler, SessionControl } from "./commands.ts"
+import type { CommandDefinition, InputHandler, PrintOptions, SessionControl } from "./commands.ts"
 import type {
   AnyEvent,
   EventEnvelope,
@@ -171,8 +171,9 @@ export interface ExtensionAPI {
    * Tells the user something outside a command (extension.notice), e.g. that a hook failed.
    * Frontends show it as a notice: the TUI in the transcript, print mode on stderr. Keep it
    * short, and name what it is about, since the extension's name is not shown. Default "info".
+   * Display options fold details with Ctrl+O and optionally persist them; never model context.
    */
-  notify(text: string, level?: NoticeLevel): void
+  notify(text: string, level?: NoticeLevel, options?: PrintOptions): void
   /**
    * Runs `handler` when Amira exits, after session.end. The process waits for the handlers,
    * but only a few seconds: then `signal` aborts and Amira exits anyway. For short work that

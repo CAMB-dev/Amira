@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { type ChildSession, defineTool, type SpawnGroup, textResult } from "@amira/api"
 import { localClock } from "../src/format.ts"
 import { closeImageApp, parallel, setup, waitFor } from "./app-harness.ts"
@@ -24,46 +24,51 @@ function delegateTool(role = "explorer") {
 }
 
 test("sub-agents show under their call: title, role, time, tokens, current tool, queued ones", async () => {
-  const { terminal, live, all, shows, idle, exited, agent } = await setup(
-    [
-      { toolCalls: [{ name: "delegate", args: { titles: ["US market trend", "Add status bar test"] } }] },
-      { toolCalls: [{ name: "read", args: { path: "a.ts" } }], usage: { input: 4000, output: 100 } },
-      { text: "trend is up", delayMs: 400 },
-      { text: "test added", usage: { input: 1200, output: 30 } },
-      { text: "all done" },
-    ],
-    { cols: 80, tree: true, maxConcurrent: 1 },
-  )
-  agent.tools.register(delegateTool(), "test")
-  terminal.send("go\r")
-  // The first one runs its tool; the second waits for the slot.
-  await waitFor(
-    () =>
+  const clock = spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 10, 12, 34).getTime())
+  try {
+    const { terminal, live, all, shows, idle, exited, agent } = await setup(
+      [
+        { toolCalls: [{ name: "delegate", args: { titles: ["US market trend", "Add status bar test"] } }] },
+        { toolCalls: [{ name: "read", args: { path: "a.ts" } }], usage: { input: 4000, output: 100 } },
+        { text: "trend is up", delayMs: 400 },
+        { text: "test added", usage: { input: 1200, output: 30 } },
+        { text: "all done" },
+      ],
+      { cols: 80, tree: true, maxConcurrent: 1 },
+    )
+    agent.tools.register(delegateTool(), "test")
+    terminal.send("go\r")
+    // The first one runs its tool; the second waits for the slot.
+    await waitFor(
+      () =>
+        new RegExp(
+          `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s {2}${localClock(Date.now())}\\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend · explorer · \\d+s · 4\\.1k tok\\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\\.ts\\n {5}└ Add status bar test · coder · queued\\n`,
+          "m",
+        ).test(live()),
+      "rows under the call",
+    )
+    // No list of sub-agents at the bottom of the live region: only the activity line is there.
+    expect(live().match(/(?:├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend|└ Add status bar test) ·/g)).toHaveLength(2)
+    await shows("all done")
+    await idle()
+    const text = all()
+    // Each one's rows became its end line, committed with the call right under its head, in order.
+    expect(text).toMatch(
       new RegExp(
-        `^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\\d+s {2}${localClock(Date.now())}\\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend · explorer · \\d+s · 4\\.1k tok\\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\\.ts\\n {5}└ Add status bar test · coder · queued\\n`,
+        `^ {2}└ delegate {2}✓ trend is up \\(\\+1 line\\) · \\d+\\.\\ds +${localClock(Date.now())}\\n {5}├ ✓ US market trend · explorer · \\d+\\.\\ds · 4\\.1k tok\\n {5}└ ✓ Add status bar test · coder · \\d+\\.\\ds · 1\\.2k tok$`,
         "m",
-      ).test(live()),
-    "rows under the call",
-  )
-  // No list of sub-agents at the bottom of the live region: only the activity line is there.
-  expect(live().match(/(?:├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend|└ Add status bar test) ·/g)).toHaveLength(2)
-  await shows("all done")
-  await idle()
-  const text = all()
-  // Each one's rows became its end line, committed with the call right under its head, in order.
-  expect(text).toMatch(
-    new RegExp(
-      `^ {2}└ delegate {2}✓ trend is up \\(\\+1 line\\) · \\d+\\.\\ds +${localClock(Date.now())}\\n {5}├ ✓ US market trend · explorer · \\d+\\.\\ds · 4\\.1k tok\\n {5}└ ✓ Add status bar test · coder · \\d+\\.\\ds · 1\\.2k tok$`,
-      "m",
-    ),
-  )
-  expect(text.match(/✓ US market trend ·/g)).toHaveLength(1)
-  // Nothing is left of them in the live region below the transcript.
-  expect(live().split("  all done")[1]).not.toMatch(/[├└] (?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓✗⊘]|Add status bar test)/)
-  // The children's replies only show as their commander's tool result, not as replies of their own.
-  expect(text).not.toMatch(/^ {2}trend is up$/m)
-  terminal.send("\x03")
-  await exited
+      ),
+    )
+    expect(text.match(/✓ US market trend ·/g)).toHaveLength(1)
+    // Nothing is left of them in the live region below the transcript.
+    expect(live().split("  all done")[1]).not.toMatch(/[├└] (?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓✗⊘]|Add status bar test)/)
+    // The children's replies only show as their commander's tool result, not as replies of their own.
+    expect(text).not.toMatch(/^ {2}trend is up$/m)
+    terminal.send("\x03")
+    await exited
+  } finally {
+    clock.mockRestore()
+  }
 })
 
 test("with sub-agents running, Esc says they go on, and quitting takes a second Ctrl+C", async () => {

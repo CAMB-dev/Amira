@@ -175,7 +175,7 @@ test("spawning deeper than maxDepth fails, and a tool can spawn through its sess
   expect(text).toContain("refused: sub-agents can nest at most 2 levels deep")
 })
 
-test("at most maxConcurrent children run at once; the rest queue in order", async () => {
+test("ordinary children leave the reserved interactive slot free and queue in order", async () => {
   const { root, tree, bus, events } = await setup(() => ({ text: "x", delayMs: 20 }), { maxConcurrent: 2 })
   let running = 0
   let peak = 0
@@ -190,9 +190,9 @@ test("at most maxConcurrent children run at once; the rest queue in order", asyn
   const results = await Promise.all(kids.map((k) => k.result()))
   await bus.flush()
   expect(results.every((r) => r.status === "done")).toBe(true)
-  expect(peak).toBe(2)
+  expect(peak).toBe(1)
   const queued = events.flatMap((e) => (e.type === "subagent.start" ? [e.data.queued] : []))
-  expect(queued).toEqual([false, false, true, true])
+  expect(queued).toEqual([false, true, true, true])
   // Queued children start in spawn order.
   const order = events.flatMap((e) =>
     e.type === "turn.start" && e.sessionId !== root.sessionId ? [e.sessionId] : [],
@@ -236,8 +236,8 @@ test("the limit holds across the tree; a parent waiting for its children does no
   const results = await Promise.all(mids.map((m) => m.result()))
   await bus.flush()
   expect(results.map((r) => r.text)).toEqual(["mid done", "mid done"])
-  // Two parents with two children each: never more than two sessions talking to the model.
-  expect(peak).toBe(2)
+  // Waiting parents do not count, but ordinary descendants still leave the interactive slot free.
+  expect(peak).toBe(1)
   expect(tree.children).toEqual([])
 })
 

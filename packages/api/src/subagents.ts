@@ -30,6 +30,25 @@ export interface SpawnOptions {
   /** Tools the child may not use, e.g. the one that spawns sub-agents once it is deep enough. */
   excludeTools?: string[]
   /**
+   * Names the child may call. Local declarations stay in their original order; excluded
+   * local calls return a short error. Hosted tools must be omitted instead: built-in
+   * provider search is named web_search (including Gemini's Google Search). Omitting it
+   * changes the hosted-tool request prefix, not local declarations. Default: unrestricted.
+   * This cannot make a mainOnly tool callable by a child.
+   */
+  callableTools?: string[]
+  /**
+   * A private, in-memory child: no session file, parent sub-agent entry, public listing or
+   * main-bus transcript events. Its ChildSession.events still stream. Implies persistent,
+   * so send starts follow-up turns; stop or abort ends it. The parent's session lifecycle
+   * also aborts it, and its usage is charged to the parent and the tree. Descendants stay
+   * private too. Main-only tools remain declared but cannot be called. Tree concurrency,
+   * depth and budget limits still apply. At maxConcurrent >= 2, one place inside the cap
+   * is reserved for ephemeral turns; at 1 they queue normally (see state/events).
+   * Not available with schema.
+   */
+  ephemeral?: boolean
+  /**
    * Tools only this child has, on top of the ones `tools` and `excludeTools` leave it: e.g. a
    * swarm member's messaging tools, whose code knows which member calls them. They win over
    * the parent's tools of the same name, and are hidden from the child's own sub-agents (a
@@ -139,8 +158,9 @@ export interface ChildSession {
   readonly groupId?: string
   /**
    * The events of this child and its descendants, ending with its subagent.end. Each
-   * iteration subscribes when it starts, so start iterating right after spawn to miss nothing;
-   * iterating a child that already ended yields nothing.
+   * iteration subscribes when it starts. The initial subagent.start is not replayed;
+   * read child.state immediately after spawn for initial waiting, then subscribe for later
+   * events. Iterating a child that already ended yields nothing.
    */
   readonly events: AsyncIterable<AnyEvent>
   /**

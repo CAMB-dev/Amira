@@ -184,7 +184,7 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `session` | Access the current top-level `SessionControl` outside commands, when the host has injected it |
 | `ui` | Ask through select, confirm, input, form and review dialogs; the command context also exposes UI requests |
 | `registerPanel` | Render live lines above the activity line |
-| `registerView` | Register a full-screen view kind; commands open it through `openView` when the frontend supports it |
+| `registerView` | Register a fullscreen or docked view kind; commands open it through `openView` when the frontend supports it |
 | `registerToolRenderer`, `decorateToolRenderer` | Present tool calls and results, or wrap an existing presenter |
 | `serverToolView` | Turn provider-hosted tool blocks, such as native web search, into the same tool-call view shape used by presenters |
 | `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks, math or standalone images and supply terminal image data |
@@ -224,7 +224,7 @@ The TUI's light/dark theme is selected at startup using its terminal background 
 
 Commands echo the typed slash-command line into the transcript by default. Set `echo: false` on the `CommandDefinition` passed to `api.registerCommand()` to omit that line in both inline and full-screen TUI modes, for example for `/btw <question>`. This hides only the frontend's echo: the command's own output (`ctx.print`, notices and views) still shows as usual, and prompt history (↑) still records the line. Print mode and RPC behavior are unchanged.
 
-### Full-screen views
+### Fullscreen and docked views
 
 Register a `ViewDefinition` with `api.registerView()` and open it from a command with
 `ctx.openView?.({ kind, data, state })`, with optional initial `Partial<UiState>`. Views return structured `ViewLine` objects; the frontend owns
@@ -268,6 +268,55 @@ plain-line fallback. API version 0.1.15 adds these view capabilities.
 D105 adds host-owned pages without registering another view: call `view.pushPage({ title?, state?, data? })` and `view.popPage()`. Render and UI contexts expose `page: { depth, data? }` on pushed pages (depth starts at 1), and omit it at the root; the view's original data remains the first callback argument. An optional page title replaces the legacy title or adds a title row above declarative content. Each page has independent selection, expansion, tabs, inputs, focus and scroll state, including legacy `scrollKey` positions; popping restores the previous page. Esc cancels an active question first, otherwise pops a page, and closes at the root. The host key bar says `Esc back` on a page and `Esc close` at the root. Ctrl+C always closes the whole view, even during a prompt or confirmation; q keeps its existing behavior. Page transitions cancel pending questions.
 
 Optional `onOpen(data, control)` and `onClose(data)` hooks run once for each opening and closing, not on redraws or page changes. Initial state is applied before `onOpen`, which may call `setState` or `close`. Opening the same kind while it is visible replaces its data without closing/reopening; state is retained unless explicit initial state is supplied, which starts a fresh root page. Replacing it with another kind closes the previous view.
+
+### Side questions: ephemeral agents, docks and display blocks
+
+`SpawnOptions.ephemeral?: boolean` creates an in-memory child, automatically persistent even if `persistent: false` is passed. Keep its `ChildSession` and use `send(text)` for follow-ups; `stop()` ends it after its current turn, while `abort()` stops it immediately. Parent exit/switch also aborts it. The child and its descendants have no session or artifact files, parent `subagent` entries, public listings, or main transcript events. Subscribe to `child.events` instead. Usage is charged to the tree and saved as the owner's `side_usage`, like `api.complete` (buffered until the owner first writes its session). Schema results are incompatible with ephemeral/persistent children.
+
+`SpawnOptions.callableTools?: string[]` restricts local execution without removing or reordering local declarations. A refused local call returns a short tool error before execution or approval. Provider-hosted tools execute remotely, so excluded ones are **not requested**, rather than returning a local error. The built-in hosted search in OpenAI Responses, Anthropic and Gemini uses the portable name `web_search` (including Gemini's Google Search); add that name to allow it. Omitting the list leaves tools unrestricted. The restriction also applies to the child's compaction requests and approval/question consultations. Descendants cannot widen inherited call permissions.
+
+Use `callableTools` instead of `tools`/`excludeTools` to preserve a fork's **local** tool declarations: ephemeral children retain `mainOnly` declarations but cannot call them. Forks copy loaded deferred tools in the parent's order; unloaded deferred tools remain unoffered. Excluding hosted search removes its declaration and may turn inherited hosted results into text, so the full request/cache prefix is not identical to a parent that offers it. Role instructions, per-session interceptors, different models, child-only tools and trimming unfinished parent calls can also change the prefix.
+
+Ephemeral work **does not bypass `maxConcurrent`**, depth, group limits or token/cost budgets. At a tree cap of at least 2, ordinary children may occupy at most `maxConcurrent - 1` busy slots, leaving one reserved for ephemeral initial or follow-up turns. Ephemeral work may also use otherwise free slots, but never exceeds the total cap or a group cap. At `maxConcurrent: 1`, it queues normally. Read `child.state === "queued"` immediately after spawning to show initial waiting. The initial `subagent.start` event fires before `spawn()` returns and is not replayed to new consumers. Subscribe to `child.events` for later `subagent.state` changes, including queued follow-ups. Idle children release admission slots. Consultation usage, including failed attempts and retries, is saved as the requesting ephemeral child's `side_usage` with the consulting model's identity.
+
+Open a dock with `ctx.openView?.({ kind, data, placement: "dock", maxHeight?: number })`; omit `placement` for fullscreen. Height includes title/header/footer, defaults to 40% of available terminal rows, and has a five-row minimum unless the input leaves less room. Both TUI modes use the same themed, margin-aware live dock directly above the focused input. The configured `scroll.page-up`/`scroll.page-down` keys scroll it (PgUp/PgDn by default), the wheel scrolls only over the dock, and `scroll.bottom` follows new output (End by default). Inline docks occupy only their bounded rows, leaving the preceding transcript visible. Typing, arrows, Tab and Enter stay with the composer; dock widgets and extension shortcuts do not capture them. Dock `prompt`/`confirm` cancel rather than replacing the composer. **Esc closes the dock first**, before cancelling a command or interrupting a turn; the next Esc performs that usual action. Covering fullscreen forms/views retain their normal key priority. `follow`, `renderReply` for Markdown, and `onClose` work as in fullscreen views.
+
+`ctx.print(text, level?, { details?: string; markdown?: boolean; persist?: boolean })` and `api.notify(text, level?, options?)` emit display-only blocks. The head is `text`; details are folded at summary detail and expanded at full detail (Ctrl+O). `markdown: true` renders the details as Markdown. `persist: true` saves a `display` session entry, restored in transcript order on resume, but skipped by context building. Neither the head nor details ever reach the model, including session forks, subagent forks and compaction. Display-only sessions also render on startup resume. A retained `ctx.print` remains bound to the session in which its command ran, even when a dock closes during a session switch. Fullscreen retains foldable blocks; inline retains semantic redraws in its bounded recent history, so Ctrl+O repaints recent blocks in place. Older native terminal scrollback is immutable. Print mode emits the head; RPC also carries the optional detail fields.
+
+The following `/btw`-style sketch uses only public APIs. It is documentation, not a bundled extension; a production extension should also handle an ended child, failed follow-up delivery, and unload cleanup.
+
+```ts
+import { defineExtension, type ChildSession, type SpawnGroup, type CommandContext } from "@amira/api"
+export default defineExtension((api) => {
+  type Side = { question: string; answer: string; child: ChildSession; group: SpawnGroup; print: CommandContext["print"] }
+  let side: Side | undefined
+  api.registerView({
+    kind: "btw", title: (d: Side) => `btw: ${d.question}${d.child.state === "queued" ? " (waiting)" : ""}`, follow: true,
+    render: (d: Side, opts) => opts.renderReply?.(d.answer) ?? [{ kind: "text", text: d.answer }],
+    onClose(d: Side) { d.child.abort(); d.group.end()
+      if (side !== d) return
+      side = undefined
+      d.print(`btw: ${d.question}`, "info", { details: d.answer, markdown: true, persist: true })
+    },
+  })
+  api.on("session.end", () => { side?.child.abort(); side?.group.end(); side = undefined })
+  api.registerCommand({
+    name: "btw", description: "Ask a side question", echo: false,
+    run(question, ctx) {
+      if (side) { side.answer += `\n\nFollow-up: ${question}\n\n`; side.child.send(question); return }
+      if (!ctx.openView || !ctx.session.createGroup) throw new Error("Side questions need the TUI and an agent tree")
+      const group = ctx.session.createGroup({ name: "Side question" })
+      const child = group.spawn({ prompt: question, context: "fork", ephemeral: true, callableTools: ["read", "grep", "glob"], systemPrompt: "Answer this side question; do not change files." })
+      const d: Side = { question, answer: "", child, group, print: ctx.print }; side = d
+      void (async () => {
+        for await (const e of child.events) {
+          if (e.type === "message.delta" && e.data.kind === "text") { d.answer += e.data.text; api.requestRender() }
+        }
+      })().catch((error) => api.reportError(String(error)))
+      if (!ctx.openView({ kind: "btw", data: d, placement: "dock" })) { side = undefined; child.abort(); group.end() }
+    } })
+})
+```
 
 ### Sub-agent controls
 

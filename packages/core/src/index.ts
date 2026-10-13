@@ -9,7 +9,14 @@ export * from "./context.ts"
 export * from "./deferred-tools.ts"
 export * from "./event-bus.ts"
 export * from "./extensions.ts"
-export * from "./file-lock.ts"
+export {
+  type FileLock,
+  isProcessAlive,
+  LockBusyError,
+  tryFileLock,
+  type WaitLockOptions,
+  waitFileLock,
+} from "./file-lock.ts"
 export * from "./file-rewind.ts"
 export * from "./git.ts"
 export * from "./home.ts"

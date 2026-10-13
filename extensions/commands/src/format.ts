@@ -83,7 +83,13 @@ export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
     }
     row.replies++
     row.usage = addUsage(row.usage, r.usage)
-    if (hasUnpricedSearch(r)) unpricedSearch.add(model)
+    // Counted search adjustments are reconciled by addUsage. Uncounted blocks and
+    // missing token prices still need a separate marker: no search counter can resolve them.
+    if (
+      hasUnpricedSearch(r) &&
+      ((r.usage.webSearchRequests ?? 0) === 0 || r.usage.webSearchCost !== undefined)
+    )
+      unpricedSearch.add(model)
     row.cost = row.usage.cost
     if (unpricedSearch.has(model)) {
       delete row.cost
@@ -122,7 +128,11 @@ export function costReport(
     ...compactionRows,
     ...sideRows,
   ]
-  const unpricedSearch = [...replies, ...asReplies, ...sideReplies].some(hasUnpricedSearch)
+  const unpricedSearch =
+    rows.some((r) => r.cost === undefined && (r.usage.webSearchRequests ?? 0) > 0) ||
+    [...replies, ...asReplies, ...sideReplies].some(
+      (r) => hasUnpricedSearch(r) && (r.usage?.webSearchRequests ?? 0) === 0,
+    )
   if (!rows.length) return "No model replies with usage in this session yet."
   const line = (r: Pick<ModelCost, "usage" | "cost">, label: string, count: string) => {
     const u = r.usage

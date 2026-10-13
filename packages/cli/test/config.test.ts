@@ -292,7 +292,7 @@ test("a resumed session without a model given continues on the one it ran on", a
   // A new session has no model to go on; switching to the stored one picks its model up.
   const fresh = await create(SessionStore.create({ cwd, dir: path.join(dir, "sessions") }))
   expect(fresh.agent.model.provider).toBe("")
-  expect(fresh.resume(store).model.id).toBe("big")
+  expect((await fresh.resume(store)).model.id).toBe("big")
 })
 
 test("an old entry for a former built-in id works with a warning that it lost its key variable", () => {

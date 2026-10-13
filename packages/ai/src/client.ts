@@ -1,3 +1,4 @@
+import { transferUsageAccounting } from "./accounting.ts"
 import { catalogProviderId, type ModelCatalog } from "./catalog.ts"
 import { usageCost, withCost } from "./cost.ts"
 import type { Dialect, DialectContext } from "./dialect.ts"
@@ -395,6 +396,7 @@ function addTo(to: Usage, u: Usage) {
   if (sum.cost === undefined) delete to.cost
   if (sum.webSearchCost === undefined) delete to.webSearchCost
   Object.assign(to, sum)
+  transferUsageAccounting(sum, to)
 }
 
 /** Where requests for `model` on `p` go, and what they offer, for canReplay and canReplayServerTool. */
