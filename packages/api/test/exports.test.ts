@@ -4,6 +4,7 @@ import type {
   EventMap,
   ExtensionAPI,
   ExtensionView,
+  PanelRenderOptions,
   PrintOptions,
   ShimmerColors,
   ShimmerEffect,
@@ -393,6 +394,13 @@ test("presenter choices and opt-in durable details are public additive contracts
       },
     }
   `)
+})
+
+test("panels can reuse the frontend command spinner without requiring it from other hosts", () => {
+  const options: PanelRenderOptions = { width: 80, now: 0, sessionId: "s1", collapsed: false }
+  expect(options.spinner).toBeUndefined()
+  options.spinner = "frame"
+  expect(options.spinner).toBe("frame")
 })
 
 test("the canonical theme glyph export includes the layout symbols", async () => {

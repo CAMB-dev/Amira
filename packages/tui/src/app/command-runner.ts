@@ -1,8 +1,10 @@
 // Owns slash-command execution, cancellation, key help and command echo correlation.
 import type { FrontendView, KeyHelp, UserMessage } from "@amira/api"
 import type { CommandHost } from "@amira/core"
+import { type RenderContext, Spinner } from "@amira/tui-kit"
 import { userText } from "../format.ts"
-import { ACTIONS, type Action, type Keybindings, type KeySpec } from "../keybindings.ts"
+import { ACTIONS, type Action, type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
+import { activityRow } from "./activity-row.ts"
 import { dockKeyHelp } from "./dock.ts"
 
 export interface CommandRunner {
@@ -28,6 +30,9 @@ export interface CommandRunner {
   clearEchoes(): void
   /** Whether an un-aborted command is available for cancellation. */
   hasCancellable(): boolean
+  /** The shared command animation frame, also used by live panels. */
+  readonly spinner: string
+  render(width: number, ctx: RenderContext, stop?: string): string[]
   /** Aborts all commands during controller shutdown. */
   abortAll(reason: Error): void
 }
@@ -40,6 +45,7 @@ export interface CommandRunnerOptions {
   commandEcho: (line: string) => void
   commandOutput: (level: "info" | "warning" | "error", text: string) => void
   requestRender: () => void
+  sessionId: () => string
   quit: () => void
   openView: (view: FrontendView) => boolean
   openRewind: () => boolean
@@ -49,7 +55,25 @@ export interface CommandRunnerOptions {
 
 export function createCommandRunner(options: CommandRunnerOptions): CommandRunner {
   /** The slash commands running now, each with the name of the command its line resolved to. */
-  const commandAborts = new Map<AbortController, string | undefined>()
+  const commandAborts = new Map<
+    AbortController,
+    { name: string | undefined; startedAt: number; sessionId: string }
+  >()
+  // Separate from the turn spinner: either can finish while the other still runs.
+  const spinner = new Spinner()
+  let spinning = false
+  let animationAt = Date.now()
+  const syncAnimation = () => {
+    const active = [...commandAborts.keys()].some((controller) => !controller.signal.aborted)
+    if (active && !spinning) {
+      animationAt = Date.now()
+      spinner.start(() => {
+        animationAt = Date.now()
+        options.requestRender()
+      })
+    } else if (!active) spinner.stop()
+    spinning = active
+  }
   /**
    * The message each running command sent with its typed line as display text: the echo shows
    * that line already, so the message is not shown again when its turn starts (or it joins one).
@@ -79,7 +103,13 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
       const echo = commands.shouldEcho(line)
       if (echo) options.commandEcho(line)
       const abort = new AbortController()
-      commandAborts.set(abort, commands.commandName(line))
+      commandAborts.set(abort, {
+        name: commands.commandName(line),
+        startedAt: Date.now(),
+        sessionId: options.sessionId(),
+      })
+      syncAnimation()
+      options.requestRender()
       let sent = false
       await commands
         .run(line, {
@@ -97,15 +127,20 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
           },
         })
         // A successful send may still be waiting to join a busy turn after its command ends.
-        .finally(() => commandAborts.delete(abort))
-        .then(() => options.requestRender())
+        .finally(() => {
+          commandAborts.delete(abort)
+          syncAnimation()
+          options.requestRender()
+        })
     },
     cancel() {
       const operation = cancellable()
       if (!operation) return false
       const [abort, command] = operation
       abort.abort(new Error("cancelled"))
-      if (command === "compact" && options.isCompacting()) options.interrupt()
+      if (command.name === "compact" && options.isCompacting()) options.interrupt()
+      syncAnimation()
+      options.requestRender()
       return true
     },
     keyHelp,
@@ -126,8 +161,34 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
     hasCancellable() {
       return cancellable() !== undefined
     },
+    get spinner() {
+      return spinning ? spinner.glyph : ""
+    },
+    render(width, ctx, stop) {
+      const command = [...commandAborts].findLast(
+        ([controller, entry]) => !controller.signal.aborted && entry.sessionId === options.sessionId(),
+      )?.[1]
+      if (!command) return []
+      const elapsed = Date.now() - command.startedAt
+      return [
+        activityRow(
+          {
+            label: `/${command.name ?? "command"}`,
+            spinner: spinner.glyph,
+            turnMs: elapsed,
+            tokens: 0,
+            rate: 0,
+            stop: stop ?? `${options.keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
+            animationMs: Math.max(0, animationAt - command.startedAt),
+          },
+          width,
+          ctx,
+        ),
+      ]
+    },
     abortAll(reason) {
       for (const abort of commandAborts.keys()) abort.abort(reason)
+      syncAnimation()
     },
   }
 }

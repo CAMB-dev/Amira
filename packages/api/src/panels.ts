@@ -14,6 +14,8 @@ export interface PanelRenderOptions {
   width: number
   /** The current time, in ms since the epoch, for elapsed times. */
   now: number
+  /** The frontend's current command spinner frame; empty when no command is animating. */
+  spinner?: string
   /** The session the frontend shows now; it changes with /clear, /resume and the like. */
   sessionId: string
   /**
