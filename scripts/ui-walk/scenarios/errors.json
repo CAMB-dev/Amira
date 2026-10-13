@@ -1,0 +1,66 @@
+{
+  "name": "errors",
+  "description": "HTTP 429 then 503 retries, recovery, a failed canned command, and a non-retryable stream-body error on the next user turn.",
+  "prompt": "Show retry recovery and a failed fixture command.",
+  "routes": {
+    "main": [
+      {
+        "error": {
+          "status": 429,
+          "message": "Scripted rate limit. The next local attempt can retry.",
+          "retryAfter": 1
+        }
+      },
+      {
+        "error": {
+          "status": 503,
+          "message": "Scripted service unavailable. The next local attempt succeeds."
+        }
+      },
+      {
+        "thinking": "The scripted provider recovered after two failures. I will show a tool error without executing the command.",
+        "text": "The local provider recovered after two retries. Next is a canned command failure.\n",
+        "delayMs": 35,
+        "toolCalls": [
+          {
+            "id": "errors-shell",
+            "name": "bash",
+            "args": { "command": "bun test test/missing.test.ts" },
+            "result": {
+              "content": [
+                { "type": "text", "text": "No tests found matching test/missing.test.ts\n\nExit code: 1" }
+              ],
+              "isError": true,
+              "details": {
+                "exitCode": 1,
+                "timedOut": false,
+                "aborted": false,
+                "settled": true,
+                "shell": "bash",
+                "shellKind": "bash",
+                "durationMs": 19,
+                "outputLines": 1
+              }
+            }
+          }
+        ]
+      },
+      {
+        "text": "## Recovery complete\n\nThe provider retried two local HTTP failures and then returned a response. The displayed command failed because its fixture names a missing test; **no command actually ran**.\n\nSend another message to trigger a non-retryable stream error, then send one more to recover.\n",
+        "delayMs": 35
+      },
+      {
+        "text": "This reply will stop after a partial sentence.\n",
+        "streamError": {
+          "message": "Scripted invalid request. Send another message to continue.",
+          "code": "invalid_request_error"
+        },
+        "delayMs": 40
+      },
+      {
+        "text": "The scripted provider is responding again. No live calls or real command executions were made.\n",
+        "delayMs": 35
+      }
+    ]
+  }
+}

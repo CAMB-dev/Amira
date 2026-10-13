@@ -20,7 +20,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
+    "@resvg/resvg-wasm": "^2.6.2",
     "@types/bun": "^1.4.2",
+    "@types/pngjs": "^6.0.5",
+    "@xterm/headless": "^6.0.0",
+    "pngjs": "^7.0.0",
     "typescript": "^7.0.2"
   }
 }

@@ -1,0 +1,52 @@
+{
+  "name": "dialogs",
+  "description": "Real ask_user dialog with single choice, multiple choice and free-text answers. Exercise accept and decline in separate runs.",
+  "prompt": "Ask me how to present the fixture results before continuing.",
+  "routes": {
+    "main": [
+      {
+        "text": "Choose how you’d like the fixture results presented. You can also answer in your own words.\n",
+        "delayMs": 35,
+        "toolCalls": [
+          {
+            "id": "dialogs-ask",
+            "name": "ask_user",
+            "args": {
+              "questions": [
+                {
+                  "header": "Summary",
+                  "question": "How much detail should the summary include?",
+                  "options": [
+                    {
+                      "label": "Short summary (Recommended)",
+                      "description": "Show the outcome and the most important change."
+                    },
+                    {
+                      "label": "Detailed report",
+                      "description": "Include the full explanation and the displayed checks."
+                    },
+                    { "label": "Diff only", "description": "Focus on the simulated file change." }
+                  ]
+                },
+                {
+                  "header": "Checks",
+                  "question": "Which fixture results should be included?",
+                  "multiSelect": true,
+                  "options": [
+                    { "label": "Tests (Recommended)", "description": "Include the canned test output." },
+                    { "label": "Type check", "description": "Include the canned type-check result." },
+                    { "label": "Formatting", "description": "Include the canned formatting result." }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "text": "## Dialog complete\n\nThe question tool has returned your choices or a declined response through the real UI. This scripted reply is the same for either outcome; the tool result above shows what you selected.\n\nNo files were changed and no checks were run.\n",
+        "delayMs": 35
+      }
+    ]
+  }
+}

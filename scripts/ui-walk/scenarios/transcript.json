@@ -1,0 +1,110 @@
+{
+  "name": "transcript",
+  "description": "Thinking, streamed Markdown, parallel reads, an edit diff and shell output. No tool execution.",
+  "prompt": "Review the greeting fixture, update its message, and show a short summary.",
+  "routes": {
+    "main": [
+      {
+        "thinking": "I will inspect the greeting and its test, then make one focused change. These are scripted fixtures, so no project files will be changed.",
+        "text": "I’ll read the implementation and test before changing the greeting.\n",
+        "delayMs": 25,
+        "toolCalls": [
+          {
+            "id": "transcript-read-source",
+            "name": "read",
+            "args": { "path": "src/greeting.ts" },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "     1\texport function greeting(name: string) {\n     2\t  return `Hello, ${name}`\n     3\t}"
+                }
+              ],
+              "details": { "path": "src/greeting.ts", "startLine": 1, "lines": 3, "totalLines": 3 }
+            }
+          },
+          {
+            "id": "transcript-read-test",
+            "name": "read",
+            "args": { "path": "test/greeting.test.ts" },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "     1\timport { expect, test } from 'bun:test'\n     2\ttest('greets a visitor', () => {\n     3\t  expect(greeting('Ada')).toBe('Hello, Ada')\n     4\t})"
+                }
+              ],
+              "details": { "path": "test/greeting.test.ts", "startLine": 1, "lines": 4, "totalLines": 4 }
+            }
+          }
+        ]
+      },
+      {
+        "text": "The greeting is missing its final punctuation. I’ll update the fixture and show the diff.\n",
+        "delayMs": 25,
+        "toolCalls": [
+          {
+            "id": "transcript-edit",
+            "name": "edit",
+            "args": {
+              "path": "src/greeting.ts",
+              "old_string": "return `Hello, ${name}`",
+              "new_string": "return `Hello, ${name}!`"
+            },
+            "result": {
+              "content": [{ "type": "text", "text": "Edited src/greeting.ts: replaced 1 occurrence" }],
+              "details": {
+                "path": "src/greeting.ts",
+                "replacements": 1,
+                "added": 1,
+                "removed": 1,
+                "hunks": [
+                  {
+                    "oldStart": 1,
+                    "oldLines": 3,
+                    "newStart": 1,
+                    "newLines": 3,
+                    "lines": [
+                      " export function greeting(name: string) {",
+                      "-  return `Hello, ${name}`",
+                      "+  return `Hello, ${name}!`",
+                      " }"
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "transcript-bash",
+            "name": "bash",
+            "args": { "command": "bun test test/greeting.test.ts" },
+            "result": {
+              "content": [
+                { "type": "text", "text": "bun test\n✓ greets a visitor\n\n1 pass\n0 fail\n\nExit code: 0" }
+              ],
+              "details": {
+                "exitCode": 0,
+                "timedOut": false,
+                "aborted": false,
+                "settled": true,
+                "shell": "bash",
+                "shellKind": "bash",
+                "durationMs": 36,
+                "outputLines": 5
+              }
+            }
+          }
+        ]
+      },
+      {
+        "text": "## Greeting update\n\nThe fixture now returns **`Hello, Ada!`**.\n\n- Read the implementation and test.\n- Changed one line; the diff is shown above.\n- Displayed a canned test result: **1 pass, 0 fail**.\n\n```ts\nexport function greeting(name: string) {\n  return `Hello, ${name}!`\n}\n```\n\n| Item | Result |\n| --- | --- |\n| File change | Simulated |\n| Test run | Simulated |\n| Network | Loopback only |\n\n> This UI walk does not read or edit your project or run the displayed command.\n",
+        "delayMs": 25
+      },
+      {
+        "text": "The greeting example is complete. You can expand the tool output, inspect the diff, or search the transcript for **greeting**.\n",
+        "delayMs": 25
+      }
+    ]
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "name": "subagents",
+  "description": "Two real concurrent child sessions with independent scripted model routes; normal agent tool, task panels and sub-agent view. Isolation is none, never a worktree.",
+  "prompt": "Delegate a fixture inspection and a fixture review, then summarize both reports.",
+  "routes": {
+    "main": [
+      {
+        "text": "I’ll delegate the fixture inspection and review in parallel. Both children use this local scripted provider.\n",
+        "delayMs": 30,
+        "toolCalls": [
+          {
+            "id": "subagents-spawn",
+            "name": "agent",
+            "args": {
+              "tasks": [
+                {
+                  "title": "Inspect greeting fixture",
+                  "prompt": "Inspect src/greeting.ts and report the greeting behavior. Do not change files.",
+                  "model": "ui-walk/child-inspect",
+                  "context": "fresh",
+                  "isolation": "none"
+                },
+                {
+                  "title": "Review greeting fixture",
+                  "prompt": "Review the fixture test for coverage and report one recommendation. Do not change files.",
+                  "model": "ui-walk/child-review",
+                  "context": "fresh",
+                  "isolation": "none"
+                }
+              ],
+              "background": false
+            }
+          }
+        ]
+      },
+      {
+        "text": "## Child reports\n\nBoth real child sessions finished with scripted replies.\n\n| Task | Finding |\n| --- | --- |\n| Inspect greeting fixture | The greeting includes the supplied name. |\n| Review greeting fixture | Add an empty-name case. |\n\nNo worktrees were created. The file reads were canned, and neither child changed files or ran commands. Open the sub-agent view to inspect their individual transcripts.\n",
+        "delayMs": 35
+      }
+    ],
+    "child-inspect": [
+      {
+        "thinking": "The assigned fixture is small. I will read it and describe the returned string.",
+        "text": "I’ll inspect the greeting fixture.\n",
+        "delayMs": 65,
+        "toolCalls": [
+          {
+            "id": "subagents-child-read-source",
+            "name": "read",
+            "args": { "path": "src/greeting.ts" },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "     1\texport function greeting(name: string) {\n     2\t  return `Hello, ${name}!`\n     3\t}"
+                }
+              ],
+              "details": { "path": "src/greeting.ts", "startLine": 1, "lines": 3, "totalLines": 3 }
+            }
+          }
+        ]
+      },
+      {
+        "text": "The fixture returns `Hello, ${name}!`. The supplied name is preserved. This was a canned read; no files were changed.\n",
+        "delayMs": 60
+      }
+    ],
+    "child-review": [
+      {
+        "thinking": "I will look at the test's behavior and identify a useful missing case.",
+        "text": "I’ll review the greeting test fixture.\n",
+        "delayMs": 80,
+        "toolCalls": [
+          {
+            "id": "subagents-child-read-test",
+            "name": "read",
+            "args": { "path": "test/greeting.test.ts" },
+            "result": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "     1\ttest('greets a visitor', () => {\n     2\t  expect(greeting('Ada')).toBe('Hello, Ada!')\n     3\t})"
+                }
+              ],
+              "details": { "path": "test/greeting.test.ts", "startLine": 1, "lines": 3, "totalLines": 3 }
+            }
+          }
+        ]
+      },
+      {
+        "text": "The happy-path fixture covers a named visitor. Add an empty-name case to make that behavior explicit. This was a canned read; no checks were run.\n",
+        "delayMs": 70
+      }
+    ],
+    "child": [
+      {
+        "text": "The child task is complete. This fallback report is scripted locally; no files were changed and no commands were run.\n",
+        "delayMs": 60
+      }
+    ]
+  }
+}
