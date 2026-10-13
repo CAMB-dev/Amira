@@ -129,11 +129,23 @@ export function extensionRows(
   }
 }
 
-export function extensionProgressLines(rows: ExtensionProgress[], width: number): ToolLine[] {
+export function extensionProgressLines(
+  rows: (ExtensionProgress & { startedAt?: number })[],
+  width: number,
+  spinner = "",
+  now = Date.now(),
+): ToolLine[] {
   return [
-    { kind: "muted", text: clip("Extensions · working", width) },
-    ...rows.map(
-      (p): ToolLine => ({
+    { kind: "muted", text: clip(`${spinner ? `${spinner} ` : ""}Extensions · working`, width) },
+    ...rows.map((p): ToolLine => {
+      const active = !["done", "failed", "cancelled"].includes(p.phase)
+      const phase = p.phase === "dependencies" ? "installing dependencies" : p.phase
+      const percent = p.percent !== undefined ? ` ${Math.max(0, Math.min(100, Math.round(p.percent)))}%` : ""
+      const elapsed =
+        active && p.startedAt !== undefined
+          ? ` · ${Math.max(0, Math.floor((now - p.startedAt) / 1000))}s`
+          : ""
+      return {
         kind:
           p.phase === "failed"
             ? "error"
@@ -143,11 +155,11 @@ export function extensionProgressLines(rows: ExtensionProgress[], width: number)
                 ? "warning"
                 : "accent",
         text: clip(
-          `${oneLine(p.name)} · ${p.phase}${p.percent !== undefined ? ` ${Math.max(0, Math.min(100, Math.round(p.percent)))}%` : ""}${p.detail ? ` · ${oneLine(p.detail)}` : ""}`,
+          `${active && spinner ? `${spinner} ` : ""}${oneLine(p.name)} · ${phase}${percent}${elapsed}${p.detail ? ` · ${oneLine(p.detail)}` : ""}`,
           width,
         ),
-      }),
-    ),
+      }
+    }),
   ]
 }
 
@@ -155,17 +167,18 @@ export function extensionProgressLines(rows: ExtensionProgress[], width: number)
 export function extensionCommand(api: ExtensionAPI): { command: CommandDefinition; running(): boolean } {
   let running = false
   let sessionId = ""
-  const progress = new Map<string, ExtensionProgress>()
-  // The panel shows while packages are being worked on, not while the picker or a search waits.
+  const progress = new Map<string, ExtensionProgress & { startedAt: number }>()
+  // The panel shows while packages or the index are being worked on, not while a picker waits.
   api.registerPanel({
     id: "extensions",
     render: (opts) =>
       running && progress.size && opts.sessionId === sessionId
-        ? extensionProgressLines([...progress.values()], opts.width)
+        ? extensionProgressLines([...progress.values()], opts.width, opts.spinner, opts.now)
         : [],
   })
   const update = (p: ExtensionProgress) => {
-    progress.set(p.name, p)
+    if (!running) return
+    progress.set(p.name, { ...p, startedAt: progress.get(p.name)?.startedAt ?? Date.now() })
     api.requestRender()
   }
   /** Nothing reloads on its own: a reload mid-turn would unload the tools the turn is using. */
@@ -226,12 +239,30 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
       running = true
       sessionId = ctx.session.info().id
       progress.clear()
+      const clearProgress = () => {
+        progress.clear()
+        api.requestRender()
+      }
+      ctx.signal.addEventListener("abort", clearProgress, { once: true })
+      const loadIndex = async (query: string) => {
+        update({ name: "Extension index", phase: query ? "searching" : "fetching" })
+        try {
+          const result = await admin.search(query, ctx.signal)
+          ctx.signal.throwIfAborted()
+          return result
+        } finally {
+          progress.delete("Extension index")
+          api.requestRender()
+        }
+      }
       const warnings = (messages: string[]) => {
         for (const message of messages) ctx.print(message, "warning")
       }
       const opts = {
         signal: ctx.signal,
-        onProgress: update,
+        onProgress: (p: ExtensionProgress) => {
+          if (!ctx.signal.aborted) update(p)
+        },
         log: (message: string) => ctx.print(message, "warning"),
       }
       let didChange = false
@@ -242,6 +273,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
           case "install": {
             update({ name, phase: "resolving" })
             const result = await admin.install(name, scope, opts)
+            ctx.signal.throwIfAborted()
             warnings(result.warnings)
             update({ name, phase: "done", detail: result.version })
             didChange = true
@@ -276,9 +308,11 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
                 changed(ctx, `Updated ${r.name} to ${r.version}.`)
               } else ctx.print(`${r.name} is up to date (${r.version}).`)
             })
+            ctx.signal.throwIfAborted()
             break
           }
           case "remove":
+            update({ name, phase: "removing" })
             admin.remove(name, scope)
             didChange = true
             changed(ctx, `Removed ${name} from ${scope} scope.`)
@@ -293,7 +327,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
             break
           }
           case "search": {
-            const result = await admin.search(names.join(" "), ctx.signal)
+            const result = await loadIndex(names.join(" "))
             warnings(result.warnings)
             ctx.print(
               result.extensions.length
@@ -316,7 +350,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         const installed = admin.list()
         let available: AvailableExtension[] = []
         try {
-          const loaded = await admin.search("", ctx.signal)
+          const loaded = await loadIndex("")
           available = loaded.extensions
           warnings(loaded.warnings)
         } catch (error) {
@@ -401,8 +435,8 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         )
       } finally {
         running = false
-        progress.clear()
-        api.requestRender()
+        ctx.signal.removeEventListener("abort", clearProgress)
+        clearProgress()
       }
     },
   }

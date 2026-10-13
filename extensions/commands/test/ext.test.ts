@@ -520,6 +520,21 @@ test("/ext manage shows settings only for packages with a declaration", async ()
   }
 })
 
+test("progress animates active rows and folded summaries but keeps outcomes static", () => {
+  const progress = [
+    { name: "active", phase: "dependencies", startedAt: 0 },
+    { name: "done", phase: "done", startedAt: 0 },
+    { name: "failed", phase: "failed", startedAt: 0 },
+    { name: "cancelled", phase: "cancelled", startedAt: 0 },
+  ]
+  const first = extensionProgressLines(progress, 120, "first", 0)
+  const next = extensionProgressLines(progress, 120, "next", 2000)
+  expect(first[0]!.text).toStartWith("first")
+  expect(next[0]!.text).toStartWith("next")
+  expect(next[1]!.text).toBe("next active · installing dependencies · 2s")
+  expect(next.slice(2)).toEqual(first.slice(2))
+})
+
 test("progress uses themed lines and clips 120/60 columns including fetching percentages", () => {
   const progress: ExtensionProgress[] = [
     { name: "fixture", phase: "resolving" },
