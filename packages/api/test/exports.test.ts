@@ -11,13 +11,16 @@ import type {
   ShimmerStyle,
   SpawnOptions,
   ThemeDefinition,
+  ToolLine,
+  ToolResult,
+  ToolResultMessage,
   TuiSettings,
 } from "../src/index.ts"
 
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
   const actual = Object.keys(api).sort()
-  expect(api.API_VERSION).toBe("0.1.42")
+  expect(api.API_VERSION).toBe("0.1.43")
   expect(actual).toEqual([
     "API_VERSION",
     "ARTIFACT_HEADER",
@@ -265,7 +268,7 @@ test("the public TUI settings include optional margins without changing API_VERS
   const defaults: TuiSettings = { margin: DEFAULT_TUI_MARGIN, marginRows: DEFAULT_TUI_MARGIN_ROWS }
   const edgeToEdge: TuiSettings = { margin: 0, marginRows: 0 }
   const omitted: TuiSettings = {}
-  expect(API_VERSION).toBe("0.1.42")
+  expect(API_VERSION).toBe("0.1.43")
   expect(defaults).toEqual({ margin: 3, marginRows: 1 })
   expect(edgeToEdge).toEqual({ margin: 0, marginRows: 0 })
   expect(omitted).toEqual({})
@@ -310,6 +313,57 @@ test("the public shimmer types are shared by theme definitions and TUI settings"
   `)
   const alias: ShimmerEffect = { preset: "sweep", edge: "linear" }
   expect(alias).toEqual({ preset: "sweep", edge: "linear" })
+})
+
+test("presenter choices and opt-in durable details are public additive contracts", () => {
+  const line: ToolLine = {
+    kind: "text",
+    text: "Patch",
+    marker: "success",
+    description: "Fix it in place",
+    wrap: true,
+  }
+  const result: ToolResult = { content: [], details: { selected: ["Patch"] }, persistDetails: true }
+  const message: ToolResultMessage = {
+    role: "toolResult",
+    toolCallId: "c1",
+    toolName: "ask_user",
+    content: [],
+    isError: false,
+    details: result.details,
+  }
+  expect({ line, result, message }).toMatchInlineSnapshot(`
+    {
+      "line": {
+        "description": "Fix it in place",
+        "kind": "text",
+        "marker": "success",
+        "text": "Patch",
+        "wrap": true,
+      },
+      "message": {
+        "content": [],
+        "details": {
+          "selected": [
+            "Patch",
+          ],
+        },
+        "isError": false,
+        "role": "toolResult",
+        "toolCallId": "c1",
+        "toolName": "ask_user",
+      },
+      "result": {
+        "content": [],
+        "details": {
+          "selected": [
+            "Patch",
+          ],
+        },
+        "persistDetails": true,
+      },
+    }
+  `)
 })
 
 test("the canonical theme glyph export includes the layout symbols", async () => {

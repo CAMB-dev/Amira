@@ -208,6 +208,20 @@ D111 为 `ExtensionAPI` 增加必需的 `readonly dataDir: string` 属性。`api
 
 这只免除外层 Amira 用户目录的保护。Git 元数据、`.gitmodules`、配置的 hooks 路径和目录内的 `.amira` 仍需审批。plan 模式仍拒绝写入；shell 权限规则和拦截器的审批请求不变，子 agent 使用相同策略。路径报告是受信任的扩展声明，不是 shell 沙箱、无竞态的授权或独占所有权证明：目录外的硬链接可能指向同一文件。自定义工具必须按文件工具的语义一致地解析报告和实际文件访问。参见[权限](usage.md#权限)。
 
+### 工具结果与展示器行
+
+工具结果的 `content` 是发给模型的文本或图片。可选的 `details` 保存展示器所需的结构化数据，默认只在当前运行中保留。在结果上设置 `persistDetails: true`，即可将这些数据的 JSON 快照保存在会话历史中，供恢复后的对话记录和 `/agents` 使用。内置 provider 序列化器不会将 details 发给模型。
+
+每个结果最多持久保存 **16 KiB（16,384 字节）的序列化 UTF-8 details**，计入 JSON 引号和转义字符。超出上限，或无法序列化的值（如循环引用或 `BigInt`）会被**丢弃，而不是截断**。实时展示器仍能收到原始 details；历史记录则回退到已保存的结果文本或输出文件的预览。因此，`content` 必须在没有 details 时也能表达结果。旧会话仍可加载；`ask_user` 不会从旧记录的文本中推断所选选项。
+
+工具展示器、全屏视图的 `ViewLine` 和块级 Markdown 渲染器共用 `ToolLine`。除 `kind` 和 `text` 外，每行还可以设置：
+
+- `wrap: true`：按可用列数换行，而不是截断文本。
+- `marker: "success" | "unchecked"`：在文本前显示主题中的成功或未选中标记，ASCII 主题也适用。标记只出现一次，续行与标签文本对齐。成功标记使用成功颜色，未选中标记使用弱化颜色，标签颜色由 `kind` 决定。
+- `description: string`：以弱化样式显示说明；同一行放得下时跟在标签后，否则在标签下换行。每个逻辑行的说明只出现一次。
+
+标记和说明也会启用换行，因此选项行无需另外设置 `wrap`。例如，`{ kind: "text", text: "Patch", marker: "success", description: "Fix it in place", wrap: true }` 显示一个已选选项，标签使用正常文本颜色，说明使用弱化样式。这些字段只描述显示内容，不改变发给模型的工具结果。Core 对 Markdown 渲染器的说明和文本进行相同的清理；块级行数上限保持不变。
+
 ### Markdown 与数学公式渲染器
 
 `api.registerMarkdownRenderer({ id, match, render })` 接管回复中已完整的节点。代码围栏使用 `match: { codeLang: ["latex", "tex"] }`，独立图片使用 `{ image: true }`，公式使用 `{ math: "inline" | "display" | "both" }`。公式节点为 `{ type: "math", display: boolean, source: string }`，source 不包含定界符。渲染器先按优先级从高到低运行，同优先级按注册顺序运行。返回 undefined、抛出异常或返回无效结果时继续尝试下一个渲染器；无人接管时，原有 Markdown 显示保持不变。

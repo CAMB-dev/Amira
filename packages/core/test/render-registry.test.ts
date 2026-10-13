@@ -136,6 +136,143 @@ test("results are checked: plain text only, a row per line, known kinds; images 
   expect(r.render(code("x"), ctx)).toBeUndefined()
 })
 
+test("markdown renderer lines preserve sanitized choice metadata once across multiline labels", () => {
+  const r = new MarkdownRendererRegistry()
+  r.register({
+    id: "choices",
+    match: { codeLang: ["x"] },
+    render: () => ({
+      lines: [
+        {
+          kind: "text",
+          text: "First\x1b[31m label\x1b[0m\r\nsecond\trow\x07",
+          marker: "success",
+          description: "One\x1b]0;title\x07 explanation\r\nwith\tdetails\x07",
+          wrap: true,
+        },
+        { kind: "accent", text: "Other choice", marker: "unchecked", description: "", wrap: false },
+      ],
+    }),
+  })
+  const expected: { lines: (ToolLine & { continuationMarker?: ToolLine["marker"] })[] } = {
+    lines: [
+      { kind: "text", text: "First label", marker: "success", wrap: true },
+      {
+        kind: "text",
+        text: "second  row",
+        continuationMarker: "success",
+        description: "One explanation with  details",
+        wrap: true,
+      },
+      { kind: "accent", text: "Other choice", marker: "unchecked", description: "", wrap: true },
+    ],
+  }
+  expect(r.render(code("x"), ctx)).toEqual(expected)
+})
+
+test("markdown renderer lines keep only declared choice metadata types", () => {
+  const r = new MarkdownRendererRegistry()
+  const result: unknown = {
+    lines: [
+      { kind: "text", text: "valid", marker: "unchecked", description: "safe", wrap: false, extra: true },
+      { kind: "text", text: "invalid enum", marker: "warning", description: 5, wrap: "true" },
+      { kind: "text", text: "invalid types", marker: true, description: null, wrap: 1 },
+      { kind: "text", text: "invalid objects", marker: {}, description: [], wrap: [] },
+      { kind: "code", text: "plain without a description", wrap: false },
+    ],
+  }
+  r.register({ id: "types", match: { codeLang: ["x"] }, render: () => result as never })
+  expect(r.render(code("x"), ctx)).toEqual({
+    lines: [
+      { kind: "text", text: "valid", marker: "unchecked", description: "safe", wrap: true },
+      { kind: "text", text: "invalid enum" },
+      { kind: "text", text: "invalid types" },
+      { kind: "text", text: "invalid objects" },
+      { kind: "code", text: "plain without a description", wrap: false },
+    ],
+  })
+})
+
+test("image fallbacks preserve sanitized choice metadata with or without graphics", () => {
+  const r = new MarkdownRendererRegistry()
+  r.register({
+    id: "choices",
+    match: { image: true },
+    render: () => ({
+      image: { url: "choices.png" },
+      fallback: [
+        {
+          kind: "text",
+          text: "First\r\nsecond",
+          marker: "unchecked",
+          description: "One\x1b[31m explanation\x1b[0m\x07",
+          wrap: true,
+        },
+      ],
+    }),
+  })
+  const fallback: (ToolLine & { continuationMarker?: ToolLine["marker"] })[] = [
+    { kind: "text", text: "First", marker: "unchecked", wrap: true },
+    {
+      kind: "text",
+      text: "second",
+      continuationMarker: "unchecked",
+      description: "One explanation",
+      wrap: true,
+    },
+  ]
+  expect(r.render(image, ctx)).toEqual({ lines: fallback })
+  expect(r.render(image, { ...ctx, images: true })).toEqual({ image: { url: "choices.png" }, fallback })
+})
+
+test("choice metadata does not raise the 2000-line cap or repeat on split rows", () => {
+  for (const count of [2000, 2001]) {
+    const errors: string[] = []
+    const r = new MarkdownRendererRegistry((_source, error) => errors.push(error))
+    r.register({
+      id: "choices",
+      match: { codeLang: ["x"] },
+      render: () => ({
+        lines: [
+          {
+            kind: "text",
+            text: `${"row\n".repeat(count - 1)}row`,
+            marker: "success",
+            description: "One explanation",
+            wrap: true,
+          },
+        ],
+      }),
+    })
+    const out = r.render(code("x"), ctx) as {
+      lines: (ToolLine & { continuationMarker?: ToolLine["marker"] })[]
+    }
+    expect(out.lines).toHaveLength(2000)
+    expect(out.lines[0]).toEqual({ kind: "text", text: "row", marker: "success", wrap: true })
+    expect(out.lines.filter((line) => line.marker !== undefined)).toHaveLength(1)
+    expect(out.lines.filter((line) => line.description !== undefined)).toHaveLength(count === 2000 ? 1 : 0)
+    expect(out.lines.slice(1, -1).every((line) => line.wrap === true)).toBe(true)
+    expect(out.lines.at(-1)).toEqual(
+      count === 2000
+        ? {
+            kind: "text",
+            text: "row",
+            continuationMarker: "success",
+            wrap: true,
+            description: "One explanation",
+          }
+        : { kind: "text", text: "row", continuationMarker: "success", wrap: true },
+    )
+    expect(errors).toEqual(
+      count === 2000
+        ? []
+        : [
+            'markdown renderer "choices" failed: render returned more than 2000 lines; the rest were left out',
+          ],
+    )
+  }
+})
+
 test("wait times as asked (0 too, nonsense as the default); a runaway rendering is cut and reported", () => {
   const errors: string[] = []
   const r = new MarkdownRendererRegistry((_s, e) => errors.push(e))

@@ -202,7 +202,11 @@ function transcriptLines(
           block.name,
           {
             args: block.args,
-            result: { content: result.content, isError: result.isError },
+            result: {
+              content: result.content,
+              isError: result.isError,
+              ...(result.details !== undefined ? { details: result.details } : {}),
+            },
             text: toolResultText(result),
             ...(result.rejected ? { rejected: result.rejected } : {}),
           },

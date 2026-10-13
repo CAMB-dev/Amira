@@ -102,10 +102,10 @@ export class PaneFind {
   }
 
   /**
-   * Finds the query in each block's text as one run: its rows without their indent, a space
-   * between rows (where the text wrapped, the space it broke at; none after a wide character,
-   * where CJK text wraps without one), a blank row a break no match
-   * crosses. So a match does not depend on where the width wraps the text; one that goes over
+   * Finds the query in each block's text as one run: its rows without their indent, joined
+   * with the renderer's wrap separator (otherwise a space, or nothing after a wide character).
+   * A blank row is a break no match crosses. So a match does not depend on where the width
+   * wraps the text; one that goes over
    * rows is a segment on each. The current match stays the one it was, where it still is.
    */
   private runFind(): void {
@@ -123,15 +123,22 @@ export class PaneFind {
       const d = this.view.drawing(block, env)
       let found = this.found.get(d)
       if (found?.query !== q) {
+        const plain = this.view.plain(block, env)
+        // Renderer-owned prefixes, not heuristic copy ranges. Convert display cells to
+        // string offsets so wrapped matches still highlight their original columns.
+        const rows = block.searchRows(plain, d.lines)
+        const starts = rows.map((row, i) => sliceCells(plain[i]!, 0, row.from).length)
         found = {
           query: q,
           matches: findIn(
             block,
-            this.view.plain(block, env),
+            plain,
             q,
             exact,
             userBandPaddingIn(d.lines),
             timestampIn(d.lines),
+            starts,
+            rows.map((row) => row.joinBefore),
           ),
         }
         this.found.set(d, found)
@@ -191,6 +198,8 @@ function findIn(
   exact: boolean,
   padding: number,
   stamp: ReturnType<typeof timestampIn>,
+  starts: readonly number[],
+  joins: readonly ("" | " " | undefined)[],
 ): Match[][] {
   let text = ""
   /** The line and column of each character of `text`; -1 for what joins lines. */
@@ -200,10 +209,12 @@ function findIn(
   for (let line = padding; line < plain.length - padding; line++) {
     // The clock is trailing chrome in display cells; matches keep their string offsets.
     const raw = stamp?.line === line ? sliceCells(plain[line]!, 0, stamp.to) : plain[line]!
-    const start = raw.length - raw.trimStart().length
+    const from = starts[line] ?? 0
+    const content = raw.slice(from)
+    const start = from + content.length - content.trimStart().length
     const body = raw.slice(start).trimEnd()
-    // Text wraps after a wide (CJK) character without dropping a space: those rows join as is.
-    const joint = !text ? "" : !body ? "\n" : endsWide(text) ? "" : " "
+    // Prefer the renderer's break boundary; older drawings only know about wide-character wraps.
+    const joint = !text ? "" : !body ? "\n" : (joins[line] ?? (endsWide(text) ? "" : " "))
     if (joint) {
       text += joint
       lineOf.push(-1)

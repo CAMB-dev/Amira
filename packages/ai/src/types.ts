@@ -141,6 +141,8 @@ export interface ToolResultMessage {
    * stored before this was kept have none.
    */
   rejected?: ToolRejection
+  /** Opt-in, JSON-safe presenter metadata retained in history; never sent by dialects. */
+  details?: unknown
 }
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage
