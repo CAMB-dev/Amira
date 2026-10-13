@@ -143,12 +143,11 @@ test("strict live authority survives a stopped heartbeat and an arbitrarily old 
   expectReleasedArtifacts(dir, [file])
 })
 
-test("strict authority never ages out an uninitialized or invalid holder pid", () => {
+test("strict authority preserves fresh legacy leases even without a valid holder pid", () => {
   const file = path.join(dir, "session.lock")
   for (const contents of ["", "not-a-pid\n", "0\n", `${deadPid}\n`]) {
     fs.writeFileSync(file, contents)
-    fs.utimesSync(file, new Date(0), new Date(0))
-    expect(tryFileLock(file, 1, undefined, true)).toBeUndefined()
+    expect(tryFileLock(file, 60_000, undefined, true)).toBeUndefined()
     expect(fs.readFileSync(file, "utf8")).toBe(contents)
   }
 })

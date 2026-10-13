@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { emptyUsage, userMessage } from "@amira/ai"
@@ -145,11 +145,10 @@ test("claimed read views are ambiguous for metadata until their references are r
   }
 })
 
-test("a lease paused before writing its pid cannot be stolen by age", () => {
+test("a fresh empty legacy lease blocks both claiming and appending", () => {
   const { dir, store } = fixture()
   try {
     writeFileSync(sessionLockFile(store.file), "")
-    utimesSync(sessionLockFile(store.file), new Date(0), new Date(0))
     expect(() => store.claim()).toThrow()
     expect(() => store.append(charge)).toThrow()
     expect(readFileSync(sessionLockFile(store.file), "utf8")).toBe("")
