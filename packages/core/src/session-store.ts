@@ -33,7 +33,7 @@ import {
 } from "./session-acquisition.ts"
 import { canonicalSessionFile } from "./session-path.ts"
 
-/** A live session refreshes this lease; a dead process is safe to replace immediately. */
+/** Owner-record death permits immediate recovery; legacy leases also need this stale window. */
 export const SESSION_LOCK_STALE_MS = 30_000
 export const SESSION_LOCK_HEARTBEAT_MS = 10_000
 const SESSION_TAIL_BYTES = 4096
@@ -499,6 +499,7 @@ export class SessionStore {
       (gate) => {
         throw new SessionWriteGuardError(gate)
       },
+      SESSION_LOCK_STALE_MS,
     )
     if (!result)
       throw new SessionInUseError(

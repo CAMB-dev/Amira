@@ -58,10 +58,13 @@ export interface FileLock {
 /**
  * Takes `lockPath` if no other process holds it: the file is created exclusively and records
  * the holder's pid. A lock whose holder died, or that was not touched for `staleMs`, is taken
- * over (a holder may keep it fresh with `heartbeatMs`). With `livePidWins`, only a provably
- * dead holder in the same host/PID domain can be replaced: neither age nor a bare pid grants
- * session authority. All participants at a strict lease pathname must use this mode. Busy,
- * foreign, legacy and unknown leases/gates fail closed. `onGuardBusy` receives the blocking
+ * over (a holder may keep it fresh with `heartbeatMs`). With `livePidWins`, owner records
+ * require proof of death in the same host/PID domain; age alone never grants authority.
+ * Legacy bare-pid, empty or unparseable single-line leases require BOTH age over `staleMs`
+ * and a provably dead local pid (or no valid pid). Live pids and fresh legacy leases block.
+ * Recovery rechecks identity and freshness under the same gate, including the moved file. All new
+ * participants must use this mode; older builds must heartbeat. Foreign or invalid owner
+ * records and unknown gates still fail closed. `onGuardBusy` receives the blocking
  * guard or unverifiable lease path; a missing guard means publication lost a concurrent race.
  * Undefined when another live process holds it. Other errors (no permission, ...) are thrown.
  */
@@ -84,9 +87,12 @@ export function tryFileLock(
         return undefined
       }
       try {
+        if (!restoreLegacyLease(lockPath, onGuardBusy)) return undefined
         return (
           createStrict(lockPath, heartbeatMs) ??
-          (removeStrictIfDead(lockPath, onGuardBusy) ? createStrict(lockPath, heartbeatMs) : undefined)
+          (removeStrictIfDead(lockPath, staleMs, onGuardBusy)
+            ? createStrict(lockPath, heartbeatMs)
+            : undefined)
         )
       } finally {
         unlock()
@@ -109,6 +115,7 @@ export function withTransientFileLock<T>(
   lockPath: string,
   write: () => T & (T extends PromiseLike<unknown> ? never : unknown),
   onGuardBusy: (gatePath: string) => void,
+  staleMs = Infinity,
 ): { value: T } | undefined {
   mkdirSync(path.dirname(lockPath), { recursive: true })
   return withFilesystemGateAttempt(() => {
@@ -121,7 +128,8 @@ export function withTransientFileLock<T>(
       return undefined
     }
     try {
-      if (!removeStrictIfDead(lockPath, onGuardBusy)) return undefined
+      if (!restoreLegacyLease(lockPath, onGuardBusy)) return undefined
+      if (!removeStrictIfDead(lockPath, staleMs, onGuardBusy)) return undefined
       return { value: write() }
     } finally {
       unlock()
@@ -129,21 +137,112 @@ export function withTransientFileLock<T>(
   })
 }
 
-/** The exclusively published gate spans lease proof, retirement and publication. */
-function removeStrictIfDead(lockPath: string, onGuardBusy?: (ownerPath: string) => void): boolean {
-  let state: ReturnType<typeof strictOwnerState>
+/** A moved legacy lease remains authority even across failed rollback or a crash. */
+function restoreLegacyLease(lockPath: string, onGuardBusy?: (ownerPath: string) => void): boolean {
+  const aside = `${lockPath}.legacy-stale`
+  let moved: ReturnType<typeof lstatSync>
   try {
-    state = statSync(lockPath).isFile() ? strictOwnerState(readFileSync(lockPath, "utf8")) : "unknown"
+    moved = lstatSync(aside)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return true
-    state = "unknown"
   }
-  if (state !== "dead") {
-    if (state === "unknown") onGuardBusy?.(lockPath)
+  if (moved?.isFile()) {
+    try {
+      try {
+        linkSync(aside, lockPath)
+      } catch (error) {
+        // A crash after linking may leave both names for the same inode. Nothing else
+        // grants permission to discard the recovery fence or overwrite the canonical lease.
+        const current = lstatSync(lockPath)
+        if (!current.isFile() || current.dev !== moved.dev || current.ino !== moved.ino) throw error
+      }
+      rmSync(aside, { force: true })
+      return true
+    } catch {}
+  }
+  onGuardBusy?.(aside)
+  return false
+}
+
+/** Never downgrade a multiline or structured owner record to a legacy pid. */
+function legacyLockPid(contents: string): number | null | undefined {
+  if (!/^[^\r\n]*(?:\r?\n)?$/.test(contents) || /^[{[]/.test(contents.trim())) return undefined
+  const pid = Number(contents.trim())
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+}
+
+/** A failed or unavailable process probe is not proof of death. */
+function legacyPidDead(pid: number): boolean {
+  if (pid === process.pid) return false
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH"
+  }
+}
+
+/** The exclusively published gate spans lease proof, identity recheck and retirement. */
+function removeStrictIfDead(
+  lockPath: string,
+  staleMs: number,
+  onGuardBusy?: (ownerPath: string) => void,
+): boolean {
+  let identity: ReturnType<typeof statSync>
+  let contents: string
+  let state: ReturnType<typeof strictOwnerState> = "unknown"
+  let recoverable = false
+  let legacy = false
+  const matchesProof = (file: string) => {
+    if (!identity) return false
+    const currentContents = readFileSync(file, "utf8")
+    const current = lstatSync(file)
+    return (
+      current.isFile() &&
+      current.dev === identity.dev &&
+      current.ino === identity.ino &&
+      current.mtimeMs === identity.mtimeMs &&
+      current.size === identity.size &&
+      currentContents === contents
+    )
+  }
+  try {
+    identity = statSync(lockPath)
+    if (identity.isFile()) {
+      contents = readFileSync(lockPath, "utf8")
+      state = strictOwnerState(contents)
+      const pid = state === "unknown" ? legacyLockPid(contents) : undefined
+      legacy = pid !== undefined
+      recoverable =
+        state === "dead" ||
+        (pid !== undefined && Date.now() - identity.mtimeMs > staleMs && (pid === null || legacyPidDead(pid)))
+      // Older builds do not take this gate: reject a replacement or heartbeat during proof.
+      if (recoverable) recoverable = matchesProof(lockPath)
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true
+    recoverable = false
+  }
+  if (!recoverable) {
+    if (state !== "live") onGuardBusy?.(lockPath)
     return false
   }
-  const aside = `${lockPath}.stale-${process.pid}-${randomUUID()}`
+  // A fixed legacy retirement path is checked before every subsequent acquisition.
+  // Unlike private owner-record debris, it must fence a possibly live older holder.
+  const aside = legacy ? `${lockPath}.legacy-stale` : `${lockPath}.stale-${process.pid}-${randomUUID()}`
   renameSync(lockPath, aside)
+  if (legacy) {
+    // Bind the proof to the inode actually moved: an older writer may ignore our gate.
+    let verified = false
+    try {
+      verified = matchesProof(aside)
+    } catch {}
+    if (!verified) {
+      if (!restoreLegacyLease(lockPath, onGuardBusy)) return false
+      onGuardBusy?.(lockPath)
+      return false
+    }
+  }
   rmSync(aside, { force: true })
   return true
 }
@@ -153,12 +252,21 @@ export class SessionWriteGuardError extends Error {
   /** Internal acquisition hint, never authority to reclaim anything. */
   readonly pendingOwnedCleanup: boolean
   constructor(readonly gatePath: string) {
+    let legacy = false
+    try {
+      legacy =
+        !gatePath.endsWith(".lease-gate") &&
+        lstatSync(gatePath).isFile() &&
+        legacyLockPid(readFileSync(gatePath, "utf8")) !== undefined
+    } catch {}
     super(
-      `session stale-write guard is busy or unverifiable: ${gatePath}; retry${
-        existsSync(gatePath)
-          ? `, or remove this ${gatePath.endsWith(".lease-gate") ? "directory" : "lease file"} manually only after confirming no Amira process is running on any host using these session files`
-          : "; no guard exists at this path yet, so do not remove any files"
-      }`,
+      legacy
+        ? `an older Amira build appears to hold the session: ${gatePath}; close it before resuming or deleting the session, then retry; if it crashed, wait for its lease to become stale`
+        : `session stale-write guard is busy or unverifiable: ${gatePath}; retry${
+            existsSync(gatePath)
+              ? `, or remove this ${gatePath.endsWith(".lease-gate") ? "directory" : "lease file"} manually only after confirming no Amira process is running on any host using these session files`
+              : "; no guard exists at this path yet, so do not remove any files"
+          }`,
     )
     this.pendingOwnedCleanup = pendingOwnedLockCleanup(gatePath)
   }
