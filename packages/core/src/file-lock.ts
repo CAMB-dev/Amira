@@ -99,6 +99,36 @@ export function tryFileLock(
   )
 }
 
+/**
+ * A synchronous unclaimed write needs authority only until it returns. Batch lease proof
+ * and the mutation under one gate instead of publishing a lease and taking a second gate
+ * to release it. Persistent claim/release/recovery use this same gate, so none can overlap.
+ * A crash is fenced by the gate owner's death proof just as in persistent acquisition.
+ */
+export function withTransientFileLock<T>(
+  lockPath: string,
+  write: () => T & (T extends PromiseLike<unknown> ? never : unknown),
+  onGuardBusy: (gatePath: string) => void,
+): { value: T } | undefined {
+  mkdirSync(path.dirname(lockPath), { recursive: true })
+  return withFilesystemGateAttempt(() => {
+    const key = strictReleaseKey(lockPath)
+    for (const registry of [pendingStrictReleases, pendingPrivateCleanups])
+      for (const cleanup of registry.get(key) ?? []) cleanup()
+    const unlock = takeFilesystemGate(lockPath)
+    if (!unlock) {
+      onGuardBusy(`${lockPath}.lease-gate`)
+      return undefined
+    }
+    try {
+      if (!removeStrictIfDead(lockPath, onGuardBusy)) return undefined
+      return { value: write() }
+    } finally {
+      unlock()
+    }
+  })
+}
+
 /** The exclusively published gate spans lease proof, retirement and publication. */
 function removeStrictIfDead(lockPath: string, onGuardBusy?: (ownerPath: string) => void): boolean {
   let state: ReturnType<typeof strictOwnerState>

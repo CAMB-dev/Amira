@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto"
 import {
   appendFileSync,
+  type BigIntStats,
   closeSync,
   existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -15,7 +17,13 @@ import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@am
 import type { CompactionInfo, CompactionReason, NoticeLevel, PrintOptions } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
-import { type FileLock, pendingOwnedLockCleanup, SessionWriteGuardError, tryFileLock } from "./file-lock.ts"
+import {
+  type FileLock,
+  pendingOwnedLockCleanup,
+  SessionWriteGuardError,
+  tryFileLock,
+  withTransientFileLock,
+} from "./file-lock.ts"
 import type { FileJournalEntry } from "./file-rewind.ts"
 import { amiraPath } from "./home.ts"
 import {
@@ -28,6 +36,7 @@ import { canonicalSessionFile } from "./session-path.ts"
 /** A live session refreshes this lease; a dead process is safe to replace immediately. */
 export const SESSION_LOCK_STALE_MS = 30_000
 export const SESSION_LOCK_HEARTBEAT_MS = 10_000
+const SESSION_TAIL_BYTES = 4096
 
 // Claimed views share a process lease, not independent write authority. Only writer may
 // append; a fresh claimed view can take over, but a stale model conversation never merges.
@@ -185,6 +194,10 @@ export class SessionStore {
   #pending: string[] = []
   /** Bytes in the file as far as this store knows; any other size means another writer. */
   #size = 0
+  /** Generation last read/written under authority; never a substitute for claim-time refresh. */
+  #generation?: BigIntStats
+  #tail = Buffer.alloc(0)
+  readonly #writeClaims = new Set<{ claimed: boolean }>()
 
   private constructor(file: string, header: SessionHeader, written: boolean) {
     this.file = canonicalSessionFile(file)
@@ -212,6 +225,7 @@ export class SessionStore {
   }
 
   static #read(file: string): SessionStore {
+    const generation = statSync(file, { bigint: true })
     const bytes = readFileSync(file)
     const raw = bytes.toString("utf8")
     const lines = raw.split("\n")
@@ -224,6 +238,8 @@ export class SessionStore {
     }
     store.#needsNewline = raw.length > 0 && !raw.endsWith("\n")
     store.#size = bytes.length
+    store.#generation = generation
+    store.#tail = Buffer.from(bytes.subarray(-SESSION_TAIL_BYTES))
     return store
   }
 
@@ -233,6 +249,19 @@ export class SessionStore {
 
   /** Holds a crash-safe lease while this session is open in an Amira process. */
   claim(): boolean {
+    return this.#claim(true)
+  }
+
+  /** A persisted child's lifetime: no artifacts until its first durable write. */
+  claimOnWrite(): () => void {
+    const scope = { claimed: false }
+    this.#writeClaims.add(scope)
+    return () => {
+      if (this.#writeClaims.delete(scope) && scope.claimed) this.release()
+    }
+  }
+
+  #claim(merge: boolean): boolean {
     if (sessionFileKey(canonicalSessionFile(this.file)) !== sessionFileKey(this.file))
       throw new SessionConflictError(this.file)
     const key = sessionFileKey(this.file)
@@ -241,14 +270,14 @@ export class SessionStore {
       sessionClaimAcquired(this)
       // A new claimed view restores under authority before Agent builds model history.
       // An existing view must not merge underneath its still-live Agent's history.
-      this.#refresh(!held.owners.has(this))
+      this.#refresh(merge && !held.owners.has(this))
       held.owners.set(this, (held.owners.get(this) ?? 0) + 1)
       return true
     }
     const lock = this.#takeLease()
     sessionClaimAcquired(this)
     try {
-      this.#refresh()
+      this.#refresh(merge)
     } catch (error) {
       lock.release()
       throw error
@@ -325,6 +354,52 @@ export class SessionStore {
     return lock
   }
 
+  /**
+   * Bounded tail proof catches same-tick Windows timestamp collisions. The lease excludes
+   * cooperating writers; non-cooperating edits to earlier bytes with identical size and
+   * timestamps are not detected. This is deliberately not a full per-append content scan.
+   */
+  #tailChanged(): boolean {
+    const fd = openSync(this.file, "r")
+    try {
+      const tail = Buffer.allocUnsafe(this.#tail.length)
+      return (
+        readSync(fd, tail, 0, tail.length, this.#size - tail.length) !== tail.length ||
+        !tail.equals(this.#tail)
+      )
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  #rememberTail(text: string): void {
+    const bytes = Buffer.from(text)
+    this.#tail = Buffer.from(
+      (bytes.length >= SESSION_TAIL_BYTES ? bytes : Buffer.concat([this.#tail, bytes])).subarray(
+        -SESSION_TAIL_BYTES,
+      ),
+    )
+  }
+
+  /** Only disk generations and a bounded tail affect validation on the append hot path. */
+  #changed(): boolean {
+    if (!this.#written || !this.#generation) return true
+    const current = statSync(this.file, { bigint: true })
+    const known = this.#generation
+    return (
+      current.size !== BigInt(this.#size) ||
+      current.dev !== known.dev ||
+      current.ino !== known.ino ||
+      current.mtimeNs !== known.mtimeNs ||
+      current.ctimeNs !== known.ctimeNs ||
+      this.#tailChanged()
+    )
+  }
+
+  #validate(): void {
+    if (this.#changed()) this.#refresh(false)
+  }
+
   /** Revalidate under the lease. Contextual appends may validate, but never merge history. */
   #refresh(merge = true): void {
     if (!this.#written) {
@@ -338,6 +413,8 @@ export class SessionStore {
     const unchanged =
       fresh.#size === this.#size && JSON.stringify(fresh.#entries) === JSON.stringify(this.#entries)
     if (unchanged) {
+      this.#generation = fresh.#generation
+      this.#tail = fresh.#tail
       // A failed append may conservatively request a newline even if no bytes landed.
       this.#needsNewline ||= fresh.#needsNewline
       return
@@ -349,13 +426,23 @@ export class SessionStore {
     this.#leaf = null
     for (const entry of fresh.#entries) this.#add(entry)
     this.#size = fresh.#size
+    this.#generation = fresh.#generation
+    this.#tail = fresh.#tail
     this.#needsNewline = fresh.#needsNewline
   }
 
   /** Only out-of-band metadata can follow another view; a model context cannot. */
-  #withWriter<T>(data: SessionEntryData, write: (writer: SessionStore) => T): T {
+  #withWriter(data: SessionEntryData, write: (writer: SessionStore) => string): string {
     if (sessionFileKey(canonicalSessionFile(this.file)) !== sessionFileKey(this.file))
       throw new SessionConflictError(this.file)
+    if (this.#written || data.type === "message" || data.type === "display") {
+      for (const scope of this.#writeClaims) {
+        if (scope.claimed) continue
+        // Claim under authority without merging underneath the child's live model history.
+        this.#claim(false)
+        scope.claimed = true
+      }
+    }
     const metadata = data.type === "display" || data.type === "side_usage" || data.type === "title"
     const key = sessionFileKey(this.file)
     const held = sessionLocks.get(key)
@@ -365,17 +452,17 @@ export class SessionStore {
         const owner = held.owners.keys().next().value!
         if (JSON.stringify(owner.header) !== JSON.stringify(this.header))
           throw new Error("session file belongs to a different session")
-        owner.#refresh(false)
+        owner.#validate()
         held.writer = owner
       } else {
         if (!held.owners.has(this)) throw new SessionConflictError(this.file)
-        this.#refresh(false)
+        this.#validate()
         held.writer = this
       }
       return write(held.writer)
     }
     // An unwritten, unowned origin may buffer entries without creating even its directory.
-    // No file writer is used here; the first durable entry revalidates under a lease.
+    // No file writer is used here; the first durable entry revalidates under authority.
     if (
       !this.#written &&
       data.type !== "message" &&
@@ -387,25 +474,39 @@ export class SessionStore {
     }
     // Even unclaimed stores must serialize with other processes. Refresh retained metadata,
     // but preserve the conflict for an unclaimed stale appendMessage/model mutation.
-    const lock = this.#takeLease()
-    try {
-      if (metadata && this.#written) {
-        const fresh = SessionStore.#read(this.file)
-        if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
-          throw new Error("session file belongs to a different session")
+    const result = withTransientFileLock(
+      sessionLockFile(this.file),
+      () => {
+        if (metadata && this.#written && this.#changed()) {
+          const fresh = SessionStore.#read(this.file)
+          if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
+            throw new Error("session file belongs to a different session")
+          }
+          // Keep captured stale views unchanged. The temporary writer owns the fresh disk
+          // snapshot; a current unclaimed view may keep its existing message identities.
+          const current =
+            fresh.#size === this.#size && JSON.stringify(fresh.#entries) === JSON.stringify(this.#entries)
+          if (current) {
+            this.#generation = fresh.#generation
+            this.#tail = fresh.#tail
+            this.#needsNewline ||= fresh.#needsNewline
+          }
+          return write(current ? this : fresh)
         }
-        // Keep captured stale views unchanged. The temporary writer owns the fresh disk
-        // snapshot; a current unclaimed view may keep its existing message identities.
-        const current =
-          fresh.#size === this.#size && JSON.stringify(fresh.#entries) === JSON.stringify(this.#entries)
-        if (current) this.#needsNewline ||= fresh.#needsNewline
-        return write(current ? this : fresh)
-      }
-      this.#refresh(false)
-      return write(this)
-    } finally {
-      lock.release()
-    }
+        this.#validate()
+        return write(this)
+      },
+      (gate) => {
+        throw new SessionWriteGuardError(gate)
+      },
+    )
+    if (!result)
+      throw new SessionInUseError(
+        this.file,
+        sessionLockPid(this.file),
+        pendingOwnedLockCleanup(sessionLockFile(this.file)),
+      )
+    return result.value
   }
 
   get entries(): readonly SessionEntry[] {
@@ -474,6 +575,8 @@ export class SessionStore {
       writeFileSync(next.file, text, { flag: "wx" })
       next.#written = true
       next.#size = Buffer.byteLength(text)
+      next.#generation = statSync(next.file, { bigint: true })
+      next.#rememberTail(text)
       for (const e of entries) next.#add(e)
       if (next.leafId !== target) next.append({ type: "checkout", target })
       next.rename(`${this.title ?? this.id} (fork)`)
@@ -661,8 +764,11 @@ export class SessionStore {
       }
       mkdirSync(path.dirname(this.file), { recursive: true })
       const text = `${[JSON.stringify(this.header), ...this.#pending, line].join("\n")}\n`
+      this.#generation = undefined
       appendFileSync(this.file, text)
       this.#size = Buffer.byteLength(text)
+      this.#generation = statSync(this.file, { bigint: true })
+      this.#rememberTail(text)
       this.#pending = []
       this.#written = true
       return
@@ -671,9 +777,12 @@ export class SessionStore {
     // would follow only one of them. The first to write wins; the other stops saving.
     if (statSync(this.file).size !== this.#size) throw new SessionConflictError(this.file)
     const text = `${this.#needsNewline ? "\n" : ""}${line}\n`
+    this.#generation = undefined
     try {
       appendFileSync(this.file, text)
       this.#size += Buffer.byteLength(text)
+      this.#generation = statSync(this.file, { bigint: true })
+      this.#rememberTail(text)
       this.#needsNewline = false
     } catch (err) {
       // Part of the line may have landed; the next one starts on a fresh line.

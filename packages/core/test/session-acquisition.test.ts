@@ -84,7 +84,8 @@ for (const kind of [
       )
     }
     const timers = spyOn(globalThis, "setTimeout")
-    const start = performance.now()
+    const atomicWait = spyOn(Atomics, "wait")
+    const sleepSync = spyOn(Bun, "sleepSync")
     let constructed = false
     try {
       const errorType = kind === "live lease" ? SessionInUseError : SessionWriteGuardError
@@ -94,10 +95,14 @@ for (const kind of [
         }),
       ).toThrow(errorType)
       expect(constructed).toBe(false)
+      // Reject scheduled and synchronous sleeps without relying on wall-clock timing.
       expect(timers).not.toHaveBeenCalled()
-      expect(performance.now() - start).toBeLessThan(20)
+      expect(atomicWait).not.toHaveBeenCalled()
+      expect(sleepSync).not.toHaveBeenCalled()
     } finally {
       timers.mockRestore()
+      atomicWait.mockRestore()
+      sleepSync.mockRestore()
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
@@ -112,15 +117,20 @@ test("awaited acquisition fails a verified live foreign-process lease without sl
     expect(worker.exitCode).toBeNull()
     expect(fs.readFileSync(file, "utf8").split("\n")[0]).toBe(String(worker.pid))
     const timers = spyOn(globalThis, "setTimeout")
+    const atomicWait = spyOn(Atomics, "wait")
+    const sleepSync = spyOn(Bun, "sleepSync")
     try {
-      const start = performance.now()
       const pending = Promise.resolve().then(() => store.withClaim(() => "never constructed"))
       await expect(pending).rejects.toThrow(SessionInUseError)
       await expect(pending).rejects.toThrow(`pid ${worker.pid}`)
+      // Reject scheduled and synchronous sleeps without relying on wall-clock timing.
       expect(timers).not.toHaveBeenCalled()
-      expect(performance.now() - start).toBeLessThan(20)
+      expect(atomicWait).not.toHaveBeenCalled()
+      expect(sleepSync).not.toHaveBeenCalled()
     } finally {
       timers.mockRestore()
+      atomicWait.mockRestore()
+      sleepSync.mockRestore()
     }
   } finally {
     fs.writeFileSync(path.join(dir, "release"), "release")

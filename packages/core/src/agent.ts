@@ -163,12 +163,17 @@ export class Agent {
   // Lifecycle: disposal and ownership of the session lease.
   #disposePromise: Promise<void> | undefined
   #disposed = false
-  #sessionLease = false
+  #releaseSessionLease: (() => void) | undefined
 
   constructor(opts: AgentOptions) {
     this.session = opts.session
     this.depth = opts.depth ?? 0
-    if (this.session && this.depth === 0 && !opts.parentSessionId) this.#sessionLease = this.session.claim()
+    if (this.session) {
+      if (this.depth === 0 && !opts.parentSessionId) {
+        this.session.claim()
+        this.#releaseSessionLease = () => this.session!.release()
+      } else this.#releaseSessionLease = this.session.claimOnWrite()
+    }
     try {
       this.fileRewindSettings = opts.fileRewindSettings
       this.fileRewind =
@@ -349,7 +354,7 @@ export class Agent {
         recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
       })
     } catch (error) {
-      if (this.#sessionLease) this.session?.release()
+      this.#releaseSessionLease?.()
       throw error
     }
   }
@@ -754,10 +759,8 @@ export class Agent {
     const jobs = this.backgroundJobsHost
     if (jobs && this.depth > 0) await jobs.closeSession(this.sessionId).catch(() => {})
     else if (jobs && reason !== "switch") await jobs.closeRoot(this.sessionId).catch(() => {})
-    if (this.#sessionLease) {
-      this.#sessionLease = false
-      this.session?.release()
-    }
+    this.#releaseSessionLease?.()
+    this.#releaseSessionLease = undefined
   }
 
   /**
