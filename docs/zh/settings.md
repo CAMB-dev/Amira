@@ -1,6 +1,6 @@
 # 设置参考
 
-[English](../settings.md) · [文档首页](../../README.zh-CN.md)
+[English](../settings.md) · [日本語](../ja/settings.md) · [文档首页](../../README.zh-CN.md)
 
 Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写的键使用下文列出的默认值。
 

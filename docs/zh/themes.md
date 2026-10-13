@@ -1,6 +1,6 @@
 # 主题
 
-[English](../themes.md) · [文档](../../README.zh-CN.md)
+[English](../themes.md) · [日本語](../ja/themes.md) · [文档](../../README.zh-CN.md)
 
 主题改变语义颜色和符号，不改变终端自身的背景或前景。内置主题有 `amira`（默认青色配色）、`amber`、`burnt`、`lavender`、`mono`（中性色强调，保留彩色状态提示）和 `ascii`（默认颜色及 ASCII 符号）。内置定义位于 [`packages/cli/themes`](../../packages/cli/themes)。
 

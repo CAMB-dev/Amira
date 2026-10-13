@@ -1,5 +1,7 @@
 # 构建 Amira
 
+[English](../building.md) · [日本語](../ja/building.md) · [文档首页](../../README.zh-CN.md)
+
 在本仓库的本地副本中使用 Bun **1.4.2**：
 
 ```sh

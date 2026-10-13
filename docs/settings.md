@@ -1,6 +1,6 @@
 # Settings reference
 
-[简体中文](zh/settings.md) · [Documentation](../README.md)
+[简体中文](zh/settings.md) · [日本語](ja/settings.md) · [Documentation](../README.md)
 
 Amira reads its settings from JSON files when it starts. Every key is optional; anything you leave out keeps the default listed below.
 

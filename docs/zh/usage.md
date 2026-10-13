@@ -1,6 +1,6 @@
 # 使用 Amira
 
-[English](../usage.md) · [文档首页](../../README.zh-CN.md)
+[English](../usage.md) · [日本語](../ja/usage.md) · [文档首页](../../README.zh-CN.md)
 
 在要处理的项目目录运行 `amira`。命令行末尾的提示词会成为第一条消息，也可以用 `--cwd` 指定工作目录。provider 配置见[快速开始](getting-started.md)。
 

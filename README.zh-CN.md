@@ -1,6 +1,6 @@
 # Amira
 
-[English](README.md)
+[English](README.md) · [日本語](README.ja.md)
 
 Amira 是用 TypeScript 和 Bun 开发的轻量终端编程 agent。它可以读取和修改项目文件、运行工具、把任务交给子 agent。你可以自行配置模型 provider，在终端中交互使用，也可以通过 print 或 RPC 模式接入脚本。
 
