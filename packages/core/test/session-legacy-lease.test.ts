@@ -256,6 +256,7 @@ test("unclaimed session writes recover stale legacy leases under the same gate",
 
 test("session deletion recovers stale legacy leases", () => {
   legacyLease(`${deadPid}\n`)
-  expect(deleteSession(dir, origin.id, undefined, dir)).toEqual([origin.file])
+  const file = fs.realpathSync.native(origin.file)
+  expect(deleteSession(dir, origin.id, undefined, dir)).toEqual([file])
   expect(fs.readdirSync(dir)).toEqual([])
 })

@@ -167,29 +167,67 @@ test("an own pending lease does not make a foreign blocking gate retryable", () 
   }
 })
 
-test("two-second acquisition deadline is monotonic and retains the original path diagnostic", async () => {
-  const { dir, store, file } = fixture()
-  const link = fs.linkSync
-  const failure = Object.assign(new Error(`EPERM: link ${file}`), { code: "EPERM", path: file })
-  const hook = spyOn(fs, "linkSync").mockImplementation((from, to) => {
-    if (String(to) === file) throw failure
-    return link(from, to)
+for (const overshoot of [0, 249]) {
+  test(`two-second acquisition deadline is monotonic and retains the original path diagnostic (${overshoot}ms scheduler overshoot)`, async () => {
+    const { dir, store, file } = fixture()
+    const link = fs.linkSync
+    const failure = Object.assign(new Error(`EPERM: link ${file}`), { code: "EPERM", path: file })
+    const later = Object.assign(new Error("later sharing failure"), { code: "EACCES" })
+    let attempts = 0
+    const hook = spyOn(fs, "linkSync").mockImplementation((from, to) => {
+      if (String(to) === file) throw ++attempts === 1 ? failure : later
+      return link(from, to)
+    })
+    const clock = spyOn(Date, "now").mockReturnValue(123)
+    let now = 5000
+    const monotonic = spyOn(performance, "now").mockImplementation(() => now)
+    let scheduled: (() => void) | undefined
+    const delays: number[] = []
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
+      scheduled = callback
+      delays.push(ms)
+      return 1
+    }) as unknown as typeof setTimeout)
+    let constructed = false
+    try {
+      const pending = Promise.resolve(
+        store.withClaim(() => {
+          constructed = true
+        }),
+      )
+      const rejected = pending.catch((error) => error)
+      // The initial attempt and 199 retries precede the fixed two-second deadline.
+      for (let tick = 0; tick < 199; tick++) {
+        now += 10
+        const wake = scheduled!
+        scheduled = undefined
+        wake()
+        await Promise.resolve()
+      }
+      expect(now).toBe(6990)
+      expect(attempts).toBe(200)
+      expect(delays).toEqual(Array(200).fill(10))
+      // A timer may wake late; expiry must still prevent even one additional claim.
+      now += 10 + overshoot
+      const wake = scheduled!
+      scheduled = undefined
+      wake()
+      expect(await rejected).toBe(failure)
+      expect(now).toBe(7000 + overshoot)
+      expect(attempts).toBe(200)
+      expect(timers).toHaveBeenCalledTimes(200)
+      expect(scheduled).toBeUndefined()
+      expect(constructed).toBe(false)
+      expect(fs.existsSync(file)).toBe(false)
+    } finally {
+      timers.mockRestore()
+      monotonic.mockRestore()
+      clock.mockRestore()
+      hook.mockRestore()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
-  const clock = spyOn(Date, "now").mockReturnValue(123)
-  const start = performance.now()
-  try {
-    await expect(Promise.resolve().then(() => store.withClaim(() => "unexpected"))).rejects.toBe(failure)
-    const elapsed = performance.now() - start
-    console.log(`acquisition deadline: ${elapsed.toFixed(2)}ms`)
-    expect(elapsed).toBeGreaterThanOrEqual(1950)
-    expect(elapsed).toBeLessThan(2200)
-    expect(fs.existsSync(file)).toBe(false)
-  } finally {
-    clock.mockRestore()
-    hook.mockRestore()
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-}, 4000)
+}
 
 test("abort clears its wait timer/listener and never claims after cancellation", async () => {
   const { dir, store, file } = fixture()
