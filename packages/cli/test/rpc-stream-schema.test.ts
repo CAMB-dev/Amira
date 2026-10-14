@@ -19,6 +19,22 @@ test("the RPC schema adds stream timing events without requiring new metadata", 
   expect(turn.properties.data.properties.sentAt.type).toBe("number")
 })
 
+test("RPC select requests expose optional display labels and nullable status badges", () => {
+  const defs = (rpcSchema() as any).$defs
+  const select = defs.UiRequest.oneOf.find((entry: any) => entry.properties.kind.enum[0] === "select")
+  expect(select.properties.optionLabels).toMatchObject({ type: "array", items: { type: "string" } })
+  expect(select.properties.optionStatuses).toMatchObject({
+    type: "array",
+    items: {
+      oneOf: [
+        { enum: ["queued", "working", "idle", "paused", "done", "failed", "stopped"] },
+        { type: "null" },
+      ],
+    },
+  })
+  expect(select.required).toEqual(["kind", "title", "options"])
+})
+
 test("RPC group snapshots expose paused presentation and durable terminal outcomes", () => {
   const defs = (rpcSchema() as any).$defs
   for (const type of ["group.start", "group.update", "group.end"]) {

@@ -25,6 +25,7 @@ export interface SubagentBlocksDeps {
   notice: (level: NoticeLevel, text: string) => void
   presenters: ViewHost["presenters"]
   spinner: Spinner
+  visible: () => boolean
 }
 
 export function createSubagentBlocks(deps: SubagentBlocksDeps) {
@@ -41,7 +42,7 @@ export function createSubagentBlocks(deps: SubagentBlocksDeps) {
   /** Working children keep the shared spinner alive even after the parent's turn ends. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tick = () => {
-    const running = [...nodes.values()].some(isWorking)
+    const running = deps.visible() && [...nodes.values()].some(isWorking)
     if (running && !subagentTimer)
       subagentTimer = setInterval(() => {
         if (!deps.spinner.running) deps.spinner.tick()

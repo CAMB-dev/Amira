@@ -198,6 +198,7 @@ test("fullscreen uses the same retained legacy outcomes and resets them with its
     notice: () => {},
     presenters: undefined,
     spinner: new Spinner(),
+    visible: () => true,
   })
   try {
     blocks.event(event("group.start", { group }))

@@ -4,6 +4,7 @@ import { type Theme, themeToken, truncateToWidth } from "@amira/tui-kit"
 import { renderToolLines, terminalText } from "./diff-view.ts"
 import { userLines } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { animationText } from "./view-animation.ts"
 
 const CHIP_TOKENS = {
   neutral: "chipNeutral",
@@ -18,7 +19,7 @@ const CHIP_TOKENS = {
 export function segmentText(parts: ViewSegment[], theme: Theme): string {
   return parts
     .map((part) => {
-      const text = terminalText(part.text)
+      const text = animationText(part, terminalText(part.text))
       if (part.kind !== "chip") return theme[part.kind](text)
       const style = themeToken(theme, CHIP_TOKENS[part.tone ?? "neutral"])
       // Mono and older/custom themes have no chip colors; thin bars keep the label distinct.
