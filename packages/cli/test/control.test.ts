@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { mkdtempSync } from "node:fs"
+import { linkSync, mkdtempSync, unlinkSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createCatalog, createMockDialect, type MockStep, NO_MODEL } from "@amira/ai"
@@ -317,6 +317,21 @@ test("readSession reads a stored session without switching to it, compacted mess
   expect(read.subagentMessages("s_nope")).toBeUndefined()
   expect(host.control.readSession!("s_nope")).toBeUndefined()
   expect(host.control.readSession!("../escape")).toBeUndefined()
+})
+
+test("readSession treats a hard-linked stored recording as unreadable", async () => {
+  const { host } = await setup([{ text: "one" }])
+  const first = host.agent
+  await first.prompt("a")
+  const file = first.session!.file
+  await host.control.newSession()
+  const alias = `${file}.hard-link`
+  linkSync(file, alias)
+  try {
+    expect(host.control.readSession!(first.sessionId)).toBeUndefined()
+  } finally {
+    unlinkSync(alias)
+  }
 })
 
 test("/provider lists only the configured providers; an unknown one says how to add it", async () => {

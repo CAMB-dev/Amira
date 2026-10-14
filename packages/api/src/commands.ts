@@ -15,7 +15,7 @@ import type { ProviderAdmin } from "./providers.ts"
 import type { CommandRule, PermissionMode, ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
-import { AGENT_STATUS_BADGES, type AgentStatusState } from "./themes.ts"
+import { AGENT_STATUS_BADGES, type AgentStatusState, type ThemeGlyphs } from "./themes.ts"
 import type { PendingNotice, SessionData, ToolExposure, ToolTraits } from "./tools.ts"
 import type { TraceRecord } from "./trace.ts"
 import type { UiApi } from "./ui.ts"
@@ -148,6 +148,8 @@ export interface CommandContext extends CommandCompleteContext {
    * the frontend has no keys of its own.
    */
   readonly keys?: () => readonly KeyHelp[]
+  /** Current host decorations for dialog labels; absent on non-themed frontends. */
+  readonly glyphs?: () => Readonly<Pick<ThemeGlyphs, "separator" | "more">>
   /**
    * Shows a view fullscreen (default) or docked above the input, on frontends that have them
    * (the TUI does); unset elsewhere. A dock leaves the conversation and input usable.
@@ -483,7 +485,8 @@ export interface SessionControl {
    * runs, for an index that is not a user message, and for a message a compaction has since
    * summarized. Unset where the host keeps no session file.
    * Captured file-tool changes are restored by default; any conflict leaves the conversation
-   * unchanged. Pass restoreFiles: false for conversation only. An extension owner replaces
+   * unchanged. Disabled, unavailable or pruned file history rejects instead of rewinding only
+   * the conversation. Pass restoreFiles: false for conversation only. An extension owner replaces
    * core file restoration. An interrupted restore must finish before changing modes.
    */
   readonly rewind?: (index: number, options?: RewindOptions) => Promise<void>

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { extensionDirectory } from "./extensions.ts"
 import { launchDaemon } from "./launch.ts"
 import { type CleanupRecord, readCleanupRecord, removeOwnedRoot } from "./ownership.ts"
 
@@ -17,6 +18,7 @@ export interface StartOptions {
   rows: number
   theme?: string
   scenario?: string
+  extensions?: string[]
   idleTimeout: number
   args: string[]
 }
@@ -153,7 +155,8 @@ export async function start(name: string, options: StartOptions): Promise<Sessio
   const claim = `${sessionRoot(name)}.starting`
   const generation = randomUUID()
   const root = sessionRoot(name, generation)
-  const config: SessionConfig = { ...options, name, generation, root, token: randomUUID() }
+  const extensions = await Promise.all((options.extensions ?? []).map(extensionDirectory))
+  const config: SessionConfig = { ...options, extensions, name, generation, root, token: randomUUID() }
   await mkdir(registry, { recursive: true, mode: 0o700 })
   try {
     await mkdir(claim, { mode: 0o700 })

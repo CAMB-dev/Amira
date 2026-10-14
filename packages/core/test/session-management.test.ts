@@ -4,7 +4,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -14,7 +17,7 @@ import path from "node:path"
 import { userMessage } from "@amira/ai"
 import { artifactDir } from "../src/artifacts.ts"
 import { leaseOwner } from "../src/file-lock-owner.ts"
-import { deleteSession, listSessions, sessionSnippet } from "../src/session-list.ts"
+import { deleteSession, findSession, listSessions, sessionSnippet } from "../src/session-list.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 
 const tmp = () => mkdtempSync(path.join(tmpdir(), "amira-management-"))
@@ -109,10 +112,50 @@ test("content search includes later assistant and user text, CJK and reuses the 
   }
 })
 
+test("cached session paths follow a retargeted directory alias with unchanged recording metadata", () => {
+  const root = tmp()
+  const actual = path.join(root, "actual")
+  const moved = path.join(root, "moved")
+  const alias = path.join(root, "alias")
+  mkdirSync(path.join(actual, "sessions"), { recursive: true })
+  symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir")
+  const dir = path.join(alias, "sessions")
+  try {
+    const s = SessionStore.create({ cwd: "/project", dir })
+    s.appendMessage(userMessage("parent"))
+    const first = listSessions("/project", dir)[0]!
+    expect(first.file).toBe(s.file)
+    const before = statSync(first.file)
+    renameSync(actual, moved)
+    rmSync(alias, { recursive: true })
+    symlinkSync(moved, alias, process.platform === "win32" ? "junction" : "dir")
+    const movedFile = realpathSync(path.join(moved, "sessions", path.basename(s.file)))
+    const after = statSync(movedFile)
+    expect(after.size).toBe(before.size)
+    expect(after.mtimeMs).toBe(before.mtimeMs)
+    expect(existsSync(first.file)).toBe(false)
+    expect(findSession("/project", s.id, dir)).toBe(movedFile)
+    const listed = listSessions("/project", dir)[0]!
+    expect(listed.file).toBe(movedFile)
+    expect(SessionStore.open(listed.file).restore().messages).toEqual([userMessage("parent")])
+    expect(listSessions("/project", dir)[0]).toBe(listed)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("hundreds of sessions are parsed once, not once per search keystroke", () => {
   const dir = tmp()
-  for (let i = 0; i < 200; i++)
-    SessionStore.create({ cwd: "/project", dir }).appendMessage(userMessage(`prompt ${i}`))
+  const fixture = SessionStore.create({ cwd: "/project", dir })
+  fixture.appendMessage(userMessage("prompt 0"))
+  // Test parsing/cache reuse, not 200 filesystem ownership lifecycles during setup.
+  for (let i = 1; i < 200; i++) {
+    const id = `s_fixture_${i}`
+    writeFileSync(
+      path.join(dir, `${id}.jsonl`),
+      `${JSON.stringify({ ...fixture.header, id })}\n${JSON.stringify({ ...fixture.entries[0], message: userMessage(`prompt ${i}`) })}\n`,
+    )
+  }
   const open = spyOn(SessionStore, "open")
   try {
     expect(listSessions("/project", dir)).toHaveLength(200)
@@ -200,16 +243,88 @@ test("delete refuses the current session and traversal; removes owned children b
   for (const store of [s, child, grandchild, fork]) writeFileSync(`${store.file}.trace.jsonl`, "trace\n")
   expect(() => deleteSession("/project", s.id, s.id, dir)).toThrow("current")
   expect(() => deleteSession("/project", "../outside", undefined, dir)).toThrow("no session")
-  expect(deleteSession("/project", s.id, fork.id, dir)).toEqual([s.file])
+  // Deletion reports physical paths, which may differ from the store's spelling on Windows.
+  const sessionFile = realpathSync.native(s.file)
+  const forkFiles = [fork, child, grandchild].map((store) => realpathSync.native(store.file))
+  expect(deleteSession("/project", s.id, fork.id, dir)).toEqual([sessionFile])
   expect(existsSync(s.file)).toBe(false)
   expect(existsSync(`${s.file}.trace.jsonl`)).toBe(false)
   expect(existsSync(child.file)).toBe(true)
   expect(existsSync(`${child.file}.trace.jsonl`)).toBe(true)
   expect(existsSync(`${grandchild.file}.trace.jsonl`)).toBe(true)
-  expect(deleteSession("/project", fork.id, undefined, dir)).toEqual([fork.file, child.file, grandchild.file])
+  expect(deleteSession("/project", fork.id, undefined, dir)).toEqual(forkFiles)
   expect(existsSync(child.file)).toBe(false)
   for (const store of [fork, child, grandchild]) expect(existsSync(`${store.file}.trace.jsonl`)).toBe(false)
   expect(listSessions("/project", dir)).toEqual([])
+})
+
+test("session paths match the store through a symlinked parent without allowing symlink deletion", () => {
+  const root = tmp()
+  const actual = path.join(root, "actual")
+  const alias = path.join(root, "alias")
+  mkdirSync(path.join(actual, "sessions"), { recursive: true })
+  symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir")
+  const dir = path.join(alias, "sessions")
+  try {
+    const s = SessionStore.create({ cwd: "/project", dir })
+    s.appendMessage(userMessage("parent"))
+    const child = SessionStore.create({ cwd: "/project", dir: path.join(dir, "subagents") })
+    child.appendMessage(userMessage("child"))
+    s.append({ type: "subagent", childSessionId: child.id, role: "explorer" })
+    expect(listSessions("/project", dir)[0]?.file).toBe(s.file)
+    expect(findSession("/project", s.id, dir)).toBe(s.file)
+    const linkedDir = path.join(root, "linked-sessions")
+    symlinkSync(path.join(actual, "sessions"), linkedDir, process.platform === "win32" ? "junction" : "dir")
+    expect(() => deleteSession("/project", s.id, undefined, linkedDir)).toThrow("unsafe session directory")
+    expect(existsSync(s.file)).toBe(true)
+    expect(existsSync(child.file)).toBe(true)
+    const files = [s.file, child.file].map((file) => realpathSync.native(file))
+    expect(deleteSession("/project", s.id, undefined, dir)).toEqual(files)
+    expect(existsSync(s.file)).toBe(false)
+    expect(existsSync(child.file)).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("deletion returns physical paths and names the physical guard through a parent alias", () => {
+  const root = tmp()
+  const actual = path.join(root, "actual")
+  const alias = path.join(root, "alias")
+  mkdirSync(path.join(actual, "sessions"), { recursive: true })
+  symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir")
+  const dir = path.join(alias, "sessions")
+  try {
+    const s = SessionStore.create({ cwd: "/project", dir })
+    s.appendMessage(userMessage("must stay while guarded"))
+    // Use an explicit alias: tmpdir() may already resolve TMPDIR on POSIX.
+    const requestedFile = path.join(dir, path.basename(s.file))
+    const physicalFile = realpathSync.native(requestedFile)
+    expect(requestedFile).not.toBe(physicalFile)
+    const gate = `${requestedFile}.lock.lease-gate`
+    mkdirSync(gate)
+    writeFileSync(path.join(gate, "owner.json"), "unverifiable")
+    const physicalGate = realpathSync.native(gate)
+    const before = readFileSync(requestedFile)
+    let error: unknown
+    try {
+      deleteSession("/project", s.id, undefined, dir)
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(
+      `session stale-write guard is busy or unverifiable: ${physicalGate}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
+    )
+    expect(readFileSync(requestedFile)).toEqual(before)
+    expect(existsSync(gate)).toBe(true)
+    rmSync(gate, { recursive: true })
+    expect(deleteSession("/project", s.id, undefined, dir)).toEqual([physicalFile])
+    expect(existsSync(requestedFile)).toBe(false)
+    expect(existsSync(physicalFile)).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test("delete removes the saved artifacts of the session and of its sub-agents", () => {

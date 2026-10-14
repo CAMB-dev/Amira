@@ -2,7 +2,73 @@
  * The characters components draw with, kept in one place so a styling pass can swap them
  * (together with the theme's color tokens) without touching the components.
  */
-export interface Glyphs {
+export interface ChromeGlyphs {
+  arrowUp: string
+  arrowDown: string
+  arrowLeft: string
+  arrowRight: string
+  disclosureOpen: string
+  disclosureClosed: string
+  optionSelected: string
+  optionUnselected: string
+  selectOpen: string
+  selectChange: string
+  error: string
+  more: string
+  rangeSeparator: string
+  spinnerFrames: readonly string[]
+}
+
+const unicodeChrome: ChromeGlyphs = {
+  arrowUp: "↑",
+  arrowDown: "↓",
+  arrowLeft: "←",
+  arrowRight: "→",
+  disclosureOpen: "▾",
+  disclosureClosed: "▸",
+  optionSelected: "●",
+  optionUnselected: "○",
+  selectOpen: "▴",
+  selectChange: "◂▸",
+  error: "✗",
+  more: "…",
+  rangeSeparator: "–",
+  spinnerFrames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+}
+
+const asciiChrome: ChromeGlyphs = {
+  arrowUp: "up",
+  arrowDown: "down",
+  arrowLeft: "left",
+  arrowRight: "right",
+  disclosureOpen: "v",
+  disclosureClosed: ">",
+  optionSelected: "*",
+  optionUnselected: "o",
+  selectOpen: "^",
+  selectChange: "<>",
+  error: "x",
+  more: "...",
+  rangeSeparator: "-",
+  spinnerFrames: ["|", "/", "-", "\\"],
+}
+
+/** ASCII cursors select font-limited chrome, just as they do for host status badges. */
+export function chromeGlyphs(glyphs?: Partial<Glyphs>): ChromeGlyphs {
+  const defaults = glyphs?.pointer && /^[\x20-\x7e]+$/.test(glyphs.pointer) ? asciiChrome : unicodeChrome
+  return {
+    ...defaults,
+    ...Object.fromEntries(
+      Object.keys(unicodeChrome).flatMap((key) => {
+        const name = key as keyof ChromeGlyphs
+        const value = glyphs?.[name]
+        return value === undefined ? [] : [[name, value]]
+      }),
+    ),
+  }
+}
+
+export interface Glyphs extends Partial<ChromeGlyphs> {
   /** Before the focused form field, option or button. */
   pointer?: string
   /** Between form hints and descriptions. */

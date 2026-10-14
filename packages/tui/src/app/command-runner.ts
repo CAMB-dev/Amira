@@ -3,6 +3,7 @@ import type { FrontendView, KeyHelp, UserMessage } from "@amira/api"
 import type { CommandHost } from "@amira/core"
 import { type RenderContext, Spinner } from "@amira/tui-kit"
 import { userText } from "../format.ts"
+import { glyphs } from "../glyphs.ts"
 import { ACTIONS, type Action, type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { activityRow } from "./activity-row.ts"
 import { dockKeyHelp } from "./dock.ts"
@@ -129,6 +130,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
           openView: options.openView,
           openRewind: options.openRewind,
           keys: keyHelp,
+          glyphs: () => ({ separator: glyphs.separator, more: glyphs.more }),
           signal: abort.signal,
           onSend: (text, sendOptions) => {
             if (!echo || sent || sendOptions?.display?.text !== line) return

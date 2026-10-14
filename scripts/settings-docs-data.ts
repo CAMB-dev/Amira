@@ -185,9 +185,9 @@ export const annotations: Record<string, Annotation> = {
   },
   maxParallelTools: {
     default: documentedDefault("maxParallelTools"),
-    en: "Most tool calls running at once.",
-    zh: "同时运行的工具调用数上限。",
-    ja: "同時に実行できるツール呼び出しの最大数です。",
+    en: "Most tool calls running at once. Use a whole number of at least 1; invalid values warn and use the default, even over a valid value in a lower-precedence file.",
+    zh: "同时运行的工具调用数上限。必须是至少为 1 的整数；无效值会发出警告并使用默认值，即使优先级较低的文件中已有有效值。",
+    ja: "同時に実行できるツール呼び出しの最大数です。1 以上の整数を指定してください。無効な値には警告を表示し、優先順位の低いファイルに有効な値があってもデフォルトを使用します。",
   },
   "backgroundJobs.maxRunning": {
     default: documentedDefault("backgroundJobs.maxRunning"),
@@ -736,9 +736,9 @@ export const annotations: Record<string, Annotation> = {
   },
   "subagents.maxConcurrent": {
     default: documentedDefault("subagents.maxConcurrent"),
-    en: "Sub-agents running at once in the whole agent tree; the rest wait their turn.",
-    zh: "整个 agent 树中同时运行的子 agent 数上限，其余的排队等待。",
-    ja: "エージェントツリー全体で同時に実行できるサブエージェントの数です。残りは順番を待ちます。",
+    en: "Sub-agents running at once in the whole agent tree; the rest wait their turn. Use a whole number of at least 1; invalid values warn and use the default, even over a valid value in a lower-precedence file.",
+    zh: "整个 agent 树中同时运行的子 agent 数上限，其余的排队等待。必须是至少为 1 的整数；无效值会发出警告并使用默认值，即使优先级较低的文件中已有有效值。",
+    ja: "エージェントツリー全体で同時に実行できるサブエージェントの数です。残りは順番を待ちます。1 以上の整数を指定してください。無効な値には警告を表示し、優先順位の低いファイルに有効な値があってもデフォルトを使用します。",
   },
   "subagents.background": {
     default: documentedDefault("subagents.background"),

@@ -3,13 +3,14 @@ import * as fs from "node:fs"
 import path from "node:path"
 import { tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
+import { filesystemGatePath } from "./file-lock-fixtures.ts"
 
 const [dir, mode] = process.argv.slice(2)
 if (!dir || !mode) throw new Error("missing gate safety arguments")
 const parent = path.join(dir, "parent")
 fs.mkdirSync(parent)
 const file = path.join(parent, "session.lock")
-const gate = `${file}.lease-gate`
+const gate = filesystemGatePath(file)
 const warnings: string[] = []
 spyOn(process, "emitWarning").mockImplementation((message) => {
   warnings.push(String(message))

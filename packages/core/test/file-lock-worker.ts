@@ -2,6 +2,7 @@ import { spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
 import { type FileLock, tryFileLock } from "../src/file-lock.ts"
+import { filesystemGatePath } from "./file-lock-fixtures.ts"
 
 const [file, dir, mode] = process.argv.slice(2)
 if (!file || !dir || !mode) throw new Error("missing file-lock worker arguments")
@@ -15,6 +16,13 @@ const wait = (name: string) => {
   }
 }
 
+const publishResult = (result: { held: boolean; error?: string }) => {
+  const target = path.join(dir, `result-${process.pid}`)
+  const pending = `${target}.pending`
+  fs.writeFileSync(pending, JSON.stringify(result))
+  fs.renameSync(pending, target)
+}
+
 const sessionMode = mode.startsWith("session-")
 const { SessionStore } = await import("../src/session-store.ts")
 const store = sessionMode ? SessionStore.open(file.slice(0, -5)) : undefined
@@ -22,7 +30,7 @@ const rename = fs.renameSync
 const open = fs.openSync
 const rm = fs.rmSync
 const write = fs.writeFileSync
-const gate = `${file}.lease-gate`
+const gate = filesystemGatePath(file)
 let releaseStarted = false
 const contender = mode.startsWith("session-contend")
 const sharingCode = mode.slice("session-contend-".length)
@@ -157,13 +165,10 @@ try {
   }
 } catch (error) {
   if (!contender && !delayedRecovery) throw error
-  fs.writeFileSync(
-    path.join(dir, `result-${process.pid}`),
-    JSON.stringify({
-      held: false,
-      error: error instanceof Error ? error.message : String(error),
-    }),
-  )
+  publishResult({
+    held: false,
+    error: error instanceof Error ? error.message : String(error),
+  })
   process.exit(0)
 }
 renameHook?.mockRestore()
@@ -177,7 +182,7 @@ sharingHook?.mockRestore()
 if (!held) throw new Error("file-lock worker was not granted authority")
 if (mode === "crash-lease") process.exit(0)
 if (contender || delayedRecovery) {
-  fs.writeFileSync(path.join(dir, `result-${process.pid}`), JSON.stringify({ held: true }))
+  publishResult({ held: true })
   wait("release")
 } else {
   mark("acquired")

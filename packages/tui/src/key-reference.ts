@@ -109,7 +109,7 @@ export class KeyReference implements Component {
   #labels(action: Action): string | undefined {
     const usable = this.opts.usable
     const specs = this.keys.keys(action).filter((s) => !usable || usable(action, s))
-    return specs.length ? specs.map(keyLabel).join(", ") : undefined
+    return specs.length ? specs.map((spec) => keyLabel(spec)).join(", ") : undefined
   }
 
   #body(width: number, theme: Theme): string[] {
@@ -121,7 +121,10 @@ export class KeyReference implements Component {
             ACTIONS[a].scope === s.scope ||
             (!this.opts.fullscreen && s.scope === "view" && a.startsWith("scroll.")),
         )
-        .map((a) => ({ keys: this.#labels(a), description: `${ACTIONS[a].description} · ${a}` })),
+        .map((a) => ({
+          keys: this.#labels(a),
+          description: `${ACTIONS[a].description} ${glyphs.separator} ${a}`,
+        })),
     }))
     groups.push({ scope: "view", title: "Docked views", rows: dockKeyHelp(this.keys) })
     const widest = Math.max(...groups.flatMap((g) => g.rows.map((r) => visibleWidth(r.keys ?? "not bound"))))
@@ -154,9 +157,16 @@ export class KeyReference implements Component {
     const where =
       p.total <= p.height
         ? []
-        : [p.following ? "end" : `${p.top + 1}–${Math.min(p.total, p.top + p.height)} of ${p.total}`]
+        : [
+            p.following
+              ? "end"
+              : `${p.top + 1}${glyphs.rangeSeparator}${Math.min(p.total, p.top + p.height)} of ${p.total}`,
+          ]
     const scroll = ["pageup", "pagedown", "home", "end"].map((name) => keyLabel({ name })).join(" ")
-    const hint = [...where, `↑↓ ${scroll} scroll`, `${keyLabel({ name: "escape" })} close`].join(
+    const move = [glyphs.arrowUp, glyphs.arrowDown].join(
+      glyphs.arrowUp.length === 1 && glyphs.arrowDown.length === 1 ? "" : "/",
+    )
+    const hint = [...where, `${move} ${scroll} scroll`, `${keyLabel({ name: "escape" })} close`].join(
       ` ${glyphs.separator} `,
     )
     return `  ${theme.muted(truncateToWidth(hint, Math.max(1, width - 2), glyphs.more))}`

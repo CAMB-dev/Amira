@@ -9,6 +9,9 @@
  * cell. A test checks both.
  */
 import { DEFAULT_THEME_GLYPHS } from "@amira/api"
+import { chromeGlyphs } from "@amira/tui-kit"
+
+const chrome = chromeGlyphs()
 
 const defaults = {
   /** In front of the user's messages and echoed commands. */
@@ -99,6 +102,11 @@ const defaults = {
   branch: "⎇",
   /** Between items of a hint or the title. */
   separator: "·",
+  arrowUp: chrome.arrowUp,
+  arrowDown: chrome.arrowDown,
+  arrowLeft: chrome.arrowLeft,
+  arrowRight: chrome.arrowRight,
+  rangeSeparator: chrome.rangeSeparator,
 } as const
 
 export type Glyphs = { -readonly [K in keyof typeof defaults]: string }
@@ -108,6 +116,14 @@ export const glyphs: Glyphs = { ...defaults }
 
 /** Definitions are validated by the core registry; absent keys always reset to the defaults. */
 export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
+  const profile = chromeGlyphs(overrides)
+  const navigation: Partial<Glyphs> = {
+    arrowUp: profile.arrowUp,
+    arrowDown: profile.arrowDown,
+    arrowLeft: profile.arrowLeft,
+    arrowRight: profile.arrowRight,
+    rangeSeparator: profile.rangeSeparator,
+  }
   for (const key of Object.keys(defaults) as (keyof Glyphs)[]) {
     const legacy =
       key === "statusDone"
@@ -117,7 +133,7 @@ export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
           : key === "statusStopped"
             ? overrides.subagentAborted
             : undefined
-    const value = overrides[key] ?? legacy ?? defaults[key]
+    const value = overrides[key] ?? legacy ?? navigation[key] ?? defaults[key]
     // Legacy API cursor overrides follow the current product cursor without changing the public table.
     glyphs[key] = (key === "choice" || key === "pointer") && value === "❯" ? "›" : value
   }

@@ -18,7 +18,12 @@ import {
   writeSync,
 } from "node:fs"
 import path from "node:path"
-import { pendingOwnedGate, takeFilesystemGate, withFilesystemGateAttempt } from "./file-lock-gate.ts"
+import {
+  pendingGateCleanup,
+  pendingOwnedGate,
+  takeFilesystemGate,
+  withFilesystemGateAttempt,
+} from "./file-lock-gate.ts"
 import { leaseOwner, strictOwnerState } from "./file-lock-owner.ts"
 
 // Only release-requested leases enter this registry; a live pid never grants cleanup
@@ -48,6 +53,16 @@ export function pendingOwnedLockCleanup(blockingPath: string): boolean {
       if (cleanup.owns?.()) return true
   } catch {}
   return false
+}
+
+/** Cleanup status, not authority: include every queued callback even after its parent moves. */
+export function pendingFileLockCleanup(canonicalLockPath: string): boolean {
+  const key = process.platform === "win32" ? canonicalLockPath.toLowerCase() : canonicalLockPath
+  return (
+    !!pendingStrictReleases.get(key)?.size ||
+    !!pendingPrivateCleanups.get(key)?.size ||
+    pendingGateCleanup(`${canonicalLockPath}.lease-gate`)
+  )
 }
 
 /** A held lock file; release it exactly once. */

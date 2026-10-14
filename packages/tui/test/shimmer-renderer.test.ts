@@ -18,7 +18,10 @@ for (const mode of ["fullscreen", "inline"] as const) {
       const cursor = { x: s.screen.x, y: s.screen.y }
       const rows = s.screen.lines
       const scrollback = [...s.screen.scrollback]
-      await Bun.sleep(110)
+      // At ~30 fps three frames take ~100 ms; slow CI runners get up to a second.
+      const frameCount = () => (stripAnsi(s.terminal.output.slice(before)).match(/Working…/g) ?? []).length
+      for (const deadline = Date.now() + 1000; frameCount() < 3 && Date.now() < deadline; )
+        await Bun.sleep(10)
       const written = s.terminal.output.slice(before)
       const output = stripAnsi(written)
       const frames = output.match(/Working…/g)!.length

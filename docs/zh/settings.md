@@ -16,7 +16,7 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 
 各层按以下顺序叠加，后面的覆盖前面的：内置默认值、用户文件、项目文件、`settings.local.json`，最后是 `--model`、`--disable-tools` 等命令行参数。对象逐键合并；列表和其他值则整体替换，所以项目的 `tools.disabled` 会替换用户的列表，而不是追加。
 
-文件不是合法 JSON，或者某个键的值类型不对，Amira 会报错并停止，错误信息中包含文件和键名。未知的键只会产生警告并被忽略，因此较新版本的设置文件仍能加载。允许使用 `$schema` 键。API 密钥不要写在设置文件里：用 `/provider` 或 `amira provider` 保存（写入 `auth.json`），或者通过 `apiKeyEnv` 指定的环境变量读取。
+文件不是合法 JSON，或者某个键的值类型不对，Amira 会报错并停止，错误信息中包含文件和键名。`maxParallelTools` 和 `subagents.maxConcurrent` 是例外：无效值会发出警告并使用默认值。未知的键只会产生警告并被忽略，因此较新版本的设置文件仍能加载。允许使用 `$schema` 键。API 密钥不要写在设置文件里：用 `/provider` 或 `amira provider` 保存（写入 `auth.json`），或者通过 `apiKeyEnv` 指定的环境变量读取。
 
 ## 保存模型与思考设置
 
@@ -124,7 +124,7 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "default"` | 无 | 对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置或设为 `"default"` 时沿用服务端默认强度，不会关闭思考。`"default"` 覆盖之前各层的顶层设置。模型的 `thinking` 仍优先于此项，`--thinking` 在单次运行中优先于两者。交互式 `/thinking` 的更改会保存模型和思考设置；`/thinking default` 保存 `"default"`。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。 |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Windows 上模型可用的 shell 工具：`"auto"` 同时提供 `bash` 和 `powershell`，`"bash"` 或 `"powershell"` 会隐藏另一个。其他平台只有 `bash`。`--shell` 优先。 |  |
 | `tools.disabled` | `string[]` | `[]` | 对模型隐藏的工具名。`--disable-tools` 在单次运行中替换这个列表，`/tools` 只修改当前会话。 |  |
-| `maxParallelTools` | `number` | `8` | 同时运行的工具调用数上限。 |  |
+| `maxParallelTools` | `number` | `8` | 同时运行的工具调用数上限。必须是至少为 1 的整数；无效值会发出警告并使用默认值，即使优先级较低的文件中已有有效值。 |  |
 | `backgroundJobs.maxRunning` | `number` | `8` | 同时运行的后台任务数上限（shell 工具以 `background: true` 启动的命令，如开发服务器和文件监视进程）。 |  |
 | `backgroundJobs.bufferChars` | `number` | `1000000` | 每个后台任务在内存中保留、供读取的输出字符数，最少 1000。 |  |
 | `backgroundJobs.maxLogBytes` | `number` | `52428800` (50 MiB) | 每个后台任务写入日志文件的输出字节数上限。 |  |
@@ -281,7 +281,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `agents` | `Record<string, object>` | 无 | 按角色名配置的子 agent 设置。 |  |
 | `agents.<role>.model` | `string` | 取角色文件中的设置，否则沿用父 agent 的模型 | 该角色使用的模型，格式为 `"provider/model"`。任务中指定的模型优先。 |  |
 | `subagents.maxDepth` | `number` | `2` | 子 agent 的最大嵌套深度。 |  |
-| `subagents.maxConcurrent` | `number` | `4` | 整个 agent 树中同时运行的子 agent 数上限，其余的排队等待。 |  |
+| `subagents.maxConcurrent` | `number` | `4` | 整个 agent 树中同时运行的子 agent 数上限，其余的排队等待。必须是至少为 1 的整数；无效值会发出警告并使用默认值，即使优先级较低的文件中已有有效值。 |  |
 | `subagents.background` | `boolean` | `true` | 除非调用另有说明，主会话的 `agent` 工具在后台运行子 agent，结果以消息形式返回。 |  |
 | `budget.tokens` | `number` | 不限 | 整个 agent 树可用的 token 总数，包括输入、输出以及缓存读写。 |  |
 | `budget.costUsd` | `number` | 不限 | 整个 agent 树可花费的金额（美元），按已知价格计算。 |  |

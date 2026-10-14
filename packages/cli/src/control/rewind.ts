@@ -71,7 +71,8 @@ export function createRewindControl(ctx: ControlContext): RewindControl {
             )
           })
           return
-        } else if (restore && a.fileRewind?.plan(entry.id).enabled) {
+        } else if (restore) {
+          if (!a.fileRewind) throw new Error("This session has no file history; use conversation-only rewind")
           a.fileRewind.restore(entry.id, entry.parentId)
           await ctx.switchTo(
             store.id,

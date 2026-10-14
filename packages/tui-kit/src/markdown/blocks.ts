@@ -16,6 +16,17 @@ import {
 import { type Cell, cellText, type Row, toCells, wrapCells } from "./layout.ts"
 import { finishMath, type MathBlock, mathRows, stepMath } from "./math-block.ts"
 import { displayMathStart, type MathCodeRange } from "./math-source.ts"
+import { tableEnvironment } from "./table-geometry.ts"
+import {
+  delimiterRow,
+  splitRow,
+  startRawTable,
+  type Table,
+  type TableHeader,
+  takeHeader,
+} from "./table-source.ts"
+
+export { endCut } from "./table-source.ts"
 
 /** What rendering needs besides the text. */
 export interface Env {
@@ -44,6 +55,8 @@ export interface Env {
   codeRow?: (row: string, kind: "top" | "body" | "bottom", col: number) => void
   markerOutset?: number
   markerRow?: (row: string) => void
+  tableRow?: (row: string, table: object) => void
+  tableWidth?: ((table: object, width: number) => number) | undefined
   claimsMath?: ((display: boolean) => boolean) | undefined
   math?: ((source: string, rows: string[], col: number) => string[]) | undefined
   inlineMath?: ((source: string, fallback: string) => string) | undefined
@@ -66,6 +79,8 @@ export interface CodeBlock {
 export interface LineRender {
   code: boolean
   lang: string
+  /** Stable identity across preview copies, for host-only table row metadata. */
+  table?: object
   base?: StyleFn
   prefix: string
   rest: string
@@ -98,19 +113,6 @@ interface Fence {
   held?: string[]
 }
 
-type Align = "left" | "center" | "right"
-
-interface Table {
-  renderCol: number
-  aligns: Align[]
-  /** Header first, then the body rows; not the delimiter row. Emptied once frozen. */
-  rows: string[][]
-  /** The source lines, delimiter row included, for when the table is too wide to lay out. */
-  lines: string[]
-  /** Set once rows are committed before the table ended: the column widths used, or raw lines. */
-  frozen?: number[] | "raw"
-}
-
 /** Where the block structure stands after the lines processed so far. */
 export interface BlockState {
   list: ListEntry[]
@@ -118,12 +120,12 @@ export interface BlockState {
   math?: MathBlock | undefined
   table?: Table
   /** A paragraph line kept back one line: the next may turn it into a heading or a table header. */
-  held?: { text: string; renderCol: number; mathCode?: MathCodeRange[] | undefined }
+  held?: TableHeader & { mathCode?: MathCodeRange[] | undefined }
   /**
    * The last line, with a `|`, was committed early as a paragraph (it did not fit the live
    * region): a delimiter row next still makes it a table header, the table shown as its source.
    */
-  header?: { text: string; renderCol: number }
+  header?: TableHeader
   prevBlank: boolean
   /** The last line was paragraph text, held or committed early: a definition cannot follow it. */
   paragraph: boolean
@@ -176,7 +178,6 @@ const HEADING = /^(#{1,6})(?:[ \t]+|$)/
 const ITEM = /^([-*+]|\d{1,9}[.)])([ \t]+|$)/
 const TASK = /^\[([ xX])\][ \t]+/
 const SETEXT = /^ {0,3}(=+|-+)[ \t]*$/
-const DELIMITER_CELL = /^:?-+:?$/
 /** A reference definition: `[label]: url`, maybe in <>, maybe with a title. */
 const DEFINITION =
   /^[ \t]*\[([^\]]*[^\]\s][^\]]*)\]:[ \t]*<?([^\s<>]+)>?(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$/
@@ -236,7 +237,13 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
       const header = splitRow(h.text)
       if (aligns && aligns.length === header.length) {
         s.held = undefined
-        s.table = { renderCol: h.renderCol, aligns, rows: [header], lines: [h.text, line.trim()] }
+        s.table = {
+          renderCol: h.renderCol,
+          identity: h.table ?? aligns,
+          aligns,
+          rows: [header],
+          lines: [h.text, line.trim()],
+        }
         s.prevBlank = false
         return
       }
@@ -286,36 +293,6 @@ export function step(s: BlockState, line: string, env: Env, sink: Sink): void {
     }
     s.paragraph = true
   } else emit(s, sink, renderLine(d.render, line, env).rows)
-}
-
-function takeHeader(s: BlockState): BlockState["header"] {
-  const header = s.header
-  s.header = undefined
-  return header
-}
-
-/**
- * Starts a table whose header was committed as a paragraph, when `line` is its delimiter row.
- * The header shows as its source already, so the table goes on as its source lines.
- */
-function startRawTable(s: BlockState, header: NonNullable<BlockState["header"]>, line: string): boolean {
-  const aligns = line.includes("|") ? delimiterRow(line) : undefined
-  if (!aligns || aligns.length !== splitRow(header.text).length) return false
-  s.table = { renderCol: header.renderCol, aligns, rows: [], lines: [], frozen: "raw" }
-  s.prevBlank = false
-  s.paragraph = false
-  return true
-}
-
-/**
- * Updates the state after the complete `line`, whose rows were committed in parts as `lr` says
- * rather than by `step`: a paragraph line may have been a table header, or a header's delimiter row.
- */
-export function endCut(s: BlockState, line: string, lr: LineRender): void {
-  const header = takeHeader(s)
-  if (lr.code || !s.paragraph || s.table || !line.includes("|")) return
-  if (header && startRawTable(s, header, line)) return
-  s.header = { text: line.trimStart(), renderCol: lr.indent }
 }
 
 /** Ends the blocks that a blank line or the end of the text closes: a held paragraph line, a table. */
@@ -396,6 +373,7 @@ export function heldUndecided(s: BlockState, line: string): boolean {
 export function commitOpenBlocks(s: BlockState, env: Env, sink: Sink): void {
   env = withRefs(s, env)
   const h = s.held
+  if (h?.text.includes("|")) h.table ??= {}
   flushHeld(s, env, sink)
   if (h?.text.includes("|")) s.header = h
   const t = s.table
@@ -438,6 +416,7 @@ export function partialRender(
   const d = classify(next, line, env)
   next.prevBlank = false
   next.paragraph = !!d.hold
+  if (d.hold && line.includes("|")) d.render.table = {}
   if (d.rows) return undefined
   return { state: next, render: d.render }
 }
@@ -606,6 +585,7 @@ function flushHeld(s: BlockState, env: Env, sink: Sink) {
   const lr: LineRender = {
     code: false,
     lang: "",
+    table: h.table,
     prefix: pad(h.renderCol),
     rest: pad(h.renderCol),
     indent: h.renderCol,
@@ -653,6 +633,7 @@ const HEADING_CLOSE = /(?:^|[ \t]+)#+[ \t]*$|[ \t]+$/
  * `lr.start` and every row gets `lr.rest`; `lead` is the rest of a run the cut went through.
  */
 export function renderLine(lr: LineRender, line: string, env: Env, carry?: string, lead?: Lead): Rendered {
+  if (lr.table) env = tableEnvironment(env, lr.table)
   let end = line.length
   if (lr.heading !== undefined) {
     const closing = line.slice(lr.heading).match(HEADING_CLOSE)
@@ -718,44 +699,13 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
     const head = i === 0 ? prefix : rest
     const row = r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
     if (outset) env.markerRow?.(row)
+    if (lr.table) env.tableRow?.(row, lr.table)
     return row
   })
   return { rows, cells, runs, layout, carry: carry ?? "", open, mathOpen }
 }
 
 // Tables
-
-function splitRow(line: string): string[] {
-  let s = line.trim()
-  if (s.startsWith("|")) s = s.slice(1)
-  if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1)
-  const cells: string[] = []
-  let cell = ""
-  let ticks = 0
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!
-    if (c === "\\" && s[i + 1] === "|") {
-      cell += "|"
-      i++
-    } else if (c === "`") {
-      ticks = ticks ? 0 : 1
-      cell += c
-    } else if (c === "|" && !ticks) {
-      cells.push(cell.trim())
-      cell = ""
-    } else cell += c
-  }
-  cells.push(cell.trim())
-  return cells
-}
-
-function delimiterRow(line: string): Align[] | undefined {
-  const cells = splitRow(line)
-  if (!cells.every((c) => DELIMITER_CELL.test(c))) return undefined
-  return cells.map((c) =>
-    c.startsWith(":") && c.endsWith(":") ? "center" : c.endsWith(":") ? "right" : "left",
-  )
-}
 
 function addTableRow(s: BlockState, t: Table, line: string, env: Env, sink: Sink) {
   s.prevBlank = false
@@ -833,9 +783,12 @@ function layoutTable(t: Table, env: Env, slack = false): { rows: string[]; width
   const rule = widths
     .map((w) => glyphs.tableRule.repeat(w))
     .join(`${glyphs.tableRule}${glyphs.tableCross}${glyphs.tableRule}`)
+  const border = pad(t.renderCol) + styles.tableBorder(rule)
+  const header = tableRow(t, t.rows[0]!, widths, env, true)
+  env.tableRow?.(border, t.identity)
   const rows = [
-    ...tableRow(t, t.rows[0]!, widths, env, true),
-    pad(t.renderCol) + styles.tableBorder(rule),
+    ...header,
+    border,
     ...t.rows.slice(1).flatMap((r) => tableRow(t, r, widths, { ...env, rowWidth: undefined }, false)),
   ]
   return { rows, widths }
@@ -846,6 +799,7 @@ function layoutTable(t: Table, env: Env, slack = false): { rows: string[]; width
  * widths were frozen) wraps within it, making the row taller.
  */
 function tableRow(t: Table, cells: string[], widths: number[], env: Env, header: boolean): string[] {
+  env = tableEnvironment(env, t.identity)
   const texts = widths.map((w, c) => {
     const text = inlineText(cells[c] ?? "", env, header ? env.styles.tableHeader : undefined)
     return visibleWidth(text) > w ? wrapText(text, w) : [text]
@@ -868,6 +822,7 @@ function tableRow(t: Table, cells: string[], widths: number[], env: Env, header:
     if (visibleWidth(line) > firstWidth) out.push(...wrapText(line, env.width, firstWidth))
     else out.push(line.trimEnd())
   }
+  for (const row of out) env.tableRow?.(row, t.identity)
   return out
 }
 
@@ -875,7 +830,7 @@ function tableRow(t: Table, cells: string[], widths: number[], env: Env, header:
 function rawRender(t: Table, line: string): LineRender {
   const start = line.length - line.trimStart().length
   const col = pad(t.renderCol)
-  return { code: false, lang: "", prefix: col, rest: col, indent: t.renderCol, start }
+  return { code: false, lang: "", table: t.identity, prefix: col, rest: col, indent: t.renderCol, start }
 }
 
 function rawRows(t: Table, lines: string[], env: Env): string[] {

@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs"
-import { detectEnv, type InputEvent, keyLabel, type TerminalEnv } from "@amira/tui-kit"
+import { detectEnv, type InputEvent, keyLabel as kitKeyLabel, type TerminalEnv } from "@amira/tui-kit"
+import { glyphs } from "./glyphs.ts"
 
-export { keyLabel } from "@amira/tui-kit"
+/** Key hints use the active host glyph profile, including rebound arrow shortcuts. */
+export function keyLabel(spec: Parameters<typeof kitKeyLabel>[0]): string {
+  return kitKeyLabel(spec, glyphs)
+}
 
 /**
  * Where an action applies: the input box, a completion list below it while open (commands

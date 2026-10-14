@@ -1,0 +1,114 @@
+{
+  "name": "extensions",
+  "description": "Offline production dashboard, swarm, workflow and btw walkthrough. Load those trusted local packages with start --extension. Children only emit scripted text; no shell, network or worktree calls.",
+  "prompt": "Start the offline audit groups and delegate an inspection.",
+  "routes": {
+    "main": [
+      {
+        "toolCalls": [
+          {
+            "id": "extensions-swarm",
+            "name": "swarm",
+            "args": {
+              "action": "start",
+              "goal": "Inspect narrow terminal layouts and keyboard navigation without changing files",
+              "members": [
+                {
+                  "name": "layout",
+                  "role": "explorer",
+                  "brief": "Describe layout boundaries",
+                  "model": "ui-walk/layout"
+                },
+                {
+                  "name": "keys",
+                  "role": "reviewer",
+                  "brief": "Describe keyboard focus",
+                  "model": "ui-walk/keys"
+                }
+              ]
+            }
+          },
+          {
+            "id": "extensions-workflow",
+            "name": "workflow",
+            "args": {
+              "action": "start",
+              "script": "export const meta = { name: 'offline-layout-review', description: 'Inspect terminal layout and summarize keyboard behavior without changing files', phases: ['Inspect', 'Summarize'] }\nphase('Inspect')\nlog('Offline fixture: no files or commands')\nconst result = await agent('Describe narrow terminal layouts. Do not call tools.', { label: 'Inspect narrow layout', role: 'explorer', model: 'ui-walk/workflow-child', isolation: 'none' })\nphase('Summarize')\nlog('Inspection complete')\nreturn { summary: result }"
+            }
+          },
+          {
+            "id": "extensions-delegate",
+            "name": "agent",
+            "args": {
+              "tasks": [
+                {
+                  "title": "Inspect terminal fixture",
+                  "prompt": "Describe terminal fixture behavior without tools.",
+                  "model": "ui-walk/delegate",
+                  "isolation": "none",
+                  "context": "fresh"
+                }
+              ],
+              "background": true
+            }
+          }
+        ]
+      },
+      {
+        "text": "Audit ready. The groups use only the loopback scripted provider. Open /dashboard, /swarm view, /workflow view and /btw Explain the layout.\n"
+      },
+      {
+        "text": "Offline groups settled. No real files were read or changed.\n"
+      }
+    ],
+    "layout": [
+      {
+        "text": "Layout review: keep selection, state and task labels readable at narrow widths. No files changed.\n",
+        "repeat": 12,
+        "chunkSize": 32,
+        "delayMs": 180
+      }
+    ],
+    "keys": [
+      {
+        "text": "Keyboard review: test Tab and F6, then left/right pane keys. Keep the focused pane visible.\n",
+        "repeat": 12,
+        "chunkSize": 32,
+        "delayMs": 180
+      }
+    ],
+    "workflow-child": [
+      {
+        "text": "## Narrow layout review\n\nSelection and focus should remain distinct. Keep the task name reachable after resizing.\n\n- Wide: inspect both panes.\n- Narrow: inspect details and return to list.\n\nNo tools were called.\n",
+        "repeat": 8,
+        "chunkSize": 40,
+        "delayMs": 120
+      }
+    ],
+    "delegate": [
+      {
+        "text": "The delegated terminal fixture inspection completed. No tools were called and no files were changed.\n",
+        "repeat": 8,
+        "chunkSize": 40,
+        "delayMs": 120
+      }
+    ],
+    "child": [
+      {
+        "text": "## Side answer\n\nTab switches focus only when the active view permits it. F6 returns focus between the extension and main input.\n\n| Key | Purpose |\n| --- | --- |\n| [ | List pane |\n| ] | Details pane |\n\n- Keep the focused pane visible.\n- Use Escape to close the side question.\n\nThis answer is scripted locally; no files or network were used.\n",
+        "chunkSize": 24,
+        "delayMs": 80
+      },
+      {
+        "text": "## Side answer\n\nTab switches focus only when the active view permits it. F6 returns focus between the extension and main input.\n\n| Key | Purpose |\n| --- | --- |\n| [ | List pane |\n| ] | Details pane |\n\n- Keep the focused pane visible.\n- Use Escape to close the side question.\n\nThis answer is scripted locally; no files or network were used.\n",
+        "chunkSize": 24,
+        "delayMs": 80
+      },
+      {
+        "text": "## Side answer\n\nTab switches focus only when the active view permits it. F6 returns focus between the extension and main input.\n\n| Key | Purpose |\n| --- | --- |\n| [ | List pane |\n| ] | Details pane |\n\n- Keep the focused pane visible.\n- Use Escape to close the side question.\n\nThis answer is scripted locally; no files or network were used.\n",
+        "chunkSize": 24,
+        "delayMs": 80
+      }
+    ]
+  }
+}

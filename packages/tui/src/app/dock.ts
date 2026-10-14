@@ -57,10 +57,12 @@ export class DockedView {
     this.width = width
     this.height = dockHeight(ctx.rows, available, this.maxHeight)
     if (!this.height) return []
-    const rows = this.viewer.render(width, { ...ctx, rows: this.height })
+    const surface = ctx.color ? themeToken(ctx.theme, "codeBg") : undefined
+    const readable = surface && themeToken(ctx.theme, "surfaceMuted")
+    const theme = readable ? { ...ctx.theme, muted: readable } : ctx.theme
+    const rows = this.viewer.render(width, { ...ctx, theme, rows: this.height })
     while (rows.length < this.height) rows.push("")
     // Use the existing code surface, not the user-message band; margins remain unpainted.
-    const surface = ctx.color ? themeToken(ctx.theme, "codeBg") : undefined
     return surface
       ? rows.map((row) => surface(row + " ".repeat(Math.max(0, width - visibleWidth(row)))))
       : rows

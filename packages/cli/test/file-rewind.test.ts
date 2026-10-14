@@ -144,9 +144,35 @@ test("capture settings are validated and disable restoration in the control prev
   await host.control.send("create a")
   expect(store.entries.some((e) => e.type === "file_mutation")).toBe(false)
   expect(host.control.planRewind!(0).note).toContain("disabled")
-  await host.control.rewind!(0)
+  const messages = [...host.control.messages()]
+  const leaf = store.leafId
+  await expect(host.control.rewind!(0)).rejects.toThrow("disabled")
+  expect(host.control.messages()).toEqual(messages)
+  expect(store.leafId).toBe(leaf)
+  await host.control.rewind!(0, { restoreFiles: false })
+  expect(host.control.messages()).toHaveLength(0)
   expect(readFileSync(join(cwd, "a"), "utf8")).toBe("tool")
 })
+
+for (const unavailable of ["pruned", "closed"] as const) {
+  test(`rewind with files refuses ${unavailable} history without checking out the conversation`, async () => {
+    const { cwd, store, host } = await setup()
+    await host.control.send("create a")
+    if (unavailable === "pruned") host.control.pruneFileHistory!()
+    else Object.defineProperty(host.agent, "fileRewind", { value: undefined })
+    const messages = [...host.control.messages()]
+    const leaf = store.leafId
+    await expect(host.control.rewind!(0)).rejects.toThrow(
+      unavailable === "pruned" ? "pruned" : "no file history",
+    )
+    expect(host.control.messages()).toEqual(messages)
+    expect(store.leafId).toBe(leaf)
+    expect(readFileSync(join(cwd, "a"), "utf8")).toBe("tool")
+    await host.control.rewind!(0, { restoreFiles: false })
+    expect(host.control.messages()).toHaveLength(0)
+    expect(readFileSync(join(cwd, "a"), "utf8")).toBe("tool")
+  })
+}
 
 for (const enabled of [true, false]) {
   test(`a failing session journal refuses writes only with capture enabled (${enabled})`, async () => {

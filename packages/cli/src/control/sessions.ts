@@ -1,4 +1,4 @@
-import { rmSync, statSync } from "node:fs"
+import { statSync } from "node:fs"
 import path from "node:path"
 import type { SessionControl } from "@amira/api"
 import {
@@ -7,9 +7,15 @@ import {
   findSession,
   listSessions,
   SessionStore,
+  sessionsDir,
   storedHistory,
   subagentsOf,
 } from "@amira/core"
+import {
+  sessionDeletionDirectory,
+  sessionTraceCleanupProof,
+  withSessionDeletionDirectory,
+} from "../../../core/src/session-delete.ts"
 import type { ControlContext } from "./context.ts"
 
 type SessionsControl = Pick<
@@ -42,11 +48,11 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
     readSession: (id) => {
       // The current session from memory: its file may lag behind (or have stopped saving).
       const live = id === ctx.agent().sessionId ? ctx.agent().session : undefined
-      const file = live?.file ?? findSession(ctx.cwd, id, ctx.directory())
-      if (!file) return undefined
       let store: SessionStore
       let updatedAt: number
       try {
+        const file = live?.file ?? findSession(ctx.cwd, id, ctx.directory())
+        if (!file) return undefined
         store = live ?? SessionStore.open(file)
         updatedAt = live ? Date.now() : statSync(file).mtimeMs
       } catch {
@@ -87,12 +93,19 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
     },
     deleteSession: async (id) => {
       ctx.idle("delete a session")
+      const proof = sessionDeletionDirectory(ctx.directory() ?? sessionsDir(ctx.cwd), true)
       const files = deleteStoredSession(ctx.cwd, id, ctx.agent().sessionId, ctx.directory())
       if (ctx.trace) {
+        const traceProof = sessionTraceCleanupProof(proof, files)
         await ctx.trace.forget(files.map((file) => path.basename(file, ".jsonl")))
-        // An append already in flight may have finished after the initial unlink. forget()
-        // retires the ids and drains those writes before this final cleanup.
-        for (const file of files) rmSync(`${file}.trace.jsonl`, { force: true })
+        // Retire and drain in-flight appends before staging cleanup in the verified private root.
+        traceProof.check()
+        withSessionDeletionDirectory(proof, (directory, stage) => {
+          traceProof.checkMoved(directory)
+          for (const file of files) {
+            stage(path.join(directory, path.relative(proof.directory, `${file}.trace.jsonl`)))
+          }
+        })
       }
     },
     fork: (index, options) =>

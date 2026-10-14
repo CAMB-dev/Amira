@@ -1,4 +1,4 @@
-import { bold, type RenderContext, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { bold, type RenderContext, Spinner, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens, formatDuration } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { markerPrefix } from "../grid.ts"
@@ -23,7 +23,7 @@ export interface ActivityRowInfo {
 export function activityRow(info: ActivityRowInfo, width: number, ctx: RenderContext): string {
   const { theme } = ctx
   const label = info.label[0]!.toUpperCase() + info.label.slice(1).replace(/[.…]+$/, "")
-  const prefix = markerPrefix(theme.accent(info.spinner))
+  const prefix = markerPrefix(theme.accent(Spinner.forGlyphs(info.spinner, ctx.glyphs)))
   let step =
     info.stepMs === undefined
       ? ""
