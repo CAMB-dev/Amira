@@ -72,6 +72,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     requestRender: () => renderer.requestRender(),
     notice,
     spinner: host.spinner,
+    visible: () => !overlay,
     get presenters() {
       return host.presenters
     },
@@ -330,12 +331,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     redraw: () => renderer.redraw(),
     openOverlay() {
       overlay = true
+      subagents.tick()
       // The overlay takes the mouse: a drag under way would never see its release.
       mouseHandlers.stopDrag()
       mouseHandlers.disarm()
     },
     closeOverlay() {
       overlay = false
+      subagents.tick()
       renderer.redraw()
     },
     requestOverlayRender: () => renderer.requestRender(),

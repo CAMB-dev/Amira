@@ -161,7 +161,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   /** Working children keep the shared spinner alive even after the parent's turn ends. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
-    const running = [...subagents.values()].some(isWorking)
+    const running = !renderer.isSuspended && [...subagents.values()].some(isWorking)
     if (running && !subagentTimer)
       subagentTimer = setInterval(() => {
         if (!host.spinner.running) host.spinner.tick()
@@ -665,6 +665,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     redraw: redrawHistory,
     openOverlay(pointer = false) {
       renderer.suspend()
+      tickSubagents()
       fullScreen.open()
       if (pointer && !overlayMouse) terminal.enableMode(modes.mouse)
       if (!pointer && overlayMouse) terminal.disableMode(modes.mouse)
@@ -675,6 +676,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       overlayMouse = false
       fullScreen.close()
       renderer.resume(historyDirty || host.dockOpen?.())
+      tickSubagents()
       historyDirty = false
     },
     dockInput: (event) =>

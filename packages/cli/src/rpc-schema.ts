@@ -679,6 +679,11 @@ export function rpcSchema(): Schema {
           kind: strings("select"),
           title: str,
           options: arrayOf(str),
+          "optionLabels?": {
+            ...arrayOf(str),
+            description:
+              "Display-only labels aligned with options; answers and numeric identities stay unchanged.",
+          },
           "initial?": { ...str, description: "The option initially highlighted; defaults to the first." },
           "sections?": {
             ...arrayOf(
@@ -695,6 +700,14 @@ export function rpcSchema(): Schema {
           "descriptions?": {
             ...arrayOf(str),
             description: 'Muted text shown with the option of the same index ("" for none).',
+          },
+          "optionStatuses?": {
+            ...arrayOf(
+              oneOf(strings("queued", "working", "idle", "paused", "done", "failed", "stopped"), {
+                type: "null",
+              }),
+            ),
+            description: "Host-rendered status badges aligned with options; null leaves an option unbadged.",
           },
           "searchTexts?": {
             ...arrayOf(str),

@@ -48,6 +48,7 @@ import {
 } from "./tool-view.ts"
 import { UiRuntime } from "./ui-runtime/runtime.ts"
 import { toggleDetail } from "./verbose.ts"
+import { animatedSegments, visibleAnimation } from "./view-animation.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
 import {
   viewKeyHints as keyHints,
@@ -492,7 +493,16 @@ export class ExtensionViewer implements Component {
   render(width: number, ctx: RenderContext): string[] {
     this.#animating = false
     this.#refreshIntervalMs = undefined
-    if (this.#ui) return this.#renderUi(width, ctx)
+    return this.#finishFrame(this.#ui ? this.#renderUi(width, ctx) : this.#renderBody(width, ctx))
+  }
+
+  #finishFrame(rows: string[]): string[] {
+    const visible = visibleAnimation(rows)
+    this.#animating ||= visible.animating
+    return visible.rows
+  }
+
+  #renderBody(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const opts = this.#renderOptions(width, theme, ctx.glyphs)
     const head: string[] = []
@@ -693,8 +703,8 @@ export class ExtensionViewer implements Component {
         ]
       },
       statusBadge: (state, options) => {
-        this.#animating ||= state === "working"
-        return statusBadge(state, this.#spinner.glyph, options)
+        const parts = statusBadge(state, this.#spinner.glyph, options)
+        return state === "working" ? animatedSegments(parts) : parts
       },
       renderReply: (text) => {
         finished ||= !!text.trim()
