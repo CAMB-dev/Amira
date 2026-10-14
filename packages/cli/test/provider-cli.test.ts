@@ -100,7 +100,7 @@ test("provider add from piped stdin asks field by field and saves", async () => 
       "1", // Save
     ]),
   })
-  expect(seen.stderr).toContain("Fetch models? Lists models from the provider")
+  expect(seen.stderr).toContain("Fetch models?\n  1) Yes\n  2) No")
   expect(seen.stderr).toContain("Test connection?")
   expect(code).toBe(0)
   expect(seen.stdout).toContain('Saved provider "ds-test"')

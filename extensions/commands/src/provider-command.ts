@@ -11,9 +11,11 @@ import {
   providerVendorLabel,
 } from "@amira/api"
 import { table } from "./format.ts"
+import { ProviderConnectionTests } from "./provider-tests.ts"
 
 const USAGE = "usage: /provider [add [<vendor|protocol>] | edit <id> | remove <id> | key <id>]"
 const CUSTOM = "Custom (choose a protocol)"
+const ADD = "+ Add provider"
 const CATALOG_UNAVAILABLE = "Provider catalog unavailable; choose a protocol to add a custom provider."
 const NONE = "No providers configured — add one with /provider add"
 
@@ -44,6 +46,7 @@ const protocolLabel = (d: string) => (DIALECT_NOTES[d] ? `${d} — ${DIALECT_NOT
  * edit, remove, and set a key.
  */
 export function providerCommand(): CommandDefinition {
+  const tests = new ProviderConnectionTests()
   return {
     name: "provider",
     description: "List providers; add, edit or remove one, or set its key",
@@ -67,16 +70,17 @@ export function providerCommand(): CommandDefinition {
     },
     async run(args, ctx) {
       const [sub, id, ...rest] = args.split(/\s+/).filter(Boolean)
-      if (!sub) return list(ctx)
+      if (!sub) return ctx.frontend === "tui" ? manage(ctx, tests) : list(ctx)
       if (rest.length || !Object.hasOwn(SUBCOMMANDS, sub)) throw new Error(USAGE)
-      if (sub === "add") return add(ctx, id)
+      const tracked = () => tests.wrap(ctx.session.info().id, admin(ctx))
+      if (sub === "add") return add(ctx, id, tracked())
       if (ctx.session.providers().length === 0) throw new Error(NONE)
       if (!id) throw new Error(`usage: /provider ${sub} <id>; providers: ${ids(ctx)}`)
       if (!ctx.session.providers().some((p) => p.id === id))
         throw new Error(`no provider "${id}"; providers: ${ids(ctx)}`)
-      if (sub === "edit") return edit(ctx, id)
-      if (sub === "remove") return remove(ctx, id)
-      return setKey(ctx, id)
+      if (sub === "edit") return edit(ctx, id, tracked())
+      if (sub === "remove") return remove(ctx, id, tracked())
+      return setKey(ctx, id, tracked())
     },
   }
 }
@@ -105,9 +109,74 @@ function list(ctx: CommandContext) {
   )
 }
 
+/** The management page is TUI-only; print and RPC keep the original table. */
+async function manage(ctx: CommandContext, tests: ProviderConnectionTests) {
+  const sessionId = ctx.session.info().id
+  const a = tests.wrap(sessionId, admin(ctx))
+  const providers = ctx.session.providers()
+  const descriptions = providers.map((p) => {
+    const draft = a.draft(p.id)
+    const url = p.baseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
+    const shortUrl = url.length > 42 ? `${url.slice(0, 41)}…` : url || "(no URL)"
+    const count = draft?.models.length ?? 0
+    const source = draft?.keySource ?? (p.apiKeyEnv ? "env" : "none")
+    const variable = draft?.apiKeyEnv ?? p.apiKeyEnv
+    const key =
+      source === "env" ? (variable ? `env (${variable})` : "env") : source === "auth" ? "auth.json" : "none"
+    const status = tests.status(sessionId, a, p.id)
+    return `${p.dialect} · ${shortUrl} · ${count} ${count === 1 ? "model" : "models"} · key: ${key}${status ? ` · ${status}` : ""}`
+  })
+  const picked = await ctx.ui.choose("Providers", [ADD, ...providers.map((p) => p.id)], {
+    sections: [
+      { at: 0, choose: "add" },
+      ...(providers.length ? [{ at: 1, title: "Configured", choose: "manage" }] : []),
+    ],
+    descriptions: ["Configure a provider and its models", ...descriptions],
+    signal: ctx.signal,
+  })
+  if (!picked) return
+  if (picked.option === ADD) return add(ctx, undefined, a)
+  const id = picked.option
+  const action = await ctx.ui.select(
+    `Manage provider ${id}`,
+    ["Edit", "Set key", "Test connection", "Remove"],
+    {
+      signal: ctx.signal,
+    },
+  )
+  if (action === "Edit") return edit(ctx, id, a)
+  if (action === "Set key") return setKey(ctx, id, a)
+  if (action === "Remove") return remove(ctx, id, a)
+  if (action === "Test connection") return testConnection(ctx, id, a)
+}
+
+async function testConnection(ctx: CommandContext, id: string, a: ProviderAdmin) {
+  const draft = a.draft(id)
+  if (!draft) throw new Error(`no provider "${id}"`)
+  if (!draft.models.length) {
+    ctx.print(`No models configured; add one with /provider edit ${id} before testing.`)
+    return
+  }
+  const model = await ctx.ui.select(`Test connection for ${id}`, draft.models, { signal: ctx.signal })
+  if (!model) return
+  const ok = await ctx.ui.confirm(
+    `Test ${id}/${model}?`,
+    "Sends one tiny request to this model. The provider may charge for it.",
+    { signal: ctx.signal },
+  )
+  if (!ok) return
+  try {
+    const result = await a.test(draft, model, ctx.signal)
+    ctx.signal.throwIfAborted()
+    ctx.print(result.message, result.ok ? "info" : "error")
+  } catch (error) {
+    ctx.signal.throwIfAborted()
+    ctx.print(`Connection test failed: ${error instanceof Error ? error.message : String(error)}`, "error")
+  }
+}
+
 /** Picks a vendor unless a protocol is given; Custom keeps the protocol-first flow. */
-async function add(ctx: CommandContext, choice: string | undefined) {
-  const a = admin(ctx)
+async function add(ctx: CommandContext, choice: string | undefined, a: ProviderAdmin) {
   const dialects = a.dialects()
   let initial: ProviderFormInitial = {}
   let custom = true
@@ -169,8 +238,7 @@ async function add(ctx: CommandContext, choice: string | undefined) {
   ctx.print(await a.save(draftFromValues(values, undefined, initial.catalogId)))
 }
 
-async function edit(ctx: CommandContext, id: string) {
-  const a = admin(ctx)
+async function edit(ctx: CommandContext, id: string, a: ProviderAdmin) {
   const existing = a.draft(id)
   if (!existing) throw new Error(`no provider "${id}"`)
   const values = await ctx.ui.form(providerFormSpec(a, existing), { signal: ctx.signal })
@@ -181,8 +249,7 @@ async function edit(ctx: CommandContext, id: string) {
   ctx.print(await a.save(draftFromValues(values, id, existing.catalogId)))
 }
 
-async function remove(ctx: CommandContext, id: string) {
-  const a = admin(ctx)
+async function remove(ctx: CommandContext, id: string, a: ProviderAdmin) {
   if (ctx.session.info().model.provider === id) {
     throw new Error(`provider "${id}" is in use; switch to another model with /model first`)
   }
@@ -202,8 +269,7 @@ async function remove(ctx: CommandContext, id: string) {
   ctx.print(await a.remove(id, { removeKey }))
 }
 
-async function setKey(ctx: CommandContext, id: string) {
-  const a = admin(ctx)
+async function setKey(ctx: CommandContext, id: string, a: ProviderAdmin) {
   const stored = a.storedKeyHint(id)
   const key = await ctx.ui.input(`API key for ${id}${stored ? ` (replaces ${stored})` : ""}`, {
     secret: true,

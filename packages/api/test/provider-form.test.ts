@@ -280,11 +280,43 @@ test("fetch results name the provider as list source and models.dev as metadata 
     progress: (text) => progress.push(text),
   })
   expect(progress).toEqual([`asking ${VENDOR.baseUrl}…`])
-  expect(result.message).toBe(
-    "The provider listed 2 models; models.dev adds context window and price for 1. Pick them in the list below.",
-  )
+  expect(result.message).toBe("2 models listed · models.dev details for 1.")
   expect(result.options?.models?.map((option) => option.value)).toEqual(["known", "custom"])
   expect(seen).toHaveLength(1)
+})
+
+test.each([
+  { apiKey: "", expected: undefined },
+  { apiKey: "   ", expected: undefined },
+  { apiKey: "\t\n", expected: undefined },
+  { apiKey: "  typed-key \t", expected: "typed-key" },
+])("draft conversion and form actions normalize the auth key $apiKey", async ({ apiKey, expected }) => {
+  const { admin, seen } = fakeAdmin()
+  admin.storedKeyHint = () => "…abcd"
+  const values = {
+    id: "existing",
+    dialect: "openai-chat",
+    baseUrl: VENDOR.baseUrl!,
+    keySource: "auth",
+    apiKey,
+    models: ["m"],
+  }
+  const draft = draftFromValues(values)
+  expect(draft.apiKey).toBe(expected)
+  if (expected === undefined) expect(draft).not.toHaveProperty("apiKey")
+  const form = providerFormSpec(admin, { ...draft, models: [] })
+  expect(autoFormActions(form, values)).toEqual(["fetchModels"])
+  for (const action of ["fetchModels", "testConnection"]) {
+    await runFormAction(form, action, values, {
+      signal: new AbortController().signal,
+      progress: () => {},
+    })
+  }
+  expect(seen).toHaveLength(2)
+  for (const incoming of seen) {
+    expect(incoming.apiKey).toBe(expected)
+    if (expected === undefined) expect(incoming).not.toHaveProperty("apiKey")
+  }
 })
 
 test("draft conversion stores only distinct catalog ids and preserves explicit opt-out", () => {
@@ -300,7 +332,7 @@ test("provider form carries catalog identity in descriptions and actions, not ed
   const form = providerFormSpec(admin, undefined, initial)
   expect(form.fields.some((field) => field.id === "catalogId")).toBe(false)
   expect(form.fields.find((field) => field.id === "models")?.help).toBe(
-    "space picks · type an id and press enter to add one the list lacks.",
+    "Type to filter · enter adds an unlisted id. Prices are input/output USD per million tokens.",
   )
   const values = { id: "renamed", dialect: "openai-chat", baseUrl: VENDOR.baseUrl!, models: ["m"] }
   for (const id of ["fetchModels", "testConnection"]) {
@@ -331,4 +363,80 @@ test("editing an opted-out provider preserves catalog opt-out in descriptions an
     progress: () => {},
   })
   expect(seen.map((draft) => draft.catalogId)).toEqual([false, false])
+})
+
+test("model info columns carry limits and catalog prices for initial and fetched options", async () => {
+  const { admin } = fakeAdmin()
+  const models = [
+    {
+      id: "known",
+      name: "Known model",
+      contextWindow: 400000,
+      cost: { input: 1.25, output: 10 },
+      inCatalog: true,
+    },
+    { id: "provider-only", contextWindow: 128000, cost: { input: 9, output: 9 }, inCatalog: false },
+    { id: "unknown", inCatalog: false },
+  ]
+  admin.describeModels = () => models
+  admin.listModels = async () => models
+  const form = providerFormSpec(admin, undefined, { models: models.map((model) => model.id) })
+  const expected = [
+    { value: "known", label: "known (Known model)", detail: ["400K", "$1.25/$10"] },
+    { value: "provider-only", detail: ["128K"] },
+    { value: "unknown" },
+  ]
+  const field = form.fields.find((field) => field.id === "models")
+  if (field?.type !== "multiselect") throw new Error("Missing models field")
+  expect(field.options).toEqual(expected)
+  const result = await runFormAction(
+    form,
+    "fetchModels",
+    {},
+    {
+      signal: new AbortController().signal,
+      progress: () => {},
+    },
+  )
+  expect(result.options?.models).toEqual(expected)
+  const schema = toFormSchema(form).fields.find((field) => field.id === "models")
+  expect(schema && "options" in schema && schema.options).toEqual(expected)
+})
+
+test("a form connection test resolving after cancellation reports cancellation, not failure", async () => {
+  const { admin } = fakeAdmin()
+  const controller = new AbortController()
+  admin.test = async () => {
+    controller.abort()
+    return { ok: false, latencyMs: 1, message: "Probe resolved unsuccessfully" }
+  }
+  const result = await runFormAction(
+    providerFormSpec(admin),
+    "testConnection",
+    { models: ["m"] },
+    {
+      signal: controller.signal,
+      progress: () => {},
+    },
+  )
+  expect(result).toEqual({ message: "Cancelled.", tone: "warning" })
+})
+
+test("Edit credential guidance keeps the live key instead of implying a disk reload", () => {
+  const { admin } = fakeAdmin()
+  const existing: ProviderDraft = {
+    id: "test",
+    dialect: "openai-chat",
+    baseUrl: VENDOR.baseUrl!,
+    keySource: "auth",
+    models: ["m"],
+  }
+  for (const hint of [undefined, "…disk"]) {
+    admin.storedKeyHint = () => hint
+    const field = providerFormSpec(admin, existing).fields.find((field) => field.id === "apiKey")
+    if (field?.type !== "secret") throw new Error("Missing key field")
+    expect(field.placeholder).toContain("keep the current key")
+    expect(field.placeholder).not.toContain("keep the stored key")
+    expect("default" in field).toBe(false)
+  }
 })
