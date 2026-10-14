@@ -324,10 +324,51 @@ TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次
 
 - `{ kind: "segments", parts: ViewSegment[] }` 将带样式的文本组合为单行，超出宽度时
   由前端截断，不换行。导出的 `ViewSegment` 类型为
-  `{ text: string, kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }`。
+  `{ text: string, kind: "text" | "dim" | "muted" | "accent" | "success" | "warning" | "error" }`。
 - `{ kind: "user-message", text: string, note?: string }` 使用与对话中用户消息相同的显示方式，
   包括换行、背景和间距。只需提供消息文本，不要手动添加 `›` 标记。可选的备注显示在
   消息下方，与消息共用同一背景。
+
+`ViewRenderOptions.statusBadge?(state: AgentStatusState, options?: { pad?: boolean }): ViewSegment[]` 是宿主提供的 agent 状态徽标辅助函数。`UiContext` 通过 `ViewRenderOptions` 继承它，因此声明式视图也可以使用。从 `@amira/api` 导出的 `AgentStatusState` 类型支持 `queued`、`working`、`idle`、`paused`、`done`、`failed` 和 `stopped`。宿主负责主题符号、ASCII 替代以及共用的旋转指示器时序和重绘。queued 使用暗淡样式，working 使用强调色，idle 使用弱化色，done 使用成功色，failed 使用错误色，stopped 和 paused 使用警告色（见[状态徽标图例](subagents.md#状态徽标图例)）。
+
+将返回的片段直接插入语义化行，例如视图标题：
+
+```ts
+import type { ViewLine, ViewRenderOptions, ViewSegment } from "@amira/api"
+
+function taskTitle(opts: ViewRenderOptions): ViewLine {
+  const fallback: ViewSegment[] = [{ kind: "accent", text: "working" }]
+  return {
+    kind: "segments",
+    parts: [
+      ...(opts.statusBadge?.("working", { pad: true }) ?? fallback),
+      { kind: "text", text: " Task" },
+    ],
+  }
+}
+```
+
+`AGENT_STATUS_BADGES` 是导出的显示表，以 `AgentStatusState` 为键。每项包含 `{ symbol, ascii, role, label }`：默认 Unicode 符号、ASCII 替代符号、语义主题角色和明确的状态词。例如，`AGENT_STATUS_BADGES.stopped` 为 `{ symbol: "‖", ascii: "|", role: "warning", label: "stopped" }`。宿主辅助函数还会应用主题覆盖和动画。`{ pad: true }` 将状态词补齐到七个单元格，使任务名对齐；默认不补齐。
+
+请将完整的 info/result 传给 `agentStatusState(agent)`，而不只是 `agent.status`，以保留提前结束的备注。导出的 `AgentStatusSource` 类型也支持旧状态字符串和对话树节点。共用映射把 `done` 加任何已定义的提前结束 `note`（包括空字符串）解释为 `stopped`；用户暂停中的活动轮次解释为 `paused`，不会显示为 `working`。这不会改变生命周期结果的契约。扩展中需要对齐的行可调用 `opts.statusBadge?.(agentStatusState(agent), { pad: true })`。按名称导入该函数或显示表，需要宿主构建已导出它们。可选辅助函数只保护前端缺少该方法时的调用，不会让缺少命名导出的旧宿主能够加载这些导入。若要支持旧版宿主构建，请使用下例的命名空间导入和功能检测。`API_VERSION` 保持不变，不能据此判断这些能力；版本管理由维护者另行决定。
+
+```ts
+import * as amira from "@amira/api"
+
+function displayState(status: amira.SubagentState, note?: string, paused = false) {
+  if (typeof amira.agentStatusState === "function") {
+    try {
+      if (amira.agentStatusState({ status: "done", note: "" }) === "stopped")
+        return amira.agentStatusState({ status, note, paused })
+    } catch {} // An older host may accept only strings.
+  }
+  if (status === "done" && note !== undefined) return "stopped"
+  if (status === "running" && paused) return "paused"
+  if (typeof amira.agentStatusState === "function") return amira.agentStatusState(status)
+  return status === "running" ? "working" : status === "error" ? "failed" : status === "aborted" ? "stopped" : status
+}
+```
+`ctx.ui.choose()` 还接受与选项一一对应的 `optionStatuses?: (AgentStatusState | undefined)[]`；宿主在这些选项前显示相同的徽标，不改变返回的选项字符串。若要在选择器打开时跟踪生命周期变化，可传入仅在宿主运行的 `live()` 回调，返回 `{ optionLabels?, optionStatuses?, descriptions? }`。这些显示数组沿用原选项顺序；`optionLabels` 只决定显示文本，原始 `options` 仍是稳定的回答标识。显示变化通过相同 `requestId` 的 `ui.request` 发布。前端和 RPC 客户端必须原位更新现有请求，不能新开选择器或重置选择、筛选和滚动位置。回调不序列化，请求关闭时取消订阅。
 
 视图按键支持单个可打印字符，以及 `left`、`right`、`tab`、`shift-tab`。标签相同的
 按键在底部提示中合并为一项（`←→ switch`）；标签为空的按键（例如另一个按键的别名）
@@ -340,7 +381,7 @@ TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次
 `follow: false` 让每个新 id 从顶部开始显示。
 
 通过 `api.session()` 读取实时快照，通过 `api.on()` 订阅事件；状态变化后调用
-`api.requestRender()`。TUI 还会每秒重绘打开的视图，更新耗时。`header` 和 `render`
+`api.requestRender()`。静态视图没有刷新定时器。若内容随时间变化，请在绘制回调中调用 `opts.requestRefresh?.(1000)`（声明式视图使用 `ctx.requestRefresh`），且仅在时间能够改变显示时调用。每帧中最短的正数有限间隔生效；刷新需求每帧重置，没有刷新或动画需求时定时器停止。被覆盖或高度为零的停靠视图会暂停刷新需求，重新可见并绘制时再计算；静态或被裁掉的选择器和命令行不会维持时钟，可见状态转为 working 时重新启动。working 徽标和运行中的工具会自动请求共用的旋转指示器频率。`header` 和 `render`
 接收可用宽度、当前时间，以及可选的 `renderTool(toolName, call, detail)` 回调。
 该回调使用 host 当前的工具 presenter 和通用渲染器；传入 `ToolCallView`，直接返回
 得到的行以保留 host 的显示效果。其他前端可能不提供该回调，因此应提供纯文本行的

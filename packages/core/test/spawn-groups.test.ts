@@ -79,7 +79,12 @@ test("a group runs at most its maxConcurrent children at once and reports itself
   expect(results.every((r) => r.status === "done")).toBe(true)
   expect(peak.value).toBe(2)
   const info = group.info()
-  expect(info).toMatchObject({ state: "active", tokens: 25, agents: { total: 5, ended: 5 } })
+  expect(info).toMatchObject({
+    state: "active",
+    tokens: 25,
+    agents: { total: 5, ended: 5 },
+    outcomes: { done: 5, failed: 0, stopped: 0 },
+  })
   group.end()
   expect(await group.ended()).toMatchObject({ state: "ended", endReason: "ended by its owner" })
   await bus.flush()
@@ -90,6 +95,45 @@ test("a group runs at most its maxConcurrent children at once and reports itself
   const start = events.find((e) => e.type === "subagent.start")!
   expect(start.data).toMatchObject({ groupId: group.id })
   expect(tree.groups().map((g) => g.id)).toEqual([group.id])
+})
+
+test("group outcomes persist after done, failed and stopped members leave the live set", async () => {
+  const { tree, root, bus, events } = setup((req) =>
+    roleOf(req) === "fail" ? { error: new Error("failed child") } : { text: "ok" },
+  )
+  const group = tree.createGroup(root, { name: "workflow", compact: true })
+  const done = group.spawn({ prompt: "done" })
+  const failed = group.spawn({ prompt: "fail", systemPrompt: "ROLE fail" })
+  const idle = group.spawn({ prompt: "idle", persistent: true })
+  const aborted = group.spawn({ prompt: "abort" })
+  aborted.abort()
+  await Promise.all([done.result(), failed.result(), aborted.result()])
+  await until(() => idle.state === "idle")
+  expect(group.info()).toMatchObject({
+    agents: { total: 4, ended: 3, idle: 1 },
+    outcomes: { done: 1, failed: 1, stopped: 1 },
+  })
+  const beforeStop = group.info()
+  idle.stop("finished by owner")
+  await idle.result()
+  expect(beforeStop.outcomes).toEqual({ done: 1, failed: 1, stopped: 1 })
+  expect(group.children()).toEqual([])
+  group.end()
+  const info = await group.ended()
+  expect(info).toMatchObject({ outcomes: { done: 1, failed: 1, stopped: 2 } })
+  await bus.flush()
+  expect(events.findLast((e) => e.type === "group.end")?.data.group).toMatchObject({
+    outcomes: { done: 1, failed: 1, stopped: 2 },
+  })
+  expect(tree.groups()[0]).toMatchObject({ outcomes: { done: 1, failed: 1, stopped: 2 } })
+})
+
+test("a persistent member reaching its turn limit counts as stopped, not successful", async () => {
+  const { tree, root } = setup(() => ({ text: "turn finished" }))
+  const group = tree.createGroup(root, { name: "limited", maxTurnsPerAgent: 1 })
+  const child = group.spawn({ prompt: "work", persistent: true })
+  expect(await child.result()).toMatchObject({ status: "done", note: "reached its limit of 1 turn" })
+  expect(group.info().outcomes).toEqual({ done: 0, failed: 0, stopped: 1 })
 })
 
 test("the tree's maxConcurrent still holds over a group, and a full group does not hold up others", async () => {
@@ -239,9 +283,74 @@ test("a group created by a member is part of the member's group", async () => {
   expect(innerInfo.tokens).toBe(10)
   // The outer group counts the lead and both of the inner group's children.
   expect(outer.info().agents.total).toBe(3)
+  expect(outer.info().outcomes).toEqual({ done: 3, failed: 0, stopped: 0 })
+  expect(innerInfo.outcomes).toEqual({ done: 2, failed: 0, stopped: 0 })
   // The lead's own reply and the inner children's.
   expect(outer.info().tokens).toBe(15)
   expect(() => outer.spawn({ prompt: "fourth" })).toThrow(SpawnError)
+})
+
+test("pause and resume publish snapshots across the group chain without releasing admission", async () => {
+  const { tree, root, tools, bus, events } = setup((req) =>
+    roleOf(req) === "lead" && req.messages.at(-1)?.role !== "toolResult"
+      ? { toolCalls: [{ name: "fan", args: {} }] }
+      : { text: "ok", delayMs: 40 },
+  )
+  const outer = tree.createGroup(root, { name: "outer", compact: true })
+  let verificationError: unknown
+  let verified = false
+  tools.register(
+    defineTool({
+      name: "fan",
+      description: "fan",
+      parameters: { type: "object", properties: {} },
+      execute: async (_p, ctx) => {
+        const inner = ctx.session!.createGroup!({ name: "inner", compact: true, maxConcurrent: 1 })
+        const child = inner.spawn({ prompt: "work" })
+        const queued = inner.spawn({ prompt: "queued" })
+        try {
+          await until(() => child.state === "working")
+          await bus.flush()
+          const from = events.length
+          expect(tree.pause(child.id)).toBe(true)
+          expect(child.state).toBe("working")
+          expect(queued.state).toBe("queued")
+          await bus.flush()
+          const updates = events.slice(from).flatMap((e) => (e.type === "group.update" ? [e.data.group] : []))
+          expect(updates.map((g) => g.id)).toEqual([inner.id, outer.id])
+          expect(updates.every((g) => g.agents.paused === 1)).toBe(true)
+          expect(inner.info().agents).toMatchObject({ total: 2, working: 0, queued: 1, paused: 1 })
+          expect(tree.pause(child.id)).toBe(false)
+          const paused = inner.info()
+          const resumedFrom = events.length
+          expect(tree.resume(child.id)).toBe(true)
+          await bus.flush()
+          const resumed = events
+            .slice(resumedFrom)
+            .flatMap((e) => (e.type === "group.update" ? [e.data.group] : []))
+          expect(resumed.map((g) => g.id)).toEqual([inner.id, outer.id])
+          expect(resumed.every((g) => !g.agents.paused)).toBe(true)
+          expect(inner.info().agents).toMatchObject({ working: 1, queued: 1 })
+          expect(paused.agents).toMatchObject({ working: 0, paused: 1 })
+          expect(tree.resume(child.id)).toBe(false)
+          verified = true
+        } catch (error) {
+          verificationError = error
+        } finally {
+          inner.end()
+          await Promise.all([child.result(), queued.result()])
+        }
+        return textResult("fanned")
+      },
+    }),
+    "test",
+  )
+  const lead = outer.spawn({ prompt: "lead", systemPrompt: "ROLE lead" })
+  const result = await lead.result()
+  expect(result.status).toBe("done")
+  outer.end()
+  if (verificationError) throw verificationError
+  expect(verified).toBe(true) // Tool errors are returned to the model, not thrown by the lead.
 })
 
 // ---- persistent children ----

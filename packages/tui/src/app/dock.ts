@@ -39,6 +39,15 @@ export class DockedView {
     this.maxHeight = maxHeight
   }
 
+  get visible(): boolean {
+    return this.height > 0
+  }
+
+  /** A covered dock must recompute its demand when its next visible frame is drawn. */
+  hide(): void {
+    this.height = 0
+  }
+
   render(width: number, ctx: RenderContext, available: number): string[] {
     this.width = width
     this.height = dockHeight(ctx.rows, available, this.maxHeight)

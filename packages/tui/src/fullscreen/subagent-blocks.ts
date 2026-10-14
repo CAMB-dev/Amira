@@ -1,10 +1,12 @@
 import type { AnyEvent } from "@amira/api"
+import { Spinner } from "@amira/tui-kit"
 import type { Block } from "../blocks/base.ts"
 import { SubagentGroupBlock } from "../blocks/subagent-group.ts"
 import type { ToolBlock } from "../blocks/tool.ts"
 import {
   endNode,
-  isActive,
+  isWorking,
+  resetGroups,
   type SpawnGroups,
   type SubagentNode,
   startedNode,
@@ -22,6 +24,7 @@ export interface SubagentBlocksDeps {
   requestRender: () => void
   notice: (level: NoticeLevel, text: string) => void
   presenters: ViewHost["presenters"]
+  spinner: Spinner
 }
 
 export function createSubagentBlocks(deps: SubagentBlocksDeps) {
@@ -35,11 +38,15 @@ export function createSubagentBlocks(deps: SubagentBlocksDeps) {
   /** The block of each spawn group whose members started without a call of this session. */
   const groupBlocks = new Map<string, SubagentGroupBlock>()
 
-  /** Redraws once a second while sub-agents run, so their elapsed time moves. */
+  /** Working children keep the shared spinner alive even after the parent's turn ends. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tick = () => {
-    const running = [...nodes.values()].some(isActive)
-    if (running && !subagentTimer) subagentTimer = setInterval(() => requestRender(), 1000)
+    const running = [...nodes.values()].some(isWorking)
+    if (running && !subagentTimer)
+      subagentTimer = setInterval(() => {
+        if (!deps.spinner.running) deps.spinner.tick()
+        requestRender()
+      }, Spinner.INTERVAL_MS)
     else if (!running && subagentTimer) {
       clearInterval(subagentTimer)
       subagentTimer = undefined
@@ -54,7 +61,7 @@ export function createSubagentBlocks(deps: SubagentBlocksDeps) {
     switch (e.type) {
       case "subagent.start": {
         if (!mine) return false
-        const node = startedNode(e)
+        const node = startedNode(e, groups)
         nodes.set(node.id, node)
         const main = node.parent === sessionId()
         const call = main && node.toolCallId ? callBlock(node.toolCallId) : undefined
@@ -82,7 +89,7 @@ export function createSubagentBlocks(deps: SubagentBlocksDeps) {
       case "subagent.end": {
         const node = nodes.get(e.data.childSessionId)
         if (!node) return false
-        endNode(node, e)
+        endNode(node, e, groups)
         ownerOf(node)?.touch()
         break
       }
@@ -110,6 +117,7 @@ export function createSubagentBlocks(deps: SubagentBlocksDeps) {
         if (!node) return false
         updateNode(node, e, deps.presenters)
         ownerOf(node)?.touch()
+        tick()
         return true
       }
     }
@@ -119,7 +127,7 @@ export function createSubagentBlocks(deps: SubagentBlocksDeps) {
 
   function reset(): void {
     nodes.clear()
-    groups.clear()
+    resetGroups(groups)
     owners.clear()
     groupBlocks.clear()
     tick()

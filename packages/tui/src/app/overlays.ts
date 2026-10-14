@@ -7,7 +7,14 @@ import {
   type ToolDetailLevel,
 } from "@amira/api"
 import type { UiRequests } from "@amira/core"
-import { type ImageStore, type InputEvent, matchesKey, type RenderContext, type Theme } from "@amira/tui-kit"
+import {
+  type ImageStore,
+  type InputEvent,
+  matchesKey,
+  type RenderContext,
+  Spinner,
+  type Theme,
+} from "@amira/tui-kit"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "../dialog.ts"
 import {
   type ExtensionSettingsRequest,
@@ -21,6 +28,7 @@ import { KeyReference } from "../key-reference.ts"
 import type { Keybindings, KeySpec } from "../keybindings.ts"
 import type { PresenterSource } from "../tool-view.ts"
 import type { TranscriptView } from "../view.ts"
+import type { CommandRunner } from "./command-runner.ts"
 import { DockedView } from "./dock.ts"
 import { overlayKeys } from "./startup.ts"
 
@@ -44,6 +52,7 @@ export interface OverlayManagerDeps {
   quitting: () => boolean
   /** Inline mode enables pointer reports only while a dock or fullscreen view uses them. */
   dockChanged?: (open: boolean) => void
+  commandActivity?: () => Pick<CommandRunner, "animationActive" | "tickAnimation">
 }
 
 /** Dialogs and full-screen views over the conversation, including forms waiting for their turn. */
@@ -57,10 +66,11 @@ export class OverlayManager {
   private viewer: ExtensionViewer | KeyReference | undefined
   dock: DockedView | undefined
   private readonly lifetimes = new WeakMap<ExtensionViewer, { owner?: object; off?: () => void }>()
-  private dockTimer: ReturnType<typeof setInterval> | undefined
-  private dockInterval = 1000
-  private viewerTimer: ReturnType<typeof setInterval> | undefined
-  private viewerInterval = 1000
+  private animationTimer: ReturnType<typeof setInterval> | undefined
+  private animationInterval: number | undefined
+  private disposed = false
+  private bottomVisible = true
+  private commandRowVisible = true
   /**
    * Forms (ui.form) waiting to be shown full screen, oldest first; the first one is open while
    * `form` is set. A form waits while an inline dialog or the viewer is up, and inline dialogs
@@ -90,13 +100,14 @@ export class OverlayManager {
   render(width: number, ctx: RenderContext): string[] {
     if (this.form) return this.form.render(width, ctx)
     const rows = this.viewer?.render(width, ctx) ?? []
-    this.syncViewerTimer()
+    this.syncAnimation()
     return rows
   }
 
   waitingChanged(change: EventMap["ui.waiting"]["change"]) {
     const pending = this.dialogs.length + this.forms.length
     const hidden = pending > 0 && (this.viewer !== undefined || (this.form !== undefined && pending > 1))
+    this.syncAnimation()
     this.deps.emitWaiting({ pending, hidden, change })
   }
 
@@ -147,7 +158,7 @@ export class OverlayManager {
         if (this.dock?.viewer === next) next.mount()
         if (this.dock?.viewer === next) this.deps.dockChanged?.(true)
       }
-      this.syncDockTimer()
+      this.syncAnimation()
       this.deps.view().requestRender()
       return true
     }
@@ -183,9 +194,13 @@ export class OverlayManager {
   }
 
   renderDock(width: number, ctx: RenderContext, available: number): string[] {
-    if (this.hasFullscreen) return []
+    if (this.hasFullscreen) {
+      this.dock?.hide()
+      this.syncAnimation()
+      return []
+    }
     const rows = this.dock?.render(width, ctx, available) ?? []
-    this.syncDockTimer()
+    this.syncAnimation()
     return rows
   }
 
@@ -201,14 +216,47 @@ export class OverlayManager {
     return this.dock.handleInput(e)
   }
 
-  private syncDockTimer() {
-    if (!this.dock) return
-    const interval = this.dock.viewer.animating ? 80 : 1000
-    if (this.dockTimer && this.dockInterval === interval) return
-    clearInterval(this.dockTimer)
-    this.dockInterval = interval
-    this.dockTimer = setInterval(() => {
-      if (!this.hasFullscreen) this.deps.view().requestRender()
+  /** One clock for visible view, dialog and command demand; hidden content never wakes it. */
+  syncAnimation(bottomVisible?: boolean, commandRowVisible?: boolean): void {
+    if (bottomVisible !== undefined) this.bottomVisible = bottomVisible
+    if (commandRowVisible !== undefined) this.commandRowVisible = commandRowVisible
+    const commands = this.deps.commandActivity?.()
+    const commandVisible =
+      this.bottomVisible &&
+      this.commandRowVisible &&
+      !this.hasFullscreen &&
+      !this.dialogs.length &&
+      commands?.animationActive
+    const demands = this.disposed
+      ? []
+      : this.hasFullscreen
+        ? [this.viewer instanceof ExtensionViewer && !this.form ? this.viewer.refreshIntervalMs : undefined]
+        : [
+            this.dock?.visible ? this.dock.viewer.refreshIntervalMs : undefined,
+            this.bottomVisible ? this.dialogs[0]?.refreshIntervalMs : undefined,
+            commandVisible ? Spinner.INTERVAL_MS : undefined,
+          ]
+    const intervals = demands.filter((ms): ms is number => ms !== undefined)
+    const interval = intervals.length ? Math.min(...intervals) : undefined
+    if (this.animationTimer !== undefined && this.animationInterval === interval) return
+    clearInterval(this.animationTimer)
+    this.animationTimer = undefined
+    this.animationInterval = interval
+    if (interval === undefined) return
+    this.animationTimer = setInterval(() => {
+      this.syncAnimation()
+      if (this.animationTimer === undefined) return
+      const commands = this.deps.commandActivity?.()
+      if (
+        this.bottomVisible &&
+        this.commandRowVisible &&
+        !this.hasFullscreen &&
+        !this.dialogs.length &&
+        commands?.animationActive
+      )
+        commands.tickAnimation()
+      if (this.hasFullscreen) this.deps.view().requestOverlayRender()
+      else this.deps.view().requestRender()
     }, interval)
   }
 
@@ -222,8 +270,7 @@ export class OverlayManager {
     const previous = this.dock
     if (!previous) return
     this.dock = undefined
-    clearInterval(this.dockTimer)
-    this.dockTimer = undefined
+    this.syncAnimation()
     this.disposeViewer(previous.viewer)
     this.deps.dockChanged?.(false)
     this.deps.view().requestRender()
@@ -255,27 +302,17 @@ export class OverlayManager {
     if (this.viewer !== next) return
     if (next instanceof ExtensionViewer) next.mount()
     if (this.viewer !== next) return
+    this.dock?.hide()
     this.deps.view().openOverlay(next instanceof ExtensionViewer)
-    this.syncViewerTimer()
+    this.syncAnimation()
     this.waitingChanged("visibility")
-  }
-
-  /** Reuse the overlay timer: ordinary views keep their 1s refresh, running tools use 80ms. */
-  private syncViewerTimer() {
-    if (!this.viewer) return
-    const interval = this.viewer instanceof ExtensionViewer && this.viewer.animating ? 80 : 1000
-    if (this.viewerTimer && this.viewerInterval === interval) return
-    clearInterval(this.viewerTimer)
-    this.viewerInterval = interval
-    this.viewerTimer = setInterval(() => this.deps.view().requestOverlayRender(), interval)
   }
 
   private closeView() {
     const previous = this.viewer
     if (!previous) return
     this.viewer = undefined
-    clearInterval(this.viewerTimer)
-    this.viewerTimer = undefined
+    this.syncAnimation()
     this.deps.view().closeOverlay()
     if (this.dock) this.deps.dockChanged?.(true)
     if (previous instanceof ExtensionViewer) this.disposeViewer(previous)
@@ -301,6 +338,8 @@ export class OverlayManager {
             previewTheme: this.deps.previewTheme,
           })
         : new FormView(uiFormBackend(ui, next), options)
+    this.dock?.hide()
+    this.syncAnimation()
     this.deps.view().openOverlay()
     this.deps.view().renderOverlay()
   }
@@ -343,11 +382,18 @@ export class OverlayManager {
 
   onUiRequest(data: EventMap["ui.request"]) {
     const ui = this.deps.ui
-    if (!ui) return
+    // Events are queued: a local answer can clear authoritative pending before an update arrives.
+    if (!ui?.pending.some((request) => request.requestId === data.requestId)) return
     if (data.kind === "form" || data.kind === "extension-settings") {
+      if (this.forms.some((request) => request.requestId === data.requestId)) return
       this.forms.push(data)
       this.openNextForm()
       this.waitingChanged("opened")
+      return
+    }
+    const existing = this.dialogs.find((dialog) => dialog.request.requestId === data.requestId)
+    if (existing) {
+      if (existing.update(data)) this.deps.view().requestRender()
       return
     }
     const dialog = new Dialog(data, (answer) => this.answerDialog(ui, dialog, answer), this.deps.keys)
@@ -361,8 +407,12 @@ export class OverlayManager {
     if (i !== -1) this.dialogs.splice(i, 1)
     const f = this.forms.find((r) => r.requestId === data.requestId)
     // Answered or cancelled elsewhere (another client, a timeout): close it without answering.
-    if (f && this.form && this.forms[0] === f) this.form.close()
-    else if (f) this.forms.splice(this.forms.indexOf(f), 1)
+    if (f && this.form && this.forms[0] === f) {
+      this.form.close()
+      return
+    }
+    if (f) this.forms.splice(this.forms.indexOf(f), 1)
+    if (i === -1 && !f) return // A local answer already removed it and emitted its waiting change.
     this.openNextForm()
     this.waitingChanged("resolved")
   }
@@ -405,6 +455,8 @@ export class OverlayManager {
 
   /** Closes full-screen overlays; inline dialogs are cancelled at the later shutdown boundary. */
   dispose() {
+    this.disposed = true
+    this.syncAnimation()
     this.closeDock()
     for (const f of this.forms.splice(0)) this.deps.ui?.cancel(f.requestId)
     this.form?.close()

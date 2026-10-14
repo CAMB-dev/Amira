@@ -18,12 +18,12 @@ exports[`walkthrough frame at 100 columns 1`] = `
                                                                                                     
 
 ⠋ agent                                                                                           6s
-│ └ ⠋ List project files · explorer · 6s · 31k tok
+│ └ ⠋ working List project files · explorer · 6s · 31k tok
 │   └ ⠋ bash ls src
 ├ edit src/add.ts  +1 / -1
 ├ bash bun test src/add.test.ts  ✓ 12 pass · 1.2s
 └ ⠋ started by a command · in the background
-  └ ⠋ Review project structure · explorer · 6s · 6.0k tok
+  └ ⠋ working Review project structure · explorer · 6s · 6.0k tok
     └ ⠋ read package.json"
 `;
 
@@ -46,11 +46,11 @@ exports[`walkthrough frame at 50 columns 1`] = `
                                                   
 
 ⠋ agent                                         6s
-│ └ ⠋ List project files · explorer · 6s · 31k tok
+│ └ ⠋ working List proj… · explorer · 6s · 31k tok
 │   └ ⠋ bash ls src
 ├ edit src/add.ts  +1 / -1
 ├ bash bun test src/add.test.ts  ✓ 12 pass · 1.2s
 └ ⠋ started by a command · in the background
-  └ ⠋ Review project s… · explorer · 6s · 6.0k tok
+  └ ⠋ working Review p… · explorer · 6s · 6.0k tok
     └ ⠋ read package.json"
 `;

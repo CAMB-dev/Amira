@@ -8,10 +8,10 @@ import {
   toolResultText,
 } from "@amira/api"
 import { stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
-import { timestampIn } from "../format.ts"
+import { agentCountsMark, agentCountsText, timestampIn } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { markerPrefix } from "../grid.ts"
-import { childrenOf, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
+import { childrenOf, isActive, type SubagentNode, subagentCounts, subtree, treeRows } from "../subagents.ts"
 import { type CopyRow, chromeRows, sliceCells } from "../text-selection.ts"
 import {
   explorationOf,
@@ -162,14 +162,18 @@ export class ToolBlock extends Block {
     const lines = finishedToolLines(theme, presenter, this.finished(), detail, width, opts)
     let rows: string[]
     if (detail === "collapsed" && this.folding === "collapsed" && tree.length) {
-      const running = tree.filter(isActive).length
+      const counts = subagentCounts(tree, env.groups)
       // Counted as the head counts them, its own; theirs said apart.
       const own = tree.filter((n) => n.depth === tree[0]!.depth).length
       const nested = tree.length - own
-      const text = `${plural(own, "sub-agent")}${nested ? ` (+${nested} nested)` : ""}${running ? ` · ${running} running` : ""}`
+      const members =
+        counts.total === tree.length
+          ? `${plural(own, "sub-agent")}${nested ? ` (+${nested} nested)` : ""}`
+          : plural(counts.total, "sub-agent")
+      const text = `${members} ${glyphs.separator} ${agentCountsText(counts)}`
       rows = [
         truncateToWidth(
-          `${markerPrefix(theme.muted(glyphs.treeLast))}${running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(text)}`,
+          `${markerPrefix(theme.muted(glyphs.treeLast))}${agentCountsMark(counts, theme, env.spinner)} ${theme.muted(text)}`,
           treeWidth,
           glyphs.more,
         ),

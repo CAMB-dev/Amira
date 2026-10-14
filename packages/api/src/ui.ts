@@ -1,6 +1,7 @@
 import type { ExtensionSettingField, ExtensionSettingsValues } from "./extension-settings.ts"
 import type { FormSchema, FormSpec, FormValues } from "./form.ts"
 import type { SettingsLayerScope } from "./settings.ts"
+import type { AgentStatusState } from "./themes.ts"
 import type { ToolLine } from "./tool-renderers.ts"
 
 /** Semantic color for status text; frontends map it to their theme. */
@@ -47,10 +48,14 @@ export type UiRequest =
       kind: "select"
       title: string
       options: string[]
+      /** Display-only labels aligned with options; answers and numeric identities stay unchanged. */
+      optionLabels?: string[]
       /** Option to highlight initially; absent or unknown starts at the first option. */
       initial?: string
       sections?: SelectSection[]
       descriptions?: string[]
+      /** Host-rendered status badges, aligned with options; undefined leaves an option unbadged. */
+      optionStatuses?: (AgentStatusState | undefined)[]
       /** Full conversation text: substring filtering and matching snippets; section keys use Ctrl. */
       searchTexts?: string[]
     }
@@ -210,7 +215,22 @@ export interface UiApi {
   choose(
     title: string,
     options: string[],
-    opts: UiRequestOptions & { sections: SelectSection[]; descriptions?: string[]; searchTexts?: string[] },
+    opts: UiRequestOptions & {
+      sections: SelectSection[]
+      descriptions?: string[]
+      searchTexts?: string[]
+      optionStatuses?: (AgentStatusState | undefined)[]
+      /**
+       * Host-only presentation, read initially and on host events until the choice closes.
+       * Options stay fixed. Changed presentation re-emits ui.request with the same requestId;
+       * clients update the existing picker without resetting selection, filter or scroll.
+       * This callback never crosses the event/transport boundary.
+       */
+      live?: () => Pick<
+        Extract<UiRequest, { kind: "select" }>,
+        "optionLabels" | "optionStatuses" | "descriptions"
+      >
+    },
   ): Promise<SelectChoice | undefined>
   confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean | undefined>
   input(

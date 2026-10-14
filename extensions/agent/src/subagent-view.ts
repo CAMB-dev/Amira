@@ -1,5 +1,7 @@
 import {
+  AGENT_STATUS_BADGES,
   type AnyEvent,
+  agentStatusState,
   clip,
   type ExtensionAPI,
   type Message,
@@ -39,28 +41,21 @@ function live(info: SubagentInfo): boolean {
   )
 }
 
+function badge(info: SubagentInfo, opts: ViewRenderOptions, pad = false): ViewSegment[] {
+  const state = agentStatusState(info)
+  const fallback = AGENT_STATUS_BADGES[state]
+  const label = pad ? fallback.label.padEnd(7) : fallback.label
+  return (
+    opts.statusBadge?.(state, pad ? { pad: true } : undefined) ?? [
+      { kind: fallback.role, text: `${fallback.symbol} ${label}` },
+    ]
+  )
+}
+
 function stats(info: SubagentInfo, now: number): ViewSegment[] {
   const timed = info.durationMs !== undefined || info.startedAt !== undefined
   const when = info.status === "queued" || !timed ? "" : ` · ${elapsed(info, now)}`
-  return [
-    { kind: statusKind(info), text: subagentStateText(info.status) },
-    { kind: "muted", text: `${when} · ${usageText(info)}` },
-  ]
-}
-
-function statusKind(info: SubagentInfo): ViewSegment["kind"] {
-  switch (info.status) {
-    case "running":
-      return "accent"
-    case "done":
-      return "success"
-    case "error":
-      return "error"
-    case "aborted":
-      return "warning"
-    default:
-      return "muted"
-  }
+  return [{ kind: "muted", text: `${when} · ${usageText(info)}` }]
 }
 
 function blockText(message: Message): string {
@@ -138,11 +133,23 @@ function transcriptLines(
   const results = new Map<string, ToolResultMessage>()
   for (const message of own) if (message.role === "toolResult") results.set(message.toolCallId, message)
   const rest = [...kids]
+  const state = agentStatusState(info)
+  const unstarted = (name: string, args: Record<string, unknown>): ViewLine => {
+    const summary = summarizeArgs(args)
+    return {
+      kind: "segments",
+      parts: [
+        ...badge(info, opts),
+        { kind: "text", text: ` ${name}` },
+        ...(summary ? [{ kind: "muted" as const, text: ` ${summary}` }] : []),
+      ],
+    }
+  }
   const kidLine = (kid: SubagentInfo, indent: string): ViewLine => ({
     kind: "segments",
     parts: [
       { kind: "text", text: indent },
-      { kind: "text", text: "◆" },
+      ...badge(kid, opts, true),
       { kind: "text", text: ` ${kid.title} ` },
       { kind: "muted", text: `· ${kid.role} · ${kid.id}` },
       { kind: "text", text: " " },
@@ -186,14 +193,18 @@ function transcriptLines(
     } else if (block.type === "serverTool") {
       if (block.status === "running" && live(info)) {
         flush()
-        out.push(
-          ...(opts.renderRunningTool?.(block.name, { args: block.input, ...started(block.id) }, { last }) ?? [
-            {
-              kind: "text",
-              text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}  running`,
-            },
-          ]),
-        )
+        const execution = started(block.id)
+        if (state !== "working" && execution?.startedAt === undefined)
+          out.push(unstarted(block.name, block.input))
+        else
+          out.push(
+            ...(opts.renderRunningTool?.(block.name, { args: block.input, ...execution }, { last }) ?? [
+              {
+                kind: "text",
+                text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}  running`,
+              },
+            ]),
+          )
       } else finished(block.name, serverToolView(block), last)
     } else if (block.type === "toolCall") {
       const result = results.get(block.id)
@@ -214,14 +225,19 @@ function transcriptLines(
         )
       } else if (live(info)) {
         flush()
-        out.push(
-          ...(opts.renderRunningTool?.(block.name, { args: block.args, ...started(block.id) }, { last }) ?? [
-            {
-              kind: "text",
-              text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}${summarizeArgs(block.args) ? ` ${summarizeArgs(block.args)}` : ""}  running`,
-            },
-          ]),
-        )
+        const execution = started(block.id)
+        // A pause can retain a model's tool call before execution reaches its gate.
+        if (state !== "working" && execution?.startedAt === undefined)
+          out.push(unstarted(block.name, block.args))
+        else
+          out.push(
+            ...(opts.renderRunningTool?.(block.name, { args: block.args, ...execution }, { last }) ?? [
+              {
+                kind: "text",
+                text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}${summarizeArgs(block.args) ? ` ${summarizeArgs(block.args)}` : ""}  running`,
+              },
+            ]),
+          )
       } else {
         finished(
           block.name,
@@ -360,10 +376,8 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
         ? {
             kind: "segments",
             parts: [
-              { kind: "accent", text: "◆" },
-              { kind: "text", text: ` ${info.title} ` },
-              { kind: "muted", text: "·" },
-              { kind: "text", text: " " },
+              ...badge(info, opts),
+              { kind: "text", text: ` ${info.title}` },
               ...stats(info, opts.now),
               { kind: "muted", text: ` · ${info.role} · ${info.id}` },
             ],
@@ -402,14 +416,22 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
       if (stream?.text.trim()) out.push(...replyLines(stream.text, opts), { kind: "text", text: "" })
       // The view's title already owns live state; do not duplicate it in the transcript.
       if (!live(info)) {
-        if (info.error && info.status !== "done")
-          out.push({ kind: "error", text: `${symbols.error} ${info.error}` })
-        else if (info.note && info.status !== "done")
+        const state = agentStatusState(info)
+        if (info.error && state !== "done")
           out.push({
-            kind: "muted",
-            text: `${symbols.interrupted} ${subagentStateText(info.status)}: ${info.note}`,
+            kind: state === "stopped" ? "warning" : "error",
+            text: `${state === "stopped" ? AGENT_STATUS_BADGES.stopped.symbol : symbols.error} ${info.error}`,
           })
-        else out.push({ kind: "muted", text: `── ${subagentStateText(info.status)} ──` })
+        else if (info.note && state === "stopped")
+          out.push({
+            kind: "warning",
+            text: `${symbols.interrupted} ${subagentStateText(info)}: ${info.note}`,
+          })
+        else
+          out.push({
+            kind: state === "stopped" ? "warning" : "muted",
+            text: `── ${subagentStateText(info)} ──`,
+          })
       }
       return out
     },

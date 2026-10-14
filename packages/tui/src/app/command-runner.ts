@@ -32,6 +32,9 @@ export interface CommandRunner {
   hasCancellable(): boolean
   /** The shared command animation frame, also used by live panels. */
   readonly spinner: string
+  /** Demand for the host's shared clock, independent of cancellation availability. */
+  readonly animationActive: boolean
+  tickAnimation(): void
   render(width: number, ctx: RenderContext, stop?: string): string[]
   /** Aborts all commands during controller shutdown. */
   abortAll(reason: Error): void
@@ -45,6 +48,8 @@ export interface CommandRunnerOptions {
   commandEcho: (line: string) => void
   commandOutput: (level: "info" | "warning" | "error", text: string) => void
   requestRender: () => void
+  /** When supplied, the host schedules animation alongside visible dialogs and views. */
+  animationChanged?: () => void
   sessionId: () => string
   quit: () => void
   openView: (view: FrontendView) => boolean
@@ -65,6 +70,12 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
   let animationAt = Date.now()
   const syncAnimation = () => {
     const active = [...commandAborts.keys()].some((controller) => !controller.signal.aborted)
+    if (options.animationChanged) {
+      if (active && !spinning) animationAt = Date.now()
+      spinning = active
+      options.animationChanged()
+      return
+    }
     if (active && !spinning) {
       animationAt = Date.now()
       spinner.start(() => {
@@ -163,6 +174,15 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
     },
     get spinner() {
       return spinning ? spinner.glyph : ""
+    },
+    get animationActive() {
+      return [...commandAborts].some(
+        ([controller, entry]) => !controller.signal.aborted && entry.sessionId === options.sessionId(),
+      )
+    },
+    tickAnimation() {
+      spinner.tick()
+      animationAt = Date.now()
     },
     render(width, ctx, stop) {
       const command = [...commandAborts].findLast(

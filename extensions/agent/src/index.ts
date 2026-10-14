@@ -1,4 +1,5 @@
 import {
+  agentStatusState,
   defineExtension,
   type ExtensionAPI,
   formatElapsed,
@@ -57,13 +58,6 @@ function serialized<T>(work: () => Promise<T>): Promise<T> {
 /** How long a finished background report waits for others finishing close by, to go as one message. */
 export const BATCH_MS = 300
 
-/** How a sub-agent ended, as its line in the transcript marks it: done, failed, stopped. */
-const ENDED: Record<SubagentResult["status"], string> = {
-  done: "✓",
-  error: "✗",
-  aborted: "⊘",
-}
-
 /** Why it ended other than finishing, for the user's line: the error, or a stop not the user's own. */
 function endReason(r: SubagentResult): string | undefined {
   if (r.status === "error") return r.error ? shorten(r.error, 100) : undefined
@@ -74,14 +68,14 @@ function endReason(r: SubagentResult): string | undefined {
 
 /**
  * The message that brings background reports to their commander: the reports for the model,
- * short lines for the transcript, shaped like a sub-agent's end line under its call
- * ("◆ US market trend ✓ explorer · 41s · 12k tok", why it failed or stopped after it), and
+ * plain lines and semantic outcomes for the host-rendered completion notices
+ * ("US market trend · explorer · 41s · 12k tok", why it failed or stopped after it), and
  * where changes it made that were not merged are ("changes kept: 3 files · <patch>").
  */
 function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result" | "kept">[]): UserMessage {
-  const lines = jobs.flatMap((j) => {
+  const notices: NonNullable<NonNullable<UserMessage["display"]>["notices"]> = jobs.flatMap((j) => {
     const r = j.result
-    if (!r) return [`◆ ${j.title} ✓ ${j.role}`]
+    if (!r) return [{ text: `${j.title} · ${j.role}`, status: "done" as const }]
     const u = r.usage
     const tokens = formatTokens(u.input + u.output + u.cacheRead + u.cacheWrite)
     // Why it failed or stopped: its error (not the user's own stop), else the stop's note.
@@ -94,11 +88,15 @@ function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result" | "k
             ? shorten(r.note, 100)
             : "stopped"
           : "")
-    const head = `◆ ${j.title} ${ENDED[r.status]} ${j.role} · ${formatElapsed(r.durationMs)} · ${tokens} tok${why ? ` · ${why}` : ""}`
+    const head = `${j.title} · ${j.role} · ${formatElapsed(r.durationMs)} · ${tokens} tok${why ? ` · ${why}` : ""}`
     const kept = j.kept
-      ? [`  changes kept: ${j.kept.files ? `${plural(j.kept.files, "file")} · ` : ""}${j.kept.patch}`]
+      ? [
+          {
+            text: `  changes kept: ${j.kept.files ? `${plural(j.kept.files, "file")} · ` : ""}${j.kept.patch}`,
+          },
+        ]
       : []
-    return [head, ...kept]
+    return [{ text: head, status: agentStatusState(r) }, ...kept]
   })
   const head =
     jobs.length === 1
@@ -108,7 +106,7 @@ function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result" | "k
   return {
     role: "user",
     content: [{ type: "text", text }],
-    display: { text: lines.join("\n"), origin: "subagent" },
+    display: { text: notices.map((line) => line.text).join("\n"), origin: "subagent", notices },
   }
 }
 

@@ -195,6 +195,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     activity: () => activity,
     themePreview: () => themes.previewing,
     activityVisible: (visible, ctx) => shimmerClock.visibility(visible, ctx),
+    commandVisible: (visible) => overlays.syncAnimation(undefined, visible),
     view: () => view,
     noticeStrip: () => noticeStrip,
     dialogs: () => overlays.dialogs,
@@ -240,6 +241,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     working: () => activity.working,
     interrupt: () => outbox.interrupt(),
     quitting: () => quitting,
+    commandActivity: () => commandRunner,
     dockChanged: (open) => {
       if (mode !== "inline") return
       if (open) terminal.enableMode(modes.mouse)
@@ -263,7 +265,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     spinner,
     sessionId: () => agent.sessionId,
     detail: () => detail,
-    bottom: bottomArea.layout,
+    bottom: (...args) => {
+      const rows = bottomArea.layout(...args)
+      overlays.syncAnimation(args[2] > 0)
+      return rows
+    },
     header,
     overlay: new View((width, ctx) => overlays.render(width, ctx)),
     dockOpen: () => !!overlays.dock,
@@ -318,6 +324,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     commandEcho: (line) => view.commandEcho(line),
     commandOutput: (level, text) => view.commandOutput(level, text),
     requestRender: () => view.requestRender(),
+    animationChanged: () => overlays.syncAnimation(),
     sessionId: () => agent.sessionId,
     quit: () => quit(),
     openView: (v) => overlays.openView(v),

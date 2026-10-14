@@ -30,6 +30,17 @@ import {
 import type { EventBus } from "./event-bus.ts"
 
 type Value = UiAnswer[keyof UiAnswer]
+type SelectLive = NonNullable<Parameters<UiApi["choose"]>[2]["live"]>
+
+/** Only display data leaves the host; option strings remain the answer identities. */
+function selectPresentation(live: SelectLive) {
+  const { optionLabels, optionStatuses, descriptions } = live()
+  return {
+    ...(optionLabels ? { optionLabels: [...optionLabels] } : {}),
+    ...(optionStatuses ? { optionStatuses: [...optionStatuses] } : {}),
+    ...(descriptions ? { descriptions: [...descriptions] } : {}),
+  }
+}
 
 /** Host-only settings callbacks. Drafts never replace the extension's effective settings. */
 export interface ExtensionSettingsBackend {
@@ -170,12 +181,15 @@ export class UiRequests {
     opts: UiRequestOptions & { source?: string },
     form?: FormState,
     settings?: ExtensionSettingsBackend,
+    live?: SelectLive,
   ) {
     if (opts.signal?.aborted) return Promise.resolve(undefined)
     const requestId = `ui_${++this.#seq}_${crypto.randomUUID().slice(0, 6)}`
     const sourceLabel = opts.source ? this.#sourceLabels.get(opts.source) : undefined
+    const presentation = live ? selectPresentation(live) : undefined
     const event = {
       ...request,
+      ...presentation,
       requestId,
       ...(opts.source ? { source: opts.source } : {}),
       ...(sourceLabel !== undefined ? { sourceLabel } : {}),
@@ -184,17 +198,39 @@ export class UiRequests {
       const onAbort = () => this.cancel(requestId)
       const timer = opts.timeoutMs !== undefined ? setTimeout(onAbort, opts.timeoutMs) : undefined
       opts.signal?.addEventListener("abort", onAbort, { once: true })
+      let unsubscribe: (() => void) | undefined
       this.#pending.set(requestId, {
         request: event,
         resolve,
         cleanup: () => {
           clearTimeout(timer)
+          unsubscribe?.()
           opts.signal?.removeEventListener("abort", onAbort)
           for (const c of form?.running ?? []) c.abort()
         },
         ...(form ? { form } : {}),
         ...(settings ? { settings } : {}),
       })
+      if (live && event.kind === "select") {
+        let previous = JSON.stringify(presentation)
+        unsubscribe = this.#bus.subscribe((e) => {
+          // Presentation updates must not feed back into themselves or reopen closed choices.
+          if (e.type.startsWith("ui.")) return
+          const pending = this.#pending.get(requestId)
+          if (!pending) return
+          const next = selectPresentation(live)
+          const serialized = JSON.stringify(next)
+          if (serialized === previous) return
+          previous = serialized
+          pending.request = {
+            ...event,
+            optionLabels: next.optionLabels,
+            optionStatuses: next.optionStatuses,
+            descriptions: next.descriptions,
+          }
+          this.#bus.emit("ui.request", pending.request, { sessionId: this.#sessionId })
+        })
+      }
       this.#bus.emit("ui.request", event, { sessionId: this.#sessionId })
     })
   }
@@ -353,7 +389,7 @@ export class UiRequests {
         return typeof answer === "object" ? answer.option : answer
       },
       choose: async (title, options, opts) => {
-        const { sections, descriptions, searchTexts, ...rest } = opts
+        const { sections, descriptions, searchTexts, optionStatuses, live, ...rest } = opts
         const problem = sectionProblem(options, sections)
         if (problem) throw new Error(`ui.choose: ${problem}`)
         const request = {
@@ -363,8 +399,11 @@ export class UiRequests {
           sections: structuredClone(sections),
           ...(descriptions ? { descriptions: [...descriptions] } : {}),
           ...(searchTexts ? { searchTexts: [...searchTexts] } : {}),
+          ...(optionStatuses ? { optionStatuses: [...optionStatuses] } : {}),
         }
-        const answer = await this.ask(request, o(rest))
+        const answer = (await this.#ask(request, o(rest), undefined, undefined, live)) as
+          | UiAnswer["select"]
+          | undefined
         return typeof answer === "string" ? { option: answer } : answer
       },
       confirm: async (title, message, opts) => {

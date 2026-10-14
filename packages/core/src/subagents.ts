@@ -3,6 +3,7 @@ import path from "node:path"
 import type { Ai, Message, ModelInfo, Usage, UserMessage } from "@amira/ai"
 import {
   type AnyEvent,
+  agentStatusState,
   type Budget,
   type ChildSession,
   type ChildState,
@@ -166,15 +167,16 @@ export class AgentTree {
     if (!c) return undefined
     if (!(c instanceof Child)) return { ...c }
     const r = c.ended
-    const status = r
-      ? r.status
-      : c.agent.execution.paused
-        ? "paused"
-        : c.state === "idle"
-          ? "idle"
-          : c.started && c.state !== "queued"
-            ? "running"
-            : "queued"
+    const liveState = agentStatusState({
+      startedAt: c.startedAt,
+      queued: c.state === "queued",
+      idle: c.state === "idle",
+      paused: c.agent.execution.paused,
+    })
+    // Keep lifecycle status names in the public listing; presentation uses the same mapper.
+    const status =
+      r?.status ??
+      (liveState === "paused" || liveState === "idle" || liveState === "queued" ? liveState : "running")
     const info: SubagentInfo = {
       id: c.id,
       parentSessionId: c.parentSessionId,
@@ -521,6 +523,11 @@ export class AgentTree {
     this.#settleGroup(group)
   }
 
+  /** A user hold changes presentation counts, not the child's admission state. */
+  childStateChanged(child: Child): void {
+    this.#groupsChanged(child)
+  }
+
   /** Emits the group.update of every group `child` counts against, and ends those whose last child ended. */
   #groupsChanged(child: Child) {
     for (const g of child.groups) {
@@ -811,7 +818,11 @@ export class AgentTree {
         ...(file ? { file } : { messages: [...child.agent.messages] }),
       })
     }
-    for (const g of child.groups) g.live.delete(child)
+    const outcome = agentStatusState(result)
+    for (const g of child.groups) {
+      g.live.delete(child)
+      g.outcomes[outcome]++
+    }
     this.#groupsChanged(child)
     child.settle(result)
   }

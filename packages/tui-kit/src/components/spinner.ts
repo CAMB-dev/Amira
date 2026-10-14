@@ -12,6 +12,14 @@ const DOTS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "�
 
 /** A one-line spinner with a label. `start(onFrame)` animates it; pass the renderer's requestRender. */
 export class Spinner implements Component {
+  static readonly INTERVAL_MS = 80
+
+  /** Matching ASCII frames for a shared Unicode spinner frame. */
+  static ascii(glyph: string): string {
+    const frame = DOTS.indexOf(glyph)
+    return frame < 0 ? glyph : ["|", "/", "-", "\\"][frame % 4]!
+  }
+
   label: string
   private frames: string[]
   private intervalMs: number
@@ -21,7 +29,7 @@ export class Spinner implements Component {
   constructor(opts: SpinnerOptions = {}) {
     this.label = opts.label ?? ""
     this.frames = opts.frames ?? DOTS
-    this.intervalMs = opts.intervalMs ?? 80
+    this.intervalMs = opts.intervalMs ?? Spinner.INTERVAL_MS
   }
 
   start(onFrame: () => void): void {
@@ -30,6 +38,11 @@ export class Spinner implements Component {
       this.tick()
       onFrame()
     }, this.intervalMs)
+  }
+
+  /** Whether a caller already owns its animation timer. */
+  get running(): boolean {
+    return this.timer !== undefined
   }
 
   stop(): void {

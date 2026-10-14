@@ -319,14 +319,55 @@ TUI のライト・ダークテーマは、起動時に端末の背景色を調�
 
 `ViewLine` は ANSI エスケープコードを使わない、意味に基づくコンテンツをサポートします。スタイルはフロントエンドが管理します。
 
-- `{ kind: "segments", parts: ViewSegment[] }` は、スタイル付きのテキストを 1 行にまとめます。折り返さず、フロントエンドが切り詰めます。エクスポートされる `ViewSegment` 型は `{ text: string, kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }` です。
+- `{ kind: "segments", parts: ViewSegment[] }` は、スタイル付きのテキストを 1 行にまとめます。折り返さず、フロントエンドが切り詰めます。エクスポートされる `ViewSegment` 型は `{ text: string, kind: "text" | "dim" | "muted" | "accent" | "success" | "warning" | "error" }` です。
 - `{ kind: "user-message", text: string, note?: string }` は、折り返し、背景、間隔も含めて、会話記録のユーザーメッセージと同様に描画します。メッセージのテキストだけを指定し、自分で `›` マーカーを追加しないでください。任意の note は、同じ帯の中でメッセージの下に表示されます。
+
+`ViewRenderOptions.statusBadge?(state: AgentStatusState, options?: { pad?: boolean }): ViewSegment[]` は、ホストが提供するエージェントの状態バッジ用ヘルパーです。`UiContext` は `ViewRenderOptions` を通じてこれを継承するため、宣言的なビューでも利用できます。`@amira/api` からエクスポートされる `AgentStatusState` 型は、`queued`、`working`、`idle`、`paused`、`done`、`failed`、`stopped` を受け付けます。テーマの記号、ASCII 表示、共通スピナーのタイミングと再描画はホストが管理します。queued は暗く、working はアクセント色、idle は控えめな色、done は成功色、failed はエラー色、stopped と paused は警告色で表示します（[状態バッジの凡例](subagents.md#状態バッジの凡例)を参照してください）。
+
+返されたセグメントを、意味に基づく行に直接挿入します。たとえば、ビューのタイトルに使えます。
+
+```ts
+import type { ViewLine, ViewRenderOptions, ViewSegment } from "@amira/api"
+
+function taskTitle(opts: ViewRenderOptions): ViewLine {
+  const fallback: ViewSegment[] = [{ kind: "accent", text: "working" }]
+  return {
+    kind: "segments",
+    parts: [
+      ...(opts.statusBadge?.("working", { pad: true }) ?? fallback),
+      { kind: "text", text: " Task" },
+    ],
+  }
+}
+```
+
+`AGENT_STATUS_BADGES` は `AgentStatusState` をキーとする、エクスポートされた表示テーブルです。各項目の `{ symbol, ascii, role, label }` は、既定の Unicode 記号、ASCII 代替記号、意味に基づくテーマの役割、明確な状態語を表します。たとえば `AGENT_STATUS_BADGES.stopped` は `{ symbol: "‖", ascii: "|", role: "warning", label: "stopped" }` です。ホストのヘルパーはテーマの上書きとアニメーションも適用します。`{ pad: true }` は状態語を七セルに揃え、タスク名を同じ列から表示します。既定では揃えません。
+
+早期終了の note を保持するため、`agent.status` だけでなく info/result 全体を `agentStatusState(agent)` に渡してください。エクスポートされた `AgentStatusSource` 型は、従来の状態文字列と会話ツリーのノードにも対応します。共通のマッパーは `done` と定義済みの早期終了 `note`（空文字列も含む）を `stopped` と解釈し、実行中のユーザーによる一時停止は `paused` と表示して `working` には数えません。ライフサイクルの結果契約は変更しません。拡張機能で行を揃える場合は `opts.statusBadge?.(agentStatusState(agent), { pad: true })` を呼びます。この関数やテーブルの名前付きインポートには、それらをエクスポートするホストビルドが必要です。任意のヘルパーはメソッドがないフロントエンドでの呼び出しを保護するだけで、存在しない名前付きインポートを互換にするものではありません。古いホストビルドもサポートする場合は、下例の名前空間インポートと機能検出を使ってください。`API_VERSION` は変更されず、これらの機能の判定には使えません。バージョン管理はメンテナーが別途決定します。
+
+```ts
+import * as amira from "@amira/api"
+
+function displayState(status: amira.SubagentState, note?: string, paused = false) {
+  if (typeof amira.agentStatusState === "function") {
+    try {
+      if (amira.agentStatusState({ status: "done", note: "" }) === "stopped")
+        return amira.agentStatusState({ status, note, paused })
+    } catch {} // An older host may accept only strings.
+  }
+  if (status === "done" && note !== undefined) return "stopped"
+  if (status === "running" && paused) return "paused"
+  if (typeof amira.agentStatusState === "function") return amira.agentStatusState(status)
+  return status === "running" ? "working" : status === "error" ? "failed" : status === "aborted" ? "stopped" : status
+}
+```
+`ctx.ui.choose()` は、選択肢と同じ順序の `optionStatuses?: (AgentStatusState | undefined)[]` も受け付けます。ホストは各選択肢の先頭に同じバッジを表示し、回答の文字列は変更しません。選択画面を開いたまま状態の変化を反映するには、ホスト内だけで実行する `live()` コールバックから `{ optionLabels?, optionStatuses?, descriptions? }` を返します。表示配列は元の選択肢と同じ順序です。`optionLabels` は表示用テキストで、元の `options` が安定した回答識別子になります。表示の変更は同じ `requestId` の `ui.request` として通知されます。フロントエンドと RPC クライアントは既存のリクエストをその場で更新し、選択画面を重複して開いたり、選択・フィルター・スクロールをリセットしたりしてはいけません。コールバックはシリアライズされず、リクエストが閉じると購読は解除されます。
 
 キーには、印字可能な 1 文字、または `left`、`right`、`tab`、`shift-tab` を指定できます。同じラベルを持つキーは、フッターの 1 項目（`←→ switch`）にまとめられます。空のラベルを指定すると、別名などのキーをフッターに表示しません。Esc、q、Ctrl+C、スクロール用のキーは、引き続きフロントエンドが管理します。ハンドラーは `ViewControl` を受け取り、閉じる、再描画を要求する、`print(text, level?)` でスナップショットを出力する、質問する、確認する操作を行えます。出力にはコマンドの出力レベル（`info`、`warning`、`error`）を使用します。すぐに会話へ戻るには、先にビューを閉じてください。
 
 `scrollKey(data)` を使い、選択した子やタブの id を返します。フロントエンドは、ビューが閉じるまで、id ごとのスクロール位置と追従状態を保持します。これを指定しない場合、ビューのスクロール状態は 1 つです。`follow: false` は、新しい id ごとに先頭から表示を開始します。
 
-`api.session()` で現在のスナップショットを読み取り、`api.on()` でイベントを購読します。状態が変わったら `api.requestRender()` を呼び出してください。TUI は、経過時間を表示するため、開いているビューを毎秒再描画します。`header` と `render` は、使用可能な幅、現在時刻、任意の `renderTool(toolName, call, detail)` コールバックを受け取ります。このコールバックは、ホストの現在のツール表示処理とフォールバックレンダラーを使用します。ホストの表示を維持するには、`ToolCallView` を渡し、結果の行を変更せずに返してください。他のフロントエンドでは省略される場合があるため、通常の行によるフォールバックを用意してください。これらのビュー機能は API バージョン 0.1.15 で追加されました。
+`api.session()` で現在のスナップショットを読み取り、`api.on()` でイベントを購読します。状態が変わったら `api.requestRender()` を呼び出してください。静的なビューには更新タイマーがありません。時間によって表示が変わる場合だけ、描画コールバックで `opts.requestRefresh?.(1000)`（宣言的なビューでは `ctx.requestRefresh`）を呼んでください。同じフレームで要求された正の有限間隔のうち最短のものを使います。要求はフレームごとにリセットされ、更新もアニメーションも要求されなければタイマーは停止します。覆われたドックや高さゼロのドックでは要求を一時停止し、再び表示されたときに再計算します。静的またはクリップされた選択画面やコマンド行では時計を動かさず、表示状態が working に変わると再開します。working バッジと実行中のツールは共通スピナーの周期を自動的に要求します。`header` と `render` は、使用可能な幅、現在時刻、任意の `renderTool(toolName, call, detail)` コールバックを受け取ります。このコールバックは、ホストの現在のツール表示処理とフォールバックレンダラーを使用します。ホストの表示を維持するには、`ToolCallView` を渡し、結果の行を変更せずに返してください。他のフロントエンドでは省略される場合があるため、通常の行によるフォールバックを用意してください。これらのビュー機能は API バージョン 0.1.15 で追加されました。
 
 D105 では、別のビューを登録せずに、ホストが管理するページを使用できます。`view.pushPage({ title?, state?, data? })` と `view.popPage()` を呼び出します。描画コンテキストと UI コンテキストには、追加されたページ上で `page: { depth, data? }` が公開されます（depth は 1 から始まります）。ルートでは省略されます。ビューの元のデータは、コールバックの第 1 引数のままです。任意のページタイトルは、従来のタイトルを置き換えるか、宣言的なコンテンツの上にタイトル行を追加します。各ページは、選択、展開、タブ、入力、フォーカス、スクロール状態を独立して持ち、従来の `scrollKey` の位置も含みます。ページを戻ると前のページの状態が復元されます。Esc はまず開いている質問をキャンセルし、それ以外ではページを戻り、ルートではビューを閉じます。ホストのキーバーには、ページ上で `Esc back`、ルートで `Esc close` と表示されます。Ctrl+C は、質問や確認の途中でも常にビュー全体を閉じます。q の動作は変わりません。ページ遷移は、回答待ちの質問をキャンセルします。
 

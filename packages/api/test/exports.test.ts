@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import type {
+  AgentStatusSource,
   CommandContext,
   EventMap,
   ExtensionAPI,
@@ -24,6 +25,7 @@ test("the public API exports stay stable", async () => {
   const actual = Object.keys(api).sort()
   expect(api.API_VERSION).toBe("0.1.46")
   expect(actual).toEqual([
+    "AGENT_STATUS_BADGES",
     "API_VERSION",
     "ARTIFACT_HEADER",
     "DEFAULT_AGING_AFTER_TURNS",
@@ -120,6 +122,7 @@ test("the public API exports stay stable", async () => {
     "UNSAVED_HEADER",
     "USER_STOP_REASON",
     "addUsage",
+    "agentStatusState",
     "artifactIdOf",
     "autoFormActions",
     "checkForm",
@@ -182,6 +185,29 @@ test("the public API exports stay stable", async () => {
     "validateExtensionSetting",
     "withSection",
   ])
+})
+
+test("the public display-state source contract handles clean stops and pauses without a version bump", async () => {
+  const api = await import("../src/index.ts")
+  const sources: AgentStatusSource[] = [
+    { status: "done", note: "" },
+    { startedAt: 1, paused: true },
+  ]
+  const terminal: "done" | "failed" | "stopped" = api.agentStatusState({ status: "done", note: "" })
+  expect({
+    version: api.API_VERSION,
+    terminal,
+    states: sources.map((source) => api.agentStatusState(source)),
+  }).toMatchInlineSnapshot(`
+    {
+      "states": [
+        "stopped",
+        "paused",
+      ],
+      "terminal": "stopped",
+      "version": "0.1.46",
+    }
+  `)
 })
 
 test("the public unload hook contract is additive without a version bump", () => {

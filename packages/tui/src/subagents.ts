@@ -1,6 +1,22 @@
-import { type AnyEvent, type EventEnvelope, fallbackTitle, type SpawnGroupInfo } from "@amira/api"
+import {
+  type AnyEvent,
+  agentStatusState,
+  type EventEnvelope,
+  fallbackTitle,
+  type SpawnGroupInfo,
+} from "@amira/api"
 import type { Theme } from "@amira/tui-kit"
-import { type SubagentLine, spawnGroupRow, subagentEndLine, subagentRows, treeLayout } from "./format.ts"
+import {
+  type AgentCounts,
+  agentCounts,
+  agentCountsMark,
+  type SubagentLine,
+  spawnGroupCounts,
+  spawnGroupRow,
+  subagentEndLine,
+  subagentRows,
+  treeLayout,
+} from "./format.ts"
 import { serverToolCall } from "./server-tools.ts"
 import { callSummary, type PresenterSource } from "./tool-view.ts"
 
@@ -29,8 +45,8 @@ export interface SubagentNode extends SubagentLine {
 }
 
 /** The node a subagent.start event describes, not placed anywhere yet. */
-export function startedNode(e: EventEnvelope<"subagent.start">): SubagentNode {
-  return {
+export function startedNode(e: EventEnvelope<"subagent.start">, groups?: SpawnGroups): SubagentNode {
+  const node: SubagentNode = {
     id: e.data.childSessionId,
     parent: e.sessionId,
     ...(e.data.toolCallId ? { toolCallId: e.data.toolCallId } : {}),
@@ -41,10 +57,12 @@ export function startedNode(e: EventEnvelope<"subagent.start">): SubagentNode {
     tokens: 0,
     ...(e.data.queued ? {} : { startedAt: e.ts }),
   }
+  if (groups) trackGroupNode(groups, node)
+  return node
 }
 
-/** Records a subagent.end event on its node. */
-export function endNode(node: SubagentNode, e: EventEnvelope<"subagent.end">): void {
+/** Records a subagent.end event on its node and retains its outcome before the row is pruned. */
+export function endNode(node: SubagentNode, e: EventEnvelope<"subagent.end">, groups?: SpawnGroups): void {
   node.end = {
     status: e.data.status,
     ...(e.data.error !== undefined ? { error: e.data.error } : {}),
@@ -52,6 +70,7 @@ export function endNode(node: SubagentNode, e: EventEnvelope<"subagent.end">): v
     durationMs: e.data.durationMs,
     tokens: node.tokens,
   }
+  if (groups) trackGroupNode(groups, node)
 }
 
 /**
@@ -60,14 +79,22 @@ export function endNode(node: SubagentNode, e: EventEnvelope<"subagent.end">): v
  */
 export function stateNode(node: SubagentNode, e: EventEnvelope<"subagent.state">): void {
   node.idle = e.data.state === "idle"
+  node.paused = e.data.state === "paused"
+  node.queued = e.data.state === "queued"
   // Its last tool belonged to the turn that ended.
   if (node.idle) delete node.activity
   if (e.data.state === "working") node.startedAt ??= e.ts
 }
 
-/** Whether a sub-agent's row still moves: started or queued, not ended, not idle between turns. */
+/** A current turn (including a user pause) or queued turn, not ended or idle between turns. */
 export function isActive(n: SubagentNode): boolean {
-  return !n.end && !n.idle
+  const state = agentStatusState(n)
+  return state === "working" || state === "queued" || state === "paused"
+}
+
+/** Only working children need spinner redraws; a pause keeps the turn active, but static. */
+export function isWorking(n: SubagentNode): boolean {
+  return agentStatusState(n) === "working"
 }
 
 /**
@@ -75,8 +102,10 @@ export function isActive(n: SubagentNode): boolean {
  * runs, the tokens it used and what it said last.
  */
 export function updateNode(node: SubagentNode, e: AnyEvent, presenters: PresenterSource | undefined): void {
-  if (e.type === "session.start") node.startedAt ??= e.ts
-  else if (e.type === "tool.execute.start") {
+  if (e.type === "session.start") {
+    node.startedAt ??= e.ts
+    node.queued = false
+  } else if (e.type === "tool.execute.start") {
     node.activity = { name: e.data.name, summary: callSummary(presenters?.get(e.data.name), e.data.args) }
   } else if (e.type === "message.delta" && e.data.kind === "serverTool") {
     // The provider's own search, shown like a tool it runs.
@@ -160,14 +189,160 @@ export function compactGroup(groups: SpawnGroups | undefined, n: SubagentNode): 
   return g?.compact ? g : undefined
 }
 
+type GroupOutcome = keyof NonNullable<SpawnGroupInfo["outcomes"]>
+interface GroupMember {
+  groups: Set<string>
+  outcome?: GroupOutcome
+}
+interface GroupBaseline {
+  outcomes: NonNullable<SpawnGroupInfo["outcomes"]>
+  known: Set<string>
+  /** Explicit outcomes whose individual end events have not been seen yet. */
+  unmatched: NonNullable<SpawnGroupInfo["outcomes"]>
+}
+interface GroupTracking {
+  members: Map<string, GroupMember>
+  snapshots: SpawnGroups
+  authoritative: Map<string, GroupBaseline>
+}
+
+/** Session-scoped handoff: rows may leave, but member identities and normalized outcomes do not. */
+const groupTracking = new WeakMap<SpawnGroups, GroupTracking>()
+function tracking(groups: SpawnGroups): GroupTracking {
+  let state = groupTracking.get(groups)
+  if (!state) {
+    state = { members: new Map(), snapshots: new Map(), authoritative: new Map() }
+    groupTracking.set(groups, state)
+  }
+  return state
+}
+
+function retainedGroup(group: SpawnGroupInfo, state: GroupTracking): SpawnGroupInfo {
+  if (group.outcomes) return group
+  const baseline = state.authoritative.get(group.id)
+  const outcomes = { ...(baseline?.outcomes ?? { done: 0, failed: 0, stopped: 0 }) }
+  // An explicit aggregate may already include end events that arrive later. Only its unknown
+  // remainder can acquire additional outcomes; never count those delayed events twice.
+  let remaining = baseline
+    ? Math.max(0, group.agents.ended - outcomes.done - outcomes.failed - outcomes.stopped)
+    : Number.POSITIVE_INFINITY
+  const unmatched = { ...baseline?.unmatched }
+  const additional: GroupOutcome[] = []
+  for (const [id, member] of state.members) {
+    if (!member.groups.has(group.id) || !member.outcome || baseline?.known.has(id)) continue
+    const covered = unmatched[member.outcome] ?? 0
+    if (covered) unmatched[member.outcome] = covered - 1
+    else additional.push(member.outcome)
+  }
+  for (const outcome of additional) {
+    if (!remaining) break
+    outcomes[outcome]++
+    remaining--
+  }
+  return { ...group, outcomes }
+}
+
+function groupBaseline(group: SpawnGroupInfo, state: GroupTracking): GroupBaseline {
+  const outcomes = { ...group.outcomes! }
+  const unmatched = { ...outcomes }
+  const known = new Set<string>()
+  const members = [...state.members].filter(([, m]) => m.groups.has(group.id) && m.outcome)
+  for (const [id, member] of members) {
+    if (!unmatched[member.outcome!]) continue
+    unmatched[member.outcome!]--
+    known.add(id)
+  }
+  // An explicit snapshot can correct previously seen results. Assign its remaining outcomes
+  // to those known identities before treating any of them as as-yet-unseen end events.
+  for (const [id] of members) {
+    if (known.has(id)) continue
+    const outcome = (Object.keys(unmatched) as GroupOutcome[]).find((key) => unmatched[key] > 0)
+    if (!outcome) break
+    unmatched[outcome]--
+    known.add(id)
+  }
+  return { outcomes, unmatched, known }
+}
+
+function trackGroupNode(groups: SpawnGroups, node: SubagentNode): void {
+  const state = tracking(groups)
+  let member = state.members.get(node.id)
+  if (!member) {
+    // Capture ancestor membership while the parent is present, so nested groups still count
+    // against their ancestors after inline prunes the parent row.
+    member = { groups: new Set(state.members.get(node.parent)?.groups) }
+    if (node.groupId !== undefined) member.groups.add(node.groupId)
+    state.members.set(node.id, member)
+  }
+  if (!node.end) return
+  member.outcome = agentStatusState(node.end)
+  for (const id of member.groups) {
+    const snapshot = state.snapshots.get(id)
+    if (snapshot) groups.set(id, retainedGroup(snapshot, state))
+  }
+}
+
+/** Clears both rendered snapshots and their retained member handoff on a session boundary. */
+export function resetGroups(groups: SpawnGroups): void {
+  groups.clear()
+  groupTracking.delete(groups)
+}
+
 /**
  * Records a group.* event; true when it changes what is shown (only a compact group's own line
- * shows it). False for other events.
+ * shows it). Explicit outcomes are authoritative; legacy snapshots use the retained handoff.
  */
 export function trackGroup(groups: SpawnGroups, e: AnyEvent): boolean {
   if (e.type !== "group.start" && e.type !== "group.update" && e.type !== "group.end") return false
-  groups.set(e.data.group.id, e.data.group)
-  return e.data.group.compact === true
+  const group = e.data.group
+  const state = tracking(groups)
+  state.snapshots.set(group.id, group)
+  if (group.outcomes) state.authoritative.set(group.id, groupBaseline(group, state))
+  groups.set(group.id, retainedGroup(group, state))
+  return group.compact === true
+}
+
+/** Core outcomes are definitive; legacy event sources can still use retained terminal nodes. */
+function groupWithOutcomes(group: SpawnGroupInfo, list: SubagentNode[]): SpawnGroupInfo {
+  if (group.outcomes) return group
+  const outcomes = { done: 0, failed: 0, stopped: 0 }
+  for (const n of list) {
+    if (n.groupId !== group.id || !n.end) continue
+    outcomes[agentStatusState(n.end)]++
+  }
+  return { ...group, outcomes }
+}
+
+/** Compact snapshots retain counts even after their terminal nodes have been discarded. */
+export function subagentCounts(list: SubagentNode[], groups?: SpawnGroups): AgentCounts {
+  const compact = new Map<string, SpawnGroupInfo>()
+  const nodes = new Map(list.map((n) => [n.id, n]))
+  const plain = list.filter((n) => {
+    // A compact ancestor's snapshot includes its descendants, including their own groups.
+    for (let parent = nodes.get(n.parent); parent; parent = nodes.get(parent.parent)) {
+      if (compactGroup(groups, parent)) return false
+    }
+    const group = compactGroup(groups, n)
+    if (!group) return true
+    compact.set(group.id, groupWithOutcomes(group, list))
+    return false
+  })
+  const counts = agentCounts(plain)
+  for (const group of compact.values()) {
+    const members = spawnGroupCounts(group)
+    for (const key of Object.keys(counts) as (keyof AgentCounts)[]) counts[key] += members[key]
+  }
+  return counts
+}
+
+/** The background root must not turn mixed, failed, stopped or idle members into success. */
+export function subagentGroupMark(
+  list: SubagentNode[],
+  groups: SpawnGroups | undefined,
+  theme: Theme,
+  spinner: string,
+): string {
+  return agentCountsMark(subagentCounts(list, groups), theme, spinner)
 }
 
 /**
@@ -192,7 +367,7 @@ export function treeRows(
     if (!g) items.push(n)
     else if (!folded.has(g.id)) {
       folded.add(g.id)
-      items.push({ group: g, depth: n.depth })
+      items.push({ group: groupWithOutcomes(g, list), depth: n.depth })
     }
   }
   const layout = treeLayout(items, closeTop)

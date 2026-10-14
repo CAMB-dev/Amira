@@ -246,8 +246,14 @@ export interface SpawnGroupInfo {
   usage: Usage
   /** All tokens of `usage`, as a token budget counts them. */
   tokens: number
-  /** How many of its children are in each state; `total` counts every one it started. */
-  agents: { total: number } & Record<ChildState, number>
+  /**
+   * Presentation counts; `total` counts every child started. Paused children retain their
+   * working admission slot, but are counted in `paused` instead of `working` here.
+   * Older sources may omit `paused` (equivalent to zero).
+   */
+  agents: { total: number; paused?: number } & Record<ChildState, number>
+  /** Terminal outcomes retained after members end; stopped includes aborts and clean early ends. Older sources may omit this. */
+  outcomes?: { done: number; failed: number; stopped: number }
   /** Why it ended, once it did. */
   endReason?: string
   /** It ended because it went over its budget. */

@@ -616,7 +616,9 @@ test("a background sub-agent that fails says why and where its unmerged changes 
   await bus.flush()
   const [notice] = notices(root)
   const [head, kept] = notice!.shown.split("\n")
-  expect(head).toMatch(/^◆ Do x ✗ coder · \d+s · \d+ tok · provider exploded$/)
+  expect(head).toMatch(/^Do x · coder · \d+s · \d+ tok · provider exploded$/)
+  expect(notice?.display.notices?.[0]?.status).toBe("failed")
+  expect(notice?.display.notices?.[1]?.status).toBeUndefined()
   expect(kept).toMatch(/^ {2}changes kept: 1 file · .+\.diff$/)
 })
 
@@ -848,7 +850,13 @@ async function until(check: () => boolean, ms = 10_000) {
 function notices(root: Agent) {
   return root.messages.flatMap((m) =>
     m.role === "user" && m.display?.origin === "subagent"
-      ? [{ text: m.content.map((b) => (b.type === "text" ? b.text : "")).join(""), shown: m.display.text }]
+      ? [
+          {
+            text: m.content.map((b) => (b.type === "text" ? b.text : "")).join(""),
+            shown: m.display.text,
+            display: m.display,
+          },
+        ]
       : [],
   )
 }
@@ -887,7 +895,10 @@ test("by default sub-agents run in the background and their result wakes the idl
   await until(() => replied(root, "thanks, reacting"))
   await bus.flush()
   const [notice] = notices(root)
-  expect(notice?.shown).toMatch(/^◆ Do look ✓ explorer · \d+s · \d+ tok$/)
+  expect(notice?.display.notices).toEqual([
+    { status: "done", text: expect.stringMatching(/^Do look · explorer · \d+s · \d+ tok$/) },
+  ])
+  expect(notice?.shown).toMatch(/^Do look · explorer · \d+s · \d+ tok$/)
   expect(notice?.text).toContain("the user did not write this message")
   expect(notice?.text).toContain(`## Do look · explorer · ${childId} · done`)
   expect(notice?.text).toContain("found it in a.ts")
@@ -918,7 +929,13 @@ test("a background sub-agent that failed says why in its notice line", async () 
   await root.prompt("go")
   await until(() => replied(root, "noted"))
   await bus.flush()
-  expect(notices(root)[0]?.shown).toMatch(/^◆ Do look ✗ explorer · \d+s · \d+ tok · HTTP 429: slow down$/)
+  expect(notices(root)[0]?.display.notices).toEqual([
+    {
+      status: "failed",
+      text: expect.stringMatching(/^Do look · explorer · \d+s · \d+ tok · HTTP 429: slow down$/),
+    },
+  ])
+  expect(notices(root)[0]?.shown).toMatch(/^Do look · explorer · \d+s · \d+ tok · HTTP 429: slow down$/)
 })
 
 test("a background sub-agent the user stopped does not wake the commander; its report waits", async () => {
@@ -955,8 +972,102 @@ test("a background sub-agent the user stopped does not wake the commander; its r
     .messages.slice(-2)
     .map((m) => m.role)
   expect(sent).toEqual(["user", "user"])
-  expect(notices(root)[0]?.shown).toMatch(/^◆ Do look ⊘ explorer · .* · stopped$/)
+  expect(notices(root)[0]?.display.notices).toEqual([
+    { status: "stopped", text: expect.stringMatching(/^Do look · explorer · .* · stopped$/) },
+  ])
+  expect(notices(root)[0]?.shown).toMatch(/^Do look · explorer · .* · stopped$/)
 })
+
+test("a background sub-agent stopped with a reason keeps its explicit semantic outcome", async () => {
+  const { root, bus, tree } = await setup(
+    (req) => {
+      if (who(req) === "explorer") return { text: "late", delayMs: 5_000 }
+      if (isNotice(req)) return { text: "noted stop" }
+      if (req.messages.at(-1)?.role === "toolResult") return { text: "started" }
+      return {
+        toolCalls: [
+          { name: "agent", args: { tasks: [{ role: "explorer", title: "Do look", prompt: "l" }] } },
+        ],
+      }
+    },
+    { settings: {} },
+  )
+  await root.prompt("go")
+  tree.stop(tree.children[0]!.id, "its commander finished")
+  await until(() => replied(root, "noted stop"))
+  await bus.flush()
+  expect(notices(root)[0]?.display.notices).toEqual([
+    { status: "stopped", text: expect.stringMatching(/^Do look · explorer · .* · its commander finished$/) },
+  ])
+})
+
+test.each(["maxTurns", "graceful stop", "empty note"] as const)(
+  "background persistent %s delivers a stopped notice while its core result remains done",
+  async (ending) => {
+    let release!: () => void
+    const untilReleased = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { root, bus, tree } = await setup(
+      (req) => {
+        if (lastText(req) === "blocker")
+          return { text: "released", hold: { chunks: 0, until: untilReleased } }
+        if (who(req) === "explorer") return { text: "partial work", delayMs: 100 }
+        if (isNotice(req)) return { text: "noted graceful ending" }
+        if (req.messages.at(-1)?.role === "toolResult") return { text: "started" }
+        return {
+          toolCalls: [
+            { name: "agent", args: { tasks: [{ role: "explorer", title: "Do look", prompt: "look" }] } },
+          ],
+        }
+      },
+      { settings: {}, git: async () => ({ output: "", ok: false }) },
+    )
+    const group =
+      ending === "empty note" ? tree.createGroup(root, { name: "Queued stop", maxConcurrent: 1 }) : undefined
+    const blocker = group?.spawn({ prompt: "blocker" })
+    // Exercise the extension with a real persistent spawn policy, not a fabricated result.
+    const spawn = tree.spawn.bind(tree)
+    tree.spawn = (parent, options, memberOf) => {
+      if (memberOf) return spawn(parent, options, memberOf)
+      const persistent = {
+        ...options,
+        persistent: true,
+        ...(ending === "maxTurns" ? { maxTurns: 1 } : {}),
+      }
+      return group ? group.spawn(persistent) : spawn(parent, persistent)
+    }
+    try {
+      await root.prompt("go")
+      const child = tree.children.find((c) => c.id !== blocker?.id)!
+      expect(child).toBeDefined()
+      if (ending === "graceful stop") child.stop("commander requested a stop")
+      if (ending === "empty note") {
+        expect(child.state).toBe("queued")
+        child.stop("")
+      }
+      const result = await child.result()
+      expect(result.status).toBe("done")
+      expect(result.note).toBe(
+        ending === "empty note"
+          ? ""
+          : ending === "maxTurns"
+            ? "reached its limit of 1 turn"
+            : "commander requested a stop",
+      )
+      await until(() => replied(root, "noted graceful ending"))
+      await bus.flush()
+      expect(notices(root)[0]?.display.notices).toEqual([
+        { status: "stopped", text: expect.stringMatching(/^Do look · explorer · \d+s · \d+ tok/) },
+      ])
+    } finally {
+      tree.spawn = spawn
+      for (const child of tree.children) child.abort("test cleanup")
+      release()
+      if (blocker) await blocker.result()
+    }
+  },
+)
 
 test("settings subagents.background false makes calls wait again", async () => {
   const { root, mock } = await setup(
@@ -1070,6 +1181,7 @@ test("sub-agents finishing close together come back as one message", async () =>
   expect(all[0]?.text).toContain("answer A")
   expect(all[0]?.text).toContain("answer B")
   expect(all[0]?.shown.split("\n").length).toBe(2)
+  expect(all[0]?.display.notices?.map((row) => row.status)).toEqual(["done", "done"])
   expect(events.filter((e) => e.type === "turn.start" && e.sessionId === root.sessionId).length).toBe(2)
 })
 

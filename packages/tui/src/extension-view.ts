@@ -38,6 +38,7 @@ import {
   type Keybindings,
   viewScrollAction,
 } from "./keybindings.ts"
+import { statusBadge } from "./status-badge.ts"
 import {
   explorationOf,
   exploredLines,
@@ -165,9 +166,16 @@ export class ExtensionViewer implements Component {
   #hostLines = new WeakMap<ViewLine, string>()
   #liveRows = new WeakMap<ViewLine, { group: object; row: number }>()
   #animating = false
+  #refreshIntervalMs: number | undefined
   /** Running transcript rows need the same redraw cadence as the main spinner. */
   get animating(): boolean {
     return this.#animating
+  }
+  /** The last frame's explicit timed-content demand, combined with host spinner demand. */
+  get refreshIntervalMs(): number | undefined {
+    return this.#animating
+      ? Math.min(this.#refreshIntervalMs ?? Infinity, Spinner.INTERVAL_MS)
+      : this.#refreshIntervalMs
   }
   #spinner = new Spinner()
   #spinnerFrame: number | undefined
@@ -494,6 +502,7 @@ export class ExtensionViewer implements Component {
 
   render(width: number, ctx: RenderContext): string[] {
     this.#animating = false
+    this.#refreshIntervalMs = undefined
     if (this.#ui) return this.#renderUi(width, ctx)
     const { theme } = ctx
     const opts = this.#renderOptions(width, theme, ctx.glyphs)
@@ -623,12 +632,16 @@ export class ExtensionViewer implements Component {
     let finished = false
     let separated = false
     // Existing redraws drive the spinner at its usual cadence; no view-specific timer.
-    const frame = Math.floor(now / 80)
+    const frame = Math.floor(now / Spinner.INTERVAL_MS)
     if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
     this.#spinnerFrame = frame
     return {
       width,
       now,
+      requestRefresh: (intervalMs) => {
+        if (Number.isFinite(intervalMs) && intervalMs > 0)
+          this.#refreshIntervalMs = Math.min(this.#refreshIntervalMs ?? Infinity, intervalMs)
+      },
       ...(this.#pages.length > 1 ? { page: { depth: this.#pages.length - 1, data: this.#page.data } } : {}),
       renderTool: (name, call, detail, options) => {
         finished = true
@@ -687,6 +700,10 @@ export class ExtensionViewer implements Component {
             true,
           ),
         ]
+      },
+      statusBadge: (state, options) => {
+        this.#animating ||= state === "working"
+        return statusBadge(state, this.#spinner.glyph, options)
       },
       renderReply: (text) => {
         finished ||= !!text.trim()

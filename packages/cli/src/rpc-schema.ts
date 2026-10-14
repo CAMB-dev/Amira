@@ -278,7 +278,8 @@ const spawnGroup = obj({
   "status?": str,
   usage,
   tokens: num,
-  agents: obj({ total: num, queued: num, working: num, idle: num, ended: num }),
+  agents: obj({ total: num, queued: num, working: num, "paused?": num, idle: num, ended: num }),
+  "outcomes?": obj({ done: num, failed: num, stopped: num }),
   "endReason?": str,
   "exceeded?": bool,
 })

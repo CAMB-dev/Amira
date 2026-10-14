@@ -12,6 +12,7 @@ import {
   MarkdownStream,
   modes,
   type RenderContext,
+  Spinner,
   type Theme,
   truncateToWidth,
   visibleWidth,
@@ -19,10 +20,10 @@ import {
 } from "@amira/tui-kit"
 import {
   commandEchoLines,
-  formatElapsed,
   messageTimestamp,
   reasoningLines,
   replyRows,
+  spawnGroupRow,
   subagentEndLine,
   timestampRoom,
   timestampRow,
@@ -30,18 +31,19 @@ import {
   userLines,
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
-import { CONTENT_INSET, contentRoom, markerPrefix } from "./grid.ts"
+import { CONTENT_INSET, contentRoom } from "./grid.ts"
 import { historyLines } from "./history.ts"
+import { inlineBackgroundRows, inlineDisplayNodes } from "./inline-background.ts"
 import { displayCommit } from "./inline-display.ts"
 import { ACTIONS, type Action } from "./keybindings.ts"
 import { contentGeometry, marginView } from "./margins.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
 import {
-  backgroundLabel,
   childrenOf,
   compactGroup,
   endNode,
-  isActive,
+  isWorking,
+  resetGroups,
   rootCall as rootCallOf,
   type SpawnGroups,
   type SubagentNode,
@@ -152,11 +154,19 @@ export function createInlineView(host: ViewHost): TranscriptView {
   const subagents = new Map<string, SubagentNode>()
   /** Spawn groups of this session's tree, as their latest event had them. */
   const spawnGroups: SpawnGroups = new Map()
-  /** Redraws once a second while sub-agents run, so their elapsed time moves. */
+  /** Compact groups keep their placement after the last member leaves, but never keep a timer alive. */
+  const groupAnchors = new Map<string, { node: SubagentNode; callId?: string }>()
+  const committedGroups = new Set<string>()
+  const displayNodes = () => inlineDisplayNodes(subagents, groupAnchors, committedGroups)
+  /** Working children keep the shared spinner alive even after the parent's turn ends. */
   let subagentTimer: ReturnType<typeof setInterval> | undefined
   const tickSubagents = () => {
-    const running = [...subagents.values()].some(isActive)
-    if (running && !subagentTimer) subagentTimer = setInterval(() => renderer.requestRender(), 1000)
+    const running = [...subagents.values()].some(isWorking)
+    if (running && !subagentTimer)
+      subagentTimer = setInterval(() => {
+        if (!host.spinner.running) host.spinner.tick()
+        renderer.requestRender()
+      }, Spinner.INTERVAL_MS)
     else if (!running && subagentTimer) {
       clearInterval(subagentTimer)
       subagentTimer = undefined
@@ -248,10 +258,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
     return true
   }
 
-  const childrenOfCall = (parent: string, callId?: string) => childrenOf(subagents, parent, callId)
-  const subtree = (n: SubagentNode) => subtreeOf(subagents, n)
   /** The sub-agents a call of this session started, and theirs, depth first. */
-  const callTree = (callId: string) => childrenOfCall(host.sessionId(), callId).flatMap(subtree)
+  const callTree = (callId: string) => {
+    const nodes = displayNodes()
+    return childrenOf(nodes, host.sessionId(), callId).flatMap((n) => subtreeOf(nodes, n))
+  }
   const rootCall = (n: SubagentNode) => rootCallOf(subagents, host.sessionId(), n)
   const isLiveCall = (id: string | undefined) => id !== undefined && toolCalls.live.some((c) => c.id === id)
 
@@ -329,45 +340,18 @@ export function createInlineView(host: ViewHost): TranscriptView {
     return [...gap, ...more, ...calls.flat()]
   }
 
-  /** Sub-agents running on after their call was committed, under a small header. */
-  function backgroundRows(width: number, t: Theme): string[] {
-    const live = new Set(toolCalls.live.map((c) => c.id))
-    const underCall = (n: SubagentNode) =>
-      n.parent === host.sessionId() && n.toolCallId !== undefined && live.has(n.toolCallId)
-    const roots = [...subagents.values()].filter((n) => !subagents.has(n.parent) && !underCall(n))
-    if (!roots.length) return []
-    const now = Date.now()
-    // Grouped by the agent call that started them, under a head shaped like that call's, so the
-    // group reads as the call going on down here (a committed call cannot be updated in place).
-    const groups = new Map<string | undefined, SubagentNode[]>()
-    for (const n of roots) groups.set(n.toolCallId, [...(groups.get(n.toolCallId) ?? []), n])
-    const sep = ` ${t.muted(glyphs.separator)} `
-    const rows: string[] = []
-    for (const [i, [callId, group]] of [...groups].entries()) {
-      const last = i === groups.size - 1
-      const arm = last ? glyphs.treeLast : glyphs.treeBranch
-      const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
-      const tree = t.muted(arm + " ".repeat(cells - visibleWidth(arm)))
-      const continuation = treeContinuation(t, last)
-      const treeWidth = Math.max(0, width - visibleWidth(continuation))
-      const started = Math.min(...group.map((n) => n.startedAt ?? now))
-      const count = plural(group.length, "sub-agent")
-      const head =
-        callId === undefined
-          ? `${markerPrefix(tree)}${t.accent(host.spinner.glyph)} ${t.muted(backgroundLabel(spawnGroups, group))}`
-          : `${markerPrefix(tree)}${t.accent(host.spinner.glyph)} ${t.fg2(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
-      rows.push(truncateToWidth(head, width, glyphs.more))
-      rows.push(
-        ...treeRows(group.flatMap(subtree), now, treeWidth, t, spawnGroups, true, host.spinner.glyph).map(
-          (row) => truncateToWidth(continuation + row, width, glyphs.more),
-        ),
-      )
-    }
-    return [...rows, ""]
-  }
-
-  // Sub-agents whose call is committed already (it returned at once): they run on here.
-  const background = new View((width, ctx) => backgroundRows(width, ctx.theme))
+  // Sub-agents whose call is committed already render from the durable display placement.
+  const background = new View((width, ctx) =>
+    inlineBackgroundRows(width, ctx.theme, {
+      sessionId: host.sessionId(),
+      liveCalls: toolCalls.live,
+      nodes: displayNodes(),
+      groups: spawnGroups,
+      callNames,
+      spinner: host.spinner.glyph,
+      now: Date.now(),
+    }),
+  )
 
   // The reply streams above the rest and gets the rows it leaves, less one that keeps the line
   // before it in view. Its finished blocks, and rows past that, go to the scrollback as they
@@ -482,7 +466,14 @@ export function createInlineView(host: ViewHost): TranscriptView {
    */
   function commitCalls(calls: TrackedCall[]): boolean {
     for (const c of calls) {
-      const tree = callTree(c.id)
+      const folded = new Set<string>()
+      const tree = callTree(c.id).filter((n) => {
+        const group = compactGroup(spawnGroups, n)
+        if (!group) return true
+        if (folded.has(group.id)) return false
+        folded.add(group.id)
+        return true
+      })
       const continuation = treeContinuation(theme, isLastTool(c.id))
       const treeWidth = Math.max(1, contentWidth() - visibleWidth(continuation))
       const ends: string[] = []
@@ -490,9 +481,19 @@ export function createInlineView(host: ViewHost): TranscriptView {
       // The call's own result line comes after them, so only a nested one can close a level.
       const layout = treeLayout(tree, false)
       for (const [i, n] of tree.entries()) {
-        if (n.end && compactGroup(spawnGroups, n)) {
-          // A compact group's line tells how it goes; its members get no lines of their own.
-          subagents.delete(n.id)
+        const group = compactGroup(spawnGroups, n)
+        if (group) {
+          if (group.state === "ended" && !committedGroups.has(group.id)) {
+            const { last, indent } = layout[i]!
+            ends.push(continuation + spawnGroupRow(group, n.depth, treeWidth, theme, last, indent))
+            committedGroups.add(group.id)
+          }
+          // The durable group placement survives even when every ended member is removed.
+          for (const member of subagents.values()) {
+            if (member.groupId !== group.id) continue
+            if (member.end) subagents.delete(member.id)
+            else member.detached = cutShort ? "interrupted" : "background"
+          }
         } else if (n.end) {
           const { last, indent } = layout[i]!
           ends.push(continuation + subagentEndLine(n, n.end, treeWidth, theme, last, indent))
@@ -519,6 +520,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       lines.splice(1, 0, ...ends)
       commitBlock("tool", lines)
     }
+    settleGroups()
+    tickSubagents()
     return calls.length > 0
   }
 
@@ -533,6 +536,17 @@ export function createInlineView(host: ViewHost): TranscriptView {
         if (endsAlone(n)) commitBlock("tool", [subagentEndLine(n, n.end, contentWidth(), theme)])
         subagents.delete(n.id)
       } else n.detached ??= "interrupted"
+    }
+  }
+
+  /** Terminal snapshots print once, either with their live call or on their own after it leaves. */
+  function settleGroups(stopping = false): void {
+    for (const group of spawnGroups.values()) {
+      if (!group.compact || group.state !== "ended" || committedGroups.has(group.id)) continue
+      const anchor = groupAnchors.get(group.id)
+      if (!stopping && isLiveCall(anchor?.callId)) continue
+      commitBlock("tool", [spawnGroupRow(group, anchor?.node.depth ?? 1, contentWidth(), theme)])
+      committedGroups.add(group.id)
     }
   }
 
@@ -552,8 +566,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
     switch (e.type) {
       case "subagent.start": {
         if (!mine) return false
-        const node = startedNode(e)
+        const node = startedNode(e, spawnGroups)
         subagents.set(node.id, node)
+        if (node.groupId && compactGroup(spawnGroups, node) && !groupAnchors.has(node.groupId))
+          groupAnchors.set(node.groupId, { node: { ...node }, callId: rootCall(node) })
         // Started under a tree whose call is committed already: it runs in the background.
         const parent = subagents.get(node.parent)
         if (parent?.detached) node.detached = parent.detached
@@ -562,7 +578,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       case "subagent.end": {
         const node = subagents.get(e.data.childSessionId)
         if (!node) return false
-        endNode(node, e)
+        endNode(node, e, spawnGroups)
         // Under a live call its rows become its end line, committed with the call. Otherwise it
         // is done: a background one's notice reports it; one cut short gets its line on its own.
         if (isLiveCall(rootCall(node))) break
@@ -578,10 +594,16 @@ export function createInlineView(host: ViewHost): TranscriptView {
       }
       case "group.start":
       case "group.update":
-      case "group.end":
-        // Only a compact group's own line shows it.
-        if (!mine || !trackGroup(spawnGroups, e)) return false
+      case "group.end": {
+        // A nested group's parent may have left before its final snapshot arrives.
+        if ((!mine && !spawnGroups.has(e.data.group.id)) || !trackGroup(spawnGroups, e)) return false
+        const group = e.data.group
+        if (group.state !== "ended") break
+        settleGroups()
+        // The terminal snapshot owns the aggregate, not stale working member rows.
+        for (const n of subagents.values()) if (n.groupId === group.id) subagents.delete(n.id)
         break
+      }
       case "budget.exceeded":
         commitBlock(
           "notice",
@@ -592,6 +614,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
         const sub = subagents.get(e.sessionId)
         if (!sub) return false
         updateNode(sub, e, presenters)
+        tickSubagents()
         return true
       }
     }
@@ -664,8 +687,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
     renderOverlay: () => fullScreen.render(),
     stop() {
       offDockResize()
+      settleGroups(true)
       subagents.clear()
-      spawnGroups.clear()
+      resetGroups(spawnGroups)
+      groupAnchors.clear()
+      committedGroups.clear()
       tickSubagents()
       flushDialog()
       flushExplored()
@@ -766,9 +792,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
       toolTimes.clear()
       // Sub-agents of calls that never ended.
       settleSubagents()
-      // Only calls with sub-agents still around need their names.
+      settleGroups()
+      // Only calls with sub-agents or uncommitted compact groups still around need their names.
       for (const id of callNames.keys())
-        if (![...subagents.values()].some((n) => n.toolCallId === id)) callNames.delete(id)
+        if (![...displayNodes().values()].some((n) => n.toolCallId === id)) callNames.delete(id)
       tickSubagents()
       return shown
     },
@@ -836,10 +863,13 @@ export function createInlineView(host: ViewHost): TranscriptView {
       toolTimes.clear()
       flushExplored()
       settleSubagents()
+      settleGroups()
       callNames.clear()
       // The old session's sub-agents and groups are not shown under the new one.
       subagents.clear()
-      spawnGroups.clear()
+      resetGroups(spawnGroups)
+      groupAnchors.clear()
+      committedGroups.clear()
       tickSubagents()
     },
     detailNote(level: ToolDetailLevel) {

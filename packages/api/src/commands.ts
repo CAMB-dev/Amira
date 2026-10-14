@@ -15,6 +15,7 @@ import type { ProviderAdmin } from "./providers.ts"
 import type { CommandRule, PermissionMode, ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
+import { AGENT_STATUS_BADGES, type AgentStatusState } from "./themes.ts"
 import type { PendingNotice, SessionData, ToolExposure, ToolTraits } from "./tools.ts"
 import type { TraceRecord } from "./trace.ts"
 import type { UiApi } from "./ui.ts"
@@ -203,12 +204,54 @@ export function isSubagentView(view: FrontendView): view is SubagentView {
  */
 export type SubagentState = "queued" | "running" | "idle" | "paused" | SubagentStatus
 
+/** Lifecycle information consumed by the shared display-state mapper. */
+export type AgentStatusSource =
+  | SubagentState
+  | AgentStatusState
+  | { status: SubagentState | AgentStatusState; note?: string; paused?: boolean }
+  | {
+      end?: { status: SubagentStatus; note?: string }
+      startedAt?: number
+      queued?: boolean
+      idle?: boolean
+      paused?: boolean
+    }
+
+/** Terminal results always map to terminal display outcomes. */
+export function agentStatusState(source: {
+  status: SubagentStatus
+  note?: string
+}): "done" | "failed" | "stopped"
+export function agentStatusState(source: AgentStatusSource): AgentStatusState
 /**
- * A sub-agent's state as every screen words it: running, queued, idle, paused, done, failed, stopped
- * (the states are named for code: an ended one is "error" or "aborted").
+ * One display interpretation for info, results and transcript nodes. An early-end note
+ * (even an empty one) means stopped, without changing a clean stop's lifecycle result.
+ * User pauses hold admission slots but are never presented as working.
  */
-export function subagentStateText(state: SubagentState): string {
-  return state === "error" ? "failed" : state === "aborted" ? "stopped" : state
+export function agentStatusState(source: AgentStatusSource): AgentStatusState {
+  const info: { status: SubagentState | AgentStatusState; note?: string; paused?: boolean } =
+    typeof source === "string"
+      ? { status: source }
+      : "status" in source
+        ? source
+        : (source.end ?? {
+            status: source.paused
+              ? "paused"
+              : source.idle
+                ? "idle"
+                : source.queued || source.startedAt === undefined
+                  ? "queued"
+                  : "working",
+          })
+  if (info.status === "done" && info.note !== undefined) return "stopped"
+  if (info.status === "running" || info.status === "working")
+    return "paused" in info && info.paused ? "paused" : "working"
+  return info.status === "error" ? "failed" : info.status === "aborted" ? "stopped" : info.status
+}
+
+/** A sub-agent's state as every screen words it, with the same early-end and pause rules. */
+export function subagentStateText(source: AgentStatusSource): string {
+  return AGENT_STATUS_BADGES[agentStatusState(source)].label
 }
 
 /** A sub-agent of the session, running or finished, as commands list it. */

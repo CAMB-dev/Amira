@@ -109,17 +109,9 @@ for (const cols of [60, 90, 100]) {
         })
         const app = await setup([], { cols, rows: 12, settings: { mode, margin, marginRows: 0 } })
         try {
-          app.bus.emit(
-            "ui.request",
-            {
-              requestId: "sectioned",
-              kind: "select",
-              title: "Model",
-              options: ["first", "second"],
-              sections: [{ at: 0, title: "Provider" }],
-            },
-            { sessionId: app.agent.sessionId },
-          )
+          void app.host.ui.api().choose("Model", ["first", "second"], {
+            sections: [{ at: 0, title: "Provider" }],
+          })
           await app.shows("Model")
           const top = app.screen.lines.findIndex((row) => row.includes("╭ Model"))
           expect(top).toBeGreaterThanOrEqual(0)

@@ -1,4 +1,5 @@
 import type { CommandOutputLevel } from "./commands.ts"
+import type { AgentStatusState } from "./themes.ts"
 import type { ToolCallView, ToolDetailLevel, ToolLine } from "./tool-renderers.ts"
 import type { ToolResult } from "./tools.ts"
 import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.ts"
@@ -18,7 +19,7 @@ import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.
 
 /** A piece of a line, styled by meaning rather than by a frontend-specific color. */
 export type ViewSegment =
-  | { text: string; kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }
+  | { text: string; kind: "text" | "dim" | "muted" | "accent" | "success" | "warning" | "error" }
   /** A pill with half-block ends in color, or ▏text▕ without colors. Defaults to neutral. */
   | {
       kind: "chip"
@@ -41,8 +42,16 @@ export interface ViewRenderOptions {
    * diff and segments lines are cut. User-message lines wrap like transcript user messages.
    */
   width: number
-  /** The current time, in ms since the epoch, for elapsed times. */
+  /** The current time, in ms since the epoch, for elapsed times; reading it does not schedule redraws. */
   now: number
+  /**
+   * Requests timed redraws for time-dependent content in this frame, e.g. an elapsed time.
+   * Pass a positive finite interval in ms; invalid intervals are ignored and the shortest
+   * request wins. Demand resets each frame, so omit it when content becomes static. Working
+   * status badges and running-tool helpers request their own spinner cadence. Without
+   * demand, views redraw only for data, input and lifecycle events (or ViewControl.requestRender).
+   */
+  requestRefresh?: (intervalMs: number) => void
   /** Present only on a pushed page; depth starts at 1. View data remains unchanged. */
   page?: { depth: number; data?: unknown }
   /** Presents a finished call with the host's current transcript renderer and theme. */
@@ -66,6 +75,11 @@ export interface ViewRenderOptions {
     call: { args: Record<string, unknown>; startedAt?: number; partial?: ToolResult },
     options?: { last?: boolean },
   ) => ViewLine[]
+  /**
+   * Shared symbol + label, with host glyphs, semantic color and spinner cadence.
+   * Set pad to true to right-pad labels to a common width; defaults to unpadded.
+   */
+  statusBadge?: (state: AgentStatusState, options?: { pad?: boolean }) => ViewSegment[]
   /** Transcript Markdown with its standard content inset, without view chrome. */
   renderReply?: (text: string) => ViewLine[]
 }
