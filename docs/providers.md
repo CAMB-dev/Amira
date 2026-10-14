@@ -1,6 +1,6 @@
 # Providers and models
 
-[简体中文](zh/providers.md) · [Documentation](../README.md)
+[简体中文](zh/providers.md) · [日本語](ja/providers.md) · [Documentation](../README.md)
 
 A provider combines a protocol, an endpoint and credentials. Add one before sending your first task; vendor defaults from the models.dev catalog help you configure it. You choose models as `provider/model`, where the provider name is the ID you assigned.
 

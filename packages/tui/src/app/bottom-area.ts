@@ -21,6 +21,7 @@ import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
 import type { TurnActivity } from "./activity.ts"
+import type { CommandRunner } from "./command-runner.ts"
 import type { DockedView } from "./dock.ts"
 import { type NoticeStrip, type Outgoing, otherWay, pendingMessageRows, type WhileWorking } from "./outbox.ts"
 
@@ -48,7 +49,7 @@ export interface BottomAreaDeps {
   queued: () => readonly Outgoing[]
   mode: () => "fullscreen" | "inline"
   hintNote: () => { text: string; until: number } | undefined
-  hasCancellable: () => boolean
+  commandActivity: () => Pick<CommandRunner, "spinner" | "render" | "hasCancellable">
   canRewind: () => boolean
   status: StatusRegistry
   header?: (width: number, ctx: RenderContext) => string[]
@@ -116,6 +117,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let panelsShown = false
   /** Rows the panels may take this frame, their blank line included; layoutBottom sets it. */
   let panelRoom = Number.POSITIVE_INFINITY
+  /** Command activity gives way on short screens rather than pushing the caret offscreen. */
+  let commandRoom = true
   /** Rows the last frame's panels took. */
   let panelRows = 0
   /** The most rows the list below the input had since it opened (full screen keeps them). */
@@ -131,6 +134,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       ? deps.panels.snapshot({
           width,
           now: Date.now(),
+          spinner: deps.commandActivity().spinner,
           sessionId: deps.agent().sessionId,
           data: deps.agent().data,
           collapsed,
@@ -199,6 +203,14 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       })
       return activityRows
     }),
+    // Commands have their own clock, including index loads and reloads outside a turn.
+    new View((width, ctx) =>
+      deps.dialogs().length || !commandRoom
+        ? []
+        : deps
+            .commandActivity()
+            .render(width, ctx, deps.dock?.() ? `${keyLabel({ name: "escape" })} close dock` : undefined),
+    ),
     // A live dock is immediately above the input, but never owns its editor or completion keys.
     dock,
     // Both composer and dialog keep their borders intact, with shared-edge status below.
@@ -268,6 +280,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const dialog = deps.dialogs()[0]
     if (dialog) dialog.maxRows = Math.max(1, budget)
     panelRoom = Number.POSITIVE_INFINITY
+    commandRoom = true
     let rest = draw()
     if (panelRows && rest.length > budget) {
       panelRoom = Math.max(0, budget - (rest.length - panelRows))
@@ -277,6 +290,10 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     // or the rows above the box grew, since the list was that tall.
     if (listRows && rest.length > budget) {
       listRows = Math.max(0, listRows - (rest.length - budget))
+      rest = draw()
+    }
+    if (rest.length > budget && commandRoom) {
+      commandRoom = false
       rest = draw()
     }
     if (dialog && rest.length > budget) {
@@ -322,7 +339,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       key && { text: `${bold(theme.fg2(key))}${theme.muted(` ${label}`)}`, priority }
     const interruptKey = keys.label("interrupt")
     const working = deps.activity().working
-    const cancellable = deps.hasCancellable() && !deps.activity().compacting
+    const cancellable = deps.commandActivity().hasCancellable() && !deps.activity().compacting
     const waiting = deps.queued().length > 0 || deps.steering().length > 0
     const stop = cancellable ? "cancel command" : waiting ? "send queued" : "stop"
     return [

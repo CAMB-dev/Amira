@@ -1,6 +1,6 @@
 # Using and writing extensions
 
-[简体中文](zh/extensions.md) · [Documentation](../README.md)
+[简体中文](zh/extensions.md) · [日本語](ja/extensions.md) · [Documentation](../README.md)
 
 Extensions add tools, commands and UI behavior. Installed packages can contain multiple extensions, skills and top-level CLI commands. They run code on your computer with your permissions.
 
@@ -52,10 +52,11 @@ Cache inspection never downloads missing objects. Git 2.45 and later support `GI
 
 ### Managing packages inside Amira
 
-`/ext` does the same work without leaving a session. On its own it opens a list of installed packages (with their scope, whether they are enabled or trusted, and whether the index has a newer version) followed by the packages available from the index. Enter on an installed package offers update, enable or disable, remove and details; Enter on an available one asks for user or project scope and installs it. `d` shows details. See [Keybindings](keybindings.md#dialogs) for the keys in the list.
+`/ext` does the same work without leaving a session. On its own it opens a list of installed packages (with their scope, whether they are enabled or trusted, and whether the index has a newer version) followed by the packages available from the index. Enter on an installed package offers settings (when a loaded extension declares them), update, enable or disable, remove and details; Enter on an available one asks for user or project scope and installs it. `d` shows details. See [Keybindings](keybindings.md#dialogs) for the keys in the list.
 
 ```text
 /ext
+/ext config hello-extension
 /ext search lsp
 /ext install todo
 /ext install todo --project
@@ -66,7 +67,7 @@ Cache inspection never downloads missing objects. Git 2.45 and later support `GI
 
 `install`, `remove`, `disable` and `enable` take one name; `update` takes any number, or none for every package in the scope; `--project` selects the project scope for install, update and remove. The rules match the CLI: project installs still need the project to be trusted, and disable and enable apply to both scopes through user settings. Install and update show a progress panel while you keep typing. Esc or Ctrl+C cancels the running operation and keeps your draft; an install is all or nothing, and updates already finished are kept.
 
-`/ext` never reloads on its own. When it changes something it suggests `/reload`, or running it after the current turn. `/reload` refuses to run until an `/ext` operation ends. A package installed into an untrusted project is loaded once you trust the project at the next start or with `amira ext trust` and a restart. In print and RPC modes the subcommands work as quoted slash commands; the list needs the interactive UI.
+`/ext` never reloads extension code on its own. Package changes suggest `/reload`, or running it after the current turn; settings saves notify the extension immediately without reloading it. `/reload` refuses to run until an `/ext` operation ends. A package installed into an untrusted project is loaded once you trust the project at the next start or with `amira ext trust` and a restart. In print and RPC modes the subcommands work as quoted slash commands; the list needs the interactive UI.
 
 ## User scope, project scope and trust
 
@@ -125,8 +126,13 @@ Create a directory named `hello-extension` containing these two files. It adds a
 import { defineExtension } from "@amira/api"
 
 export default defineExtension((api) => {
-  const configured = api.settings.extensions?.["hello-extension"]?.message
-  const message = typeof configured === "string" ? configured : "Hello from an extension."
+  const settings = api.settings.declare({
+    fields: [
+      { key: "message", type: "text", label: "Greeting", default: "Hello from an extension.", maxLength: 120 },
+    ],
+    preview: (draft) => ({ lines: [{ kind: "text", text: draft.message }] }),
+  })
+  settings.onChange(() => api.requestRender())
   let greetings = 0
 
   api.registerStatusItem({
@@ -140,7 +146,7 @@ export default defineExtension((api) => {
     description: "Print a greeting and update its status counter",
     run(_args, ctx) {
       greetings += 1
-      ctx.print(message)
+      ctx.print(settings.get().message)
       api.requestRender()
     },
   })
@@ -166,7 +172,7 @@ Optionally customize the greeting in settings:
 }
 ```
 
-Restart after changing this setting. You can also develop a standalone extension file with `amira --extension ./hello-extension/index.ts`. This loads the file directly without installing its manifest. The option is repeatable; relative paths are resolved from the directory where the command starts. Amira supplies the runtime import of `@amira/api`, including for standalone files; no separate runtime install of that package is needed.
+Open `/ext config hello-extension` to edit the greeting with a live preview. Saving updates the next `/hello` immediately; no restart is needed. You can also develop a standalone extension file with `amira --extension ./hello-extension/index.ts`. This loads the file directly without installing its manifest. The option is repeatable; relative paths are resolved from the directory where the command starts. Amira supplies the runtime import of `@amira/api`, including for standalone files; no separate runtime install of that package is needed.
 
 ## API guide
 
@@ -189,12 +195,79 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `serverToolView` | Turn provider-hosted tool blocks, such as native web search, into the same tool-call view shape used by presenters |
 | `registerMarkdownRenderer`, `registerImageProvider` | Render matching reply code blocks, math or standalone images and supply terminal image data |
 | `provideService`, `useService` | Share named extension services; look them up when needed because a provider may be absent or unloaded |
+| `settings.declare` | Declare ordered settings fields and an optional isolated preview; read typed values with `get()` and subscribe with `onChange()` |
 | `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, provenance layers for each top-level key, the working directory, the user directory and API version |
 | `dataDir` | Required, read-only absolute path to this extension's persistent state directory, created on first access |
 | `backgroundJobs` | Start and inspect only this extension's background jobs; built-in frontend code uses the host-only `hostBackgroundJobs()` capability |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
+| `onUnload` | Register synchronous cleanup for unload, reload and exit |
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
+
+### Unload cleanup
+
+Register `api.onUnload(() => { ... })` for resources you create yourself, such as timers, subscriptions or an `AbortController` for pending work. It returns a function that removes the hook. Each registered hook runs once when this instance unloads: on `/reload`, when a disable/removal takes effect, after a failed load, or on exit. Dock and fullscreen views close first, calling `onClose` once while registrations are still available; unload hooks then run before registrations are removed. A failing hook is reported without stopping the remaining cleanup.
+
+Cleanup is synchronous; returned promises are not awaited. Use synchronous persistence if it must finish during unload, and `api.onExit` for bounded asynchronous work needed only at exit. Exit handlers run before unload cleanup.
+
+```ts
+const pending = new AbortController()
+const timer = setInterval(refresh, 1000)
+api.onUnload(() => {
+  pending.abort()
+  clearInterval(timer)
+})
+```
+
+### Declared extension settings
+
+Declare settings once with `api.settings.declare(...)`. The host supplies the extension identity: an installed package writes to `extensions.<package-name>.<key>`, and a standalone file uses its host-known absolute path (lowercased on Windows) as the key under `extensions`. Command aliases never change that storage identity. One declaration per identity is allowed; a second declaration is a load error. Field order is page order. `settings.get()` returns a read-only, validated object with inferred keys and types; missing or invalid file values use the declared defaults. Invalid values are reported as settings issues, with their file and key.
+
+```ts
+import { defineExtension, type MarkdownRenderContext, type MarkdownRenderResult } from "@amira/api"
+
+export default defineExtension((api) => {
+  // Share this pure helper with the real renderer; always pass its settings explicitly.
+  const renderSample = (
+    mode: "text" | "image",
+    size: number,
+    ctx: MarkdownRenderContext,
+  ): MarkdownRenderResult => ({
+    lines: [{ kind: "text", text: `Sample: ${mode}, ${size}px (${ctx.width} columns)` }],
+  })
+  const settings = api.settings.declare({
+    fields: [
+      { key: "size", type: "number", label: "Size", description: "Font size in pixels.", default: 16, min: 8, max: 64, step: 1 },
+      { key: "mode", type: "choice", label: "Mode", default: "text", options: ["text", "image"] },
+      { key: "enabled", type: "toggle", label: "Render samples", default: true },
+      { key: "colour", type: "colour", label: "Colour", default: "#88aaff" },
+    ],
+    preview: (draft, ctx) => renderSample(draft.mode, draft.size, ctx),
+  })
+  settings.onChange((values) => {
+    // Invalidate extension-owned render caches here if necessary.
+    api.requestRender()
+  })
+  api.registerCommand({
+    name: "sample",
+    description: "Print the saved sample settings",
+    run(_args, ctx) {
+      const values = settings.get()
+      ctx.print(`${values.mode}: ${values.size}px`)
+    },
+  })
+})
+```
+
+The five field types are `number` (optional `min`, `max`, `step`), `toggle`, `choice` (`options` are strings or `{ value, label?, description? }`), `text` (optional `placeholder`, whole-value `pattern`, `maxLength`) and `colour` (`#rrggbb`). Every field needs a flat `key`, `type`, `label` and `default`; `description` is optional. Defaults and constraints are checked at declaration time. `onChange` runs when effective saved values change, from the settings page or a settings reload; it returns a disposer and is removed on unload. Read with `get()` where values are used, or update extension state in this callback. No automatic filesystem watcher is implied: externally edited files are picked up by the host's settings reload (`/reload`).
+
+Text `maxLength` counts Unicode code points, not UTF-16 code units: `🚀` counts as one, while `e` plus a combining accent counts as two. Editing truncates only between code points, and validation rejects unpaired surrogates in defaults, files and saved drafts. An `onChange` callback may be async; synchronous throws and returned-promise rejections are reported as extension errors. Saving and other notifications do not wait for asynchronous callbacks.
+
+A preview is optional. It receives the draft and a render context (`width`, `theme`, `images`, `maxImageRows`, `signal`) and returns the existing `MarkdownRenderResult`: styled `lines`, inline `segments`, or an `image` with `alt`/`fallback`. It can return a promise, including a generated KaTeX picture. The host redraws on completion, aborts replaced or closed previews, and ignores superseded results even if the callback ignores the signal. Use the same rendering helper as your real renderer, with explicit settings arguments. This is simpler and safer than temporarily injecting drafts into the normal Markdown renderer: saved reads, notifications, normal rendering and caches never see an unsaved draft. Extensions must not mutate their normal rendering state from a preview callback.
+
+In `/ext`, loaded packages with declared settings offer **Settings**. Standalone files with declared settings appear in a separate **Standalone** section and offer **Settings** and **Show details**, not package install/update/remove actions. `/ext config <name>` opens the page directly; config completion includes standalone names. The host derives each standalone name from its file stem, replacing spaces and other characters outside ASCII letters, digits, `_` and `-` with `-` (for example, `my extension.ts` becomes `my-extension`); an empty stem becomes `extension`. Collisions with other files or package names add `-2`, `-3`, and so on, in absolute-path order. Use the name shown in `/ext`, or quote the absolute path: `/ext config "/path/to/my extension.ts"` or `/ext config "C:\\extensions\\my extension.ts"`. Single quotes are also accepted; backslashes remain literal. Aliases can change when the loaded files or installed packages change, but saved settings remain under the original path identity. The preview appears above the controls; without a preview, only controls are shown. Up/down moves between rows, left/right or `-`/`+` changes a number by its step, digits set a clamped number, left/right cycles a choice, and space toggles on/off. Text and colour are single-line inputs. The focused row shows its wrapped description. `ctrl+r` resets that row to its default; a marker identifies values differing from defaults.
+
+Changes update the preview but save nothing. Enter asks inline for user or project settings, defaulting to the current source layer (user when unset); Enter again saves to that layer, preserving unrelated keys and the formatting supported by the settings writer. Esc discards the whole draft. A higher-precedence project-local or flag value may still override a saved user/project value; the page shows provenance so you can choose deliberately.
 
 ### Extension state directory
 
@@ -281,7 +354,7 @@ plain-line fallback. API version 0.1.15 adds these view capabilities.
 
 D105 adds host-owned pages without registering another view: call `view.pushPage({ title?, state?, data? })` and `view.popPage()`. Render and UI contexts expose `page: { depth, data? }` on pushed pages (depth starts at 1), and omit it at the root; the view's original data remains the first callback argument. An optional page title replaces the legacy title or adds a title row above declarative content. Each page has independent selection, expansion, tabs, inputs, focus and scroll state, including legacy `scrollKey` positions; popping restores the previous page. Esc cancels an active question first, otherwise pops a page, and closes at the root. The host key bar says `Esc back` on a page and `Esc close` at the root. Ctrl+C always closes the whole view, even during a prompt or confirmation; q keeps its existing behavior. Page transitions cancel pending questions.
 
-Optional `onOpen(data, control)` and `onClose(data)` hooks run once for each opening and closing, not on redraws or page changes. Initial state is applied before `onOpen`, which may call `setState` or `close`. Opening the same kind while it is visible replaces its data without closing/reopening; state is retained unless explicit initial state is supplied, which starts a fresh root page. Replacing it with another kind closes the previous view.
+Optional `onOpen(data, control)` and `onClose(data)` hooks run once for each opening and closing, not on redraws or page changes. Initial state is applied before `onOpen`, which may call `setState` or `close`. Opening the same kind from the same extension instance and registration while it is visible replaces its data without closing/reopening; state is retained unless explicit initial state is supplied, which starts a fresh root page. Replacing it with another kind or extension instance closes the previous view and mounts a fresh viewer. Unloading either the opening extension or the view's provider closes its dock and fullscreen views before removing registrations; retained command contexts cannot reopen views after unload.
 
 ### Side questions: ephemeral agents, docks and display blocks
 

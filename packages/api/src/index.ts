@@ -1,5 +1,5 @@
 /** Public API for Amira extensions. Extensions may import only from this package. */
-export const API_VERSION = "0.1.44"
+export const API_VERSION = "0.1.46"
 
 export type {
   AssistantMessage,
@@ -23,6 +23,7 @@ export * from "./background-jobs.ts"
 export * from "./commands.ts"
 export * from "./events.ts"
 export * from "./extension.ts"
+export * from "./extension-settings.ts"
 export * from "./extensions-admin.ts"
 export * from "./file-rewind.ts"
 export * from "./form.ts"

@@ -11,6 +11,7 @@ import { DEFAULT_BUFFER_CHARS, DEFAULT_MAX_RUNNING } from "../packages/proc/src/
 import {
   docFiles,
   endMarker,
+  type Language,
   type Row,
   renderReference,
   root,
@@ -67,7 +68,20 @@ describe("settings reference", () => {
   const rows = settingsRows()
 
   test.each(Object.entries(docFiles))("%s is up to date with the types", (language, file) => {
-    expect(generated(read(file))).toBe(renderReference(language as "en" | "zh", rows))
+    expect(generated(read(file))).toBe(renderReference(language as Language, rows))
+  })
+
+  test("Japanese localizes the reference", () => {
+    const doc = read(docFiles.ja)
+    expect(doc).toContain("| キー | 型 | デフォルト | 説明 | ユーザーファイルのみ |")
+    for (const [key, annotation] of Object.entries(annotations)) {
+      expect(annotation.ja.length, `Japanese description for ${key}`).toBeGreaterThan(0)
+      if (typeof annotation.default !== "string") {
+        expect(annotation.default.ja.length, `Japanese default for ${key}`).toBeGreaterThan(0)
+      }
+      const line = doc.split("\n").find((line) => line.startsWith(`| \`${key}\` |`))!
+      expect(line.endsWith(annotation.userOnly ? "| はい |" : "|  |"), key).toBe(true)
+    }
   })
 
   test("the shimmer union stays a named row with a valid schema sample", () => {

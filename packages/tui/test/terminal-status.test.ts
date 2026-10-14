@@ -151,6 +151,39 @@ test("running titles use a one-second fake clock window and final status bypasse
   }
 })
 
+test("completion and dialog markers differ, with dialogs taking priority even after focus returns", async () => {
+  const { screen, status } = setup()
+  try {
+    status.setFocused(false)
+    status.setRunning(true)
+    status.setTitle("● Amira · proj")
+    await flush()
+    expect(screen.oscs.at(-1)).toBe("0;● Amira · proj")
+
+    status.setRunning(false)
+    status.setTitle("Amira · proj")
+    await flush()
+    expect(screen.oscs.at(-1)).toBe("0;✓ Amira · proj")
+    status.setFocused(true)
+    await flush()
+    expect(screen.oscs.at(-1)).toBe("0;Amira · proj")
+
+    status.setFocused(false)
+    status.setWaiting(1, true)
+    status.setRunning(false) // Completion and an unanswered dialog both apply.
+    await flush()
+    expect(screen.oscs.at(-1)).toBe("0;◆ Amira · proj")
+    status.setFocused(true)
+    await flush()
+    expect(screen.oscs.at(-1)).toBe("0;◆ Amira · proj")
+    status.setWaiting(0, false)
+    await flush()
+    expect(screen.oscs.at(-1)).toBe("0;Amira · proj")
+  } finally {
+    status.stop()
+  }
+})
+
 test("waiting alerts deduplicate until answer, retain focus context and clear on return", async () => {
   const { screen, status } = setup()
   status.setTitle("● Amira · proj")
@@ -162,7 +195,7 @@ test("waiting alerts deduplicate until answer, retain focus context and clear on
   status.bell()
   await flush()
   expect(screen.bells).toBe(1)
-  expect(screen.oscs.at(-1)).toBe("0;? Amira · proj")
+  expect(screen.oscs.at(-1)).toBe("0;◆ Amira · proj")
   status.setWaiting(2, true)
   status.bell()
   status.setFocused(false)
@@ -171,7 +204,7 @@ test("waiting alerts deduplicate until answer, retain focus context and clear on
   expect(screen.bells).toBe(1)
   status.setFocused(true)
   await flush()
-  expect(screen.oscs.at(-1)).toBe("0;? Amira · proj")
+  expect(screen.oscs.at(-1)).toBe("0;◆ Amira · proj")
   status.setWaiting(0, false)
   status.setWaiting(1, true)
   status.bell()
@@ -300,23 +333,23 @@ test("waiting transitions bypass the running title throttle and focus never hide
     status.bell()
     await flush()
     expect(screen.bells).toBe(1) // Alerts are not delayed with titles.
-    expect(screen.oscs).toEqual(["0;● Amira · first", "0;? Amira · first"])
+    expect(screen.oscs).toEqual(["0;● Amira · first", "0;◆ Amira · first"])
     now = 300
     status.setTitle("● Amira · latest")
     await flush()
-    expect(screen.oscs.at(-1)).toBe("0;? Amira · first")
+    expect(screen.oscs.at(-1)).toBe("0;◆ Amira · first")
     now = 1200
     status.setTitle("● Amira · latest")
     await flush()
-    expect(screen.oscs.at(-1)).toBe("0;? Amira · latest")
+    expect(screen.oscs.at(-1)).toBe("0;◆ Amira · latest")
     now = 1300
     status.setFocused(true)
     await flush()
-    expect(screen.oscs.at(-1)).toBe("0;? Amira · latest")
+    expect(screen.oscs.at(-1)).toBe("0;◆ Amira · latest")
     now = 2000
     status.setTitle("● Amira · latest")
     await flush()
-    expect(screen.oscs.at(-1)).toBe("0;? Amira · latest")
+    expect(screen.oscs.at(-1)).toBe("0;◆ Amira · latest")
     status.setWaiting(0, false)
     await flush()
     expect(screen.oscs.at(-1)).toBe("0;● Amira · latest")

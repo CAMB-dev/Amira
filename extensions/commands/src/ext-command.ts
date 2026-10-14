@@ -6,14 +6,16 @@ import {
   type ExtensionAPI,
   type ExtensionProgress,
   type ExtensionScope,
+  type ExtensionSettingsTarget,
   type ManagedExtension,
   type SelectSection,
   type ToolLine,
 } from "@amira/api"
 
 const USAGE =
-  "usage: /ext [install <name>|update [name…]|remove <name>|disable <name>|enable <name>|search <query>] [--project]"
+  "usage: /ext [config <name>|install <name>|update [name…]|remove <name>|disable <name>|enable <name>|search <query>] [--project]"
 const SUBS = {
+  config: "Configure extension settings",
   install: "Install from the index",
   update: "Update installed packages",
   remove: "Remove a package",
@@ -24,7 +26,11 @@ const SUBS = {
 type Subcommand = keyof typeof SUBS
 
 export function parseExtArgs(args: string): { sub?: Subcommand; names: string[]; scope: ExtensionScope } {
-  const words = args.split(/\s+/).filter(Boolean)
+  const quoted = /^(config)\s+(["'])(.*?)\2(?:\s+(.*))?$/s.exec(args.trim())
+  if (/^config\s+["']/.test(args.trim()) && !quoted) throw new Error(USAGE)
+  const words = quoted
+    ? [quoted[1]!, quoted[3]!, ...(quoted[4] ?? "").split(/\s+/).filter(Boolean)]
+    : args.split(/\s+/).filter(Boolean)
   const project = words.includes("--project")
   const rest = words.filter((s) => s !== "--project")
   const [sub, ...names] = rest
@@ -32,15 +38,15 @@ export function parseExtArgs(args: string): { sub?: Subcommand; names: string[];
   if (
     !sub ||
     !Object.hasOwn(SUBS, sub) ||
-    names.some((n) => n.startsWith("-")) ||
+    names.some((n) => !n || n.startsWith("-")) ||
     words.filter((w) => w === "--project").length > 1
   )
     throw new Error(USAGE)
-  if ((sub === "install" || sub === "remove" || sub === "disable" || sub === "enable") && names.length !== 1)
+  if (["config", "install", "remove", "disable", "enable"].includes(sub) && names.length !== 1)
     throw new Error(USAGE)
-  if (project && (sub === "disable" || sub === "enable" || sub === "search"))
+  if (project && (sub === "config" || sub === "disable" || sub === "enable" || sub === "search"))
     throw new Error(
-      "disable and enable apply to both scopes in user settings; --project is for install, update and remove",
+      "--project is for install, update and remove; config asks where to save, and enable/disable apply to both scopes",
     )
   return { sub: sub as Subcommand, names, scope: project ? "project" : "user" }
 }
@@ -71,8 +77,19 @@ function details(item: ManagedExtension): string {
     .join("\n")
 }
 
-export function extensionRows(installed: ManagedExtension[], available: AvailableExtension[]) {
+export function extensionRows(
+  installed: ManagedExtension[],
+  available: AvailableExtension[],
+  settings: ExtensionSettingsTarget[] = [],
+) {
   const names = new Set(installed.map((p) => p.name))
+  const standalone = settings
+    .filter((target) => target.standalone)
+    .map((target) => ({
+      label: `${target.name} · standalone`,
+      description: oneLine(target.source),
+      target,
+    }))
   const rows = installed.map((p) => ({
     label: `${p.name} ${p.version} · ${p.scope} · ${p.enabled ? "enabled" : "disabled"}${!p.trusted ? " · not trusted" : ""}${p.shadowed ? " · shadowed" : ""}${hasUpdate(p, available) ? " · update available" : ""}`,
     description: oneLine(p.error ?? p.description),
@@ -84,27 +101,51 @@ export function extensionRows(installed: ManagedExtension[], available: Availabl
   const sections: SelectSection[] = []
   if (rows.length)
     sections.push({ at: 0, title: "Installed", choose: "manage", keys: [{ key: "d", label: "details" }] })
-  if (others.length)
+  if (standalone.length)
     sections.push({
       at: rows.length,
+      title: "Standalone",
+      choose: "configure",
+      keys: [{ key: "d", label: "details" }],
+    })
+  if (others.length)
+    sections.push({
+      at: rows.length + standalone.length,
       title: "Available from the index",
       choose: "install",
       keys: [{ key: "d", label: "details" }],
     })
   return {
-    options: [...rows.map((r) => r.label), ...others.map((r) => r.label)],
-    descriptions: [...rows.map((r) => r.description), ...others.map((r) => r.description)],
+    options: [...rows.map((r) => r.label), ...standalone.map((r) => r.label), ...others.map((r) => r.label)],
+    descriptions: [
+      ...rows.map((r) => r.description),
+      ...standalone.map((r) => r.description),
+      ...others.map((r) => r.description),
+    ],
     sections,
     rows,
+    standalone,
     others,
   }
 }
 
-export function extensionProgressLines(rows: ExtensionProgress[], width: number): ToolLine[] {
+export function extensionProgressLines(
+  rows: (ExtensionProgress & { startedAt?: number })[],
+  width: number,
+  spinner = "",
+  now = Date.now(),
+): ToolLine[] {
   return [
-    { kind: "muted", text: clip("Extensions · working", width) },
-    ...rows.map(
-      (p): ToolLine => ({
+    { kind: "muted", text: clip(`${spinner ? `${spinner} ` : ""}Extensions · working`, width) },
+    ...rows.map((p): ToolLine => {
+      const active = !["done", "failed", "cancelled"].includes(p.phase)
+      const phase = p.phase === "dependencies" ? "installing dependencies" : p.phase
+      const percent = p.percent !== undefined ? ` ${Math.max(0, Math.min(100, Math.round(p.percent)))}%` : ""
+      const elapsed =
+        active && p.startedAt !== undefined
+          ? ` · ${Math.max(0, Math.floor((now - p.startedAt) / 1000))}s`
+          : ""
+      return {
         kind:
           p.phase === "failed"
             ? "error"
@@ -114,11 +155,11 @@ export function extensionProgressLines(rows: ExtensionProgress[], width: number)
                 ? "warning"
                 : "accent",
         text: clip(
-          `${oneLine(p.name)} · ${p.phase}${p.percent !== undefined ? ` ${Math.max(0, Math.min(100, Math.round(p.percent)))}%` : ""}${p.detail ? ` · ${oneLine(p.detail)}` : ""}`,
+          `${active && spinner ? `${spinner} ` : ""}${oneLine(p.name)} · ${phase}${percent}${elapsed}${p.detail ? ` · ${oneLine(p.detail)}` : ""}`,
           width,
         ),
-      }),
-    ),
+      }
+    }),
   ]
 }
 
@@ -126,17 +167,18 @@ export function extensionProgressLines(rows: ExtensionProgress[], width: number)
 export function extensionCommand(api: ExtensionAPI): { command: CommandDefinition; running(): boolean } {
   let running = false
   let sessionId = ""
-  const progress = new Map<string, ExtensionProgress>()
-  // The panel shows while packages are being worked on, not while the picker or a search waits.
+  const progress = new Map<string, ExtensionProgress & { startedAt: number }>()
+  // The panel shows while packages or the index are being worked on, not while a picker waits.
   api.registerPanel({
     id: "extensions",
     render: (opts) =>
       running && progress.size && opts.sessionId === sessionId
-        ? extensionProgressLines([...progress.values()], opts.width)
+        ? extensionProgressLines([...progress.values()], opts.width, opts.spinner, opts.now)
         : [],
   })
   const update = (p: ExtensionProgress) => {
-    progress.set(p.name, p)
+    if (!running) return
+    progress.set(p.name, { ...p, startedAt: progress.get(p.name)?.startedAt ?? Date.now() })
     api.requestRender()
   }
   /** Nothing reloads on its own: a reload mid-turn would unload the tools the turn is using. */
@@ -145,7 +187,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
   const changed = (ctx: CommandContext, message: string) => ctx.print(`${message} ${reloadHint(ctx)}`)
   const command: CommandDefinition = {
     name: "ext",
-    description: "Manage extensions: install, update, remove, enable, disable or search",
+    description: "Manage extensions: settings, install, update, remove, enable, disable or search",
     args: {
       hint: "[subcommand] [name…] [--project]",
       async complete(prefix, ctx) {
@@ -153,21 +195,27 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         const m = /^(\S+)\s+/.exec(prefix)
         if (!m) return Object.entries(SUBS).map(([value, description]) => ({ value, description }))
         const sub = m[1]!
-        if (!admin || !["install", "update", "remove", "disable", "enable"].includes(sub)) return []
+        if (!admin || !["config", "install", "update", "remove", "disable", "enable"].includes(sub)) return []
         const project = prefix.split(/\s+/).includes("--project")
         const before = prefix.slice(0, prefix.lastIndexOf(" ") + 1)
         if (sub === "install") {
           const list = await admin.search("", AbortSignal.timeout(2000))
           return list.extensions.map((p) => ({ value: `${before}${p.name}`, description: p.description }))
         }
+        if (sub === "config" && admin.settings)
+          return admin
+            .settings()
+            .map((target) => ({ value: `config ${target.name}`, description: target.source }))
         const installed = admin
           .list()
           .filter((p) =>
-            sub === "disable"
-              ? p.enabled
-              : sub === "enable"
-                ? !p.enabled
-                : p.scope === (project ? "project" : "user"),
+            sub === "config"
+              ? p.settings
+              : sub === "disable"
+                ? p.enabled
+                : sub === "enable"
+                  ? !p.enabled
+                  : p.scope === (project ? "project" : "user"),
           )
         return [
           ...new Map(
@@ -182,17 +230,39 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
     async run(args, ctx) {
       if (running) throw new Error("Extension management is running; cancel it or wait for it to finish.")
       const parsed = parseExtArgs(args)
+      if (parsed.sub === "config") {
+        await ctx.ui.extensionSettings(parsed.names[0]!, { signal: ctx.signal })
+        return
+      }
       const admin = ctx.session.extensionAdmin
       if (!admin) throw new Error("Extension management is unavailable on this host.")
       running = true
       sessionId = ctx.session.info().id
       progress.clear()
+      const clearProgress = () => {
+        progress.clear()
+        api.requestRender()
+      }
+      ctx.signal.addEventListener("abort", clearProgress, { once: true })
+      const loadIndex = async (query: string) => {
+        update({ name: "Extension index", phase: query ? "searching" : "fetching" })
+        try {
+          const result = await admin.search(query, ctx.signal)
+          ctx.signal.throwIfAborted()
+          return result
+        } finally {
+          progress.delete("Extension index")
+          api.requestRender()
+        }
+      }
       const warnings = (messages: string[]) => {
         for (const message of messages) ctx.print(message, "warning")
       }
       const opts = {
         signal: ctx.signal,
-        onProgress: update,
+        onProgress: (p: ExtensionProgress) => {
+          if (!ctx.signal.aborted) update(p)
+        },
         log: (message: string) => ctx.print(message, "warning"),
       }
       let didChange = false
@@ -203,6 +273,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
           case "install": {
             update({ name, phase: "resolving" })
             const result = await admin.install(name, scope, opts)
+            ctx.signal.throwIfAborted()
             warnings(result.warnings)
             update({ name, phase: "done", detail: result.version })
             didChange = true
@@ -237,9 +308,11 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
                 changed(ctx, `Updated ${r.name} to ${r.version}.`)
               } else ctx.print(`${r.name} is up to date (${r.version}).`)
             })
+            ctx.signal.throwIfAborted()
             break
           }
           case "remove":
+            update({ name, phase: "removing" })
             admin.remove(name, scope)
             didChange = true
             changed(ctx, `Removed ${name} from ${scope} scope.`)
@@ -254,7 +327,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
             break
           }
           case "search": {
-            const result = await admin.search(names.join(" "), ctx.signal)
+            const result = await loadIndex(names.join(" "))
             warnings(result.warnings)
             ctx.print(
               result.extensions.length
@@ -277,14 +350,14 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         const installed = admin.list()
         let available: AvailableExtension[] = []
         try {
-          const loaded = await admin.search("", ctx.signal)
+          const loaded = await loadIndex("")
           available = loaded.extensions
           warnings(loaded.warnings)
         } catch (error) {
           ctx.signal.throwIfAborted()
           ctx.print(`Index unavailable: ${error instanceof Error ? error.message : String(error)}`, "warning")
         }
-        const rows = extensionRows(installed, available)
+        const rows = extensionRows(installed, available, admin.settings?.())
         if (!rows.options.length) {
           ctx.print("No installed extensions; the index has no available entries.")
           return
@@ -297,6 +370,21 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         if (!pick) return
         const item = rows.rows.find((r) => r.label === pick.option)?.installed
         const entry = rows.others.find((r) => r.label === pick.option)?.available
+        const standalone = rows.standalone.find((r) => r.label === pick.option)?.target
+        if (standalone) {
+          const detail = `${standalone.name} · standalone\nSource: ${standalone.source}`
+          if (pick.key === "d") {
+            ctx.print(detail)
+            return
+          }
+          const action = await ctx.ui.select(`Configure ${standalone.name}`, ["Settings", "Show details"], {
+            signal: ctx.signal,
+          })
+          if (action === "Settings")
+            await ctx.ui.extensionSettings(standalone.identity, { signal: ctx.signal })
+          else if (action === "Show details") ctx.print(detail)
+          return
+        }
         if (pick.key === "d") {
           ctx.print(item ? details(item) : `${entry!.name} ${entry!.version}\n${entry!.description}`)
           return
@@ -304,10 +392,20 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         if (item) {
           const action = await ctx.ui.select(
             `Manage ${item.name} (${item.scope})`,
-            ["Update", item.enabled ? "Disable" : "Enable", "Remove", "Show details"],
+            [
+              ...(item.settings ? ["Settings"] : []),
+              "Update",
+              item.enabled ? "Disable" : "Enable",
+              "Remove",
+              "Show details",
+            ],
             { signal: ctx.signal },
           )
           if (!action) return
+          if (action === "Settings") {
+            await ctx.ui.extensionSettings(item.name, { signal: ctx.signal })
+            return
+          }
           if (action === "Show details") {
             ctx.print(details(item))
             return
@@ -337,8 +435,8 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         )
       } finally {
         running = false
-        progress.clear()
-        api.requestRender()
+        ctx.signal.removeEventListener("abort", clearProgress)
+        clearProgress()
       }
     },
   }

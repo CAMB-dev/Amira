@@ -2,7 +2,9 @@ import { expect, test } from "bun:test"
 import type {
   CommandContext,
   EventMap,
+  ExtensionAPI,
   ExtensionView,
+  PanelRenderOptions,
   PrintOptions,
   ShimmerColors,
   ShimmerEffect,
@@ -20,7 +22,7 @@ import type {
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
   const actual = Object.keys(api).sort()
-  expect(api.API_VERSION).toBe("0.1.44")
+  expect(api.API_VERSION).toBe("0.1.46")
   expect(actual).toEqual([
     "API_VERSION",
     "ARTIFACT_HEADER",
@@ -131,6 +133,7 @@ test("the public API exports stay stable", async () => {
     "diffToolLines",
     "draftFromValues",
     "emptyUsage",
+    "extensionSettingsDefaults",
     "fallbackTitle",
     "fetchPublic",
     "fieldDefault",
@@ -176,8 +179,35 @@ test("the public API exports stay stable", async () => {
     "toFormSchema",
     "tokenWeight",
     "toolResultText",
+    "validateExtensionSetting",
     "withSection",
   ])
+})
+
+test("the public unload hook contract is additive without a version bump", () => {
+  const hooks = new Set<() => void>()
+  const lifecycle: Pick<ExtensionAPI, "onUnload"> = {
+    onUnload: (hook) => {
+      hooks.add(hook)
+      return () => void hooks.delete(hook)
+    },
+  }
+  const off = lifecycle.onUnload(() => {})
+  expect({
+    methods: Object.keys(lifecycle),
+    registered: hooks.size,
+    disposer: typeof off,
+  }).toMatchInlineSnapshot(`
+    {
+      "disposer": "function",
+      "methods": [
+        "onUnload",
+      ],
+      "registered": 1,
+    }
+  `)
+  off()
+  expect(hooks.size).toBe(0)
 })
 
 test("the public side-question API contract is additive without a version bump", () => {
@@ -268,7 +298,7 @@ test("the public TUI settings include optional margins without changing API_VERS
   const defaults: TuiSettings = { margin: DEFAULT_TUI_MARGIN, marginRows: DEFAULT_TUI_MARGIN_ROWS }
   const edgeToEdge: TuiSettings = { margin: 0, marginRows: 0 }
   const omitted: TuiSettings = {}
-  expect(API_VERSION).toBe("0.1.44")
+  expect(API_VERSION).toBe("0.1.46")
   expect(defaults).toEqual({ margin: 3, marginRows: 1 })
   expect(edgeToEdge).toEqual({ margin: 0, marginRows: 0 })
   expect(omitted).toEqual({})
@@ -364,6 +394,13 @@ test("presenter choices and opt-in durable details are public additive contracts
       },
     }
   `)
+})
+
+test("panels can reuse the frontend command spinner without requiring it from other hosts", () => {
+  const options: PanelRenderOptions = { width: 80, now: 0, sessionId: "s1", collapsed: false }
+  expect(options.spinner).toBeUndefined()
+  options.spinner = "frame"
+  expect(options.spinner).toBe("frame")
 })
 
 test("the canonical theme glyph export includes the layout symbols", async () => {

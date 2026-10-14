@@ -10,7 +10,7 @@ export { shimmerLabel }
 export interface ActivityRowInfo {
   label: string
   spinner: string
-  stepMs: number
+  stepMs?: number
   turnMs: number
   tokens: number
   rate: number
@@ -24,7 +24,10 @@ export function activityRow(info: ActivityRowInfo, width: number, ctx: RenderCon
   const { theme } = ctx
   const label = info.label[0]!.toUpperCase() + info.label.slice(1).replace(/[.…]+$/, "")
   const prefix = markerPrefix(theme.accent(info.spinner))
-  let step = ` ${theme.muted(info.stepMs < 1000 ? formatElapsed(info.stepMs) : formatDuration(info.stepMs))}`
+  let step =
+    info.stepMs === undefined
+      ? ""
+      : ` ${theme.muted(info.stepMs < 1000 ? formatElapsed(info.stepMs) : formatDuration(info.stepMs))}`
   const stats = [theme.muted(formatElapsed(info.turnMs).replaceAll(" ", ""))]
   if (info.tokens > 0) {
     stats.push(

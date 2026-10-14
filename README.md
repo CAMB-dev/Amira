@@ -1,6 +1,6 @@
 # Amira
 
-[简体中文](README.zh-CN.md)
+[简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
 Amira is a lightweight, extensible coding agent for the terminal, built with TypeScript and Bun. It reads and edits project files, runs tools, and delegates tasks to sub-agents. Choose your own model provider and use it interactively or through print and RPC modes.
 

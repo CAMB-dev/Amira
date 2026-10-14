@@ -119,6 +119,7 @@ async function setup(
     interceptors: new InterceptorRegistry(),
     tools: new ToolRegistry(),
     cwd,
+    settingsSources: { home, cwd },
   })
   await host.load(commandsExtension, "builtin:commands")
   const ai = createAi({
@@ -158,6 +159,7 @@ test("/ext parsing validates arity and flags, preserving explicit scope", () => 
     names: ["fixture"],
     scope: "project",
   })
+  expect(parseExtArgs("config latex")).toEqual({ sub: "config", names: ["latex"], scope: "user" })
   expect(parseExtArgs("update one two").names).toEqual(["one", "two"])
   expect(parseExtArgs("search local fixture").names.join(" ")).toBe("local fixture")
   for (const args of [
@@ -166,6 +168,9 @@ test("/ext parsing validates arity and flags, preserving explicit scope", () => 
     "toString",
     "__proto__",
     "install",
+    "config",
+    "config one two",
+    "config one --project",
     "remove one two",
     "install a --quiet",
     "--project",
@@ -175,6 +180,17 @@ test("/ext parsing validates arity and flags, preserving explicit scope", () => 
     "search a --project",
   ])
     expect(() => parseExtArgs(args)).toThrow()
+})
+
+test("/ext config accepts quoted absolute paths without interpreting Windows separators as escapes", () => {
+  expect(parseExtArgs('config "C:\\extensions\\my extension.ts"')).toEqual({
+    sub: "config",
+    names: ["C:\\extensions\\my extension.ts"],
+    scope: "user",
+  })
+  expect(parseExtArgs("config '/tmp/my extension.ts'").names).toEqual(["/tmp/my extension.ts"])
+  expect(() => parseExtArgs('config "unfinished')).toThrow("usage:")
+  expect(() => parseExtArgs('config ""')).toThrow("usage:")
 })
 
 test("installed and available rows have unique scoped labels and details keys", () => {
@@ -375,6 +391,148 @@ test("index fetch cancellation stops mirrors and never falls back to a stale cac
   expect((await pending).output.join("\n")).toContain("cancelled")
   expect(fetches).toBe(1)
   expect(existsSync(cacheFile)).toBe(true)
+})
+
+function settingsAdmin(configurable: boolean): ExtensionAdmin {
+  const unused = () => {
+    throw new Error("unexpected package operation")
+  }
+  return {
+    list: () => [
+      {
+        name: "sample",
+        version: "1.0.0",
+        scope: "user",
+        enabled: true,
+        trusted: true,
+        source: "fixture",
+        description: "Settings fixture",
+        settings: configurable,
+      },
+    ],
+    search: async () => ({ extensions: [], warnings: [] }),
+    install: unused,
+    update: unused,
+    remove: unused,
+    setEnabled: unused,
+  }
+}
+
+async function declareSample(host: ExtensionHost) {
+  expect(
+    await host.load(
+      (api) => {
+        api.settings.declare({
+          fields: [{ key: "size", type: "number", label: "Size", default: 16, min: 8, max: 64, step: 1 }],
+        })
+      },
+      "fixture:sample",
+      "sample",
+    ),
+  ).toBe(true)
+}
+
+test("/ext config opens declared settings directly without an index lookup", async () => {
+  const admin = settingsAdmin(true)
+  admin.search = async () => {
+    throw new Error("index must not be requested")
+  }
+  const { host, run, asked, commands } = await setup(admin)
+  await declareSample(host)
+  expect((await run("/ext config sample")).ok).toBe(true)
+  expect(asked).toHaveLength(1)
+  expect(asked[0]).toMatchObject({ kind: "extension-settings", name: "sample" })
+  expect((await commands.complete("/ext config ")).candidates.map((c) => c.value)).toEqual(["config sample"])
+  expect((await run("/ext config missing")).ok).toBe(false)
+})
+
+test("/ext lists standalone declarations with settings-only actions and config completion", async () => {
+  const admin = settingsAdmin(false)
+  admin.list = () => []
+  const { host, run, asked, commands } = await setup(admin, (r) =>
+    r.kind === "select" ? (r.title === "Extensions" ? r.options[0] : "Settings") : undefined,
+  )
+  const file = path.join(cwd, "my extension.ts")
+  writeFileSync(
+    file,
+    `export default (api) => api.settings.declare({ fields: [{ key: "size", type: "number", label: "Size", default: 2 }] })`,
+  )
+  expect(await host.loadFile(file)).toBe(true)
+  admin.settings = () => host.extensionSettingsTargets()
+  expect((await run("/ext")).ok).toBe(true)
+  const menu = asked.find((r) => r.kind === "select" && r.title !== "Extensions")
+  expect(menu).toMatchObject({ kind: "select", options: ["Settings", "Show details"] })
+  expect(asked.filter((r) => r.kind === "extension-settings")).toHaveLength(1)
+  expect((await commands.complete("/ext config ")).candidates.map((c) => c.value)).toEqual([
+    "config my-extension",
+  ])
+  expect((await commands.complete("/ext remove ")).candidates).toEqual([])
+  expect((await run(`/ext config "${file}"`)).ok).toBe(true)
+  host.unloadAll()
+})
+
+test("/ext keeps the selected standalone identity when aliases change during its menu", async () => {
+  const admin = settingsAdmin(false)
+  admin.list = () => []
+  let reserved = ["foo"]
+  const { host, run, asked } = await setup(admin, (r) => {
+    if (r.kind !== "select") return undefined
+    if (r.title === "Extensions") return r.options.find((option) => option.startsWith("foo-2"))
+    reserved = []
+    return "Settings"
+  })
+  host.setExtensionSettingsPackageNames(() => reserved)
+  const files = ["a", "b"].map((folder) => path.join(cwd, folder, "foo.ts"))
+  for (const file of files) {
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(
+      file,
+      `export default (api) => api.settings.declare({ fields: [{ key: "size", type: "number", label: "Size", default: 2 }] })`,
+    )
+    expect(await host.loadFile(file)).toBe(true)
+  }
+  admin.settings = () => host.extensionSettingsTargets()
+  expect(host.extensionSettingsTargets().map((target) => target.name)).toEqual(["foo-2", "foo-3"])
+  expect((await run("/ext")).ok).toBe(true)
+  expect(asked.find((r) => r.kind === "extension-settings")).toMatchObject({
+    name: process.platform === "win32" ? files[0]!.toLowerCase() : files[0],
+  })
+  host.unloadAll()
+})
+
+test("/ext manage shows settings only for packages with a declaration", async () => {
+  for (const configurable of [true, false]) {
+    const { host, run, asked } = await setup(settingsAdmin(configurable), (r) =>
+      r.kind === "select"
+        ? r.title === "Extensions"
+          ? r.options[0]
+          : configurable
+            ? "Settings"
+            : undefined
+        : undefined,
+    )
+    if (configurable) await declareSample(host)
+    expect((await run("/ext")).ok).toBe(true)
+    const menu = asked.find((r) => r.kind === "select" && r.title.startsWith("Manage"))
+    expect(menu?.kind).toBe("select")
+    if (menu?.kind === "select") expect(menu.options.includes("Settings")).toBe(configurable)
+    expect(asked.filter((r) => r.kind === "extension-settings")).toHaveLength(configurable ? 1 : 0)
+  }
+})
+
+test("progress animates active rows and folded summaries but keeps outcomes static", () => {
+  const progress = [
+    { name: "active", phase: "dependencies", startedAt: 0 },
+    { name: "done", phase: "done", startedAt: 0 },
+    { name: "failed", phase: "failed", startedAt: 0 },
+    { name: "cancelled", phase: "cancelled", startedAt: 0 },
+  ]
+  const first = extensionProgressLines(progress, 120, "first", 0)
+  const next = extensionProgressLines(progress, 120, "next", 2000)
+  expect(first[0]!.text).toStartWith("first")
+  expect(next[0]!.text).toStartWith("next")
+  expect(next[1]!.text).toBe("next active · installing dependencies · 2s")
+  expect(next.slice(2)).toEqual(first.slice(2))
 })
 
 test("progress uses themed lines and clips 120/60 columns including fetching percentages", () => {

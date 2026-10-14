@@ -1,4 +1,9 @@
 import type { ModelOverrides, ProviderCompat, ReasoningEffort } from "@amira/ai"
+import type {
+  ExtensionSettingsDeclaration,
+  ExtensionSettingsField,
+  ExtensionSettingsHandle,
+} from "./extension-settings.ts"
 import type { Budget } from "./subagents.ts"
 import type { ShimmerEffect } from "./themes.ts"
 
@@ -23,6 +28,10 @@ export type SettingsLayers = Partial<Record<keyof Settings, readonly SettingsLay
 /** Merged settings plus the explicit values that produced each top-level key. */
 export interface SettingsView extends Readonly<Settings> {
   layers<K extends keyof Settings>(key: K): readonly SettingsLayer<NonNullable<Settings[K]>>[]
+  /** Declares settings under the host-supplied extension identity, not an extension-chosen name. */
+  declare<const F extends readonly ExtensionSettingsField[]>(
+    declaration: ExtensionSettingsDeclaration<F>,
+  ): ExtensionSettingsHandle<F>
 }
 
 export interface ModelSettings extends ModelOverrides {
@@ -276,7 +285,11 @@ export interface TuiSettings {
   bell?: boolean
   /** Desktop alerts in supported terminals, independently of the bell. See DEFAULT_TUI_NOTIFY. */
   notify?: "auto" | "off"
-  /** Session title or cwd name: ● while running, ? while waiting; running updates at most once per second. See DEFAULT_TUI_TITLE. */
+  /**
+   * Session title or cwd name: ● while running; ✓ for a turn finished while unfocused, cleared
+   * on focus return; ◆ for an unanswered dialog, even when focused, taking priority over ✓.
+   * No marker when idle/seen. Running updates at most once per second. See DEFAULT_TUI_TITLE.
+   */
   title?: boolean
   /** Show work on the tab and taskbar progress indicator (OSC 9;4). See DEFAULT_TUI_PROGRESS. */
   progress?: boolean

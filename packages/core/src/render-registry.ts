@@ -107,9 +107,14 @@ export class MarkdownRendererRegistry {
     return this.#entries.length
   }
 
-  /** Bumped whenever a renderer comes or goes, so what was rendered before can be redone. */
+  /** Bumped whenever renderers or their saved settings change, so cached results can be redone. */
   get version(): number {
     return this.#version
+  }
+
+  /** Saved extension settings changed; frontend caches must ask the real renderers again. */
+  invalidate(): void {
+    this.#version++
   }
 
   /** Whether a code block in `lang` is rendered by an extension: it is held until it closes. */

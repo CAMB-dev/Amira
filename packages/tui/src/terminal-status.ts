@@ -133,10 +133,10 @@ export class TerminalStatus implements TerminalApi {
 
   #flush(): void {
     let out = ""
-    const waiting = this.#dialogWaiting || this.#completed
+    const marker = this.#dialogWaiting ? "◆" : this.#completed ? "✓" : undefined
     const title =
-      waiting && this.#title !== undefined
-        ? truncateToWidth(`? ${this.#title.replace(/^● /, "")}`, 128, "…")
+      marker && this.#title !== undefined
+        ? truncateToWidth(`${marker} ${this.#title.replace(/^● /, "")}`, 128, "…")
         : this.#title
     clearTimeout(this.#titleTimer)
     this.#titleTimer = undefined

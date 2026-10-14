@@ -31,6 +31,37 @@ function newHost() {
   return { bus, events, host }
 }
 
+test("saved declared settings invalidate Markdown results, but previews do not", async () => {
+  const { host } = newHost()
+  await host.load(
+    (api) => {
+      const settings = api.settings.declare({
+        fields: [{ key: "size", type: "number", label: "Size", default: 16, min: 8, max: 64, step: 1 }],
+        preview: (draft) => ({ lines: [{ kind: "text", text: String(draft.size) }] }),
+      })
+      api.registerMarkdownRenderer({
+        id: "sample",
+        match: { math: "both" },
+        render: () => ({ segments: [{ kind: "text", text: String(settings.get().size) }] }),
+      })
+    },
+    "sample",
+    "sample",
+  )
+  const before = host.markdown.version
+  const page = host.extensionSettings.get("sample")!
+  await page.preview!({ size: 24 }, { ...ctx, signal: new AbortController().signal })
+  expect(host.markdown.version).toBe(before)
+  expect(host.markdown.render(math(), ctx)).toEqual({ segments: [{ kind: "text", text: "16" }] })
+  host.setSettings({ extensions: { sample: { size: 24 } } })
+  expect(host.markdown.version).toBeGreaterThan(before)
+  expect(host.markdown.render(math(), ctx)).toEqual({ segments: [{ kind: "text", text: "24" }] })
+  const saved = host.markdown.version
+  host.setSettings({ extensions: { sample: { size: 24 } } })
+  expect(host.markdown.version).toBe(saved)
+  host.unloadAll()
+})
+
 test("markdown renderers: matched by language (any case) or image, highest priority first, then registration order", () => {
   const r = new MarkdownRendererRegistry()
   const seen: string[] = []

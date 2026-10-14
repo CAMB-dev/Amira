@@ -10,6 +10,8 @@ type AdminControl = Pick<
 >
 
 export function createAdminControl(ctx: ControlContext): AdminControl {
+  const extensions = createExtensionAdmin({ cwd: ctx.cwd, ...(ctx.home ? { home: ctx.home } : {}) })
+  ctx.session.host.setExtensionSettingsPackageNames(() => extensions.list().map((p) => p.name))
   return {
     providers: () =>
       ctx.ai.providers().map((p) => ({
@@ -19,7 +21,25 @@ export function createAdminControl(ctx: ControlContext): AdminControl {
         ...(p.apiKeyEnv ? { apiKeyEnv: p.apiKeyEnv } : {}),
         hasKey: ctx.ai.hasKey(p.id),
       })),
-    extensionAdmin: createExtensionAdmin({ cwd: ctx.cwd, ...(ctx.home ? { home: ctx.home } : {}) }),
+    extensionAdmin: {
+      ...extensions,
+      settings: () => ctx.session.host.extensionSettingsTargets(),
+      list: () => {
+        const installed = extensions.list()
+        const trustedProjects = new Set(
+          installed.filter((p) => p.scope === "project" && p.trusted).map((p) => p.name),
+        )
+        return installed.map((p) => ({
+          ...p,
+          ...(ctx.session.host.extensionSettings.has(p.name) &&
+          p.enabled &&
+          p.trusted &&
+          (p.scope === "project" || !trustedProjects.has(p.name))
+            ? { settings: true }
+            : {}),
+        }))
+      },
+    },
     providerAdmin: createProviderAdmin({
       ai: ctx.ai,
       ...(ctx.home ? { home: ctx.home } : {}),

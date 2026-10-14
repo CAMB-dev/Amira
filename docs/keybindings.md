@@ -1,6 +1,6 @@
 # Keybindings
 
-[简体中文](zh/keybindings.md) · [Documentation](../README.md)
+[简体中文](zh/keybindings.md) · [日本語](ja/keybindings.md) · [Documentation](../README.md)
 
 Every key the interactive UI answers belongs to an action. To change keys, put a JSON object
 in `~/.amira/keybindings.json` (or `$AMIRA_HOME/keybindings.json`) that maps action names to
@@ -131,7 +131,18 @@ details of the selected extension. Typing filters the list; once a filter has te
 part of the filter. Install and update keep the input available and show a live progress
 panel. Outside a dialog or completion list, Esc (`interrupt`) or Ctrl+C (`cancel`) cancels
 the running command and preserves the draft; changes already completed stay installed.
-The hint uses the current keybindings. Changes take effect with `/reload` while idle.
+The hint uses the current keybindings. Package changes take effect with `/reload` while idle.
+Loaded extensions with declared settings also offer **Settings**; standalone files appear in
+**Standalone** with Settings and Show details only. `/ext config <name>` opens that page directly,
+using the host-derived file-stem name shown in `/ext` (for example, `my-extension`; collisions
+add `-2`, `-3`, including collisions with package names). Quoted absolute paths work too:
+`/ext config "/path/to/my extension.ts"` or `/ext config "C:\\extensions\\my extension.ts"`.
+These command names do not change the absolute-path storage identity of standalone settings. The live preview never changes saved values. Up/down selects a row;
+left/right or `-`/`+` adjusts a number, digits set it within its bounds, left/right cycles a
+choice, and space toggles on/off. Text and colour are single-line inputs. `ctrl+r` resets the
+focused row to its default. Enter asks inline for user or project settings; Enter again saves
+and notifies the extension immediately. Esc discards the draft. Descriptions wrap below the
+focused row, and values differing from defaults are marked.
 
 In `/resume`, typing searches titles and conversation text, with the matching text under each
 row; Ctrl+D deletes the selected session after a confirmation.

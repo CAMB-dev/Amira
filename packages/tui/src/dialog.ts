@@ -20,7 +20,7 @@ import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
 import { type Action, defaultKeybindings, type Keybindings, keyLabel } from "./keybindings.ts"
 
-export type DialogRequest = EventMap["ui.request"]
+export type DialogRequest = Exclude<EventMap["ui.request"], { kind: "form" | "extension-settings" }>
 
 /** How a dialog was answered; undefined cancels it. */
 export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | SelectChoice | undefined
@@ -168,7 +168,6 @@ export class Dialog implements Component {
       if (keys.is(e, "dialog.choose")) return this.#finish("")
       return false
     }
-    if (r.kind === "form") return false
     const page = this.#current
     const choices = this.#choices()
     const n = choices.length

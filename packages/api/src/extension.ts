@@ -181,6 +181,13 @@ export interface ExtensionAPI {
    * Returns a function that removes it; unloading the extension removes it too.
    */
   onExit(handler: (signal: AbortSignal) => void | Promise<void>): () => void
+  /**
+   * Runs synchronous cleanup once on unload, reload, disable taking effect, failed load or exit.
+   * Views close first; registrations are still available. Use for timers, subscriptions and
+   * aborting pending work. Async work is not awaited; use onExit for bounded async exit work.
+   * Returns a function that removes this hook. Failures are reported without stopping cleanup.
+   */
+  onUnload(handler: () => void): () => void
   /** Asks the user through whichever frontend is attached (select, confirm, input). */
   readonly ui: UiApi
   /**

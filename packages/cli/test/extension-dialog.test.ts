@@ -91,7 +91,8 @@ for (const kind of ["relative file", "absolute file", "package", "scoped package
           data: expect.objectContaining({ source, error: expect.stringContaining("fixture diagnostic") }),
         }),
       )
-      const dialog = new Dialog(request!, (answer) => session!.host.ui.respond(request!.requestId, answer))
+      if (request?.kind !== "confirm") throw new Error("expected confirmation request")
+      const dialog = new Dialog(request, (answer) => session!.host.ui.respond(request.requestId, answer))
       const title = `Continue? (${label})`
       const top = dialog.render(120, plain)[0]!
       expect(stripAnsi(top)).toBe(`╭ ${title}${"─".repeat(117 - title.length)}╮`)
