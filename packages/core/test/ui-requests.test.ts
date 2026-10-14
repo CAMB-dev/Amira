@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test"
-import type { AnyEvent, EventEnvelope, FormActionResult, FormSpec, FormValues } from "@amira/api"
+import type {
+  AgentStatusState,
+  AnyEvent,
+  EventEnvelope,
+  FormActionResult,
+  FormSpec,
+  FormValues,
+} from "@amira/api"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
@@ -95,6 +102,77 @@ test("choose sends sections and takes a key of the option's section, or the opti
   ui.cancel(req2.data.requestId)
   expect(await keyless).toBeUndefined()
 })
+
+test("choose copies aligned option statuses without changing option identities", async () => {
+  const { ui, next } = setup()
+  const optionStatuses: (AgentStatusState | undefined)[] = ["working", "paused", undefined]
+  const choice = ui.api().choose("Agents", ["First", "Second", "Worktree"], {
+    sections: [{ at: 0 }],
+    optionStatuses,
+  })
+  optionStatuses[0] = "done"
+  const request = (await next()).data
+  expect(request).toMatchObject({
+    kind: "select",
+    options: ["First", "Second", "Worktree"],
+    optionStatuses: ["working", "paused", undefined],
+  })
+  ui.respond(request.requestId, "Second")
+  expect(await choice).toEqual({ option: "Second" })
+
+  const unbadged = ui.api().choose("Pick", ["First"], { sections: [{ at: 0 }] })
+  const plainRequest = (await next()).data
+  expect(plainRequest).not.toHaveProperty("optionStatuses")
+  ui.cancel(plainRequest.requestId)
+  expect(await unbadged).toBeUndefined()
+})
+
+test.each(["answer", "cancel", "abort", "timeout", "unload"] as const)(
+  "live choose presentation stays serializable and stops refreshing after %s",
+  async (close) => {
+    const { ui, next, bus, events } = setup()
+    const controller = new AbortController()
+    let reads = 0
+    const presentation = { optionLabels: ["First · 0 tok"], optionStatuses: ["working" as AgentStatusState] }
+    const choice = ui.api("ext").choose("Agents", ["1. First"], {
+      sections: [{ at: 0, keys: [{ key: "p", label: "print" }] }],
+      signal: controller.signal,
+      ...(close === "timeout" ? { timeoutMs: 100 } : {}),
+      live: () => {
+        reads++
+        return presentation
+      },
+    })
+    const initial = (await next()).data
+    expect(initial).toMatchObject({ options: ["1. First"], ...presentation })
+    expect(initial).not.toHaveProperty("live")
+    expect(initial).not.toHaveProperty("signal")
+    expect(structuredClone(initial)).toEqual(initial)
+    presentation.optionStatuses[0] = "done"
+    presentation.optionLabels[0] = "First · 1.2k tok"
+    bus.emit("subagent.state", { childSessionId: "child", state: "idle", turns: 1 }, { sessionId: "parent" })
+    const updated = (await next()).data
+    expect(updated).toMatchObject({ requestId: initial.requestId, options: ["1. First"], ...presentation })
+    expect(initial).toMatchObject({ optionStatuses: ["working"], optionLabels: ["First · 0 tok"] })
+    expect(structuredClone(updated)).toEqual(updated)
+    const requests = events.filter((e) => e.type === "ui.request").length
+    bus.emit("subagent.state", { childSessionId: "child", state: "idle", turns: 1 }, { sessionId: "parent" })
+    await bus.flush()
+    expect(events.filter((e) => e.type === "ui.request")).toHaveLength(requests)
+    if (close === "answer") ui.respond(initial.requestId, { option: "1. First", key: "p" })
+    else if (close === "cancel") ui.cancel(initial.requestId)
+    else if (close === "abort") controller.abort()
+    else if (close === "unload") ui.cancelAll("ext")
+    expect(await choice).toEqual(close === "answer" ? { option: "1. First", key: "p" } : undefined)
+    const before = reads
+    presentation.optionStatuses[0] = "failed"
+    bus.emit("subagent.state", { childSessionId: "child", state: "idle", turns: 1 }, { sessionId: "parent" })
+    await bus.flush()
+    expect(reads).toBe(before)
+    expect(ui.pending).toEqual([])
+    expect(events.filter((e) => e.type === "ui.request")).toHaveLength(requests)
+  },
+)
 
 test("choose refuses repeated options and malformed sections", async () => {
   const api = setup().ui.api("ext")

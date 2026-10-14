@@ -2,7 +2,6 @@ import type {
   CommandOutputLevel,
   FrontendView,
   ToolDetailLevel,
-  ToolLine,
   UiControl,
   UiState,
   ViewControl,
@@ -24,9 +23,9 @@ import {
   type Theme,
   truncateToWidth,
   visibleWidth,
-  wrapText,
 } from "@amira/tui-kit"
 import { terminalText } from "./diff-view.ts"
+import { oneLine, wrapViewLines } from "./extension-view-rendering.ts"
 import { replyRows } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
@@ -37,6 +36,7 @@ import {
   type Keybindings,
   viewScrollAction,
 } from "./keybindings.ts"
+import { statusBadge } from "./status-badge.ts"
 import {
   explorationOf,
   exploredLines,
@@ -56,6 +56,8 @@ import {
   viewInputHint,
 } from "./view-keys.ts"
 import { renderViewLines, viewTitle } from "./view-lines.ts"
+
+export { wrapViewLines } from "./extension-view-rendering.ts"
 
 /** Where the TUI finds the view kinds extensions registered. */
 export interface ViewSource {
@@ -99,58 +101,6 @@ export interface ExtensionViewerOptions {
   toolDetail?: () => ToolDetailLevel
 }
 
-/** Lines of text that wrap to the width; the rest (code, diffs) are cut, as tool output is. */
-const WRAPPED: ReadonlySet<ToolLine["kind"]> = new Set([
-  "text",
-  "muted",
-  "accent",
-  "success",
-  "warning",
-  "error",
-])
-
-/**
- * Where a wrapped line's later rows start: past its indent and a leading marker such as "✗ ",
- * "● ", "- " or "12. ", so they hang under its text.
- */
-const HANG = /^(\s*)((?:[^\p{L}\p{N}\s]{1,2}|\d{1,3}[.)])\s+)?/u
-
-/**
- * View lines fitted to `width`: text lines wrapped, their later rows hanging under their text,
- * code and diff lines as they are (renderToolLines cuts them).
- */
-export function wrapViewLines(lines: readonly ViewLine[], width: number): ViewLine[] {
-  const out: ViewLine[] = []
-  for (const l of lines) {
-    // Presenter metadata needs the complete label to place its marker and description once.
-    if (
-      l.kind === "segments" ||
-      l.kind === "user-message" ||
-      l.wrap ||
-      l.marker ||
-      l.description !== undefined
-    ) {
-      out.push(l)
-      continue
-    }
-    const text = terminalText(l.text)
-    if (!WRAPPED.has(l.kind) || l.lineNo !== undefined || visibleWidth(text) <= width) {
-      out.push(l)
-      continue
-    }
-    const m = HANG.exec(text)!
-    let hang = visibleWidth(m[0])
-    // A marker that leaves too little room hangs nothing.
-    if (width - hang < 10) hang = 0
-    const rest = text.slice(m[0].length)
-    const rows = hang ? wrapText(rest, width - hang) : wrapText(text, width)
-    for (const [i, r] of rows.entries()) {
-      out.push({ ...l, text: hang ? (i === 0 ? m[0] + r : " ".repeat(hang) + r) : r })
-    }
-  }
-  return out
-}
-
 /**
  * A full-screen view an extension registered (ViewDefinition), over the data a command
  * opened it with: the title and header stay at the top, the body scrolls (ScrollView), and the
@@ -174,9 +124,16 @@ export class ExtensionViewer implements Component {
   #hostLines = new WeakMap<ViewLine, string>()
   #liveRows = new WeakMap<ViewLine, { group: object; row: number }>()
   #animating = false
+  #refreshIntervalMs: number | undefined
   /** Running transcript rows need the same redraw cadence as the main spinner. */
   get animating(): boolean {
     return this.#animating
+  }
+  /** The last frame's explicit timed-content demand, combined with host spinner demand. */
+  get refreshIntervalMs(): number | undefined {
+    return this.#animating
+      ? Math.min(this.#refreshIntervalMs ?? Infinity, Spinner.INTERVAL_MS)
+      : this.#refreshIntervalMs
   }
   #spinner = new Spinner()
   #spinnerFrame: number | undefined
@@ -534,6 +491,7 @@ export class ExtensionViewer implements Component {
 
   render(width: number, ctx: RenderContext): string[] {
     this.#animating = false
+    this.#refreshIntervalMs = undefined
     if (this.#ui) return this.#renderUi(width, ctx)
     const { theme } = ctx
     const opts = this.#renderOptions(width, theme, ctx.glyphs)
@@ -664,12 +622,16 @@ export class ExtensionViewer implements Component {
     let finished = false
     let separated = false
     // Existing redraws drive the spinner at its usual cadence; no view-specific timer.
-    const frame = Math.floor(now / 80)
+    const frame = Math.floor(now / Spinner.INTERVAL_MS)
     if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
     this.#spinnerFrame = frame
     return {
       width,
       now,
+      requestRefresh: (intervalMs) => {
+        if (Number.isFinite(intervalMs) && intervalMs > 0)
+          this.#refreshIntervalMs = Math.min(this.#refreshIntervalMs ?? Infinity, intervalMs)
+      },
       focused: this.focused,
       ...(this.#pages.length > 1 ? { page: { depth: this.#pages.length - 1, data: this.#page.data } } : {}),
       renderTool: (name, call, detail, options) => {
@@ -729,6 +691,10 @@ export class ExtensionViewer implements Component {
             true,
           ),
         ]
+      },
+      statusBadge: (state, options) => {
+        this.#animating ||= state === "working"
+        return statusBadge(state, this.#spinner.glyph, options)
       },
       renderReply: (text) => {
         finished ||= !!text.trim()
@@ -889,8 +855,4 @@ export class ExtensionViewer implements Component {
       return undefined
     }
   }
-}
-
-function oneLine(s: string): string {
-  return terminalText(s).replace(/\s+/g, " ").trim()
 }

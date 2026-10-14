@@ -130,9 +130,10 @@ export function jobView(registry: JobRegistry): ViewDefinition<{ id: string }> {
       const job = registry.get(id)
       return job ? `${job.id} · ${job.command.replace(/\s+/g, " ").trim()}` : id
     },
-    header: ({ id }, { now }) => {
+    header: ({ id }, opts) => {
       const job = registry.get(id)
-      return job ? headerLines(job, now) : [{ kind: "muted", text: "This job is no longer kept." }]
+      if (job && isLive(job)) opts.requestRefresh?.(1000)
+      return job ? headerLines(job, opts.now) : [{ kind: "muted", text: "This job is no longer kept." }]
     },
     render: ({ id }) => (registry.get(id) ? outputLines(registry, id, VIEW_LINES) : []),
     keys: [

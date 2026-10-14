@@ -18,3 +18,15 @@ test("the RPC schema adds stream timing events without requiring new metadata", 
   expect(turn.properties.data.required).toEqual(["prompt"])
   expect(turn.properties.data.properties.sentAt.type).toBe("number")
 })
+
+test("RPC group snapshots expose paused presentation and durable terminal outcomes", () => {
+  const defs = (rpcSchema() as any).$defs
+  for (const type of ["group.start", "group.update", "group.end"]) {
+    const event = defs.Event.anyOf.find((entry: any) => entry.properties.type.enum[0] === type)
+    const group = event.properties.data.properties.group
+    expect(group.properties.agents.properties.paused).toEqual({ type: "number" })
+    expect(group.properties.agents.required).not.toContain("paused")
+    expect(group.required).not.toContain("outcomes")
+    expect(group.properties.outcomes.required).toEqual(["done", "failed", "stopped"])
+  }
+})

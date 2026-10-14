@@ -1,6 +1,7 @@
 // B/D deliberate oracles: rounded title/footer borders, normal bold titles, › cursors and filter: label.
-import { expect, test } from "bun:test"
-import type { AskQuestion } from "@amira/api"
+import { expect, spyOn, test } from "bun:test"
+import type { AgentStatusState, AskQuestion } from "@amira/api"
+import { EventBus, UiRequests } from "@amira/core"
 import { CURSOR_MARKER, defaultTheme, key, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "../src/dialog.ts"
@@ -66,6 +67,89 @@ test("local select header handles appearance keys without selecting or filtering
   expect(answers).toEqual([undefined])
 })
 
+test("host choose refreshes an open filtered, scrolled picker without changing its answer", async () => {
+  const bus = new EventBus()
+  const ui = new UiRequests(bus)
+  const options = Array.from({ length: 15 }, (_, i) => `${i + 1}. Agent ${i + 1}`)
+  const presentation = {
+    optionLabels: [...options],
+    optionStatuses: options.map((): AgentStatusState => "working"),
+  }
+  let dialog: Dialog | undefined
+  let opened = 0
+  bus.subscribe((event) => {
+    if (event.type !== "ui.request" || event.data.kind !== "select") return
+    const data = structuredClone(event.data)
+    if (dialog) expect(dialog.update(data)).toBe(true)
+    else {
+      opened++
+      dialog = new Dialog(data, (answer) => {
+        expect(ui.respond(data.requestId, answer)).toBeUndefined()
+      })
+      dialog.maxRows = 7
+    }
+  })
+  const choice = ui.api().choose("Agents", options, { sections: [{ at: 0 }], live: () => presentation })
+  await bus.flush()
+  const picker = dialog!
+  for (const ch of "Agent") picker.handleInput(textKey(ch))
+  for (let i = 0; i < 11; i++) picker.handleInput(key("down"))
+  const before = stripAnsi(picker.render(100, plain).join("\n"))
+  expect(before).toContain("filter: Agent")
+  expect(before).toContain("12/15")
+  presentation.optionLabels = options.map((option) => `${option} · 1.2k tok`)
+  // The transport carries plain display data; the existing dialog receives it in place.
+  const statuses = ["done", "failed", "stopped", "paused", "idle", "queued"] as const
+  for (const status of statuses) {
+    presentation.optionStatuses = options.map(() => status)
+    bus.emit("subagent.state", { childSessionId: "child", state: "idle", turns: 1 }, { sessionId: "parent" })
+    await bus.flush()
+    const frame = stripAnsi(picker.render(100, plain).join("\n"))
+    expect(frame).toContain("filter: Agent")
+    expect(frame).toContain("12/15")
+    expect(frame).toMatch(/›.*12\. Agent 12 · 1\.2k tok/)
+    expect(frame).not.toContain("working")
+  }
+  bus.emit("subagent.state", { childSessionId: "child", state: "idle", turns: 1 }, { sessionId: "parent" })
+  await bus.flush()
+  expect(opened).toBe(1)
+  picker.handleInput(key("enter"))
+  expect(await choice).toEqual({ option: options[11]! })
+})
+
+test("display refresh keeps numeric and section-key answers bound to opening options", () => {
+  const request: DialogRequest = {
+    kind: "select",
+    requestId: "live",
+    title: "Agents",
+    options: ["1. First", "2. Second"],
+    sections: [{ at: 0, keys: [{ key: "p", label: "print" }] }],
+    optionStatuses: ["working", "working"],
+  }
+  const numeric = open(structuredClone(request))
+  expect(
+    numeric.dialog.update({
+      ...request,
+      optionLabels: ["1. First updated", "2. Second updated"],
+      optionStatuses: ["done", "paused"],
+    }),
+  ).toBe(true)
+  numeric.type("2")
+  expect(numeric.answers).toEqual(["2. Second"])
+  const section = open(structuredClone(request))
+  section.press("down")
+  expect(
+    section.dialog.update({
+      ...request,
+      optionLabels: ["1. First updated", "2. Second updated"],
+      optionStatuses: ["done", "paused"],
+    }),
+  ).toBe(true)
+  section.type("p")
+  expect(section.answers).toEqual([{ option: "2. Second", key: "p" }])
+  expect(section.dialog.update({ ...request, options: ["different"] })).toBe(false)
+})
+
 test("local picker footer keeps appearance discoverable when its header is trimmed", () => {
   const dialog = new Dialog(
     { kind: "select", requestId: "theme", title: "Theme", options: ["amira", "amber"] },
@@ -110,6 +194,79 @@ test("dialog footers format rebound and section keys without changing labels or 
   )
   dialog.handleInput(key("f6", { ctrl: true, shift: true }))
   expect(answers).toEqual(["Mixed Case Session"])
+})
+
+test("select badges precede titles and stay aligned when filtering without changing answers", () => {
+  const d = open({
+    kind: "select",
+    requestId: "agents",
+    title: "Agents",
+    options: ["1. First", "2. Second", "Worktree"],
+    optionStatuses: ["done", "paused", undefined],
+    sections: [{ at: 0, keys: [{ key: "p", label: "print" }] }, { at: 2 }],
+  })
+  expect(d.rows()).toContain("› 1 ✓ done    First")
+  expect(d.rows()).toContain("  2 ‖ paused  Second")
+  expect(d.rows()).toContain("  3 Worktree")
+  d.type("Second")
+  expect(d.rows()).toContain("› ‖ paused  2. Second")
+  d.press("enter")
+  expect(d.answers).toEqual(["2. Second"])
+
+  const warning = new Dialog(
+    {
+      kind: "select",
+      requestId: "paused",
+      title: "Agents",
+      options: ["Paused task"],
+      optionStatuses: ["paused"],
+    },
+    () => {},
+  )
+  const rendered = warning.render(80, {
+    ...plain,
+    theme: { ...plain.theme, warning: (s) => `warning(${s})` },
+  })
+  expect(rendered.join("\n")).toContain("warning(‖ paused ) Paused task")
+  for (const maxRows of [3, 4, 8]) {
+    d.dialog.maxRows = maxRows
+    expect(d.dialog.render(24, plain).every((row) => visibleWidth(row) <= 24)).toBe(true)
+  }
+})
+
+test("select animates only working badges at the shared spinner cadence", () => {
+  const clock = spyOn(Date, "now").mockReturnValue(0)
+  try {
+    const d = open({
+      kind: "select",
+      requestId: "agents",
+      title: "Agents",
+      options: ["First", "Second"],
+      optionStatuses: ["working", "paused"],
+    })
+    const first = d.rows()
+    expect(first).toContain("› 1 ⠋ working First")
+    expect(first).toContain("  2 ‖ paused  Second")
+    clock.mockReturnValue(79)
+    expect(d.rows()).toEqual(first)
+    clock.mockReturnValue(80)
+    const next = d.rows()
+    expect(next).toContain("› 1 ⠙ working First")
+    expect(next).toContain("  2 ‖ paused  Second")
+
+    const paused = open({
+      kind: "select",
+      requestId: "paused",
+      title: "Agents",
+      options: ["Only paused"],
+      optionStatuses: ["paused"],
+    })
+    const staticRows = paused.rows()
+    clock.mockReturnValue(160)
+    expect(paused.rows()).toEqual(staticRows)
+  } finally {
+    clock.mockRestore()
+  }
 })
 
 test("select highlights its initial option, and Enter keeps it", () => {

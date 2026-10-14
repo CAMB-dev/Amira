@@ -23,6 +23,7 @@ function setup(mode: "inline" | "fullscreen") {
     write(data)
     screen.write(data)
   }
+  const spinner = new Spinner()
   const view = (mode === "inline" ? createInlineView : createFullscreenView)({
     terminal,
     theme: plain.theme,
@@ -32,7 +33,7 @@ function setup(mode: "inline" | "fullscreen") {
     hyperlinks: false,
     renders: new ReplyRenderers(undefined),
     keys: new Keybindings(defaultKeys({ vscode: false })),
-    spinner: new Spinner(),
+    spinner,
     sessionId: () => "main",
     detail: () => "summary",
     bottom: (width, ctx, _budget, top) => [...(top?.render(width, ctx) ?? []), "input"],
@@ -61,7 +62,7 @@ function setup(mode: "inline" | "fullscreen") {
       parent,
     )
   view.start()
-  return { view, screen, event, start, text: () => screen.lines.join("\n") }
+  return { view, screen, event, start, spinner, text: () => screen.lines.join("\n") }
 }
 
 function guides(ascii: boolean) {
@@ -93,9 +94,9 @@ for (const ascii of [false, true]) {
         const first = rows.findIndex((row) => row.includes("First task · explorer"))
         const last = rows.findIndex((row) => row.includes("Last task · explorer"))
         expect(rows[first - 1]).toStartWith(`${g.branch}${g.gap}⠋ `)
-        expect(rows[first]).toBe(`${g.first}${g.last}${g.gap}⠋ First task · explorer · 0s · 0 tok`)
+        expect(rows[first]).toBe(`${g.first}${g.last}${g.gap}⠋ working First task · explorer · 0s · 0 tok`)
         expect(rows[last - 1]).toStartWith(`${g.last}${g.gap}⠋ `)
-        expect(rows[last]).toBe(`${g.final}${g.last}${g.gap}⠋ Last task · explorer · 0s · 0 tok`)
+        expect(rows[last]).toBe(`${g.final}${g.last}${g.gap}⠋ working Last task · explorer · 0s · 0 tok`)
         expect(rows[last + 1]).toBe(`${g.activity}${g.last}${g.gap}⠋ bash ls src`)
         expect(text()).toContain("Restored prompt")
         // /agents temporarily covers the transcript; restoring it uses the same group routes.
@@ -103,8 +104,8 @@ for (const ascii of [false, true]) {
         view.renderOverlay()
         view.closeOverlay()
         view.render()
-        expect(text()).toContain(`${g.first}${g.last}${g.gap}⠋ First task`)
-        expect(text()).toContain(`${g.final}${g.last}${g.gap}⠋ Last task`)
+        expect(text()).toContain(`${g.first}${g.last}${g.gap}⠋ working First task`)
+        expect(text()).toContain(`${g.final}${g.last}${g.gap}⠋ working Last task`)
       } finally {
         view.stop()
         setGlyphs()
@@ -125,10 +126,10 @@ for (const ascii of [false, true]) {
       view.stop()
       const g = guides(ascii)
       expect(screen.mainText).toContain(
-        `${g.branch}${g.gap}⠋ started by a command · in the background\n${g.first}${g.last}${g.gap}⠋ First task`,
+        `${g.branch}${g.gap}⠋ started by a command · in the background\n${g.first}${g.last}${g.gap}⠋ working First task`,
       )
       expect(screen.mainText).toContain(
-        `${g.last}${g.gap}⠋ started by a command · in the background\n${g.final}${g.last}${g.gap}⠋ Last task`,
+        `${g.last}${g.gap}⠋ started by a command · in the background\n${g.final}${g.last}${g.gap}⠋ working Last task`,
       )
       expect(screen.mainText).toContain("Restored prompt")
     } finally {
@@ -170,14 +171,79 @@ for (const mode of ["inline", "fullscreen"] as const) {
           queued: false,
         })
       view.render()
-      expect(text()).toMatch(/^└ ⠋ in the background\n {2}└ ⠋ workflow demo · Explore · 0\/2 agents$/m)
+      expect(text()).toMatch(
+        /^└ ⠋ in the background\n {2}└ ⠋ workflow demo · 2 working · 0 tok · Explore · 0\/2 agents$/m,
+      )
       expect(text().match(/workflow demo/g)).toHaveLength(1)
+      group.agents = { total: 2, working: 0, queued: 0, idle: 2, ended: 0 }
+      group.status = "Waiting"
+      event("group.update", { group })
+      for (const childSessionId of ["one", "two"])
+        event("subagent.state", { childSessionId, state: "idle", turns: 1 })
+      view.render()
+      expect(text()).toContain("└ ○ in the background")
+      expect(text()).toContain("2 idle")
     } finally {
       view.stop()
       clock.mockRestore()
     }
   })
 }
+
+test("fullscreen: compact failed and idle-only groups never acquire successful root marks", () => {
+  const { view, event, text } = setup("fullscreen")
+  const group: SpawnGroupInfo = {
+    id: "workflow",
+    name: "workflow",
+    parentSessionId: "main",
+    state: "active",
+    limits: {},
+    compact: true,
+    usage: emptyUsage(),
+    tokens: 0,
+    agents: { total: 1, working: 1, queued: 0, idle: 0, ended: 0 },
+    outcomes: { done: 0, failed: 0, stopped: 0 },
+  }
+  try {
+    event("group.start", { group })
+    event("subagent.start", {
+      childSessionId: "member",
+      groupId: group.id,
+      prompt: "work",
+      title: "member",
+      model: { provider: "mock", model: "m1" },
+      depth: 1,
+      cwd: "/work",
+      context: "fresh",
+      queued: false,
+    })
+    event("subagent.state", { childSessionId: "member", state: "idle", turns: 1 })
+    const idle = { ...group, agents: { ...group.agents, working: 0, idle: 1 } }
+    event("group.update", { group: idle })
+    view.render()
+    expect(text()).toMatch(/^└ ○ in the background\n {2}└ ○ workflow · 1 idle · 0 tok$/m)
+    event("subagent.end", {
+      childSessionId: "member",
+      status: "error",
+      error: "failed child",
+      usage: emptyUsage(),
+      durationMs: 1,
+    })
+    event("group.end", {
+      group: {
+        ...group,
+        state: "ended",
+        agents: { ...group.agents, working: 0, ended: 1 },
+        outcomes: { done: 0, failed: 1, stopped: 0 },
+      },
+    })
+    view.render()
+    expect(text()).toMatch(/^└ ✗ in the background\n {2}└ ✗ workflow · 1 failed · 0 tok$/m)
+    expect(text()).not.toContain("1/1 done")
+  } finally {
+    view.stop()
+  }
+})
 
 test("fullscreen: adding a sibling invalidates a finished group's cached arm and continuation", () => {
   const clock = spyOn(Date, "now").mockReturnValue(at)
@@ -194,16 +260,40 @@ test("fullscreen: adding a sibling invalidates a finished group's cached arm and
     view.render()
     start("Last task")
     view.render()
-    expect(text()).toContain("├ ✓ started by a command · in the background\n│ └ ✓ First task")
+    expect(text()).toContain("├ ✓ started by a command · in the background\n│ └ ✓ done    First task")
     view.replyDelta("A reply ends the tree.")
     view.replyEnd([])
     view.render()
-    expect(text()).toContain("  └ ⠋ Last task")
+    expect(text()).toContain("  └ ⠋ working Last task")
   } finally {
     view.stop()
     clock.mockRestore()
   }
 })
+
+for (const mode of ["inline", "fullscreen"] as const) {
+  test(`${mode}: background working badges animate without a parent turn timer`, async () => {
+    const { view, start, event, spinner, text } = setup(mode)
+    try {
+      expect(spinner.running).toBe(false)
+      start("Background task")
+      view.render()
+      expect(text()).toContain("⠋ working Background task")
+      await Bun.sleep(Spinner.INTERVAL_MS * 2)
+      view.render()
+      expect(spinner.glyph).not.toBe("⠋")
+      expect(text()).toContain(`${spinner.glyph} working Background task`)
+      for (const state of ["paused", "queued", "idle"] as const) {
+        event("subagent.state", { childSessionId: "Background task", state, turns: 1 })
+        const frame = spinner.glyph
+        await Bun.sleep(Spinner.INTERVAL_MS * 2)
+        expect(spinner.glyph).toBe(frame)
+      }
+    } finally {
+      view.stop()
+    }
+  })
+}
 
 test("group rails use gray and reserve their full width before clipping children", () => {
   const env: BlockEnv = {

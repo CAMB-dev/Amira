@@ -13,6 +13,7 @@ import {
   type SubagentInfo,
   textResult,
   type UiRequest,
+  type ViewDefinition,
 } from "@amira/api"
 import {
   createAi,
@@ -31,6 +32,8 @@ import {
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
 import { runCommand } from "../../../packages/proc/src/index.ts"
+import { ExtensionViewer } from "../../../packages/tui/src/extension-view.ts"
+import { monoTheme, stripAnsi } from "../../../packages/tui-kit/src/index.ts"
 import {
   createAgentExtension,
   createWorktree,
@@ -45,6 +48,7 @@ import {
   subagentSummary,
   transcriptText,
 } from "../src/index.ts"
+import { subagentView } from "../src/subagent-view.ts"
 
 const dirs: string[] = []
 const savedHome = process.env.AMIRA_HOME
@@ -112,11 +116,12 @@ async function setup(
     stopSubagent: (id: string) =>
       listSubagents(root, tree).some((e) => e.info.id === id) && tree.stop(id, "stopped by the user"),
   } as Partial<SessionControl> as SessionControl
+  host.setSessionControl(control, () => root)
   const commands = new CommandHost({ registry: host.commands, bus, ui: host.ui, control, agent: root })
   const views: FrontendView[] = []
   /** Whether the frontend can show the view now (a form may hold the screen). */
   const screen = { free: true }
-  const run = async (line: string, frontend: "tui" | "rpc" = "tui") => {
+  const run = async (line: string, frontend: "tui" | "rpc" | "print" = "tui") => {
     const r = await commands.run(line, {
       frontend,
       ...(frontend === "tui" ? { openView: (v: FrontendView) => screen.free && views.push(v) > 0 } : {}),
@@ -125,6 +130,78 @@ async function setup(
   }
   return { root, tree, tools, bus, events, host, commands, control, run, views, screen, home }
 }
+
+test.each(["maxTurns", "graceful stop"] as const)(
+  "persistent %s displays stopped in live picker, plain output and details without changing done lifecycle",
+  async (ending) => {
+    let finish!: () => void
+    const until = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const { root, tree, run, host, bus, control } = await setup(() => ({
+      text: "finished work",
+      hold: { chunks: 0, until },
+    }))
+    let definition!: ViewDefinition<{ sessionId: string }>
+    await host.load((api) => {
+      definition = subagentView(api)
+    }, "test:details")
+    const child = tree.spawn(root, {
+      prompt: "work",
+      persistent: true,
+      ...(ending === "maxTurns" ? { maxTurns: 1 } : {}),
+    })
+    while (child.state !== "working") await Bun.sleep(1)
+    const picking = run("/agents")
+    while (!host.ui.pending.length) await Bun.sleep(1)
+    const request = host.ui.pending[0]!
+    const options = request.kind === "select" ? [...request.options] : []
+    expect(request).toMatchObject({ optionStatuses: ["working"] })
+    try {
+      if (ending === "graceful stop") child.stop("commander requested a stop")
+      finish()
+      const result = await child.result()
+      const note = ending === "maxTurns" ? "reached its limit of 1 turn" : "commander requested a stop"
+      expect(result.status).toBe("done")
+      expect(result.note).toBe(note)
+      await bus.flush()
+      const info = control.subagents()[0]!
+      expect(info).toMatchObject({ status: "done", note: result.note })
+      const updated = host.ui.pending[0]!
+      const plain = (await run("/agents", "print")).text
+      const printed = (await run("/agents 1", "rpc")).text
+      const alreadyEnded = (await run("/agents stop 1", "rpc")).text
+      const viewer = new ExtensionViewer(definition, { sessionId: child.id })
+      const details = viewer
+        .render(100, { theme: monoTheme, color: false, rows: 30 })
+        .map(stripAnsi)
+        .join("\n")
+      expect(plain).toContain("‖ stopped")
+      expect(printed).toContain("‖ stopped")
+      expect(printed).toContain(note)
+      expect(alreadyEnded).toContain("already ended (stopped)")
+      expect(details).toContain("‖ stopped")
+      expect(details).toContain(`stopped: ${result.note}`)
+      expect(details).not.toContain("── done ──")
+      expect(updated).toMatchObject({ requestId: request.requestId, optionStatuses: ["stopped"] })
+      expect(updated.kind === "select" ? updated.options : []).toEqual(options)
+      host.ui.respond(updated.requestId, options[0]!)
+      expect((await picking).ok).toBe(true)
+      const reopened = run("/agents")
+      while (!host.ui.pending.length) await Bun.sleep(1)
+      expect(host.ui.pending[0]).toMatchObject({ optionStatuses: ["stopped"] })
+      host.ui.cancel(host.ui.pending[0]!.requestId)
+      await reopened
+    } finally {
+      host.ui.cancel(request.requestId)
+      finish()
+      tree.stop(child.id, "test cleanup")
+      await picking
+      await child.result()
+      host.unload("test:details")
+    }
+  },
+)
 
 /** The commander starts a coder that reads a file and starts an explorer of its own. */
 function nested(req: ModelRequest): MockReply {
@@ -162,16 +239,130 @@ function nested(req: ModelRequest): MockReply {
   return { text: "Used in b.ts." }
 }
 
+test.each([
+  ["done", "done"],
+  ["error", "failed"],
+  ["aborted", "stopped"],
+  ["paused", "paused"],
+  ["idle", "idle"],
+] as const)("an open /agents picker follows working -> %s through the host API", async (status, badge) => {
+  let finish!: () => void
+  const until = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  const { root, tree, run, host, bus, control } = await setup(() =>
+    status === "error"
+      ? { error: { message: "failed on purpose" }, delayMs: 100 }
+      : { text: "finished", hold: { chunks: 0, until }, usage: { input: 1234, output: 12 } },
+  )
+  const child = tree.spawn(root, { prompt: "work", persistent: status === "idle" })
+  while (child.state !== "working") await Bun.sleep(1)
+  const picking = run("/agents")
+  const deadline = Date.now() + 1000
+  while (!host.ui.pending.length && Date.now() < deadline) await Bun.sleep(1)
+  if (!host.ui.pending.length) throw new Error(`picker missing: ${JSON.stringify(await picking)}`)
+  const request = host.ui.pending[0]!
+  expect(request).toMatchObject({ kind: "select", optionStatuses: ["working"] })
+  const options = request.kind === "select" ? [...request.options] : []
+  try {
+    if (status === "paused") tree.pause(child.id)
+    else if (status === "aborted") {
+      tree.stop(child.id, "stopped by the user")
+      finish()
+    } else if (status !== "error") finish()
+    if (status === "idle" || status === "paused") {
+      const deadline = Date.now() + 1000
+      while (control.subagents()[0]?.status !== status && Date.now() < deadline) await Bun.sleep(1)
+      expect(control.subagents()[0]?.status).toBe(status)
+    } else await child.result()
+    await bus.flush()
+    const updated = host.ui.pending[0]!
+    expect(updated).toMatchObject({ requestId: request.requestId, optionStatuses: [badge] })
+    expect(updated.kind === "select" ? updated.options : []).toEqual(options)
+    if (status === "done" || status === "idle") {
+      expect(updated.kind === "select" ? updated.optionLabels?.[0] : "").toContain("1.2k tok")
+      expect(options[0]).toContain("0 tok")
+    }
+    host.ui.respond(updated.requestId, options[0]!)
+    expect((await picking).ok).toBe(true)
+  } finally {
+    host.ui.cancel(request.requestId)
+    tree.stop(child.id, "test cleanup")
+    finish()
+    await picking
+    await child.result()
+  }
+})
+
+test("an open /agents picker follows a working persistent agent back to queued", async () => {
+  let finishFirst!: () => void
+  let finishBlocker!: () => void
+  const firstGate = new Promise<void>((resolve) => {
+    finishFirst = resolve
+  })
+  const blockerGate = new Promise<void>((resolve) => {
+    finishBlocker = resolve
+  })
+  const { root, tree, run, host, bus } = await setup((req) => ({
+    text: "finished",
+    hold: {
+      chunks: 0,
+      until:
+        req.messages[0]?.content[0]?.type === "text" && req.messages[0].content[0].text === "blocker"
+          ? blockerGate
+          : firstGate,
+    },
+  }))
+  const group = tree.createGroup(root, { name: "One at a time", maxConcurrent: 1 })
+  const child = group.spawn({ prompt: "first", persistent: true })
+  const picking = run("/agents")
+  while (!host.ui.pending.length) await Bun.sleep(1)
+  const request = host.ui.pending[0]!
+  expect(request).toMatchObject({ optionStatuses: ["working"] })
+  const options = request.kind === "select" ? [...request.options] : []
+  let blocker: ReturnType<typeof group.spawn> | undefined
+  try {
+    finishFirst()
+    while (child.state !== "idle") await Bun.sleep(1)
+    blocker = group.spawn({ prompt: "blocker" })
+    while (blocker.state !== "working") await Bun.sleep(1)
+    child.send("another turn")
+    while (tree.subagent(child.id)?.info.status !== "queued") await Bun.sleep(1)
+    await bus.flush()
+    const updated = host.ui.pending[0]!
+    expect(updated).toMatchObject({ requestId: request.requestId, optionStatuses: ["queued"] })
+    expect(updated.kind === "select" ? updated.options : []).toEqual(options)
+    host.ui.respond(updated.requestId, options[0]!)
+    expect((await picking).ok).toBe(true)
+  } finally {
+    host.ui.cancel(request.requestId)
+    tree.stop(child.id, "test cleanup")
+    if (blocker) tree.stop(blocker.id, "test cleanup")
+    finishFirst()
+    finishBlocker()
+    await picking
+    await child.result()
+    await blocker?.result()
+  }
+})
+
 test("/agents stop all still stops paused children", async () => {
-  const { root, tree, run } = await setup(() => ({ text: "done", delayMs: 100 }))
+  const { root, tree, run, host } = await setup(() => ({ text: "done", delayMs: 100 }))
   const child = tree.spawn(root, { prompt: "work" })
   while (child.state !== "working") await Bun.sleep(1)
   expect(tree.pause(child.id)).toBe(true)
   try {
     const { text } = await run("/agents 1")
-    expect(text.split("\n")[0]).toContain(" · paused · ")
+    expect(text.split("\n")[0]).toContain("◆ ‖ paused ")
     expect(text).not.toContain("… paused")
     expect(text).not.toContain("… still running")
+    const picking = run("/agents")
+    while (!host.ui.pending.length) await Bun.sleep(1)
+    const request = host.ui.pending[0]!
+    expect(request).toMatchObject({ kind: "select", optionStatuses: ["paused"] })
+    expect(request.kind === "select" ? request.options[0] : "").not.toContain("paused")
+    host.ui.cancel(request.requestId)
+    expect((await picking).ok).toBe(true)
   } finally {
     expect((await run("/agents stop all")).ok).toBe(true)
     expect((await child.result()).status).toBe("aborted")
@@ -188,15 +379,16 @@ test("/agents lists the sub-agents; where the frontend has no live view, it prin
   const options = request.kind === "select" ? request.options : []
   // Numbered like /agents <n>, and in that position, so a digit in the dialog picks the same one.
   expect(options[0]).toMatch(
-    /^1\. Fix the bug · coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
+    /^1\. Fix the bug · coder · s_\w+ · \d+s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
   )
-  expect(options[1]).toMatch(/^2\. {3}Find its uses · explorer · s_\w+ · done · /)
+  expect(options[1]).toMatch(/^2\. {3}Find its uses · explorer · s_\w+ · /)
   expect(options).toHaveLength(2)
+  expect(request).toMatchObject({ optionStatuses: ["done", "done"] })
   host.ui.respond(request.requestId, options[0]!)
   const { text, ok } = await picking
   expect(ok).toBe(true)
   const lines = text.split("\n")
-  expect(lines[0]).toMatch(/^◆ Fix the bug · coder · s_\w+ · done · \d+s · 1\.2k tok · \$0\.0021$/)
+  expect(lines[0]).toMatch(/^◆ ✓ done Fix the bug · coder · s_\w+ · \d+s · 1\.2k tok · \$0\.0021$/)
   expect(lines.slice(1)).toEqual([
     "  › fix the bug",
     "    in a.ts",
@@ -207,7 +399,7 @@ test("/agents lists the sub-agents; where the frontend has no live view, it prin
     "",
     expect.stringMatching(/^ {2}└ agent {2}✓ ## Find its uses · explorer · s_\w+ · done/),
     expect.stringMatching(
-      /^ {5}◆ Find its uses · explorer · s_\w+ · done · \d+s · 0 tok · where is it used$/,
+      /^ {5}◆ ✓ done Find its uses · explorer · s_\w+ · \d+s · 0 tok · where is it used$/,
     ),
     "",
     "  Fixed the bug.",
@@ -293,7 +485,7 @@ test("a running sub-agent shows its transcript so far", async () => {
   }
   const { text } = await run("/agents 1")
   expect(text.split("\n")).toEqual([
-    expect.stringMatching(/^◆ Do look · agent · s_\w+ · running · \d+s · 0 tok$/),
+    expect.stringMatching(/^◆ ⠋ working Do look · agent · s_\w+ · \d+s · 0 tok$/),
     "  › look",
     "",
     "  Checking.",
@@ -327,7 +519,7 @@ test("the argument completes to ids, numbers as themselves, and to view <ref> af
   const [coder, explorer] = control.subagents()
   const all = await commands.complete("/agents ")
   expect(all.candidates.map((c) => c.value)).toEqual([coder!.id, explorer!.id, "view", "worktrees"])
-  expect(all.candidates[0]!.description).toMatch(/^1\. Fix the bug · coder · /)
+  expect(all.candidates[0]!.description).toMatch(/^1\. ✓ done {4}Fix the bug · coder · /)
   // A typed number stays a number (the popup keeps an exact match), rather than an id with that digit.
   expect((await commands.complete("/agents 2")).candidates.map((c) => c.value)).toEqual(["2"])
   // Nothing after view yet: no candidates, so Enter runs /agents view on the default one.
@@ -526,6 +718,7 @@ test("with sub-agents too, the kept worktrees follow them under a heading of the
   const r = host.ui.pending[0]!
   expect(r).toMatchObject({
     title: "Sub-agents",
+    optionStatuses: ["done", "done", undefined],
     sections: [
       { at: 0, choose: "open", keys: [{ key: "p", label: "print" }] },
       { at: 2, title: "Worktrees kept with their changes", choose: "review" },
@@ -621,6 +814,45 @@ test("plain transcripts group visible tools, keep outcomes inline and start at t
   ).toEqual(["  ├ web_search  ⊘ did not finish", "  └ wait  ⊘ no result"])
 })
 
+test("plain summaries and transcript headings use static badges before titles and preserve details", () => {
+  const info: SubagentInfo = {
+    id: "s_badges",
+    parentSessionId: "p",
+    depth: 1,
+    role: "coder",
+    title: "Fix parser",
+    task: "repair it",
+    status: "done",
+    durationMs: 12_000,
+    usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0.0012 },
+  }
+  for (const [status, badge] of [
+    ["queued", "· queued"],
+    ["running", "⠋ working"],
+    ["idle", "○ idle"],
+    ["paused", "‖ paused"],
+    ["done", "✓ done"],
+    ["error", "✗ failed"],
+    ["aborted", "‖ stopped"],
+  ] as const) {
+    const agent = { ...info, status }
+    const details = `Fix parser · coder · s_badges${status === "queued" ? "" : " · 12s"} · 120 tok · $0.0012`
+    expect(subagentSummary(agent, 0)).toBe(`${badge} ${details} · repair it`)
+    expect(transcriptText(agent, [], [], 0).split("\n")[0]).toBe(`◆ ${badge} ${details}`)
+  }
+})
+
+test("/agents print mode keeps numbering and static badges without opening a select", async () => {
+  const { root, commands, host } = await setup(nested)
+  await root.prompt("go")
+  const result = await commands.run("/agents", { frontend: "print" })
+  expect(result.ok).toBe(true)
+  const lines = result.output.join("\n").split("\n")
+  expect(lines[0]).toMatch(/^1\. ✓ done {4}Fix the bug · coder · s_\w+ · \d+s · 1\.2k tok · \$0\.0021 · /)
+  expect(lines[1]).toMatch(/^2\. {3}✓ done {4}Find its uses · explorer · s_\w+ · /)
+  expect(host.ui.pending).toEqual([])
+})
+
 test("findSubagent takes a number, an id or a unique start of one", () => {
   const info = (id: string) => ({
     id,
@@ -646,6 +878,6 @@ test("findSubagent takes a number, an id or a unique start of one", () => {
   expect(transcriptText(list[0]!, [], list).split("\n").slice(1)).toEqual(["  › (no task)", "", "(no reply)"])
   // One that never started has no time to show.
   expect(subagentSummary({ ...list[0]!, status: "aborted" }, 0)).toBe(
-    "Look around · agent · s_aa11 · stopped · 0 tok · ",
+    "‖ stopped Look around · agent · s_aa11 · 0 tok · ",
   )
 })

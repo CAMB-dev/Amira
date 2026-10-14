@@ -44,6 +44,8 @@ export interface BottomAreaDeps {
   activity: () => TurnActivity
   /** The activity row survived the final bottom-aligned viewport budget. */
   activityVisible?: (visible: boolean, ctx: RenderContext) => void
+  /** Command activity survived the same final viewport budget. */
+  commandVisible?: (visible: boolean) => void
   themePreview?: () => boolean
   view: () => Pick<TranscriptView, "runningTools" | "capturing">
   noticeStrip: () => NoticeStrip
@@ -124,6 +126,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let panelRoom = Number.POSITIVE_INFINITY
   /** Command activity gives way on short screens rather than pushing the caret offscreen. */
   let commandRoom = true
+  let commandRows: string[] = []
   /** Rows the last frame's panels took. */
   let panelRows = 0
   /** The most rows the list below the input had since it opened (full screen keeps them). */
@@ -211,13 +214,15 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       return activityRows
     }),
     // Commands have their own clock, including index loads and reloads outside a turn.
-    new View((width, ctx) =>
-      deps.dialogs().length || !commandRoom
-        ? []
-        : deps
-            .commandActivity()
-            .render(width, ctx, deps.dock?.() ? `${keyLabel({ name: "escape" })} close dock` : undefined),
-    ),
+    new View((width, ctx) => {
+      commandRows =
+        deps.dialogs().length || !commandRoom
+          ? []
+          : deps
+              .commandActivity()
+              .render(width, ctx, deps.dock?.() ? `${keyLabel({ name: "escape" })} close dock` : undefined)
+      return commandRows
+    }),
     // A live dock is immediately above the input; selectable content can take keyboard focus.
     dock,
     // Both composer and dialog keep their borders intact, with shared-edge status below.
@@ -342,6 +347,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         ? [...rest.slice(Math.max(0, interactiveStart - prefixRoom), interactiveStart), ...essential]
         : []
     deps.activityVisible?.(budget > 0 && activityRows.some((row) => visible.includes(row)), ctx)
+    deps.commandVisible?.(budget > 0 && commandRows.some((row) => visible.includes(row)))
     return visible
   }
 

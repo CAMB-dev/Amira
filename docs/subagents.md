@@ -68,6 +68,22 @@ References can be a 1-based list number, full ID or unique ID prefix. Rows show 
 
 The viewer updates as the child works. ←/→ or Tab/Shift+Tab switch children. The view declares `needsTab: true`, so F6 (`view.focus`, default keys `["f6", "ctrl+tab"]`) switches focus between the viewer and the composer, including in inline mode's fullscreen overlay, while Tab/Shift+Tab keep switching children. Ctrl+Tab is an alias where delivered; Windows Terminal may intercept it and legacy terminals may report it as plain Tab, so prefer F6, except that VS Code needs the configuration described in the linked keybindings docs. The default focus hints show `f6→input/view`, not Ctrl+Tab. See [Extension views](keybindings.md#extension-views) for the other focus controls. `p` prints the displayed transcript, `x` asks to stop the displayed child and `y` confirms; another key cancels that stop. Esc, `q` or Ctrl+C closes the viewer. It also displays a reminder when a main-session dialog waits behind it. The viewer is available from either terminal mode; inline mode temporarily uses the alternate screen.
 
+### Status badge legend
+
+Agent status badges use the current theme's glyphs, with ASCII alternatives when needed. Working badges share the host's spinner timing and redraws; extensions do not need their own animation timers.
+
+| Badge state | Meaning | Style |
+| --- | --- | --- |
+| `queued` | Waiting for a working slot | Dim |
+| `working` | Running a turn | Accent, animated spinner |
+| `idle` | Persistent child waiting for another message | Muted |
+| `paused` | Held before the next model call | Warning |
+| `done` | Finished successfully | Success |
+| `failed` | Ended with an error | Error |
+| `stopped` | Stopped before completion | Warning |
+
+These are display states, not changes to the lifecycle contract. Use `agentStatusState(info)` from `@amira/api` with the complete info/result: `done` plus a defined early-end note (including an empty note, graceful stop or turn limit) displays as `stopped`. Paused members keep their admission slots but are counted separately from working members. Collapsed trees and compact groups show actual state/outcome counts, and inline terminal group summaries remain after the last member leaves. Extensions can use the optional host-provided `statusBadge` helper to render the same badges (see [Extensions](extensions.md#fullscreen-and-docked-views)).
+
 ## Worktrees and merging
 
 Ask the agent to use `isolation: "worktree"` for an implementation task, or give its role `isolation: worktree`. Amira creates a detached Git worktree from the parent's current tracked files, including uncommitted tracked changes. **Untracked files are not copied.** If worktree creation fails, including outside a Git repository or before its first commit, the task falls back to the shared directory and reports that fact.

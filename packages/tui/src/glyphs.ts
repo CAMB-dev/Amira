@@ -8,6 +8,8 @@
  * `textWidth` (rows hanging under a warning start a cell further in) rather than assuming one
  * cell. A test checks both.
  */
+import { DEFAULT_THEME_GLYPHS } from "@amira/api"
+
 const defaults = {
   /** In front of the user's messages and echoed commands. */
   user: "›",
@@ -42,6 +44,13 @@ const defaults = {
   subagentDone: "✓",
   subagentFailed: "✗",
   subagentAborted: "⊘",
+  statusQueued: DEFAULT_THEME_GLYPHS.statusQueued,
+  statusWorking: DEFAULT_THEME_GLYPHS.statusWorking,
+  statusIdle: DEFAULT_THEME_GLYPHS.statusIdle,
+  statusPaused: DEFAULT_THEME_GLYPHS.statusPaused,
+  statusDone: DEFAULT_THEME_GLYPHS.statusDone,
+  statusFailed: DEFAULT_THEME_GLYPHS.statusFailed,
+  statusStopped: DEFAULT_THEME_GLYPHS.statusStopped,
   /** What the model thought before it answered. */
   thought: "∴",
   /**
@@ -100,7 +109,15 @@ export const glyphs: Glyphs = { ...defaults }
 /** Definitions are validated by the core registry; absent keys always reset to the defaults. */
 export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
   for (const key of Object.keys(defaults) as (keyof Glyphs)[]) {
-    const value = overrides[key] ?? defaults[key]
+    const legacy =
+      key === "statusDone"
+        ? overrides.subagentDone
+        : key === "statusFailed"
+          ? overrides.subagentFailed
+          : key === "statusStopped"
+            ? overrides.subagentAborted
+            : undefined
+    const value = overrides[key] ?? legacy ?? defaults[key]
     // Legacy API cursor overrides follow the current product cursor without changing the public table.
     glyphs[key] = (key === "choice" || key === "pointer") && value === "❯" ? "›" : value
   }

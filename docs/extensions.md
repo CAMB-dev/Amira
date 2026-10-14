@@ -345,10 +345,52 @@ marker. The frontend truncates either form to the available title space.
 
 - `{ kind: "segments", parts: ViewSegment[] }` combines styled text into one line,
   truncated by the frontend rather than wrapped. The exported `ViewSegment` type is
-  `{ text: string, kind: "text" | "muted" | "accent" | "success" | "warning" | "error" }`.
+  `{ text: string, kind: "text" | "dim" | "muted" | "accent" | "success" | "warning" | "error" }`.
 - `{ kind: "user-message", text: string, note?: string }` renders like a transcript user
   message, including wrapping, background and spacing. Supply only the message text; do
   not add a `›` marker yourself. An optional note appears below it, inside the same band.
+
+`ViewRenderOptions.statusBadge?(state: AgentStatusState, options?: { pad?: boolean }): ViewSegment[]` is a host-provided helper for agent status badges. `UiContext` inherits it through `ViewRenderOptions`, so it is also available in declarative views. The exported `AgentStatusState` type from `@amira/api` accepts `queued`, `working`, `idle`, `paused`, `done`, `failed` and `stopped`. The host handles theme glyphs and ASCII alternatives, plus shared spinner timing and redraws. Styles are dim for queued, accent for working, muted for idle, success for done, error for failed, and warning for stopped or paused (see the [status badge legend](subagents.md#status-badge-legend)).
+
+Insert the returned segments directly into a semantic line, for example in a view title:
+
+```ts
+import type { ViewLine, ViewRenderOptions, ViewSegment } from "@amira/api"
+
+function taskTitle(opts: ViewRenderOptions): ViewLine {
+  const fallback: ViewSegment[] = [{ kind: "accent", text: "working" }]
+  return {
+    kind: "segments",
+    parts: [
+      ...(opts.statusBadge?.("working", { pad: true }) ?? fallback),
+      { kind: "text", text: " Task" },
+    ],
+  }
+}
+```
+
+`AGENT_STATUS_BADGES` is the exported display table, keyed by `AgentStatusState`. Each entry has `{ symbol, ascii, role, label }`: the default Unicode symbol, ASCII fallback, semantic theme role, and explicit state word. For example, `AGENT_STATUS_BADGES.stopped` is `{ symbol: "‖", ascii: "|", role: "warning", label: "stopped" }`. Rendering through the host helper additionally respects theme overrides and animation. `{ pad: true }` pads the label to seven cells so task names line up; the default is unpadded.
+
+Pass the complete info/result to `agentStatusState(agent)`, not just `agent.status`, so early-end notes are retained. Its exported `AgentStatusSource` type also accepts legacy state strings and transcript nodes. The shared mapper interprets `done` plus any defined early-end `note` (including an empty string) as `stopped`, and an active user pause as `paused`, never `working`; it does not change lifecycle result contracts. For aligned extension rows, call `opts.statusBadge?.(agentStatusState(agent), { pad: true })`. Named imports of the mapper or table require a host build that exports them. The optional helper only protects calls on frontends where it is absent; it does not make missing named imports compatible. Extensions supporting older host builds should use a namespace import and feature detection, as below. `API_VERSION` is unchanged and cannot identify these capabilities; versioning is handled separately by the maintainer.
+
+```ts
+import * as amira from "@amira/api"
+
+function displayState(status: amira.SubagentState, note?: string, paused = false) {
+  if (typeof amira.agentStatusState === "function") {
+    try {
+      if (amira.agentStatusState({ status: "done", note: "" }) === "stopped")
+        return amira.agentStatusState({ status, note, paused })
+    } catch {} // An older host may accept only strings.
+  }
+  if (status === "done" && note !== undefined) return "stopped"
+  if (status === "running" && paused) return "paused"
+  if (typeof amira.agentStatusState === "function") return amira.agentStatusState(status)
+  return status === "running" ? "working" : status === "error" ? "failed" : status === "aborted" ? "stopped" : status
+}
+```
+
+`ctx.ui.choose()` also accepts `optionStatuses?: (AgentStatusState | undefined)[]`, aligned with its options; the host prefixes those options with the same badge without changing their answer strings. For lifecycle updates while a picker remains open, pass a host-only `live()` callback returning `{ optionLabels?, optionStatuses?, descriptions? }`. These presentation arrays follow the original option order; `optionLabels` are display text, while the original `options` remain stable answer identities. The host publishes changed presentation as `ui.request` with the same `requestId`. Frontends and RPC clients must update the existing request in place, not open another picker or reset its selection/filter/scroll. The callback is not serialized and is unsubscribed when the request closes.
 
 Keys can be one printable character or `left`, `right`, `tab`, and `shift-tab`. Keys with
 the same label share one footer item (`←→ switch`); an empty label keeps a key, such as an
@@ -362,8 +404,14 @@ each id's scroll position and following state until the view closes. Without it,
 has one scroll state. `follow: false` starts each new id at its top.
 
 Read live snapshots through `api.session()` and subscribe to events with `api.on()`;
-call `api.requestRender()` when your state changes. The TUI also redraws open views every
-second for elapsed times. `header` and `render` receive the available width, current time
+call `api.requestRender()` when your state changes. Static views have no refresh timer.
+For time-dependent content, call `opts.requestRefresh?.(1000)` from the render callback
+(or `ctx.requestRefresh` in a declarative view) only while time can change the display.
+The shortest positive finite interval requested in a frame wins; demand resets each frame,
+and the timer stops when no refresh or animation is requested. Covered or zero-height docks
+suspend their demand until a visible render recomputes it. Static or clipped pickers and
+command rows do not keep a clock alive; visible transitions to working restart it. Working badges and running
+tools automatically request the shared spinner cadence. `header` and `render` receive the available width, current time
 and an optional `renderTool(toolName, call, detail)` callback. It uses the host's current
 tool presenter and fallback renderer; pass a `ToolCallView` and return the resulting lines
 unchanged to preserve the host's presentation. Other frontends may omit it, so provide a

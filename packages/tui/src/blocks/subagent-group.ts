@@ -1,7 +1,14 @@
 import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { glyphs } from "../glyphs.ts"
 import { markerPrefix } from "../grid.ts"
-import { backgroundLabel, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
+import {
+  backgroundLabel,
+  type SubagentNode,
+  subagentCounts,
+  subagentGroupMark,
+  subtree,
+  treeRows,
+} from "../subagents.ts"
 import { treeContinuation } from "../tool-view.ts"
 import { Block, type BlockEnv } from "./base.ts"
 
@@ -52,7 +59,8 @@ export class SubagentGroupBlock extends Block {
   lines(env: BlockEnv): string[] {
     const list = this.subagents(env)
     if (!list.length) return []
-    this.running = list.some(isActive)
+    const counts = subagentCounts(list, env.groups)
+    this.running = counts.working + counts.queued + counts.paused > 0
     const roots = this.roots.flatMap((id) => env.nodes.get(id) ?? [])
     const { theme, width } = env
     const arm = this.last ? glyphs.treeLast : glyphs.treeBranch
@@ -60,7 +68,8 @@ export class SubagentGroupBlock extends Block {
     const tree = theme.muted(arm + " ".repeat(cells - visibleWidth(arm)))
     const continuation = treeContinuation(theme, this.last)
     const treeWidth = Math.max(0, width - visibleWidth(continuation))
-    const head = `${markerPrefix(tree)}${this.running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(backgroundLabel(env.groups, roots))}`
+    const mark = subagentGroupMark(list, env.groups, theme, env.spinner)
+    const head = `${markerPrefix(tree)}${mark} ${theme.muted(backgroundLabel(env.groups, roots))}`
     return [
       truncateToWidth(head, width, glyphs.more),
       ...treeRows(list, env.now, treeWidth, theme, env.groups, true, env.spinner).map((row) =>

@@ -77,6 +77,8 @@ export interface ViewHost {
    * first. A dialog gets what the rest leaves of `budget` rows.
    */
   bottom(width: number, ctx: RenderContext, budget: number, top?: Component): string[]
+  /** Mandatory bottom rows reserved before optional inline tools; unset means no reservation. */
+  essentialBottomRows?(): number
   /** Fullscreen's fixed header; inline carries these facts in its bottom area. */
   header?(width: number, ctx: RenderContext): string[]
   /** The full-screen view open over the conversation: a form or the sub-agent viewer. */

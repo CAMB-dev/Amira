@@ -63,6 +63,19 @@ export type ThemePalette = Record<Exclude<ThemePaletteToken, "shimmer" | "shimme
   shimmerEnd?: ThemeHex
 }
 
+/** The display vocabulary shared by agent trees, pickers and extension views. */
+export const AGENT_STATUS_BADGES = {
+  queued: { symbol: "·", ascii: ".", role: "dim", label: "queued" },
+  working: { symbol: "⠋", ascii: "*", role: "accent", label: "working" },
+  idle: { symbol: "○", ascii: "o", role: "muted", label: "idle" },
+  paused: { symbol: "‖", ascii: "|", role: "warning", label: "paused" },
+  done: { symbol: "✓", ascii: "v", role: "success", label: "done" },
+  failed: { symbol: "✗", ascii: "x", role: "error", label: "failed" },
+  stopped: { symbol: "‖", ascii: "|", role: "warning", label: "stopped" },
+} as const
+
+export type AgentStatusState = keyof typeof AGENT_STATUS_BADGES
+
 /** Default symbols from both terminal glyph sets; overrides use these flat keys. */
 export const DEFAULT_THEME_GLYPHS = Object.freeze({
   bullets: ["•", "◦", "▪"],
@@ -100,6 +113,13 @@ export const DEFAULT_THEME_GLYPHS = Object.freeze({
   subagentDone: "✓",
   subagentFailed: "✗",
   subagentAborted: "⊘",
+  statusQueued: AGENT_STATUS_BADGES.queued.symbol,
+  statusWorking: AGENT_STATUS_BADGES.working.symbol,
+  statusIdle: AGENT_STATUS_BADGES.idle.symbol,
+  statusPaused: AGENT_STATUS_BADGES.paused.symbol,
+  statusDone: AGENT_STATUS_BADGES.done.symbol,
+  statusFailed: AGENT_STATUS_BADGES.failed.symbol,
+  statusStopped: AGENT_STATUS_BADGES.stopped.symbol,
   thought: "∴",
   question: "?",
   dialogBar: "┃",

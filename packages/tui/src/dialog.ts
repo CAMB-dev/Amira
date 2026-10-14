@@ -7,6 +7,7 @@ import {
   type InputEvent,
   LineInput,
   type RenderContext,
+  Spinner,
   type StyleFn,
   stripAnsi,
   type Theme,
@@ -19,6 +20,7 @@ import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
 import { type Action, defaultKeybindings, type Keybindings, keyLabel } from "./keybindings.ts"
+import { styledStatusBadge } from "./status-badge.ts"
 
 export type DialogRequest = Exclude<EventMap["ui.request"], { kind: "form" | "extension-settings" }>
 
@@ -105,6 +107,7 @@ interface Fit {
 export class Dialog implements Component {
   /** Rows the dialog may take; set by the app before each render. */
   maxRows = Number.POSITIVE_INFINITY
+  #request: DialogRequest
   #pages: Page[]
   #page = 0
   #filter = ""
@@ -115,9 +118,13 @@ export class Dialog implements Component {
   /** The free-text choice's field while it is open. */
   #field: LineInput | undefined
   #done = false
+  #spinner = new Spinner()
+  #spinnerFrame: number | undefined
+  #refreshIntervalMs: number | undefined
+  #animatedRows = new Set<string>()
 
   constructor(
-    readonly request: DialogRequest,
+    request: DialogRequest,
     private onDone: (answer: DialogAnswer) => void,
     private keys: Keybindings = defaultKeybindings(),
     private selection: {
@@ -128,6 +135,7 @@ export class Dialog implements Component {
       handleInput?: (event: InputEvent) => boolean
     } = {},
   ) {
+    this.#request = request
     this.#pages = pagesOf(request)
     if (request.kind === "select") this.#searchTexts = request.searchTexts?.map((s) => s.toLowerCase()) ?? []
     if (request.kind === "input" && request.secret) {
@@ -142,6 +150,37 @@ export class Dialog implements Component {
       })
       if (request.initial) this.#editor.setText(request.initial)
     }
+  }
+
+  get request(): DialogRequest {
+    return this.#request
+  }
+
+  /** Only working badges actually shown by the last frame request animation. */
+  get refreshIntervalMs(): number | undefined {
+    return this.#done ? undefined : this.#refreshIntervalMs
+  }
+
+  /** Refreshes presentation in place; fixed options keep selection, filtering and scroll intact. */
+  update(request: DialogRequest): boolean {
+    const current = this.request
+    if (
+      this.#done ||
+      current.kind !== "select" ||
+      request.kind !== "select" ||
+      current.requestId !== request.requestId ||
+      current.options.length !== request.options.length ||
+      current.options.some((option, i) => option !== request.options[i])
+    )
+      return false
+    this.#request = {
+      ...current,
+      optionLabels: request.optionLabels,
+      optionStatuses: request.optionStatuses,
+      descriptions: request.descriptions,
+    }
+    for (const c of this.#current.choices) c.description = request.descriptions?.[c.index ?? 0]
+    return true
   }
 
   handleInput(e: InputEvent): boolean {
@@ -221,12 +260,29 @@ export class Dialog implements Component {
 
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
+    this.#animatedRows.clear()
+    this.#refreshIntervalMs = undefined
+    if (this.request.kind === "select" && this.request.optionStatuses?.includes("working")) {
+      // Existing redraws drive the shared spinner cadence; static states never animate.
+      const frame = Math.floor(Date.now() / Spinner.INTERVAL_MS)
+      if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
+      this.#spinnerFrame = frame
+    }
     const border = barStyle(this.request, theme)
     const inner = Math.max(1, width - 3)
     const title = this.#titleRows(inner, theme)[0] ?? ""
     // Body producers include their two-cell gutter; the frame absorbs one into its side.
     const body =
       this.request.kind === "input" ? this.#renderInput(inner + 2, ctx) : this.#renderList(inner + 2, ctx)
+    // Match the frame's clipping, including the one-row fallback which shows only the hint.
+    const room = Math.max(0, this.maxRows - 2)
+    const kept =
+      width < 5 || this.maxRows < 4
+        ? [title, ...body].slice(-Math.max(1, this.maxRows))
+        : body.length <= room
+          ? body
+          : [...body.slice(0, room - 1), body.at(-1)!]
+    if (kept.some((row) => this.#animatedRows.has(row))) this.#refreshIntervalMs = Spinner.INTERVAL_MS
     return dialogFrame(title, body, width, ctx, border, this.maxRows)
   }
 
@@ -363,23 +419,35 @@ export class Dialog implements Component {
       const marker = selected ? theme.accent(glyphs.choice) : " "
       const digit = digits ? `${theme.muted(String(i + 1))} ` : ""
       const box = page.multi ? `${page.checked.has(i) ? glyphs.checked : glyphs.unchecked} ` : ""
+      const status =
+        this.request.kind === "select" && c.index !== undefined
+          ? this.request.optionStatuses?.[c.index]
+          : undefined
+      const badge = status ? `${styledStatusBadge(status, theme, this.#spinner.glyph, { pad: true })} ` : ""
       const lead = `${marker} ${digit}${box}`
       // An option numbered as its digit ("1. explorer", for frontends without digits) shows once.
-      const label = digits && c.label.startsWith(`${i + 1}. `) ? c.label.slice(`${i + 1}. `.length) : c.label
+      const display =
+        this.request.kind === "select" && c.index !== undefined
+          ? (this.request.optionLabels?.[c.index] ?? c.label)
+          : c.label
+      const label = digits && display.startsWith(`${i + 1}. `) ? display.slice(`${i + 1}. `.length) : display
       const typed = c.other && page.other ? `${label} ${theme.muted(JSON.stringify(page.other))}` : label
       const description = c.description?.replace(/\s+/g, " ").trim() ?? ""
-      return { c, selected, lead, typed, description }
+      return { c, selected, lead, badge, typed, description, status }
     })
     // Descriptions line up in a column after the labels when every one fits there; else each
     // goes under its label, unless the rows are too few for that.
     const described = items.filter((it) => it.description && !it.c.other)
-    const column = Math.max(0, ...described.map((it) => visibleWidth(it.lead) + visibleWidth(it.typed)))
+    const column = Math.max(
+      0,
+      ...described.map((it) => visibleWidth(it.lead) + visibleWidth(it.badge) + visibleWidth(it.typed)),
+    )
     const inline =
       fit.inlineDescriptions ||
       (!(this.request.kind === "select" && this.request.searchTexts) &&
         described.every((it) => column + 2 + visibleWidth(it.description) <= width))
     const rows: string[] = []
-    for (const { c, selected, lead, typed, description } of items) {
+    for (const { c, selected, lead, badge, typed, description, status } of items) {
       const heading = this.#heading(c)
       if (heading && fit.headings) rows.push(truncateToWidth(`  ${theme.muted(heading)}`, width, glyphs.more))
       const leadWidth = visibleWidth(lead)
@@ -391,7 +459,8 @@ export class Dialog implements Component {
         rows.push(`${lead}${field}`)
         continue
       }
-      const head = `${lead}${selected ? theme.accent(typed) : typed}`
+      const head = `${lead}${badge}${selected ? theme.accent(typed) : typed}`
+      const optionRow = rows.length
       if (!description) {
         rows.push(truncateToWidth(head, width, glyphs.more))
       } else if (inline) {
@@ -403,6 +472,7 @@ export class Dialog implements Component {
         for (const l of wrapText(description, Math.max(1, width - leadWidth)))
           rows.push(`${indent}${theme.muted(l)}`)
       }
+      if (status === "working" && leadWidth < width - 1) this.#animatedRows.add(rows[optionRow]!)
     }
     if (shown < choices.length && fit.position) {
       rows.push(theme.muted(`  ${Math.max(0, page.selected) + 1}/${choices.length}`))

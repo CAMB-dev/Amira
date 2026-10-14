@@ -71,6 +71,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     add,
     requestRender: () => renderer.requestRender(),
     notice,
+    spinner: host.spinner,
     get presenters() {
       return host.presenters
     },

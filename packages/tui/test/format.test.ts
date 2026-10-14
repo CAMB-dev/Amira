@@ -331,9 +331,33 @@ test("a sub-agent's compact end line keeps status and stats, not its result text
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("└ ✓ US market trend · explorer · 41.0s · 12k tok")
-  expect(line("error", "model failed")).toBe("└ ✗ US market trend · explorer · 41.0s · 12k tok")
-  expect(line("aborted")).toBe("└ ⊘ US market trend · explorer · 41.0s · 12k tok")
+  expect(line("done")).toBe("└ ✓ done    US market trend · explorer · 41.0s · 12k tok")
+  expect(line("error", "model failed")).toBe("└ ✗ failed  US market trend · explorer · 41.0s · 12k tok")
+  expect(line("aborted")).toBe("└ ‖ stopped US market trend · explorer · 41.0s · 12k tok")
+})
+
+test("transcript badge labels align to seven cells while names survive narrow widths", () => {
+  const sub = { title: "Scan", role: "explorer", depth: 1, tokens: 4100, startedAt: 0 }
+  const rows = [
+    ...subagentRows(sub, 1000, 80, defaultTheme),
+    ...subagentRows({ ...sub, queued: true }, 1000, 80, defaultTheme),
+    ...subagentRows({ ...sub, idle: true }, 1000, 80, defaultTheme),
+    ...subagentRows({ ...sub, paused: true }, 1000, 80, defaultTheme),
+    ...(["done", "error", "aborted"] as const).map((status) =>
+      subagentEndLine(sub, { status, durationMs: 1000, tokens: 4100 }, 80, defaultTheme),
+    ),
+  ].map(stripAnsi)
+  expect(rows.map((row) => row.indexOf("Scan"))).toEqual(Array(7).fill(12))
+  for (const status of ["done", "error", "aborted"] as const) {
+    for (const width of [20, 24, 40, 41, 42, 43]) {
+      const row = stripAnsi(
+        subagentEndLine(sub, { status, durationMs: 1000, tokens: 4100 }, width, defaultTheme),
+      )
+      expect(row).toContain("Scan")
+      expect(row).toContain(status === "done" ? "✓ done" : status === "error" ? "✗ failed" : "‖ stopped")
+      expect(visibleWidth(row)).toBeLessThanOrEqual(width)
+    }
+  }
 })
 
 test("nested sub-agents keep the tree lines of the levels above them", () => {
@@ -371,7 +395,7 @@ test("a stopped sub-agent's compact end line omits its result note", () => {
       defaultTheme,
     ),
   )
-  expect(line).toBe("└ ⊘ Scan · explorer · 3.0s · 0 tok")
+  expect(line).toBe("└ ‖ stopped Scan · explorer · 3.0s · 0 tok")
 })
 
 test("a background sub-agent's notice marks how it ended and wraps under its marker", () => {
@@ -386,15 +410,15 @@ test("a background sub-agent's notice marks how it ended and wraps under its mar
   const rows = userLines(defaultTheme, message, 40)
   const shown = rows.map(stripAnsi)
   expect(shown).toEqual([
-    "└ ✗ Scan the code · explorer · 3s · 1.2k",
-    "  tok · HTTP 429 rate limited, try again",
-    "  later",
+    "✗ failed Scan the code · explorer · 3s ·",
+    "  1.2k tok · HTTP 429 rate limited, try",
+    "  again later",
     "  changes kept: 2 files · /tmp/x.patch",
   ])
   expect(shown.join(" ").replace(/\s+/g, " ")).toContain("changes kept: 2 files · /tmp/x.patch")
   expect(rows.every((r) => visibleWidth(r) <= 40)).toBe(true)
   // The cross in the error color, not muted like the rest.
-  expect(rows[0]).toContain(defaultTheme.error("✗"))
+  expect(rows[0]).toContain(defaultTheme.error("✗ failed"))
 })
 
 test("a sub-agent's live rows: title, role, time and tokens, then its current tool cut to 40 characters", () => {
@@ -402,25 +426,31 @@ test("a sub-agent's live rows: title, role, time and tokens, then its current to
     subagentRows(sub, 13_500, width, defaultTheme).map(stripAnsi)
   const base = { title: "US market trend", role: "explorer", depth: 1, tokens: 4_100 }
   // Queued: no time yet, and no tool.
-  expect(rows(base)).toEqual(["└ US market trend · explorer · queued"])
-  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["└ ⠋ US market trend · explorer · 12s · 4.1k tok"])
+  expect(rows(base)).toEqual(["└ · queued  US market trend · explorer"])
+  expect(rows({ ...base, startedAt: 1_000 })).toEqual([
+    "└ ⠋ working US market trend · explorer · 12s · 4.1k tok",
+  ])
   const busy = { ...base, startedAt: 1_000, activity: { name: "grep", summary: '"LiveRenderer"' } }
-  expect(rows(busy)).toEqual(["└ ⠋ US market trend · explorer · 12s · 4.1k tok", '  └ ⠋ grep "LiveRenderer"'])
+  expect(rows(busy)).toEqual([
+    "└ ⠋ working US market trend · explorer · 12s · 4.1k tok",
+    '  └ ⠋ grep "LiveRenderer"',
+  ])
   // With a row of the same tree after it: "├", and "│" carries the tree past its tool row.
   expect(subagentRows(busy, 13_500, 80, defaultTheme, false).map(stripAnsi)).toEqual([
-    "├ ⠋ US market trend · explorer · 12s · 4.1k tok",
+    "├ ⠋ working US market trend · explorer · 12s · 4.1k tok",
     '│ └ ⠋ grep "LiveRenderer"',
   ])
   // One level deeper per nesting; a long summary is cut to 40 characters.
   const deep = { ...busy, depth: 2, activity: { name: "read", summary: "x".repeat(60) } }
   expect(rows(deep)).toEqual([
-    "  └ ⠋ US market trend · explorer · 12s · 4.1k tok",
+    "  └ ⠋ working US market trend · explorer · 12s · 4.1k tok",
     `    └ ⠋ read ${"x".repeat(39)}…`,
   ])
   // Narrow: cut to the width.
   for (const r of rows(deep, 30)) expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
   // A persistent one between turns says so, without a clock or a tool.
-  expect(rows({ ...busy, idle: true })).toEqual(["└ ✓ US market trend · explorer · idle · 4.1k tok"])
+  expect(rows({ ...busy, idle: true })).toEqual(["└ ○ idle    US market trend · explorer · 4.1k tok"])
+  expect(rows({ ...busy, paused: true })).toEqual(["└ ‖ paused  US market trend · explorer · 12s · 4.1k tok"])
 })
 
 test("subagent.state: an idle persistent sub-agent is not active, and working again is", () => {
@@ -434,7 +464,7 @@ test("subagent.state: an idle persistent sub-agent is not active, and working ag
     startedAt: 1,
     activity: { name: "read", summary: "a.ts" },
   }
-  const state = (s: "idle" | "working", turns: number) =>
+  const state = (s: "idle" | "working" | "paused" | "queued", turns: number) =>
     ({
       type: "subagent.state",
       sessionId: "main",
@@ -444,7 +474,16 @@ test("subagent.state: an idle persistent sub-agent is not active, and working ag
   stateNode(node, state("idle", 1))
   expect(isActive(node)).toBe(false)
   expect(node.activity).toBeUndefined()
+  stateNode(node, state("queued", 1))
+  expect(subagentRows(node, 10, 80, defaultTheme).map(stripAnsi)[0]).toBe("└ · queued  writer · agent")
   stateNode(node, state("working", 2))
+  expect(isActive(node)).toBe(true)
+  stateNode(node, state("paused", 2))
+  expect(node.paused).toBe(true)
+  expect(isActive(node)).toBe(true)
+  expect(subagentRows(node, 10, 80, defaultTheme)[0]).toContain(defaultTheme.warning("‖ paused "))
+  stateNode(node, state("working", 2))
+  expect(node.paused).toBe(false)
   expect(isActive(node)).toBe(true)
 })
 

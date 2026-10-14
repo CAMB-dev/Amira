@@ -466,7 +466,7 @@ test("sub-agents stay under their call, also running in the background after the
   await waitFor(
     () =>
       new RegExp(
-        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \\d+s · 0 tok\\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs/app\\.log`,
+        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Scan the logs · explorer · \\d+s · 0 tok\\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs/app\\.log`,
       ).test(view()),
     "rows under the call",
   )
@@ -480,7 +480,7 @@ test("sub-agents stay under their call, also running in the background after the
   await waitFor(
     () =>
       new RegExp(
-        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ ✓ Scan the logs · explorer · \\d+\\.\\ds · 0 tok`,
+        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ ✓ done    Scan the logs · explorer · \\d+\\.\\ds · 0 tok`,
       ).test(view()),
     "end line under the call",
   )
@@ -540,20 +540,24 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await waitFor(
     () =>
       new RegExp(
-        `└ flow {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0/3 agents`,
+        `└ flow {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \\S+ tok · Explore · 0/3 agents`,
       ).test(view()),
     "one line for the group under its call",
   )
   expect(view()).not.toContain("Scan api")
   group!.setStatus("Verify · 2/3 agents")
-  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Verify · 2\/3 agents/.test(view()), "the new status")
+  await waitFor(
+    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Verify · 2\/3 agents/.test(view()),
+    "the new status",
+  )
   release()
   await group!.ended()
   await bus.flush()
   // Its members never get rows of their own; the group's line stays with its last status.
   await waitFor(
     () =>
-      !/Scan (api|core|tui)/.test(view()) && /^ {2}└ ✓ workflow demo · Verify · 2\/3 agents$/m.test(view()),
+      !/Scan (api|core|tui)/.test(view()) &&
+      /^ {2}└ ✓ workflow demo · 3\/3 done · \S+ tok · Verify · 2\/3 agents$/m.test(view()),
     "ended",
   )
   terminal.send("\x03")
@@ -590,7 +594,10 @@ test("the members of a group a command started share one block: a compact group 
   const kids = ["Scan api", "Scan core", "Scan tui"].map((title) =>
     group.spawn({ role: "explorer", title, prompt: `step ${title}` }),
   )
-  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Answer · 0\/3 agents/.test(view()), "the compact group")
+  await waitFor(
+    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Answer · 0\/3 agents/.test(view()),
+    "the compact group",
+  )
   await bus.flush()
   await Bun.sleep(50)
   expect(view().match(/└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] in the background/g)).toHaveLength(1)
@@ -1123,7 +1130,10 @@ test("a selected call opens the sub-agent viewer on its sub-agent", async () => 
     "test",
   )
   terminal.send("go\r")
-  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] Scan the logs · explorer/.test(view()), "the child row")
+  await waitFor(
+    () => /└ (?:[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working|✓ done {3}) Scan the logs · explorer/.test(view()),
+    "the child row",
+  )
   finish()
   await shows("started it")
   await idle()

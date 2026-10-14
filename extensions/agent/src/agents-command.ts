@@ -1,6 +1,8 @@
 import os from "node:os"
 import path from "node:path"
 import {
+  AGENT_STATUS_BADGES,
+  agentStatusState,
   type CommandCandidate,
   type CommandContext,
   type CommandDefinition,
@@ -45,16 +47,26 @@ export function usageText(info: SubagentInfo): string {
   return u.cost !== undefined ? `${tokens} · $${u.cost.toFixed(4)}` : tokens
 }
 
-/** One line about a sub-agent: title, role, id, state, time and usage, then the task. */
-export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60): string {
-  return `${info.title} · ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)} · ${oneLine(info.task, taskChars)}`
+/** A stable badge for plain text, where there is no host theme or animation context. */
+function plainBadge(info: SubagentInfo, pad = false): string {
+  const badge = AGENT_STATUS_BADGES[agentStatusState(info)]
+  return `${badge.symbol} ${pad ? badge.label.padEnd(7) : badge.label}`
 }
 
-/** Its status and how long it ran; just the status when that is not known (it never started). */
-function stateText(info: SubagentInfo, now: number): string {
+/** One line about a sub-agent: badge, title, role, id, time and usage, then the task. */
+export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60): string {
+  return `${plainBadge(info)} ${summary(info, now, taskChars)}`
+}
+
+function summary(info: SubagentInfo, now: number, taskChars = 60): string {
+  return `${agentHeading(info, now)} · ${oneLine(info.task, taskChars)}`
+}
+
+/** Its title and details, leaving the status to the badge before the title. */
+function agentHeading(info: SubagentInfo, now: number): string {
   const known = info.durationMs !== undefined || info.startedAt !== undefined
-  const state = subagentStateText(info.status)
-  return info.status === "queued" || !known ? state : `${state} · ${elapsed(info, now)}`
+  const time = info.status !== "queued" && known ? ` · ${elapsed(info, now)}` : ""
+  return `${info.title} · ${info.role} · ${info.id}${time} · ${usageText(info)}`
 }
 
 function blockText(content: Message["content"]): string {
@@ -100,9 +112,7 @@ export function transcriptText(
   all: SubagentInfo[],
   now = Date.now(),
 ): string {
-  const out = [
-    `${glyphs.subagent} ${info.title} · ${info.role} · ${info.id} · ${stateText(info, now)} · ${usageText(info)}`,
-  ]
+  const out = [`${glyphs.subagent} ${plainBadge(info)} ${agentHeading(info, now)}`]
   // A forked child starts with its parent's history; its own part starts at its task.
   const from = Math.max(
     0,
@@ -209,8 +219,8 @@ function defaultView(list: SubagentInfo[]): SubagentInfo | undefined {
   return list.findLast((s) => s.status === "running") ?? list.at(-1)
 }
 
-function label(s: SubagentInfo, i: number, now: number): string {
-  return `${i + 1}. ${"  ".repeat(Math.max(0, s.depth - 1))}${subagentSummary(s, now)}`
+function label(s: SubagentInfo, i: number, now: number, plain = true): string {
+  return `${i + 1}. ${"  ".repeat(Math.max(0, s.depth - 1))}${plain ? `${plainBadge(s, true)} ` : ""}${summary(s, now)}`
 }
 
 /** Prints a sub-agent's transcript as it is now. */
@@ -254,7 +264,7 @@ function stop(ctx: CommandContext, list: SubagentInfo[], ref: string) {
   if (!target) throw new Error(`no sub-agent "${ref}"; /agents lists them`)
   if (!live(target) || !ctx.session.stopSubagent(target.id)) {
     ctx.print(
-      `${target.title} (${target.role} ${target.id}) has already ended (${subagentStateText(target.status)}).`,
+      `${target.title} (${target.role} ${target.id}) has already ended (${subagentStateText(target)}).`,
     )
     return
   }
@@ -486,7 +496,7 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
         return
       }
       // A digit picks the sub-agent of that number; worktrees come after them.
-      const agentRows = list.map((s, i) => label(s, i, now))
+      const agentRows = list.map((s, i) => label(s, i, now, false))
       // Two worktrees of the same task and age read the same: their names tell them apart.
       // What matters most comes first: the rest (and the path) wraps under it when narrow.
       const summaries = kept.map((w) => keptHead(w))
@@ -513,10 +523,24 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
       const title = list.length ? "Sub-agents" : "Worktrees sub-agents left with their changes"
       const pick = await ctx.ui.choose(title, [...agentRows, ...keptRows], {
         sections,
+        optionStatuses: [...list.map((s) => agentStatusState(s)), ...kept.map(() => undefined)],
         descriptions: [
           ...agentRows.map(() => ""),
           ...kept.map((w) => `${keptWhen(w, now)} · ${shortPath(w.dir, home)}`),
         ],
+        live: () => {
+          // Keep the opening order and answer strings; only their presentation changes.
+          const current = new Map(ctx.session.subagents().map((s) => [s.id, s]))
+          const agents = list.map((s) => current.get(s.id) ?? s)
+          return {
+            optionLabels: [...agents.map((s, i) => label(s, i, Date.now(), false)), ...keptRows],
+            optionStatuses: [...agents.map((s) => agentStatusState(s)), ...kept.map(() => undefined)],
+            descriptions: [
+              ...agentRows.map(() => ""),
+              ...kept.map((w) => `${keptWhen(w, now)} · ${shortPath(w.dir, home)}`),
+            ],
+          }
+        },
         signal: ctx.signal,
       })
       if (!pick) return

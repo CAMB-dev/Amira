@@ -881,3 +881,32 @@ test("transcript helpers share main reply/tool styles, closing rails and running
   now += 80
   expect(stripAnsi(viewer.render(80, ctx)[8]!)).toMatch(/^⠙ wait +1s$/)
 })
+
+test("extension status badges share host styling and spinner redraws", () => {
+  let now = 0
+  let working = true
+  const viewer = new ExtensionViewer(
+    {
+      kind: "badges",
+      title: () => "Agents",
+      render: (_data, opts) => [
+        { kind: "segments", parts: opts.statusBadge!(working ? "working" : "idle") },
+        { kind: "segments", parts: opts.statusBadge!("queued") },
+        { kind: "segments", parts: opts.statusBadge!("paused") },
+      ],
+    },
+    {},
+    { now: () => now },
+  )
+  const ctx = { ...renderContext, theme: defaultTheme, color: true }
+  const rows = viewer.render(60, ctx)
+  expect(rows.join("\n")).toContain(defaultTheme.accent("⠋ working"))
+  expect(rows.join("\n")).toContain(defaultTheme.dim("· queued"))
+  expect(rows.join("\n")).toContain(defaultTheme.warning("‖ paused"))
+  expect(viewer.animating).toBe(true)
+  now += 80
+  expect(viewer.render(60, ctx).join("\n")).toContain(defaultTheme.accent("⠙ working"))
+  working = false
+  expect(viewer.render(60, ctx).join("\n")).toContain(defaultTheme.muted("○ idle"))
+  expect(viewer.animating).toBe(false)
+})

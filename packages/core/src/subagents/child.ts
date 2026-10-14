@@ -1,17 +1,18 @@
 import { emptyUsage, type Message, type Usage, type UserMessage, userMessage } from "@amira/ai"
-import type {
-  AnyEvent,
-  ChildSession,
-  ChildState,
-  PendingNotice,
-  SpawnContext,
-  SpawnGroup,
-  SpawnGroupInfo,
-  SpawnGroupOptions,
-  SpawnGroupState,
-  SpawnOptions,
-  SubagentInfo,
-  SubagentResult,
+import {
+  type AnyEvent,
+  agentStatusState,
+  type ChildSession,
+  type ChildState,
+  type PendingNotice,
+  type SpawnContext,
+  type SpawnGroup,
+  type SpawnGroupInfo,
+  type SpawnGroupOptions,
+  type SpawnGroupState,
+  type SpawnOptions,
+  type SubagentInfo,
+  type SubagentResult,
 } from "@amira/api"
 import type { Agent } from "../agent.ts"
 import type { EmitMeta } from "../event-bus.ts"
@@ -176,6 +177,7 @@ export class Child implements ChildSession {
       { childSessionId: this.id, state, turns: this.turns },
       this.parentMeta,
     )
+    this.tree.childStateChanged(this)
   }
 
   send(message: string | UserMessage, steer = false): boolean {
@@ -200,6 +202,8 @@ export class Group implements SpawnGroup {
   total = 0
   /** Its children (and theirs) that have not ended. */
   readonly live = new Set<Child>()
+  /** Terminal counts survive releasing the finished child and its session. */
+  readonly outcomes = { done: 0, failed: 0, stopped: 0 }
   endReason: string | undefined
   exceeded = false
   /** The owner's line about what the group is doing (setStatus). */
@@ -237,8 +241,25 @@ export class Group implements SpawnGroup {
   }
 
   info(): SpawnGroupInfo {
-    const agents = { total: this.total, queued: 0, working: 0, idle: 0, ended: this.total - this.live.size }
-    for (const c of this.live) agents[c.state]++
+    const agents: SpawnGroupInfo["agents"] = {
+      total: this.total,
+      queued: 0,
+      working: 0,
+      idle: 0,
+      ended: this.total - this.live.size,
+    }
+    for (const c of this.live) {
+      const state = agentStatusState({
+        end: c.ended,
+        startedAt: c.startedAt,
+        queued: c.state === "queued",
+        idle: c.state === "idle",
+        paused: c.agent.execution.paused,
+      })
+      if (state === "paused") agents.paused = (agents.paused ?? 0) + 1
+      else if (state === "working" || state === "queued" || state === "idle") agents[state]++
+      else agents.ended++
+    }
     return {
       id: this.id,
       name: this.name,
@@ -250,6 +271,7 @@ export class Group implements SpawnGroup {
       usage: { ...this.usage },
       tokens: usageTokens(this.usage),
       agents,
+      outcomes: { ...this.outcomes },
       ...(this.endReason !== undefined ? { endReason: this.endReason } : {}),
       ...(this.exceeded ? { exceeded: true } : {}),
     }

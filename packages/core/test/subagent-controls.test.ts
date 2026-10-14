@@ -289,7 +289,8 @@ test("pause lets a running tool finish but holds the next model call and keeps g
   expect(tool.aborted()).toBe(false)
   expect(mock.requests).toHaveLength(1)
   expect(queued.state).toBe("queued")
-  expect(group.info().agents).toMatchObject({ working: 1, queued: 1 })
+  expect(child.state).toBe("working") // Paused turns still occupy their admission slot.
+  expect(group.info().agents).toMatchObject({ working: 0, paused: 1, queued: 1 })
   expect(tree.resume(child.id)).toBe(true)
   expect((await child.result()).status).toBe("done")
   await queued.result()

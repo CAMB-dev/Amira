@@ -1,0 +1,88 @@
+{
+  "name": "agent-status",
+  "description": "Real delegate tree and /agents with a delayed running child, quick completed child, stream-error child, and an unknown ui-walk model that fails locally with HTTP 404. All calls are local scripted replies, every child explicitly uses isolation:none, and no tools touch real files or execute commands.",
+  "prompt": "Delegate the offline agent-status fixtures.",
+  "routes": {
+    "main": [
+      {
+        "text": "I’ll delegate four offline status fixtures.\n",
+        "chunkSize": 4096,
+        "delayMs": 20,
+        "toolCalls": [
+          {
+            "id": "agent-status-spawn",
+            "name": "agent",
+            "args": {
+              "tasks": [
+                {
+                  "title": "Inspect delayed status fixture",
+                  "role": "explorer",
+                  "prompt": "Return the scripted delayed report. Do not access files or execute commands.",
+                  "model": "ui-walk/child-delayed",
+                  "context": "fresh",
+                  "isolation": "none"
+                },
+                {
+                  "title": "Review quick completion fixture",
+                  "role": "reviewer",
+                  "prompt": "Return the scripted quick report. Do not access files or execute commands.",
+                  "model": "ui-walk/child-done",
+                  "context": "fresh",
+                  "isolation": "none"
+                },
+                {
+                  "title": "Check stream error fixture",
+                  "role": "coder",
+                  "prompt": "Receive the scripted stream error. Do not access files or execute commands.",
+                  "model": "ui-walk/child-error",
+                  "context": "fresh",
+                  "isolation": "none"
+                },
+                {
+                  "title": "Check missing model fixture",
+                  "role": "explorer",
+                  "prompt": "Exercise an HTTP 404 using an intentionally unknown local model. Do not access files or execute commands.",
+                  "model": "ui-walk/missing-model",
+                  "context": "fresh",
+                  "isolation": "none"
+                }
+              ],
+              "background": false
+            }
+          }
+        ]
+      },
+      {
+        "text": "Status fixtures settled. Inspect each child's badge for its outcome. No files changed, no commands executed, and no live calls were made.\n",
+        "chunkSize": 4096,
+        "delayMs": 20
+      }
+    ],
+    "child-delayed": [
+      {
+        "text": "Inspecting the offline fixture; still working.\n",
+        "repeat": 40,
+        "chunkSize": 12,
+        "delayMs": 1500
+      }
+    ],
+    "child-done": [
+      {
+        "text": "Quick completion fixture done. No changes or commands.\n",
+        "chunkSize": 4096,
+        "delayMs": 20
+      }
+    ],
+    "child-error": [
+      {
+        "text": "The offline error fixture started.\n",
+        "chunkSize": 4096,
+        "delayMs": 100,
+        "streamError": {
+          "message": "Scripted child status error; no live request was made.",
+          "code": "invalid_request_error"
+        }
+      }
+    ]
+  }
+}

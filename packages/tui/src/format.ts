@@ -1,4 +1,6 @@
 import {
+  type AgentStatusState,
+  agentStatusState,
   type CompactionInfo,
   clip,
   formatDuration,
@@ -6,6 +8,7 @@ import {
   formatTokens,
   plural,
   type SpawnGroupInfo,
+  subagentStateText,
   type UserMessage,
 } from "@amira/api"
 import {
@@ -23,6 +26,8 @@ import {
 import { localClock } from "./clock.ts"
 import { glyphs } from "./glyphs.ts"
 import { CONTENT_INSET, contentRoom, MARKER_WIDTH, markerPrefix } from "./grid.ts"
+import { messageNoticeLines } from "./message-notice.ts"
+import { styledStatusBadge } from "./status-badge.ts"
 
 /** Arguments that say what a call is about; the first one present leads the summary. */
 const PRIMARY_ARGS = ["path", "file_path", "filePath", "command", "pattern", "url", "query", "prompt", "name"]
@@ -141,7 +146,7 @@ export function userLines(
 ): string[] {
   // A notice (e.g. background sub-agents' results) shows as its short lines, not as typed text.
   if (message.display?.origin && message.display.text.trim())
-    return originLines(theme, message.display.text, width)
+    return messageNoticeLines(theme, message.display, width)
   const text = (message.display?.text.trim() || userText(message)).trim()
   const bg = Number.isFinite(width) ? themeToken(theme, "userBg") : undefined
   // The band bleeds to the edges; its prompt occupies the marker gutter and its text starts two cells in.
@@ -206,43 +211,6 @@ export function bandRows(rows: string[], width: number, bg: StyleFn): string[] {
   const padding = userBandPaddingIn(rows)
   if (padding) userBandPadding.set(lines, padding)
   return lines
-}
-
-/** How a sub-agent's line marks how it ended, styled. */
-function endMark(theme: Theme, mark: string): string {
-  if (mark === glyphs.subagentDone) return theme.success(mark)
-  if (mark === glyphs.subagentFailed) return theme.error(mark)
-  return theme.muted(mark)
-}
-
-/** Stored sub-agent notices use the same tree and outcome marks as live rows. */
-function originLines(theme: Theme, text: string, width = Number.POSITIVE_INFINITY): string[] {
-  const arm = treeArm(true)
-  const hang = CONTENT_INSET
-  return text
-    .trim()
-    .split("\n")
-    .flatMap((line) => {
-      const notice = /^\s*◆ (.*?) ([✓✗⊘]) (.*)$/.exec(line)
-      const body = notice ? `${notice[1]} ${glyphs.separator} ${notice[3]}` : line.trim()
-      const mark =
-        notice?.[2] === "✓"
-          ? glyphs.subagentDone
-          : notice?.[2] === "✗"
-            ? glyphs.subagentFailed
-            : glyphs.subagentAborted
-      const rows = Number.isFinite(width)
-        ? wrapText(
-            body,
-            contentRoom(width),
-            Math.max(1, width - MARKER_WIDTH - (notice ? visibleWidth(mark) + 1 : 0)),
-          )
-        : [body]
-      return rows.map((row, i) => {
-        const lead = i === 0 && notice ? `${markerPrefix(theme.muted(arm))}${endMark(theme, mark)} ` : hang
-        return `${lead}${theme.muted(row)}`
-      })
-    })
 }
 
 /**
@@ -322,6 +290,10 @@ export interface SubagentLine {
   lastText?: string
   /** A persistent sub-agent between turns, waiting for a message (subagent.state). */
   idle?: boolean
+  /** A user pause holds the current turn without completing it. */
+  paused?: boolean
+  /** Also used when a persistent child's next turn is waiting for admission. */
+  queued?: boolean
 }
 
 /** Longest summary of a sub-agent's current tool on its row. */
@@ -413,18 +385,19 @@ export function treeLayout(list: { depth: number }[], _closeTop = true): { inden
 
 /**
  * `title` cut so that `rest` (what follows it on the row: stats) still fits in `room` cells;
- * when even a short title leaves no room, the row is cut at its end as usual.
+ * when stats leave less than a readable title, the row is cut at its end as usual.
  */
 function fitTitle(title: string, rest: string, room: number): string {
   const left = room - visibleWidth(rest)
-  return left >= 8 ? clip(title, left, glyphs.more) : title
+  return left >= Math.min(3, visibleWidth(title)) ? truncateToWidth(title, left, glyphs.more) : title
 }
 
 const defaultSpinner = new Spinner().glyph
 
 /**
- * A queued or running sub-agent under its call: `└ ⠋ title · role · 12s · 4.1k tok`
- * ("queued" while it waits), and once it has called a tool, `│ └ ⠋ grep "TODO"` below. On a
+ * A sub-agent under its call: `└ ⠋ working title · role · 12s · 4.1k tok`
+ * (a shared status badge while it waits or pauses), and once it has called a tool,
+ * `│ └ ⠋ grep "TODO"` below. On a
  * narrow screen the title gives way before its role, time and tokens.
  *
  * `last`: no row of the same tree follows at this level, so this one closes it ("└", not "├")
@@ -441,19 +414,20 @@ export function subagentRows(
   spinner = defaultSpinner,
 ): string[] {
   const s = glyphs.separator
+  const state = agentStatusState(sub)
   const stats =
-    sub.startedAt === undefined
-      ? "queued"
-      : sub.idle
-        ? `idle ${s} ${compactTokens(sub.tokens)} tok`
-        : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
-  const mark = sub.idle ? glyphs.subagentDone : sub.startedAt === undefined ? "" : spinner
-  const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark ? `${mark} ` : ""}`
-  const rest = ` ${s} ${sub.role} ${s} ${stats}`
+    state === "queued"
+      ? ""
+      : state === "idle"
+        ? ` ${s} ${compactTokens(sub.tokens)} tok`
+        : ` ${s} ${formatElapsed(now - (sub.startedAt ?? now))} ${s} ${compactTokens(sub.tokens)} tok`
+  const mark = styledStatusBadge(state, theme, spinner, { pad: true })
+  const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark} `
+  const rest = ` ${s} ${sub.role}${stats}`
   const title = fitTitle(oneLine(sub.title), rest, width - visibleWidth(lead))
-  const head = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark ? `${sub.idle ? theme.success(mark) : theme.accent(mark)} ` : ""}${title}${theme.muted(rest)}`
+  const head = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark} ${title}${theme.muted(rest)}`
   const rows = [truncateToWidth(head, width, glyphs.more)]
-  if (sub.startedAt !== undefined && sub.activity && !sub.idle) {
+  if (state === "working" && sub.activity) {
     const summary = clip(oneLine(sub.activity.summary), ACTIVITY_CHARS)
     const tree = `${indent}${treeRail(!last)}${treeArm(true)}`
     const tool = `${theme.muted(tree)}${treeGap(true)}${theme.accent(spinner)} ${theme.fg2(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
@@ -481,12 +455,7 @@ export function subagentEndLine(
   last = true,
   indent = treeIndent(sub.depth),
 ): string {
-  const mark =
-    end.status === "done"
-      ? theme.success(glyphs.subagentDone)
-      : end.status === "error"
-        ? theme.error(glyphs.subagentFailed)
-        : theme.muted(glyphs.subagentAborted)
+  const mark = styledStatusBadge(agentStatusState(end), theme, undefined, { pad: true })
   const s = glyphs.separator
   const stats = `${sub.role} ${s} ${formatDuration(end.durationMs)} ${s} ${compactTokens(end.tokens)} tok`
   const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark} `
@@ -495,10 +464,75 @@ export function subagentEndLine(
   return truncateToWidth(line, width, glyphs.more)
 }
 
+/** Shared presentation counts, including terminal members whose exact outcome is unknown. */
+export type AgentCounts = Record<AgentStatusState | "ended" | "total", number>
+
+export function agentCounts(sources: readonly Parameters<typeof agentStatusState>[0][]): AgentCounts {
+  const counts: AgentCounts = {
+    total: sources.length,
+    working: 0,
+    queued: 0,
+    paused: 0,
+    idle: 0,
+    done: 0,
+    failed: 0,
+    stopped: 0,
+    ended: 0,
+  }
+  for (const source of sources) counts[agentStatusState(source)]++
+  return counts
+}
+
+/** Core snapshots already separate paused members from working admission slots. */
+export function spawnGroupCounts(group: SpawnGroupInfo): AgentCounts {
+  const counts = agentCounts([])
+  const a = group.agents
+  const o = group.outcomes
+  counts.total = a.total
+  counts.working = a.working
+  counts.queued = a.queued
+  counts.paused = a.paused ?? 0
+  counts.idle = a.idle
+  counts.done = o?.done ?? 0
+  counts.failed = o?.failed ?? 0
+  counts.stopped = o?.stopped ?? 0
+  counts.ended = Math.max(0, a.ended - counts.done - counts.failed - counts.stopped)
+  return counts
+}
+
+/** Only working members animate; success requires every member to have actually finished. */
+export function agentCountsMark(counts: AgentCounts, theme: Theme, spinner = defaultSpinner): string {
+  if (counts.working) return theme.accent(spinner)
+  if (counts.paused) return theme.warning(glyphs.statusPaused)
+  if (counts.queued) return theme.dim(glyphs.statusQueued)
+  const terminal = counts.done + counts.failed + counts.stopped
+  if (counts.total > 0 && terminal === counts.total && !counts.idle && !counts.ended) {
+    if (counts.done === counts.total) return theme.success(glyphs.subagentDone)
+    if (counts.failed === counts.total) return theme.error(glyphs.subagentFailed)
+    if (counts.stopped === counts.total) return theme.warning(glyphs.statusStopped)
+  }
+  return theme.muted(glyphs.statusIdle)
+}
+
+/** Explicit state words survive a folded tree, rather than relabeling every live member running. */
+export function agentCountsText(counts: AgentCounts, doneFraction = false): string {
+  return (["done", "failed", "stopped", "ended", "working", "paused", "queued", "idle"] as const)
+    .filter((state) => counts[state] > 0)
+    .map(
+      (state) =>
+        `${counts[state]}${state === "done" && doneFraction ? `/${counts.total}` : ""} ${state === "ended" ? "ended" : subagentStateText(state)}`,
+    )
+    .join(` ${glyphs.separator} `)
+}
+
+/** A compact group's aggregate mark is successful only when every member finished successfully. */
+export function spawnGroupMark(group: SpawnGroupInfo, theme: Theme, spinner = defaultSpinner): string {
+  return agentCountsMark(spawnGroupCounts(group), theme, spinner)
+}
+
 /**
  * The one line a compact spawn group (e.g. a workflow run) shows in place of its members'
- * rows: `└ ⠋ workflow deep-review · Verify · 3/7 agents · 12.3k tok`, from its owner's status
- * line, or else from its counts.
+ * rows, using definitive terminal outcomes rather than treating every ended member as done.
  */
 export function spawnGroupRow(
   group: SpawnGroupInfo,
@@ -510,15 +544,11 @@ export function spawnGroupRow(
   spinner = defaultSpinner,
 ): string {
   const s = glyphs.separator
-  const a = group.agents
-  const counts = [
-    `${a.ended}/${a.total} done`,
-    ...(a.working ? [`${a.working} working`] : []),
-    ...(a.queued ? [`${a.queued} queued`] : []),
-    `${compactTokens(group.tokens)} tok`,
-  ].join(` ${s} `)
-  const about = group.status ? oneLine(group.status) : counts
-  const mark = a.working || a.queued ? theme.accent(spinner) : theme.success(glyphs.subagentDone)
+  const states = agentCountsText(spawnGroupCounts(group), true)
+  const counts = [states, `${compactTokens(group.tokens)} tok`].filter(Boolean).join(` ${s} `)
+  const status = group.status ? oneLine(group.status) : undefined
+  const about = status ? `${counts} ${s} ${status}` : counts
+  const mark = spawnGroupMark(group, theme, spinner)
   const line = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
   return truncateToWidth(line, width, glyphs.more)
 }

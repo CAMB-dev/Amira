@@ -109,6 +109,8 @@ export interface MessageDisplay {
    * sub-agents delivered to their commander. Frontends show it as a notice, not as the user's.
    */
   origin?: string
+  /** Plain notice rows, with semantic completion states for host-selected symbols and colors. */
+  notices?: { text: string; status?: "done" | "failed" | "stopped" }[]
 }
 
 export interface UserMessage {

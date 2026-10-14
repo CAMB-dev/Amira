@@ -454,7 +454,7 @@ test("a background result wakes the idle session as a notice line; a draft in th
   await shows("reacting to report: found it")
   await idle()
   const text = all()
-  expect(text).toContain("└ ✓ explorer finished · agent · 41s · 12.3k tok")
+  expect(text).toContain("✓ done explorer finished · agent · 41s · 12.3k tok")
   expect(text).not.toContain("› ◆")
   expect(text).not.toContain("› report")
   expect(live()).toContain("half-typed")
@@ -487,10 +487,10 @@ test("a background result during a turn shows as a notice where it joins, not as
   await shows("then saw report: B")
   await idle()
   const text = all()
-  expect(text.indexOf("└ read")).toBeLessThan(text.indexOf("└ ✓ explorer finished · agent"))
-  expect(text.indexOf("└ ✓ explorer finished · agent")).toBeLessThan(text.indexOf("then saw report: B"))
+  expect(text.indexOf("└ read")).toBeLessThan(text.indexOf("✓ done explorer finished · agent"))
+  expect(text.indexOf("✓ done explorer finished · agent")).toBeLessThan(text.indexOf("then saw report: B"))
   // A block of the transcript like any other: one blank line before it and after it.
-  expect(text).toMatch(/[^\n]\n\n└ ✓ explorer finished · agent · 41s · 12\.3k tok\n\n {2}then saw/)
+  expect(text).toMatch(/[^\n]\n\n✓ done explorer finished · agent · 41s · 12\.3k tok\n\n {2}then saw/)
   terminal.send("\x03")
   await exited
 })
@@ -504,7 +504,7 @@ test("a background result an interrupt kept waiting shows as pending and joins t
   await shows("01234567")
   agent.expectNotice().deliver(subagentNotice("C"))
   await waitFor(
-    () => live().includes("└ ✓ explorer finished · agent · 41s · 12.3k tok · pending"),
+    () => live().includes("✓ done explorer finished · agent · 41s · 12.3k tok · pending"),
     "pending line",
   )
   terminal.send("\x1b[27u")
@@ -516,7 +516,7 @@ test("a background result an interrupt kept waiting shows as pending and joins t
   await idle()
   expect(live()).not.toContain("· pending")
   const text = all()
-  expect(text.indexOf("› next")).toBeLessThan(text.indexOf("└ ✓ explorer finished · agent"))
+  expect(text.indexOf("› next")).toBeLessThan(text.indexOf("✓ done explorer finished · agent"))
   expect(agent.waitingNotices).toBe(0)
   terminal.send("\x03")
   await exited
