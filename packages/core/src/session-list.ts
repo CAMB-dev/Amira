@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync, rmSync, statSync, unlinkSync } from
 import path from "node:path"
 import { type FileLock, isProcessAlive, SessionWriteGuardError, tryFileLock } from "./file-lock.ts"
 import { fileHistoryDir } from "./file-rewind.ts"
+import { canonicalSessionFile } from "./session-path.ts"
 import {
   SESSION_LOCK_HEARTBEAT_MS,
   SESSION_LOCK_STALE_MS,
@@ -29,8 +30,8 @@ export interface SessionSummary {
 }
 
 /**
- * Summaries by file, reused while the file's size and mtime stay the same: /resume completes
- * on every keystroke, and parsing every session file each time would stall typing.
+ * Summaries by file, reused while the canonical target, size and mtime stay the same: /resume
+ * completes on every keystroke, and parsing every session file each time would stall typing.
  */
 const summaries = new Map<string, { mtimeMs: number; size: number; summary: SessionSummary }>()
 
@@ -48,7 +49,12 @@ export function listSessions(cwd: string, dir = sessionsDir(cwd)): SessionSummar
     try {
       const { mtimeMs, size } = statSync(file)
       const cached = summaries.get(file)
-      if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+      if (
+        cached &&
+        cached.mtimeMs === mtimeMs &&
+        cached.size === size &&
+        cached.summary.file === canonicalSessionFile(file)
+      ) {
         out.push(cached.summary)
         continue
       }
@@ -72,7 +78,7 @@ function summarize(file: string, updatedAt: number): SessionSummary {
   const text = shown || (first?.content.find((b) => b.type === "text")?.text ?? "")
   return {
     id: store.id,
-    file,
+    file: store.file,
     cwd: store.header.cwd,
     createdAt: store.header.createdAt,
     updatedAt,
@@ -106,8 +112,9 @@ export function sessionSnippet(
  */
 export function deleteSession(cwd: string, id: string, currentId?: string, dir = sessionsDir(cwd)): string[] {
   if (id === currentId) throw new Error("the current session cannot be deleted")
-  const file = findSession(cwd, id, dir)
-  if (!file) throw new Error(`no session ${id}`)
+  // Keep the requested path for the ownership walk: resolving it first would hide symlinks.
+  const file = path.join(dir, `${id}.jsonl`)
+  if (!/^[\w-]+$/.test(id) || !existsSync(file)) throw new Error(`no session ${id}`)
   const deletionLock: FileLock | undefined = tryFileLock(
     sessionLockFile(file),
     SESSION_LOCK_STALE_MS,
@@ -170,6 +177,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
       }
       for (const name of shared) files.delete(name)
     }
+    const removed = [...files].map(canonicalSessionFile)
     // Attachments are inline in message entries; there are no separate attachment files.
     for (const name of [...files].reverse()) {
       // Its assets (captured file bytes, saved artifacts) first: a failure leaves the recording,
@@ -183,7 +191,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
       unlinkSync(name)
       summaries.delete(name)
     }
-    return [...files]
+    return removed
   } finally {
     deletionLock?.release()
   }
@@ -193,7 +201,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
 export function findSession(cwd: string, id: string, dir = sessionsDir(cwd)): string | undefined {
   if (!/^[\w-]+$/.test(id)) return undefined
   const file = path.join(dir, `${id}.jsonl`)
-  return existsSync(file) ? file : undefined
+  return existsSync(file) ? canonicalSessionFile(file) : undefined
 }
 
 function lstatOrUndefined(file: string) {

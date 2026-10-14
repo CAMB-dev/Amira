@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises"
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -302,20 +302,28 @@ test("a tool that returns after an interrupt (within the grace period) still get
   expect(readFileSync(agent.artifacts.find(id!)!.path, "utf8")).toBe(logText(9, 30_000))
 })
 
-test("artifacts are found again after a resume, through the tool session", async () => {
-  const dir = await tempDir()
-  const session = SessionStore.create({ cwd: dir, dir })
-  const { agent } = setup({
-    session,
-    steps: [{ toolCalls: [{ name: "big", args: { n: 3, size: 20_000 }, id: "c1" }] }, { text: "done" }],
+for (const linked of [false, true]) {
+  test(`artifacts are found again after a resume, through the tool session${linked ? " in a linked directory" : ""}`, async () => {
+    const root = await tempDir()
+    const dir = linked ? path.join(root, "link") : root
+    if (linked) {
+      const target = path.join(root, "target")
+      await mkdir(target)
+      await symlink(target, dir, process.platform === "win32" ? "junction" : "dir")
+    }
+    const session = SessionStore.create({ cwd: dir, dir })
+    const { agent } = setup({
+      session,
+      steps: [{ toolCalls: [{ name: "big", args: { n: 3, size: 20_000 }, id: "c1" }] }, { text: "done" }],
+    })
+    await agent.prompt("go")
+    const id = ARTIFACT_HEADER.exec(textOf(results(agent.messages)[0]))![1]!
+    const { agent: resumed } = setup({ session: SessionStore.open(session.file) })
+    expect(resumed.artifacts.find(id)?.chars).toBe(20_000)
+    expect(resumed.artifacts.dir).toBe(path.join(realpathSync(dir), `${session.id}.assets`, "outputs"))
+    await rm(root, { recursive: true, force: true })
   })
-  await agent.prompt("go")
-  const id = ARTIFACT_HEADER.exec(textOf(results(agent.messages)[0]))![1]!
-  const { agent: resumed } = setup({ session: SessionStore.open(session.file) })
-  expect(resumed.artifacts.find(id)?.chars).toBe(20_000)
-  expect(resumed.artifacts.dir).toBe(path.join(dir, `${session.id}.assets`, "outputs"))
-  await rm(dir, { recursive: true, force: true })
-})
+}
 
 test("a session forked from another finds the artifacts its copied history names", async () => {
   const dir = await tempDir()
