@@ -78,8 +78,8 @@ test("a real ui.form request receives configured ASCII pointer and separator gly
     expect(app.live()).toContain("> Mode")
     expect(app.live()).toContain(" | ")
     app.terminal.send("\r")
-    await waitFor(() => app.live().includes("> ● Alpha"), "ASCII form option")
-    expect(app.live()).not.toMatch(/[›·]/)
+    await waitFor(() => app.live().includes("> * Alpha"), "ASCII form option")
+    expect(app.live()).not.toMatch(/[›·●]/)
     app.terminal.send("\x1b[27u\t")
     await waitFor(() => app.live().includes("> [ Save ]"), "ASCII form save")
   } finally {

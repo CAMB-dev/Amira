@@ -156,10 +156,10 @@ describe("Form", () => {
     const ctx = { ...plain, rows: 40, glyphs: { ...defaultGlyphs, pointer: ">", separator: "|" } }
     const view = () => form.render(100, ctx).join("\n")
     expect(view()).toContain("> Mode")
-    expect(view()).toContain("Alpha ◂▸ | First")
-    expect(view()).toContain("enter list | ←→ change | tab/↑↓ move | ctrl+s save | esc cancel")
+    expect(view()).toContain("Alpha <> | First")
+    expect(view()).toContain("enter list | left/right change | tab/up/down move | ctrl+s save | esc cancel")
     form.handleInput(key("enter"))
-    expect(view()).toContain("  > ● Alpha")
+    expect(view()).toContain("  > * Alpha")
     form.handleInput(key("escape"))
     form.handleInput(key("tab"))
     expect(view()).toContain("> Tags")

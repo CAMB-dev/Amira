@@ -1,4 +1,11 @@
-import { type Component, type InputEvent, type RenderContext, Spinner, truncateToWidth } from "@amira/tui-kit"
+import {
+  type Component,
+  chromeGlyphs,
+  type InputEvent,
+  type RenderContext,
+  Spinner,
+  truncateToWidth,
+} from "@amira/tui-kit"
 import type { FileListing, FileSource } from "./file-index.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { pickerRows } from "./picker.ts"
@@ -436,6 +443,7 @@ export class FilePicker implements Component {
   render(width: number, ctx: RenderContext, maxRows = Number.POSITIVE_INFINITY): string[] {
     if (!this.visible || maxRows <= 0) return []
     const t = ctx.theme
+    const chrome = chromeGlyphs(ctx.glyphs)
     const listing = this.#listing
     const status = !!listing && (this.#indexing || listing.partial)
     const statusRows = status && (!this.#results.length || maxRows > 1) ? 1 : 0
@@ -450,10 +458,12 @@ export class FilePicker implements Component {
       : []
     if (statusRows && this.#indexing && listing) {
       // Lined up with the rows' text, as the "searched the first …" row is.
-      const status = `  ${t.accent(this.#spinner.glyph)} ${t.muted(`indexing… ${count(listing.files)} files`)}`
-      rows.push(truncateToWidth(status, width, "…"))
+      const status = `  ${t.accent(Spinner.forGlyphs(this.#spinner.glyph, ctx.glyphs))} ${t.muted(`indexing${chrome.more} ${count(listing.files)} files`)}`
+      rows.push(truncateToWidth(status, width, chrome.more))
     } else if (statusRows && listing?.partial) {
-      rows.push(truncateToWidth(t.muted(`  searched the first ${count(listing.files)} files`), width, "…"))
+      rows.push(
+        truncateToWidth(t.muted(`  searched the first ${count(listing.files)} files`), width, chrome.more),
+      )
     }
     return rows
   }

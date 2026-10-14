@@ -24,7 +24,7 @@ test("prototype details: painted band padding and bold accent prompt preserve AN
   expect(rows[2]).toBe(theme.userBg!(" ".repeat(100)))
   expect(rows[1]).toContain(bold(theme.accent("›")))
   expect(rows[1]).toContain("\x1b[38;2;120;219;226m›")
-  expect(rows[1]).toContain(theme.muted(localClock(at)))
+  expect(rows[1]).toContain(theme.surfaceMuted!(localClock(at)))
 })
 
 test("prototype details: warning dirty marker, quiet divider, folded glyph and running accent", () => {

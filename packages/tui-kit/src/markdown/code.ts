@@ -1,4 +1,5 @@
 import { RESET } from "../ansi.ts"
+import { chromeGlyphs } from "../glyphs.ts"
 import { truncateToWidth, visibleWidth } from "../width.ts"
 import type { Env } from "./blocks.ts"
 import type { Run } from "./inline.ts"
@@ -25,11 +26,12 @@ function codeSurface(col: number, text: string, env: Env): string {
   return indent + bg(row.replaceAll(RESET, RESET + open))
 }
 
-/** Blank surface edges, with the muted language tucked into the top-right. */
+/** Blank surface edges, with the readable language label tucked into the top-right. */
 export function frameRow(col: number, bottom: boolean, env: Env, lang = ""): string {
   const box = geometry(col, env)
-  const label = bottom ? "" : truncateToWidth(lang, box.width, "…")
-  const row = codeSurface(box.col, pad(box.width - visibleWidth(label)) + env.styles.codeFrame(label), env)
+  const label = bottom ? "" : truncateToWidth(lang, box.width, chromeGlyphs(env.glyphs).more)
+  const style = label ? (env.styles.surfaceMuted ?? env.styles.codeFrame) : env.styles.codeFrame
+  const row = codeSurface(box.col, pad(box.width - visibleWidth(label)) + style(label), env)
   env.codeRow?.(row, bottom ? "bottom" : "top", box.col)
   return row
 }
@@ -40,7 +42,7 @@ export function codeRows(col: number, cells: Cell[], runs: Run[], env: Env) {
   const room = Math.max(1, box.width)
   const layout = wrapCells(cells, room, false)
   const rows = layout.map((r) => {
-    const text = truncateToWidth(cellText(cells, runs, r.start, r.end), room, "…")
+    const text = truncateToWidth(cellText(cells, runs, r.start, r.end), room, chromeGlyphs(env.glyphs).more)
     const row = codeSurface(box.col, text + pad(room - visibleWidth(text)), env)
     env.codeRow?.(row, "body", box.col)
     return row

@@ -7,14 +7,14 @@ export function scrollPosition(view: ScrollView): string {
   const p = view.position
   return p.following
     ? "following"
-    : `${Math.min(p.total, p.top + 1)}–${Math.min(p.total, p.top + p.height)} of ${p.total}`
+    : `${Math.min(p.total, p.top + 1)}${glyphs.rangeSeparator}${Math.min(p.total, p.top + p.height)} of ${p.total}`
 }
 
 /** A full-screen banner for a main-session dialog waiting for an answer. */
 export function waitingLine(theme: Theme, title: string, width: number): string {
   return theme.warning(
     truncateToWidth(
-      `${glyphs.warning} Waiting for you: ${title} · ${keyLabel({ name: "escape" })} to answer`,
+      `${glyphs.warning} Waiting for you: ${title} ${glyphs.separator} ${keyLabel({ name: "escape" })} to answer`,
       width,
       glyphs.more,
     ),
