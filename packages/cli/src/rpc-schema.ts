@@ -763,7 +763,12 @@ export function rpcSchema(): Schema {
         },
         "A single-choice question takes exactly one label or other text; a multiSelect one any number.",
       ),
-      FormOption: obj({ value: str, "label?": str, "description?": str }),
+      FormOption: obj({
+        value: str,
+        "label?": str,
+        "description?": str,
+        "detail?": oneOf(str, arrayOf(str)),
+      }),
       FormField: oneOf(...formFields()),
       FormActionResult: obj({
         "message?": str,

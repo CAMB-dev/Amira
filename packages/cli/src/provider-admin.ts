@@ -118,11 +118,36 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     if (placeholder) throw new Error(`replace ${placeholder} in the base URL with its value`)
   }
 
-  /** The key a probe of the draft should use: the one typed, the stored one, or the variable's. */
+  const keyFromEnv = (p: Pick<ProviderConfig, "apiKeyEnv" | "apiKeyEnvFallbacks">): string | undefined => {
+    for (const name of [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])]) {
+      const key = name ? env[name]?.trim() : undefined
+      if (key) return key
+    }
+    return undefined
+  }
+
+  /** Configured credentials come from Ai, never a disk reload; explicit draft edits stay local. */
   const keyFor = (d: ProviderDraft): string | undefined => {
     if (d.keySource === "none") return undefined
-    if (d.keySource === "env") return d.apiKeyEnv ? env[d.apiKeyEnv] || undefined : undefined
-    return d.apiKey || storedKeys()[d.id] || undefined
+    const typed = d.apiKey?.trim()
+    if (d.keySource === "auth" && typed) return typed
+    const current = config(d.id)
+    const sameEnv = current && (d.apiKeyEnv || undefined) === (current.apiKeyEnv || undefined)
+    if (d.keySource === "env" && !sameEnv) return keyFromEnv(d)
+    if (current) {
+      const live = ai.providerEndpoint(d.id)
+      const source = live.credentialSource
+      if (
+        (d.keySource === "auth" && (source === "explicit" || source === "stored")) ||
+        (d.keySource === "env" && sameEnv && (source === "env" || source === "none"))
+      )
+        return live.apiKey
+    }
+    if (d.keySource === "env") {
+      // Choosing environment authentication must not silently test an auth.json fallback.
+      return keyFromEnv(sameEnv ? current : d)
+    }
+    return storedKeys()[d.id]?.trim() || undefined
   }
   const endpoint = (d: ProviderDraft): ProbeEndpoint => {
     checkPlaceholders(d.baseUrl)
@@ -207,9 +232,14 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     draft: (id) => {
       const p = config(id)
       if (!p) return undefined
-      const stored = storedKeys()[id] !== undefined
+      // A disk entry can differ from, or be disabled in, the live Ai.
+      const source = ai.credentialSource?.(id) ?? ai.providerEndpoint(id).credentialSource
       const keySource =
-        p.apiKeyEnv && !(stored && !env[p.apiKeyEnv]) ? "env" : stored ? "auth" : p.apiKeyEnv ? "env" : "none"
+        source === "explicit" || source === "stored"
+          ? "auth"
+          : source === "env" || p.apiKeyEnv
+            ? "env"
+            : "none"
       const d = p.defaultModel
       const defaults: NonNullable<ProviderDraft["defaults"]> = {
         ...(d?.contextWindow ? { contextWindow: d.contextWindow } : {}),
@@ -263,6 +293,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       return { ok: r.ok, latencyMs: r.latencyMs, message: r.message }
     },
     save: async (d) => {
+      const apiKey = d.apiKey?.trim()
       check(d)
       const { catalogId } = catalogFor(d, d.models)
       const { after } = updateProviderInSettings(settingsFile, d.id, (cur) =>
@@ -274,17 +305,17 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       }
       let key: string | undefined
       if (d.keySource === "auth") {
-        if (d.apiKey) {
-          setAuthKey(keysFile, d.id, d.apiKey)
+        if (apiKey) {
+          setAuthKey(keysFile, d.id, apiKey)
           const warning = await restrict(keysFile)
-          lines.push(`Key: stored in ${keysFile} (${keyHint(d.apiKey)}).`)
+          lines.push(`Key: stored in ${keysFile} (${keyHint(apiKey)}).`)
           if (warning) lines.push(`Warning: ${warning}.`)
-          key = d.apiKey
+          key = apiKey
         } else {
-          key = storedKeys()[d.id]
+          key = keyFor(d)
           lines.push(
             key
-              ? `Key: the one stored in ${keysFile} (${keyHint(key)}).`
+              ? `Key: kept the existing credential (${keyHint(key)}).`
               : `Key: none yet; add one with /provider key ${d.id}.`,
           )
         }
@@ -296,7 +327,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         lines.push("Key: none.")
       }
       const [live] = providersFromSettings({ [d.id]: after ?? {} })
-      if (live) ai.registerProvider(key ? { ...live, apiKey: key } : live)
+      if (live) ai.registerProvider(d.keySource === "auth" ? { ...live, apiKey: key ?? "" } : live)
       // A provider switched away from auth.json must not keep using the stored key meanwhile.
       if (d.keySource !== "auth") ai.setStoredKey?.(d.id, undefined)
       const inUse = opts.currentProvider?.() === d.id

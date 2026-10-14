@@ -12,6 +12,7 @@ import {
   endpointKey,
   type NativeCompaction,
 } from "./native-compaction.ts"
+import type { ProbeEndpoint } from "./probe.ts"
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
 import { type RetryOptions, sleep, withRetry } from "./retry.ts"
 import { hasNativeWebSearch } from "./server-tools.ts"
@@ -53,6 +54,8 @@ export interface AiOptions {
   compactionMemory?: CompactionMemory
 }
 
+type CredentialSource = "explicit" | "env" | "stored" | "none"
+
 export interface Ai {
   /** Resolves "provider/model" (the model id may itself contain slashes). */
   model(ref: string): ModelInfo
@@ -60,8 +63,12 @@ export interface Ai {
   registerProvider(p: ProviderConfig): void
   registerDialect(d: Dialect): void
   providers(): ProviderConfig[]
+  /** Host-only resolved endpoint, using the live request's in-memory credentials. Never emit it or put it in a public draft. */
+  providerEndpoint(providerId: string): ProbeEndpoint & { credentialSource: CredentialSource }
   /** Whether a request to this provider would have an API key, or needs none (e.g. a local server). */
   hasKey(providerId: string): boolean
+  /** Effective live credential source, without exposing its value; unlike hasKey, none means no key. */
+  credentialSource?(providerId: string): CredentialSource
   /**
    * "provider/model" refs worth offering, e.g. for completion: the models each provider lists
    * and its own catalog's models (not a borrowed catalog's), from providers that have a key or need none.
@@ -111,8 +118,22 @@ export function createAi(opts: AiOptions = {}): Ai {
   // Null-prototype, so ids such as "constructor" never find Object's members.
   const storedKeys: Record<string, string> = Object.assign(Object.create(null), opts.apiKeys)
 
-  const hasKey = (p: ProviderConfig) =>
-    !p.apiKeyEnv || Boolean(p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id])
+  const credentialOf = (p: ProviderConfig): { source: CredentialSource; apiKey: string | undefined } => {
+    if (p.apiKey !== undefined) return { source: "explicit", apiKey: p.apiKey.trim() || undefined }
+    const fromEnv = keyFromEnv(p, env)
+    if (fromEnv !== undefined) return { source: "env", apiKey: fromEnv }
+    const stored = storedKeys[p.id]?.trim() || undefined
+    return { source: stored ? "stored" : "none", apiKey: stored }
+  }
+  const endpointOf = (p: ProviderConfig, credential = credentialOf(p)): DialectContext["endpoint"] => {
+    const { apiKey } = credential
+    return {
+      baseUrl: p.baseUrl,
+      ...(apiKey ? { apiKey } : {}),
+      ...(p.headers ? { headers: p.headers } : {}),
+    }
+  }
+  const hasKey = (p: ProviderConfig) => !p.apiKeyEnv || Boolean(credentialOf(p).apiKey)
 
   const unknownProvider = (id: string) => {
     const ids = [...providers.keys()]
@@ -128,17 +149,13 @@ export function createAi(opts: AiOptions = {}): Ai {
 
   /** What a dialect needs to reach the provider, or why no request can be sent. */
   const contextOf = (p: ProviderConfig, signal: AbortSignal): DialectContext | string => {
-    const apiKey = p.apiKey ?? keyFromEnv(p, env) ?? storedKeys[p.id]
-    if (p.apiKeyEnv && !apiKey) {
+    const endpoint = endpointOf(p)
+    if (p.apiKeyEnv && !endpoint.apiKey) {
       const names = [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])].join(" or ")
       return `${names} is not set; export it to use provider ${p.id}`
     }
     return {
-      endpoint: {
-        baseUrl: p.baseUrl,
-        ...(apiKey ? { apiKey } : {}),
-        ...(p.headers ? { headers: p.headers } : {}),
-      },
+      endpoint,
       signal,
       fetch: doFetch,
       ...(opts.userAgent !== undefined ? { userAgent: opts.userAgent } : {}),
@@ -342,9 +359,24 @@ export function createAi(opts: AiOptions = {}): Ai {
     registerProvider: (p) => void providers.set(p.id, p),
     registerDialect: (d) => void dialects.set(d.id, d),
     providers: () => [...providers.values()],
+    providerEndpoint: (id) => {
+      const p = provider(id)
+      const credential = credentialOf(p)
+      return {
+        dialect: p.dialect,
+        ...endpointOf(p, credential),
+        credentialSource: credential.source,
+        ...(p.compat ? { compat: p.compat } : {}),
+      }
+    },
     hasKey: (id) => {
       const p = providers.get(id)
       return p !== undefined && hasKey(p)
+    },
+    credentialSource: (id) => {
+      const p = providers.get(id)
+      if (!p) return "none"
+      return credentialOf(p).source
     },
     knownModels() {
       const out = new Set<string>()
@@ -372,7 +404,7 @@ export function createAi(opts: AiOptions = {}): Ai {
 
 function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>): string | undefined {
   for (const name of [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])]) {
-    const value = name ? env[name] : undefined
+    const value = name ? env[name]?.trim() : undefined
     if (value) return value
   }
   return undefined

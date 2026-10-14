@@ -1,0 +1,1514 @@
+{
+  "name": "providers",
+  "description": "Provider management and a 200-model checklist, fully offline.",
+  "prompt": "go",
+  "routes": {
+    "main": [
+      {
+        "text": "Provider fixture completed."
+      }
+    ]
+  },
+  "models": [
+    {
+      "id": "gpt-5.5",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "gpt-5.5-mini",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "gpt-5.5-nano",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "gpt-5.5-codex",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-004",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-005",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-006",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-007",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-008",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-009",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-010",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-011",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-012",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-013",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-014",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-015",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-016",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-017",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-018",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-019",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-020",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-021",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-022",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-023",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-024",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-025",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-026",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-027",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-028",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-029",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-030",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-031",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-032",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-033",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-034",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-035",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-036",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-037",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-038",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-039",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-040",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-041",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-042",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-043",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-044",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-045",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-046",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-047",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-048",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-049",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-050",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-051",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-052",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-053",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-054",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-055",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-056",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-057",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-058",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-059",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-060",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-061",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-062",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-063",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-064",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-065",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-066",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-067",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-068",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-069",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-070",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-071",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-072",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-073",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-074",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-075",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-076",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-077",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-078",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-079",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-080",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-081",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-082",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-083",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-084",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-085",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-086",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-087",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-088",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-089",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-090",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-091",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-092",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-093",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-094",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-095",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-096",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-097",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-098",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-099",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-100",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-101",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-102",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-103",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-104",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-105",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-106",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-107",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-108",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-109",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-110",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-111",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-112",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-113",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-114",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-115",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-116",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-117",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-118",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-119",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-120",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-121",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-122",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-123",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-124",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-125",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-126",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-127",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-128",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-129",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-130",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-131",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-132",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-133",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-134",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-135",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-136",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-137",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-138",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-139",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-140",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-141",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-142",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-143",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-144",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-145",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-146",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-147",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-148",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-149",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-150",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-151",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-152",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-153",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-154",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-155",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-156",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-157",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-158",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-159",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-160",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-161",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-162",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-163",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-164",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-165",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-166",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-167",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-168",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-169",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-170",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-171",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-172",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-173",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-174",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-175",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-176",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-177",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.25,
+        "output": 2
+      }
+    },
+    {
+      "id": "demo-model-178",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 0.05,
+        "output": 0.4
+      }
+    },
+    {
+      "id": "demo-model-179",
+      "contextWindow": 400000,
+      "cost": {
+        "input": 1.25,
+        "output": 10
+      }
+    },
+    {
+      "id": "demo-model-180"
+    },
+    {
+      "id": "demo-model-181"
+    },
+    {
+      "id": "demo-model-182"
+    },
+    {
+      "id": "demo-model-183"
+    },
+    {
+      "id": "demo-model-184"
+    },
+    {
+      "id": "demo-model-185"
+    },
+    {
+      "id": "demo-model-186"
+    },
+    {
+      "id": "demo-model-187"
+    },
+    {
+      "id": "demo-model-188"
+    },
+    {
+      "id": "demo-model-189"
+    },
+    {
+      "id": "demo-model-190"
+    },
+    {
+      "id": "demo-model-191"
+    },
+    {
+      "id": "demo-model-192"
+    },
+    {
+      "id": "demo-model-193"
+    },
+    {
+      "id": "demo-model-194"
+    },
+    {
+      "id": "demo-model-195"
+    },
+    {
+      "id": "demo-model-196"
+    },
+    {
+      "id": "demo-model-197"
+    },
+    {
+      "id": "demo-model-198"
+    },
+    {
+      "id": "demo-model-199"
+    }
+  ]
+}

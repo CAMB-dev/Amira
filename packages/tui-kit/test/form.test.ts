@@ -1,4 +1,4 @@
-// A/D deliberate oracles: fields hang at content column 2; form cursors use › and filters use a colon.
+// A/D deliberate oracles: readable form content starts at column 2; filters use a muted `filter:` label.
 import { describe, expect, test } from "bun:test"
 import { CURSOR_MARKER } from "../src/component.ts"
 import {
@@ -123,6 +123,21 @@ function makeForm(over: Partial<FormOptions> = {}) {
   return { form, log, view, submitted: () => submitted }
 }
 
+function makeChecklist(
+  options: NonNullable<FormFieldView["options"]> = [
+    { value: "model-a", label: "Alpha" },
+    { value: "model-b", label: "Beta" },
+    { value: "model-c", label: "Alpine" },
+  ],
+  values: string[] = [],
+) {
+  return makeForm({
+    fields: [{ id: "tags", type: "multiselect", label: "Tags", options }],
+    values: { tags: values },
+    validate: () => ({}),
+  })
+}
+
 describe("Form", () => {
   test("configured ASCII pointers and separators follow field, list, action and footer focus", () => {
     const { form } = makeForm({
@@ -170,7 +185,10 @@ describe("Form", () => {
       ["secret", "enter next"],
       ["number", "enter next"],
       ["select", "enter list · ←→ change"],
-      ["multiselect", "space toggle · type to filter · ctrl+a all"],
+      [
+        "multiselect",
+        "space toggle · type to filter · ctrl+a all/none filtered options · ctrl+x invert filtered options",
+      ],
       ["checkbox", "space toggle"],
       ["textarea", "shift+enter newline · enter next"],
       ["action", "enter run"],
@@ -182,8 +200,9 @@ describe("Form", () => {
         onSubmit: () => {},
         onCancel: () => {},
       })
-      const rows = form.render(100, plain)
-      expect(rows.at(-1)).toBe(`${lead} · tab/↑↓ move · ctrl+s save · esc cancel`)
+      const rows = form.render(120, plain)
+      const hint = type === "multiselect" ? rows.slice(-2).join(" · ") : rows.at(-1)
+      expect(hint).toBe(`${lead} · tab/↑↓ move · ctrl+s save · esc cancel`)
       const text = rows.join("\n")
       expect(text).toContain("Provider Settings")
       expect(text).toContain("Keep This Prose")
@@ -262,6 +281,388 @@ describe("Form", () => {
     // ↓ past the last row leaves the list.
     for (let i = 0; i < 10; i++) form.handleInput(key("down"))
     expect(form.focused).not.toBe("tags")
+  })
+
+  test("filtered all/none and invert retain outside selections and report global counts", () => {
+    const { form, view } = makeChecklist(undefined, ["model-b"])
+    expect(view()).toContain("Tags · selected 1/3")
+    expect(view()).toContain("filter: ")
+    type(form, "ALP")
+    expect(view()).toContain("Tags · selected 1/3 · 2 shown")
+    expect(view()).not.toContain("Beta")
+    form.handleInput(key("a", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-b", "model-a", "model-c"])
+    expect(view()).toContain("selected 3/3 · 2 shown")
+    form.handleInput(key("a", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-b"])
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-b", "model-a", "model-c"])
+    form.handleInput(key("space"))
+    expect(form.values.tags).toEqual(["model-b", "model-c"])
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-b", "model-a"])
+    expect(view()).toContain("selected 2/3 · 2 shown")
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-b", "model-c"])
+    type(form, "missing")
+    expect(view()).toContain("selected 2/3 · 0 shown")
+    expect(view()).toContain("no match")
+    form.handleInput(key("a", { ctrl: true }))
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-b", "model-c"])
+  })
+
+  test("bulk bindings act on every matching option, not just the eight visible rows", () => {
+    const matching = Array.from({ length: 12 }, (_, i) => ({ value: `match-${i}` }))
+    const { form, view } = makeChecklist([...matching, { value: "outside" }], ["outside"])
+    type(form, "match")
+    expect(view()).toContain("12 shown")
+    expect(view()).not.toContain("match-11")
+    form.handleInput(key("a", { ctrl: true }))
+    expect(form.values.tags).toEqual(["outside", ...matching.map((o) => o.value)])
+    form.handleInput(key("a", { ctrl: true }))
+    expect(form.values.tags).toEqual(["outside"])
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["outside", ...matching.map((o) => o.value)])
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["outside"])
+  })
+
+  test("unfiltered all/none and invert include checked extra rows in the total", () => {
+    const { form, view } = makeChecklist(undefined, ["extra"])
+    expect(view()).toContain("selected 1/4")
+    form.handleInput(key("a", { ctrl: true }))
+    expect(form.values.tags).toEqual(["extra", "model-a", "model-b", "model-c"])
+    expect(view()).toContain("selected 4/4")
+    form.handleInput(key("a", { ctrl: true }))
+    expect(form.values.tags).toEqual([])
+    expect(view()).toContain("selected 0/3")
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-a", "model-b", "model-c"])
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual([])
+    form.handleInput(key("space"))
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["model-b", "model-c"])
+    form.handleInput(key("tab"))
+    expect(view()).toContain("Tags · selected 2/3")
+    expect(view()).not.toContain("filter:")
+  })
+
+  test("checklist filters match labels and ids case-insensitively and Esc clears before cancel", () => {
+    const { form, view, log } = makeChecklist()
+    type(form, "ALP")
+    expect(view()).toContain("Alpha")
+    expect(view()).toContain("Alpine")
+    expect(view()).not.toContain("Beta")
+    form.handleInput(key("escape"))
+    expect(log).toEqual([])
+    expect(view()).toContain("filter: ")
+    expect(view()).not.toContain("shown")
+    type(form, "MODEL-B")
+    expect(view()).toContain("Beta")
+    expect(view()).not.toContain("Alpha")
+    expect(view()).toContain("1 shown")
+    form.handleInput(key("escape"))
+    type(form, "é👨‍👩‍👧")
+    form.handleInput(key("backspace"))
+    expect(view()).toContain("filter: é")
+    expect(view()).not.toContain("👨")
+    form.handleInput(key("backspace"))
+    expect(view()).not.toContain("é")
+    expect(view()).not.toContain("shown")
+    expect(form.dirty).toBe(false)
+    form.handleInput(key("escape"))
+    expect(log).toEqual(["cancel"])
+  })
+
+  test("empty checklists keep their filter caret and bulk actions are harmless", () => {
+    const { form, view } = makeChecklist([])
+    expect(view()).toContain("selected 0/0")
+    expect(view()).toContain("filter: ")
+    expect(view()).toContain("(no options yet)")
+    type(form, "missing")
+    expect(view()).toContain("selected 0/0 · 0 shown")
+    form.handleInput(key("a", { ctrl: true }))
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual([])
+    expect(form.dirty).toBe(false)
+    const lines = form.render(16, { ...plain, rows: 7 })
+    expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
+  })
+
+  test("focused checklist filters mute only the shared filter label, not the query", () => {
+    const { form } = makeChecklist()
+    type(form, "ALP")
+    const lines = form.render(60, {
+      ...plain,
+      theme: { ...plain.theme, muted: (s) => `\x1b[90m${s}\x1b[39m` },
+    })
+    const filter = lines.find((l) => l.includes(CURSOR_MARKER))!
+    expect(filter).toBe(`  \x1b[90mfilter:\x1b[39m ALP${CURSOR_MARKER}`)
+  })
+
+  test("trailing subcolumns align independently across all filtered rows and scroll positions", () => {
+    const options = [
+      { value: "a", label: "Alpha", detail: ["128k", "$0.27/$1.10"] },
+      { value: "b", label: "Beta", detail: ["2M", "$12.50/$24"] },
+      { value: "c", label: "Gamma", detail: ["1M"] },
+      { value: "d", label: "Unknown" },
+      { value: "e", label: "Legacy", detail: "64k" },
+      { value: "f", label: "Blank", detail: [] },
+      { value: "g", label: "Empty price", detail: ["32k", ""] },
+      { value: "h", label: "Other" },
+      { value: "i", label: "Wider context", detail: ["1,048,576", "$123.45/$678.90"] },
+    ]
+    const { form } = makeChecklist(options, ["custom"])
+    for (const [width, rows] of [
+      [100, 32],
+      [60, 24],
+    ] as const) {
+      const lines = form.render(width, { ...plain, rows })
+      const alpha = lines.find((l) => l.includes("[ ] Alpha"))!
+      const beta = lines.find((l) => l.includes("[ ] Beta"))!
+      const gamma = lines.find((l) => l.includes("[ ] Gamma"))!
+      const legacy = lines.find((l) => l.includes("[ ] Legacy"))!
+      const edge = alpha.indexOf("128k") + 4
+      expect(beta.indexOf("2M") + 2).toBe(edge)
+      expect(gamma.indexOf("1M") + 2).toBe(edge)
+      expect(legacy.indexOf("64k") + 3).toBe(edge)
+      expect(alpha.endsWith("$0.27/$1.10")).toBe(true)
+      expect(beta.endsWith("$12.50/$24")).toBe(true)
+      expect(visibleWidth(alpha)).toBe(width)
+      expect(visibleWidth(beta)).toBe(width)
+      expect(lines.find((l) => l.includes("[ ] Unknown"))).not.toContain("undefined")
+      for (let i = 0; i < 9; i++) form.handleInput(key("down"))
+      const scrolled = form.render(width, { ...plain, rows })
+      const widest = scrolled.find((l) => l.includes("[ ] Wider context"))!
+      expect(widest.indexOf("1,048,576") + 9).toBe(edge)
+      expect(scrolled.join("\n")).toContain("[x] custom")
+      for (const line of [...lines, ...scrolled]) expect(visibleWidth(line)).toBeLessThanOrEqual(width)
+      for (let i = 0; i < 9; i++) form.handleInput(key("up"))
+    }
+    type(form, "Alpha")
+    const filtered = form.render(60, plain).find((l) => l.includes("[ ] Alpha"))!
+    expect(filtered.endsWith("$0.27/$1.10")).toBe(true)
+    expect(filtered.indexOf("128k") + 4).toBe(60 - "$0.27/$1.10".length - 2)
+  })
+
+  test("narrow subcolumns drop the complete rightmost column before context", () => {
+    const { form } = makeChecklist([
+      { value: "a", label: "Alpha", detail: ["128k", "$0.27/$1.10"] },
+      { value: "b", label: "Wider context", detail: ["1,048,576", "$123.45/$678.90"] },
+    ])
+    for (const width of [40, 32]) {
+      const lines = form.render(width, plain)
+      const alpha = lines.find((l) => l.includes("[ ] Alpha"))!
+      const wider = lines.find((l) => l.includes("[ ] Wider context"))!
+      expect(alpha.endsWith("128k")).toBe(true)
+      expect(wider.endsWith("1,048,576")).toBe(true)
+      expect(lines.join("\n")).not.toContain("$")
+    }
+    for (const width of [1, 4, 8, 12, 20]) {
+      const lines = form.render(width, plain)
+      expect(lines.join("\n")).not.toContain("128k")
+      expect(lines.join("\n")).not.toContain("$")
+      expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width)
+    }
+  })
+
+  test("generic subcolumns handle wide text and sanitize notes without parsing their content", () => {
+    const { form } = makeChecklist([
+      { value: "a", label: "Alpha", detail: ["漢字", "short", "第三"] },
+      { value: "b", label: "Beta", detail: ["字", "longer\x1b[2J", "👨‍👩‍👧\n"] },
+    ])
+    const lines = form.render(60, plain)
+    const alpha = lines.find((l) => l.includes("[ ] Alpha"))!
+    const beta = lines.find((l) => l.includes("[ ] Beta"))!
+    expect(visibleWidth(alpha.slice(0, alpha.indexOf("漢字"))) + 4).toBe(
+      visibleWidth(beta.slice(0, beta.indexOf("字"))) + 2,
+    )
+    expect(visibleWidth(alpha.slice(0, alpha.indexOf("short"))) + 5).toBe(
+      visibleWidth(beta.slice(0, beta.indexOf("longer"))) + 6,
+    )
+    expect(visibleWidth(alpha)).toBe(60)
+    expect(visibleWidth(beta)).toBe(60)
+    expect(beta).not.toContain("\x1b[2J")
+    expect(beta).not.toContain("\n")
+  })
+
+  test("form headings and descriptions share the field content column", () => {
+    const { form } = makeForm({
+      title: "Settings",
+      description: "Description",
+      sections: [{ title: "Connection", help: "Section help" }],
+      fields: [{ id: "name", type: "text", label: "Name", section: "Connection" }],
+    })
+    const lines = form.render(60, plain)
+    expect(lines[0]).toMatch(/^ {2}/)
+    expect(lines[1]).toBe("  Description")
+    expect(lines.find((l) => l.includes("Connection"))).toMatch(/^ {2}/)
+    expect(lines.find((l) => l.includes("Section help"))).toBe("  Section help")
+    expect(lines.find((l) => l.includes("Name"))).toBe("› Name")
+  })
+
+  test("a singleton section matching its field label avoids duplication without hiding controls", () => {
+    const { form } = makeForm({
+      title: "Settings",
+      sections: [{ title: "Models", help: "Choose matching models" }],
+      fields: [
+        {
+          id: "tags",
+          type: "multiselect",
+          label: "Models",
+          section: "Models",
+          required: true,
+          options: [{ value: "a" }],
+        },
+      ],
+    })
+    const lines = form.render(60, plain)
+    expect(lines.filter((l) => l.includes("Models"))).toHaveLength(1)
+    expect(lines.join("\n")).toContain("› Models * · selected 0/1")
+    expect(lines.join("\n")).toContain("Choose matching models")
+    expect(lines.join("\n")).toContain("[ ] a")
+    expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
+    const grouped = makeForm({
+      fields: [
+        { id: "first", type: "text", label: "Connection", section: "Connection" },
+        { id: "second", type: "text", label: "URL", section: "Connection" },
+      ],
+    })
+    expect(
+      grouped
+        .view()
+        .split("\n")
+        .filter((l) => l.includes("Connection")),
+    ).toHaveLength(2)
+  })
+
+  test("multiselect details align right while inline descriptions remain supported", () => {
+    const { form, view } = makeChecklist([
+      { value: "a", label: "Alpha", description: "first", detail: "128k" },
+      { value: "b", label: "Beta", detail: "2M" },
+      { value: "c", label: "Gamma", description: "third" },
+      { value: "d", label: "Delta", detail: "" },
+    ])
+    const lines = form.render(50, { ...plain, rows: 40 })
+    const alpha = lines.find((l) => l.includes("[ ] Alpha"))!
+    const beta = lines.find((l) => l.includes("[ ] Beta"))!
+    expect(alpha).toContain("Alpha  first")
+    expect(alpha.endsWith("128k")).toBe(true)
+    expect(beta.endsWith("2M")).toBe(true)
+    expect(visibleWidth(alpha)).toBe(50)
+    expect(visibleWidth(beta)).toBe(50)
+    expect(view()).toContain("Gamma  third")
+    expect(view()).not.toContain("undefined")
+    form.setOptions("tags", [{ value: "a", label: "Alpha", detail: "updated" }])
+    expect(view()).toContain("updated")
+  })
+
+  test("detail columns and empty states stay width-bounded in narrow terminals", () => {
+    const { form } = makeChecklist([
+      { value: "a", label: "Long model label", detail: "Context info with a long price" },
+      { value: "b", label: "漢字 model", detail: "128k 👨‍👩‍👧" },
+      { value: "c", label: "Short", description: "legacy description", detail: "" },
+    ])
+    for (const width of [1, 4, 8, 10, 12, 16, 24, 50]) {
+      const lines = form.render(width, { ...plain, rows: 40 })
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width)
+      expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
+    }
+    const narrow = form.render(16, { ...plain, rows: 40 }).join("\n")
+    expect(narrow).toContain("Lo…")
+    expect(narrow).toContain("Co…")
+    const empty = makeChecklist([])
+    for (const width of [1, 4, 8, 12]) {
+      for (const line of empty.form.render(width, { ...plain, rows: 40 }))
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width)
+    }
+    type(form, "a very long query with 漢字")
+    const filter = form.render(16, { ...plain, rows: 40 }).find((l) => l.includes(CURSOR_MARKER))!
+    expect(visibleWidth(filter.split(CURSOR_MARKER)[0]!)).toBeLessThan(16)
+  })
+
+  test("bulk actions and filter changes retain the scrolled highlight and active row", () => {
+    const { form, view } = makeChecklist(
+      Array.from({ length: 14 }, (_, i) => ({ value: `id-${i}`, label: `Group ${i}` })),
+    )
+    for (let i = 0; i < 11; i++) form.handleInput(key("down"))
+    expect(view()).toContain("› [ ] Group 11")
+    expect(view()).toContain("12/14")
+    form.handleInput(key("a", { ctrl: true }))
+    expect(view()).toContain("› [x] Group 11")
+    form.handleInput(key("x", { ctrl: true }))
+    expect(view()).toContain("› [ ] Group 11")
+    expect(view()).toContain("12/14")
+    type(form, "GROUP")
+    expect(view()).toContain("› [ ] Group 11")
+    form.handleInput(key("escape"))
+    expect(view()).toContain("› [ ] Group 11")
+    type(form, "ID-11")
+    expect(view()).toContain("› [ ] Group 11")
+    form.handleInput(key("escape"))
+    expect(view()).toContain("› [ ] Group 11")
+    const short = form.render(50, { ...plain, rows: 9 }).join("\n")
+    expect(short).toContain("› [ ] Group 11")
+    form.handleInput(key("space"))
+    expect(form.values.tags).toEqual(["id-11"])
+  })
+
+  test("bulk key hints remain visible at walkthrough widths", () => {
+    const { form } = makeChecklist([{ value: "a" }])
+    for (const [width, rows] of [
+      [100, 32],
+      [60, 24],
+    ] as const) {
+      const lines = form.render(width, { ...plain, rows })
+      const view = lines.join("\n")
+      expect(lines.some((l) => l.includes("ctrl+a all/none filtered options"))).toBe(true)
+      expect(lines.some((l) => l.includes("ctrl+x invert filtered options"))).toBe(true)
+      expect(view).toContain("esc cancel")
+      expect(view).toContain("filter:")
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width)
+    }
+  })
+
+  test("bulk shortcuts stay local and global save/cancel still win over field bindings", () => {
+    const { form, log, submitted } = makeForm({
+      fields: [
+        { id: "name", type: "text", label: "Name" },
+        { id: "tags", type: "multiselect", label: "Tags", options: [{ value: "a" }, { value: "b" }] },
+        { id: "notes", type: "textarea", label: "Notes" },
+      ],
+      values: { tags: ["a"] },
+      validate: () => ({}),
+    })
+    type(form, "Ada")
+    form.handleInput(key("a", { ctrl: true }))
+    type(form, "!")
+    expect(form.values.name).toBe("!Ada")
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["a"])
+    form.handleInput(key("tab"))
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["b"])
+    form.handleInput(key("tab"))
+    type(form, "Note")
+    form.handleInput(key("a", { ctrl: true }))
+    type(form, "!")
+    expect(form.values.notes).toBe("!Note")
+    form.handleInput(key("x", { ctrl: true }))
+    expect(form.values.tags).toEqual(["b"])
+    form.handleInput(key("tab", { shift: true }))
+    type(form, "b")
+    form.handleInput(key("s", { ctrl: true }))
+    expect(log).toEqual(["submit"])
+    expect(submitted()?.tags).toEqual(["b"])
+    expect(form.values.tags).toEqual(["b"])
+    type(form, "a")
+    form.handleInput(key("c", { ctrl: true }))
+    expect(form.confirmingCancel).toBe(true)
+    form.handleInput(key("y"))
+    expect(log).toEqual(["submit", "cancel"])
   })
 
   test("problems show once a field is left, and saving goes to the first one", () => {
