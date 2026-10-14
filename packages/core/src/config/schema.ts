@@ -1,4 +1,4 @@
-import type { Settings } from "@amira/api"
+import { DEFAULT_MAX_PARALLEL_TOOLS, DEFAULT_SUBAGENT_MAX_CONCURRENT, type Settings } from "@amira/api"
 import { isCommandAliasName } from "../commands.ts"
 import { isPlainObject, UNSAFE_KEYS } from "./merge.ts"
 
@@ -41,6 +41,16 @@ const boolean = expect("true or false", (v) => typeof v === "boolean")
 const number = expect("a number", (v) => typeof v === "number" && Number.isFinite(v))
 const integer = (min: number) =>
   expect(`a whole number of at least ${min}`, (v) => Number.isInteger(v) && (v as number) >= min)
+/** Invalid concurrency settings warn and reset to the default, even over a valid lower layer. */
+const concurrency =
+  (fallback: number): Check =>
+  (v, key, out) => {
+    if (typeof v === "number" && Number.isInteger(v) && v >= 1) return v
+    out.warnings.push(
+      `"${key}" must be a whole number of at least 1, got ${show(v)}; using default ${fallback}`,
+    )
+    return fallback
+  }
 const integerBetween = (min: number, max: number) =>
   expect(
     `a whole number between ${min} and ${max}`,
@@ -205,7 +215,7 @@ const settings = object({
   tools: object({ disabled: list(string) }),
   fileRewind: object({ enabled: boolean, maxFileBytes: integer(1), quotaBytes: integer(1) }),
   commandAliases,
-  maxParallelTools: integer(1),
+  maxParallelTools: concurrency(DEFAULT_MAX_PARALLEL_TOOLS),
   compact: object({ threshold: number, model: modelRef, layout: oneOf("tail", "recent-user") }),
   context: object({
     outputs: object({ saveAbove: integer(4000), previewChars: integer(500), quotaMB: integer(1) }),
@@ -258,7 +268,11 @@ const settings = object({
   }),
   agents: record(object({ model: modelRef })),
   sessions: object({ autoTitle: boolean }),
-  subagents: object({ maxDepth: integer(1), maxConcurrent: integer(1), background: boolean }),
+  subagents: object({
+    maxDepth: integer(1),
+    maxConcurrent: concurrency(DEFAULT_SUBAGENT_MAX_CONCURRENT),
+    background: boolean,
+  }),
   backgroundJobs: object({
     maxRunning: integer(1),
     bufferChars: integer(1000),

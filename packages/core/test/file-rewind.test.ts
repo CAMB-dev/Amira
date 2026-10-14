@@ -80,6 +80,138 @@ test("write captures a new file and a binary overwrite; edit preserves bytes acr
   expect(readdirSync(rewind.directory).length).toBeGreaterThan(0)
 })
 
+test("conversation-only checkout keeps chronological file versions across discarded branches", async () => {
+  const { dir, store, messageId, rewind, write } = setup()
+  writeFileSync(join(dir, "a"), "original")
+  await write("a", "first")
+  const second = store.appendMessage(userMessage("second"))
+  await write("a", "discarded")
+  store.append({ type: "checkout", target: store.get(second)!.parentId })
+  const replacement = store.appendMessage(userMessage("replacement"))
+  await write("a", "replacement")
+  expect(rewind.plan(messageId)).toMatchObject({ restored: 1, conflicts: [] })
+  rewind.restore(replacement, store.get(replacement)!.parentId)
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("discarded")
+  expect(rewind.plan(messageId)).toMatchObject({ restored: 1, conflicts: [] })
+  rewind.restore(messageId, null)
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("original")
+})
+
+test("a fork after a completed rewind tolerates restore markers from the discarded branch", async () => {
+  const { dir, store, messageId, rewind, write } = setup()
+  await write("a", "first")
+  const second = store.appendMessage(userMessage("second"))
+  await write("a", "second")
+  await write("b", "created")
+  rewind.restore(second, store.get(second)!.parentId)
+  const forked = store.fork()
+  copyFileHistory(store, forked)
+  const recorder = new FileRewind(forked)
+  expect(recorder.plan(messageId)).toMatchObject({ removed: 1, conflicts: [] })
+  recorder.restore(messageId, null)
+  expect(existsSync(join(dir, "a"))).toBe(false)
+  expect(existsSync(join(dir, "b"))).toBe(false)
+  expect(forked.restore().messages).toHaveLength(0)
+})
+
+test("disabled capture refuses a new restore even when called without the CLI", () => {
+  const { store, messageId, rewind } = setup({ enabled: false })
+  const leaf = store.leafId
+  expect(() => rewind.restore(messageId, null)).toThrow("disabled")
+  expect(store.leafId).toBe(leaf)
+  expect(store.entries.some((e) => e.type === "file_restore")).toBe(false)
+})
+
+test("discarded writes remain the expected version even without a new branch write", async () => {
+  const { dir, store, messageId, rewind, write } = setup()
+  await write("a", "first")
+  const second = store.appendMessage(userMessage("second"))
+  await write("a", "discarded")
+  store.append({ type: "checkout", target: store.get(second)!.parentId })
+  expect(rewind.plan(messageId)).toMatchObject({ removed: 1, conflicts: [] })
+  rewind.restore(messageId, null)
+  expect(existsSync(join(dir, "a"))).toBe(false)
+})
+
+test("external edits between discarded and replacement writes are still conflicts", async () => {
+  const { dir, store, messageId, rewind, write } = setup()
+  await write("a", "first")
+  const second = store.appendMessage(userMessage("second"))
+  await write("a", "discarded")
+  store.append({ type: "checkout", target: store.get(second)!.parentId })
+  writeFileSync(join(dir, "a"), "external")
+  const replacement = store.appendMessage(userMessage("replacement"))
+  await write("a", "replacement")
+  expect(rewind.plan(messageId).conflicts).toEqual([join(dir, "a")])
+  expect(() => rewind.restore(messageId, null)).toThrow("nothing changed")
+  expect(rewind.plan(replacement).conflicts).toEqual([])
+  rewind.restore(replacement, store.get(replacement)!.parentId)
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("external")
+})
+
+test("an external edit after a discarded branch still refuses the entire restore", async () => {
+  const { dir, store, messageId, rewind, write } = setup()
+  await write("a", "first")
+  const second = store.appendMessage(userMessage("second"))
+  await write("a", "discarded")
+  store.append({ type: "checkout", target: store.get(second)!.parentId })
+  store.appendMessage(userMessage("replacement"))
+  await write("a", "replacement")
+  await write("b", "created")
+  writeFileSync(join(dir, "a"), "external")
+  const leaf = store.leafId
+  expect(() => rewind.restore(messageId, null)).toThrow("nothing changed")
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("external")
+  expect(readFileSync(join(dir, "b"), "utf8")).toBe("created")
+  expect(store.leafId).toBe(leaf)
+})
+
+test("files already at the restore target are skipped while the remaining files restore", async () => {
+  const { dir, messageId, rewind, write } = setup()
+  writeFileSync(join(dir, "a"), "original")
+  await write("a", "changed")
+  await write("b", "created")
+  await write("c", "also created")
+  writeFileSync(join(dir, "a"), "original")
+  rmSync(join(dir, "b"))
+  expect(rewind.plan(messageId)).toMatchObject({ restored: 0, removed: 1, conflicts: [] })
+  rewind.restore(messageId, null)
+  expect(readFileSync(join(dir, "a"), "utf8")).toBe("original")
+  expect(existsSync(join(dir, "b"))).toBe(false)
+  expect(existsSync(join(dir, "c"))).toBe(false)
+})
+
+test("hard-link realpath aliases are accepted only for the same inode and expected bytes", async () => {
+  const { dir, messageId, rewind, write } = setup()
+  const file = join(dir, "a")
+  const twin = join(dir, "twin")
+  writeFileSync(file, "original")
+  linkSync(file, twin)
+  await write("a", "changed")
+  const native = realpathSync.native
+  const alias = spyOn(realpathSync, "native").mockImplementation((...args) => {
+    const resolved = Reflect.apply(native, realpathSync, args)
+    if (String(args[0]) !== file) return resolved
+    return typeof resolved === "string" ? twin : Buffer.from(twin)
+  })
+  try {
+    expect(rewind.plan(messageId)).toMatchObject({ restored: 1, conflicts: [] })
+    writeFileSync(twin, "external")
+    expect(rewind.plan(messageId).conflicts).toEqual([file])
+    writeFileSync(twin, "changed")
+    rmSync(twin)
+    writeFileSync(twin, "changed")
+    expect(rewind.plan(messageId).conflicts).toEqual([file])
+    rmSync(twin)
+    linkSync(file, twin)
+    rewind.restore(messageId, null)
+    expect(readFileSync(twin, "utf8")).toBe("original")
+    expect(statSync(file).ino).toBe(statSync(twin).ino)
+  } finally {
+    alias.mockRestore()
+  }
+})
+
 test("apply_patch captures add, move, update and binary deletion as one mutation", async () => {
   const { dir, ctx, store, rewind, messageId } = setup()
   writeFileSync(join(dir, "old"), "old\n")
