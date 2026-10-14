@@ -35,6 +35,24 @@ test("RPC select requests expose optional display labels and nullable status bad
   expect(select.required).toEqual(["kind", "title", "options"])
 })
 
+test.each(["select", "confirm", "input", "diff-review", "ask", "form", "extension-settings"])(
+  "RPC %s requests expose optional display-only session association",
+  (kind) => {
+    const defs = (rpcSchema() as any).$defs
+    const request = defs.UiRequest.oneOf.find((entry: any) => entry.properties.kind.enum[0] === kind)
+    expect(request).toBeDefined()
+    expect(request.properties.sessionId).toEqual({
+      type: "string",
+      description: "Display association only; does not grant access to or control over the conversation.",
+    })
+    expect(request.required).not.toContain("sessionId")
+    const event = defs.Event.anyOf.find((entry: any) => entry.properties.type.enum[0] === "ui.request")
+    expect(event.properties.data.allOf[0]).toEqual({ $ref: "#/$defs/UiRequest" })
+    const state = defs.Response.oneOf.find((entry: any) => entry.description === "Answer to state.")
+    expect(state.properties.uiRequests.items).toEqual({ $ref: "#/$defs/UiRequest" })
+  },
+)
+
 test("RPC group snapshots expose paused presentation and durable terminal outcomes", () => {
   const defs = (rpcSchema() as any).$defs
   for (const type of ["group.start", "group.update", "group.end"]) {

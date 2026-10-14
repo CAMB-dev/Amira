@@ -183,6 +183,16 @@ export class Dialog implements Component {
     return true
   }
 
+  /** Releases unfinished answers without invoking the request's answer callback. */
+  close(): void {
+    this.#done = true
+    this.#editor = undefined
+    this.#secret = undefined
+    this.#field = undefined
+    this.#filter = ""
+    this.#pages = []
+  }
+
   handleInput(e: InputEvent): boolean {
     if (this.#done) return false
     const keys = this.keys
@@ -259,6 +269,7 @@ export class Dialog implements Component {
   }
 
   render(width: number, ctx: RenderContext): string[] {
+    if (!this.#pages.length) return []
     const { theme } = ctx
     this.#animatedRows.clear()
     this.#refreshIntervalMs = undefined

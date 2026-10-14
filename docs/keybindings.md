@@ -77,6 +77,8 @@ from `terminal.integrated.commandsToSkipShell`.
 | `edit.redo` | `ctrl+shift+z` | Redo the change undone last. Terminals without the kitty keyboard protocol send Ctrl+Shift+Z as Ctrl+Z; bind another key there |
 | `edit.external` | `ctrl+g` | Edit the message in your editor: `$VISUAL`, else `$EDITOR`, else Git's `core.editor` (a command, e.g. `code --wait`), else Notepad on Windows and vi elsewhere. The terminal is the editor's until it exits; the saved text becomes the input |
 
+When an [extension-owned conversation](extensions.md#extension-owned-conversations) has native focus (inline or fullscreen), F6 (`view.focus`, or your binding) returns to main without stopping either conversation. Esc (`interrupt`) also returns when the focused conversation is idle and the composer is empty; while it is working, Esc/Ctrl+C (`interrupt`/`cancel`) stop only that conversation, not background main work. Dialogs, completion lists and history search keep their key priority. Drafts, prompt history, images and pasted content stay scoped to the conversation; `@` file completion uses its working directory. Slash commands and skills show a hint instead of executing: return to main and execute them explicitly.
+
 ### Completion lists
 
 The command popup, shown while the input starts with `/`; the skill popup, shown while it
@@ -180,7 +182,7 @@ is no hidden Esc or Ctrl+C fallback, so keep a way to leave the view bound.
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `view.focus` | `f6`, `ctrl+tab` | Toggle focus between the view and the composer, including default views; Ctrl+Tab is an alias where delivered |
+| `view.focus` | `f6`, `ctrl+tab` | Toggle focus between the view and the composer, including default views; return to main from a natively focused owned conversation. Ctrl+Tab is an alias where delivered |
 | `view.back` | `escape` | Release an activated text field, go back one page, or close the root page; cancel a view's prompt |
 | `view.close` | `q`, `ctrl+c` | Close the whole view, including any nested pages |
 | `view.scroll-up` | `up` | Scroll view text up a line |

@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from "node:fs"
 import path from "node:path"
-import type { Ai, Message } from "@amira/ai"
+import { type Ai, type Message, userMessage } from "@amira/ai"
 import type {
   ConversationRuntime,
   ConversationSpec,
@@ -24,6 +24,7 @@ import {
   type SavedConversation,
   validateSpec,
 } from "./owned-conversations-storage.ts"
+import { registerConversationScope, sessionScopeContains } from "./session-routing.ts"
 import { approveWithHost } from "./subagents/host-approval.ts"
 import { AgentTree } from "./subagents.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -326,6 +327,10 @@ class Handle implements OwnedConversation {
     this.#state = state
     this.#canExecute = canExecute
     this.id = agent.sessionId
+    registerConversationScope(
+      this,
+      (id) => !this.#released && sessionScopeContains(agent.tree, id, agent.sessionId),
+    )
     this.key = spec.key
     this.name = spec.name
     this.cwd = spec.cwd
@@ -378,7 +383,7 @@ class Handle implements OwnedConversation {
     }
   }
 
-  async send(text: string, options?: { signal?: AbortSignal }): Promise<void> {
+  async send(text: string, options?: Parameters<OwnedConversation["send"]>[1]): Promise<void> {
     this.#check()
     if (options?.signal?.aborted) {
       if (!this.#running) this.#state = "stopped"
@@ -397,7 +402,18 @@ class Handle implements OwnedConversation {
     this.#running = (async () => {
       const result = await this.#agent.tree!.runRoot(
         this.#agent,
-        () => this.#agent.prompt(text),
+        () =>
+          this.#agent.prompt(
+            options?.images?.length
+              ? {
+                  role: "user",
+                  content: [...(text ? [{ type: "text" as const, text }] : []), ...options.images],
+                  ...(options.display ? { display: options.display } : {}),
+                }
+              : options?.display
+                ? userMessage(text, options.display)
+                : text,
+          ),
         controller.signal,
       )
       this.#state = result.reason === "error" ? "error" : result.reason === "aborted" ? "stopped" : "idle"

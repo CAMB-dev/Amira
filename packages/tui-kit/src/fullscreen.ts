@@ -2,6 +2,7 @@ import { cursor, erase, modes, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 import { type ImagePlacement, ScreenImageLayer } from "./images/screen.ts"
 import type { RendererOptions } from "./renderer.ts"
+import { registerFullscreenControl } from "./renderer-controls.ts"
 import { defaultTheme, isColorEnabled, stripColors } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
 import { closeStyles, presentEmoji, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
@@ -33,6 +34,7 @@ export class FullScreenRenderer {
   private lastFrameAt = 0
   private offResize: (() => void) | undefined
   private opened = false
+  private active = true
   /** Where the cursor was shown by the last frame; undefined when hidden. */
   private cursorAt: { row: number; col: number } | undefined
   private images = new ScreenImageLayer()
@@ -50,6 +52,7 @@ export class FullScreenRenderer {
       color: opts.color ?? isColorEnabled(),
       rows: terminal.rows,
     }
+    registerFullscreenControl(this, (paused) => this.pause(paused))
   }
 
   get isOpen(): boolean {
@@ -62,16 +65,37 @@ export class FullScreenRenderer {
     this.opened = true
     this.prev = undefined
     this.cursorAt = undefined
-    this.terminal.enterAltScreen()
-    this.terminal.enableMode(modes.alternateScroll)
     this.offResize = this.terminal.onResize(() => {
+      if (!this.active) return
       this.prev = undefined
       this.requestRender()
     })
+    if (this.active) this.activate()
+  }
+
+  /** Pauses frames without leaving the alternate screen; resuming repaints every row. */
+  private pause(paused: boolean): void {
+    const active = !paused
+    if (this.active === active) return
+    clearTimeout(this.timer)
+    this.timer = undefined
+    this.prev = undefined
+    this.cursorAt = undefined
+    if (!active) {
+      const free = this.images.close()
+      if (free && this.opened) this.terminal.write(free)
+    }
+    this.active = active
+    if (active && this.opened) this.activate()
+  }
+
+  private activate(): void {
+    this.terminal.enterAltScreen()
+    this.terminal.enableMode(modes.alternateScroll)
     this.render()
   }
 
-  /** Leaves the alternate screen; the main screen and its cursor come back as they were. */
+  /** Leaves the alternate screen, or disposes silently when another renderer is active. */
   close(): void {
     if (!this.opened) return
     this.opened = false
@@ -81,6 +105,8 @@ export class FullScreenRenderer {
     this.offResize = undefined
     this.prev = undefined
     const free = this.images.close()
+    // Another retained renderer owns the terminal while this one is inactive.
+    if (!this.active) return
     if (free) this.terminal.write(free)
     this.terminal.disableMode(modes.alternateScroll)
     // The alternate screen does not save whether the cursor was shown; it was before we hid it.
@@ -90,7 +116,7 @@ export class FullScreenRenderer {
 
   /** Schedules a frame, coalescing calls to at most one per frame interval. */
   requestRender(): void {
-    if (!this.opened || this.timer) return
+    if (!this.opened || !this.active || this.timer) return
     const wait = Math.max(0, this.lastFrameAt + this.frameIntervalMs - performance.now())
     this.timer = setTimeout(() => {
       this.timer = undefined
@@ -106,7 +132,7 @@ export class FullScreenRenderer {
 
   /** Draws a frame now. */
   render(): void {
-    if (!this.opened) return
+    if (!this.opened || !this.active) return
     clearTimeout(this.timer)
     this.timer = undefined
     this.lastFrameAt = performance.now()

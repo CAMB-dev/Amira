@@ -1,3 +1,4 @@
+import { markPasteOrigin, registerParserPasteControl } from "./input-paste-control.ts"
 import {
   type InputEvent,
   type KeyEvent,
@@ -9,6 +10,7 @@ import {
 } from "./keys.ts"
 
 const ESC = "\x1b"
+const PASTE_BEGIN = "\x1b[200~"
 const PASTE_END = "\x1b[201~"
 
 type Mods = { ctrl: boolean; shift: boolean; alt: boolean }
@@ -387,12 +389,44 @@ export class InputParser {
   private buf = ""
   private held = ""
   private paste: string | undefined
+  private discardPaste = false
+  private discardOpening = false
+  private timedOutPaste = false
+  private timedOutTail = ""
   private high = ""
   private win32 = false
 
+  constructor() {
+    registerParserPasteControl(this, () => {
+      if (this.paste === undefined) {
+        if (this.timedOutPaste) {
+          this.paste = ""
+          this.discardPaste = true
+          if (!this.buf.startsWith(this.timedOutTail)) this.buf = this.timedOutTail + this.buf
+          this.timedOutTail = ""
+        } else {
+          const opening = this.buf + this.held
+          if (opening && PASTE_BEGIN.startsWith(opening)) this.discardOpening = true
+        }
+        return
+      }
+      this.paste = ""
+      this.discardPaste = true
+    })
+  }
+
   feed(data: string): InputEvent[] {
-    this.buf += this.unwrapRawWin32(data)
-    return this.drain("wait")
+    const incoming = this.unwrapRawWin32(data)
+    let closeAt: number | undefined
+    if (this.timedOutPaste && this.paste === undefined) {
+      const tail = this.timedOutTail + incoming
+      const end = tail.indexOf(PASTE_END)
+      if (end !== -1) closeAt = this.buf.length + end + PASTE_END.length - this.timedOutTail.length
+      const keep = partialSuffix(tail, PASTE_END)
+      this.timedOutTail = keep ? tail.slice(-keep) : ""
+    }
+    this.buf += incoming
+    return this.drain("wait", closeAt)
   }
 
   /** True when an ambiguous escape prefix is waiting; call `flush()` if nothing follows soon. */
@@ -407,8 +441,16 @@ export class InputParser {
 
   /** Ends a paste whose end marker never came, emitting what was collected. */
   endPaste(): InputEvent[] {
-    if (this.paste === undefined) return []
+    // An ownership boundary discards content, not framing. A late tail must remain paste data
+    // until the real closing marker arrives, even after the reader's idle timeout.
+    if (this.paste === undefined || this.discardPaste) return []
     const text = this.paste
+    // Preserve origin framing after normal timeout delivery; a later focus boundary must
+    // still quarantine bytes that arrive before the terminal's actual closing marker.
+    this.timedOutPaste = true
+    const ending = this.buf + this.held
+    const keep = partialSuffix(ending, PASTE_END)
+    this.timedOutTail = keep ? ending.slice(-keep) : ""
     this.paste = undefined
     this.buf = ""
     this.held = ""
@@ -423,6 +465,7 @@ export class InputParser {
   flush(drop = false): InputEvent[] {
     this.buf += this.held
     this.held = ""
+    if (this.discardOpening && PASTE_BEGIN.startsWith(this.buf)) return []
     return this.drain(drop ? "drop" : "resolve")
   }
 
@@ -444,14 +487,15 @@ export class InputParser {
     })
   }
 
-  private drain(flush: Flush): InputEvent[] {
+  private drain(flush: Flush, closeAt?: number): InputEvent[] {
     const out: InputEvent[] = []
+    let consumed = 0
     while (this.buf.length > 0) {
       if (this.paste !== undefined) {
         const end = this.buf.indexOf(PASTE_END)
         if (end === -1) {
           const keep = partialSuffix(this.buf, PASTE_END)
-          this.paste += this.pasteText(this.buf.slice(0, this.buf.length - keep))
+          if (!this.discardPaste) this.paste += this.pasteText(this.buf.slice(0, this.buf.length - keep))
           this.buf = this.buf.slice(this.buf.length - keep)
           // Hand over a huge paste in pieces rather than holding it all.
           if (this.paste.length >= MAX_PASTE) {
@@ -460,19 +504,42 @@ export class InputParser {
           }
           break
         }
-        const text = this.paste + this.pasteText(this.buf.slice(0, end))
+        const text = this.discardPaste ? "" : this.paste + this.pasteText(this.buf.slice(0, end))
         this.buf = this.buf.slice(end + PASTE_END.length)
         this.paste = undefined
+        this.discardPaste = false
+        this.timedOutPaste = false
+        this.timedOutTail = ""
         if (text !== "") out.push(pasteEvent(text))
         continue
       }
+      if (this.buf.startsWith(PASTE_END)) this.timedOutPaste = false
+      const origin = this.timedOutPaste
       const parsed = parseOne(this.buf, flush)
       if (!parsed) break
       this.buf = this.buf.slice(parsed.len)
-      if (parsed.pasteStart) this.paste = ""
+      const discard = this.discardOpening
+      this.discardOpening = false
+      if (parsed.pasteStart) {
+        this.paste = ""
+        this.discardPaste = discard
+        this.timedOutPaste = false
+        this.timedOutTail = ""
+      }
       if (parsed.focus !== undefined) out.push({ type: "focus", focused: parsed.focus })
-      if (parsed.mouse) out.push(parsed.mouse)
-      for (const e of parsed.events ?? []) this.emit(e, out)
+      if (!discard) {
+        if (parsed.mouse) out.push(parsed.mouse)
+        for (const e of parsed.events ?? []) {
+          const start = out.length
+          this.emit(e, out)
+          if (origin) for (let i = start; i < out.length; i++) markPasteOrigin(out[i]!)
+        }
+      }
+      consumed += parsed.len
+      if (closeAt !== undefined && consumed >= closeAt) {
+        this.timedOutPaste = false
+        this.timedOutTail = ""
+      }
     }
     return out
   }

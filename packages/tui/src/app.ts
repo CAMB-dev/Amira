@@ -1,4 +1,3 @@
-import { statSync } from "node:fs"
 import { isNoModel, type ServerToolBlock } from "@amira/ai"
 import {
   type AnyEvent,
@@ -28,10 +27,13 @@ import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { createBottomArea } from "./app/bottom-area.ts"
 import { createCommandRunner } from "./app/command-runner.ts"
 import { createComposer } from "./app/composer.ts"
+import { conversationFiles } from "./app/conversation-files.ts"
 import { createHintNote } from "./app/hint-note.ts"
+import { createMainRewind } from "./app/main-rewind.ts"
+import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
-import { RewindFlow } from "./app/rewind.ts"
+import { showAgentSession } from "./app/session-display.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
@@ -48,7 +50,7 @@ import { interactiveBanner, interactiveTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { displayHistory, displayOutput } from "./display-history.ts"
-import { compactionNotice, rememberMessageTime } from "./format.ts"
+import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { headerLine } from "./header.ts"
@@ -67,8 +69,7 @@ import { type TranscriptView, View, type ViewHost } from "./view.ts"
 export type { RetryState } from "./app/activity.ts"
 export { activityLabel, lastReasoningLine, retryLabel, statusRetryLabel } from "./app/activity.ts"
 export { pendingMessageRows } from "./app/outbox.ts"
-export type { InteractiveOptions } from "./app/startup.ts"
-export { tildePath } from "./app/startup.ts"
+export { type InteractiveOptions, tildePath } from "./app/startup.ts"
 
 /**
  * The interactive terminal UI. This is its controller: it follows the bus and the keys, keeps
@@ -105,7 +106,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     new ImageStore({
       support: imageSupport,
       open: (input, ctx) => providers.open(input, ctx),
-      cwd: () => agent.cwd,
+      cwd: () => focus.conversation?.cwd ?? agent.cwd,
       maxRows: () => Math.max(1, Math.min(20, Math.floor(terminal.rows * 0.4))),
     })
   const images = imageStore ? () => (providers!.size > 0 ? imageStore : undefined) : undefined
@@ -145,14 +146,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     isNewline: (e) => keys.is(e, "newline"),
   })
   const commands = opts.commands
-  const history = opts.history ?? new PromptHistory()
+  const mainHistory = opts.history ?? new PromptHistory()
+  const files = conversationFiles(
+    opts.files,
+    () => focus.conversation?.cwd ?? agent.cwd,
+    () => !!focus.conversation,
+  )
   const composer = createComposer({
     editor,
     keys,
-    history,
+    history: focusHistory(mainHistory, () => focus),
     commands,
-    files: opts.files,
-    agent: () => agent,
+    files,
+    commandsEnabled: () => !focus.conversation,
+    agent: () => focus.conversation ?? agent,
     env,
     terminal,
     clipboard: opts.clipboard,
@@ -162,36 +169,37 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     redraw,
     redrawTerminal: () => view.redraw(),
     runPopup: (line) => {
+      if (focus.guardCommand(line)) return
       if (line.startsWith("$")) submission.runSkill(line)
       else commandRunner.run(line)
     },
   })
   // Shift+Enter is no use where the terminal sends it as plain Enter.
   const reaches = (s: KeySpec) => capabilities.shiftEnter || !(s.shift && s.name === "enter")
-  /** Whether the conversation can be rewound: the host keeps a session file. */
-  function canRewind(): boolean {
-    return commands?.control.rewind !== undefined
-  }
   let workspace: EventMap["workspace.changed"] | undefined
   const header: NonNullable<ViewHost["header"]> = (width, ctx) => [
     headerLine(
-      {
-        cwd: tildePath(agent.cwd, env),
-        ...(workspace?.cwd === agent.cwd
-          ? { branch: workspace.branch ?? workspace.head, dirty: workspace.dirty }
-          : {}),
-        title: agent.session?.title,
-        cost: opts.status.snapshot().find((i) => i.id === "cost")?.text,
-        used: agent.contextTokens,
-        limit: agent.model.contextWindow,
-      },
+      focus.conversation
+        ? { cwd: tildePath(focus.conversation.cwd, env), title: focus.conversation.name }
+        : {
+            cwd: tildePath(agent.cwd, env),
+            ...(workspace?.cwd === agent.cwd
+              ? { branch: workspace.branch ?? workspace.head, dirty: workspace.dirty }
+              : {}),
+            title: agent.session?.title,
+            cost: opts.status.snapshot().find((i) => i.id === "cost")?.text,
+            used: agent.contextTokens,
+            limit: agent.model.contextWindow,
+          },
       width,
       ctx,
     ),
   ]
   const bottomArea = createBottomArea({
     agent: () => agent,
-    activity: () => activity,
+    activity: () => focus.activity ?? activity,
+    conversationIndicator: (width) => focus.indicator(width),
+    conversationFocused: () => !!focus.conversation,
     themePreview: () => themes.previewing,
     activityVisible: (visible, ctx) => shimmerClock.visibility(visible, ctx),
     commandVisible: (visible) => overlays.syncAnimation(undefined, visible),
@@ -201,12 +209,12 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     dock: () => overlays.dock,
     renderDock: (width, ctx, available) => overlays.renderDock(width, ctx, available),
     focusHint: (theme, width) => overlays.focusHint(theme, width),
-    steering: () => outbox.steering,
-    queued: () => outbox.queued,
+    steering: () => (focus.conversation ? [] : outbox.steering),
+    queued: () => (focus.conversation ? [] : outbox.queued),
     mode: () => mode,
     hintNote: hint.current,
     commandActivity: () => commandRunner,
-    canRewind,
+    canRewind: () => rewind.canRewind(),
     status: opts.status,
     header,
     panels: opts.panels,
@@ -240,6 +248,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     },
     working: () => activity.working,
     interrupt: () => outbox.interrupt(),
+    approvalCancelled: (request) => focus.cancelApproval(request.sessionId),
+    conversationChrome: (width, ctx) => {
+      const indicator = focus.indicator(width)
+      return indicator ? [ctx.theme.accent(indicator)] : []
+    },
     quitting: () => quitting,
     commandActivity: () => commandRunner,
     editorEmpty: () => editor.isEmpty,
@@ -293,30 +306,62 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       overlays.openView({ kind: "subagent", data: { sessionId } })
     },
   }
-  const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
-  const shimmerClock = createActivityShimmer(terminal, activity, themes, overlays, () => view.requestRender())
+  const makeView = (h: ViewHost) => (mode === "fullscreen" ? createFullscreenView(h) : createInlineView(h))
+  const mainView = makeView(host)
+  let view: TranscriptView = mainView
+  const focus = createNativeFocus({
+    mode,
+    editor,
+    mainView,
+    mainHistory,
+    host,
+    makeView,
+    composer,
+    overlays,
+    keys,
+    showNote,
+    agent: () => agent,
+    activity,
+    interruptMain: () => outbox.interrupt(),
+    mainAttention: () => rewind.attention,
+    onMainFocused: () => rewind.flush(),
+    activate: (next) => {
+      view = next
+    },
+    quitting: () => quitting,
+  })
+  const shimmerClock = createActivityShimmer(
+    terminal,
+    () => focus.activity ?? activity,
+    themes,
+    overlays,
+    () => view.requestRender(),
+  )
   const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
   const outbox = createOutbox({
     agent: () => agent,
-    editor,
+    editor: focus.mainEditor,
     activity,
     spinner,
     view,
     takeEcho: (message) => commandRunner.takeEcho(message),
     echoedNote: (message) => commandRunner.echoedNote(message),
     noModelYet: (parts) => submission.noModelYet(parts),
-    canRewind,
-    openRewind: () => rewind.openRewind(),
+    canRewind: () => rewind.canInterruptRewind(),
+    openRewind: () => rewind.openInterruptRewind(),
     onInterrupt: () => {
       interrupted = true
     },
   })
-  const rewind = new RewindFlow({
+  const rewind = createMainRewind({
     agent: () => agent,
     commands,
     dialogs: overlays.dialogs,
     keys,
-    editor,
+    editor: focus.mainEditor,
+    conversationFocused: () => !!focus.conversation,
+    canOpen: () => !overlays.hasFullscreen && !overlays.dock,
+    quitting: () => quitting,
     sentParts: outbox.sentParts,
     working: () => activity.working,
     compacting: () => activity.compacting,
@@ -330,14 +375,17 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     keys,
     mode,
     reaches,
-    commandEcho: (line) => view.commandEcho(line),
-    commandOutput: (level, text) => view.commandOutput(level, text),
+    commandEcho: (line) => mainView.commandEcho(line),
+    commandOutput: (level, text) => mainView.commandOutput(level, text),
     requestRender: () => view.requestRender(),
     animationChanged: () => overlays.syncAnimation(),
     sessionId: () => agent.sessionId,
     quit: () => quit(),
-    openView: (v) => overlays.openView(v),
+    openView: focus.openView,
     openRewind: () => rewind.openRewind(),
+    focusConversation: focus.focus,
+    unfocusConversation: focus.unfocus,
+    guardCommand: (line) => focus.guardCommand(line),
     isCompacting: () => activity.compacting,
     interrupt: () => outbox.interrupt(),
   })
@@ -345,15 +393,23 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const submission = createSubmission({
     agent: () => agent,
     editor,
-    history,
+    history: focus.history,
+    focusedSubmit: (text, parts, display) => focus.submit(text, parts, display),
     commands,
     composer,
     commandRunner,
     outbox,
     view,
+    composerView: () => view,
     enterDoes,
     notice: opts.notice,
-    context: { frontend: "tui", quit: () => quit(), openView: (v) => overlays.openView(v) },
+    context: {
+      frontend: "tui",
+      quit: () => quit(),
+      openView: focus.openView,
+      focusConversation: focus.focus,
+      unfocusConversation: focus.unfocus,
+    },
   })
 
   themes.connect((selection) => {
@@ -365,7 +421,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     editor.setPrompt(`${glyphs.user} `)
     renders.setTheme(selection.variant)
     overlays.setTheme(theme)
-    view.setTheme(theme, selection.markdownGlyphs)
+    focus.setTheme(theme, selection.markdownGlyphs)
   })
 
   // Lifecycle: the exit result resolved by shutdown.
@@ -388,6 +444,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * the reply's end, `final`, as it was left).
    */
   function serverRow(b: ServerToolBlock, final = false) {
+    const view = mainView
     const call = serverToolCall(b)
     let row = serverRows.get(b.id)
     if (row?.ended) return
@@ -411,6 +468,9 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   }
 
   const onEvent = (e: AnyEvent) => {
+    if (focus.onUiEvent(e)) return
+    const view = mainView
+    focus.refresh()
     if (view.subagentEvent(e)) view.requestRender()
     overlays.onEvent(e)
     // Sub-agents share the bus; only this session's turn events drive the transcript.
@@ -565,11 +625,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         break
     }
     shimmerClock.sync()
+    rewind.flush()
     view.requestRender()
   }
 
   /** A failed turn: what went wrong in plain words and what to do, the provider's text folded. */
   function errorNotice(end: EventMap["turn.end"]) {
+    const view = mainView
     const f = end.failure
     // Without a next step of its own, the notice says what the user can always do.
     if (!f) return view.notice("error", modelErrorNotice(end.error))
@@ -615,27 +677,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     showNote(`${what} still running — ${key} again to stop them and quit`)
   }
 
-  /** Shows this session's boundary and history; switched full-screen sessions start afresh. */
-  function showSession(a: Agent, switched: boolean) {
-    const displays = displayHistory(a)
-    const resumed = a.messages.length > 0 || displays.length > 0
-    let updatedAt: number | undefined
-    try {
-      if (a.session?.file && resumed) updatedAt = statSync(a.session.file).mtimeMs
-    } catch {}
-    const boundary = {
-      id: a.sessionId,
-      resumed,
-      ...(updatedAt !== undefined ? { updatedAt } : {}),
-    }
-    for (const entry of a.session?.branch() ?? []) {
-      if (entry.type === "message") rememberMessageTime(entry.message, entry.ts)
-    }
-    view.openSession(boundary, a.messages, switched, (m) => a.compactionInfo(m), displays)
-  }
-
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
+    rewind.reset(next)
+    focus.unfocus()
     termStatus.setRunning(false, true)
     composer.cancelClipboard()
     outbox.reset()
@@ -644,7 +689,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     agent = next
     commandRunner.clearEchoes()
     noticeStrip.reset()
-    showSession(next, true)
+    showAgentSession(mainView, next, true)
     view.requestRender()
   }
 
@@ -661,6 +706,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     composer.abortClipboard()
     if (quitting) return
     quitting = true
+    focus.dispose()
+    files.dispose()
     commandRunner.abortAll(new Error("quitting"))
     overlays.dispose()
     off()
@@ -697,6 +744,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
       }
       return
+    }
+    overlays.reconcileResolvedRequests()
+    if (focus.conversation && keys.is(e, "view.focus")) {
+      focus.unfocus()
+      return redraw()
     }
     if (overlays.hasFullscreen && e.type === "mouse") {
       const translated = contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings, true))
@@ -746,24 +798,37 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       submission.submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
       composer.cancelClipboard()
-      if (commandRunner.cancel()) {
+      if (focus.conversation) {
+        if (focus.busy) focus.interrupt()
+        else if (focus.conversation && !editor.isEmpty) editor.clear()
+        else if (focus.conversation) showNote(`Press ${keys.label("view.focus") ?? "F6"} to return to main.`)
+      } else if (commandRunner.cancel()) {
         // A slash command runs alongside the turn; cancellation leaves the input intact.
       } else if (activity.working) outbox.interrupt()
       else if (!editor.isEmpty) editor.clear()
       else return quitOrWarn("cancel")
     } else if (keys.is(e, "exit") && !activity.working && editor.isEmpty) {
+      if (focus.unfocus()) return redraw()
       return quitOrWarn("exit")
     } else if (keys.is(e, "copy.reply")) {
       // In both modes: from the session's messages, so a new session (/clear) has none yet.
       const fallback =
         mode === "fullscreen" ? `${mouseLabels.drag} selects text.` : "Select it with the mouse."
-      copyToClipboard(terminal, lastReplyText(agent.messages), "the last reply", showNote, fallback)
+      copyToClipboard(
+        terminal,
+        lastReplyText([...(focus.historySnapshot() ?? agent.messages)]),
+        "the last reply",
+        showNote,
+        fallback,
+      )
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(toggleDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && bottomArea.panelsShown) {
       bottomArea.togglePanels()
     } else if (keys.is(e, "permissions.mode")) {
       // The user's choice for the whole session tree, sub-agents included; the border shows it.
+      if (focus.conversation)
+        return showNote(`Return to main with ${keys.label("view.focus") ?? "F6"} to change permission mode.`)
       const next = agent.permissions.cycleMode()
       showNote(`Permission mode: ${next} — ${MODE_SUMMARY[next]}`)
     } else if (keys.is(e, "help") && editor.isEmpty) {
@@ -773,7 +838,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // An editing key of the input (cut, paste back, undo, the external editor).
     } else if (keys.is(e, "interrupt")) {
       // A /compact runs without a turn; interrupt stops it too. Twice in a row: rewind.
-      if (!commandRunner.cancel()) outbox.pressInterrupt()
+      if (focus.conversation) {
+        if (focus.busy) focus.interrupt()
+        else if (editor.isEmpty) focus.unfocus()
+      } else if (!commandRunner.cancel()) outbox.pressInterrupt()
     } else {
       composer.handleEditorInput(e)
     }
@@ -787,6 +855,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * Completion runs here, on input, never while rendering.
    */
   function redraw() {
+    rewind.flush()
     const pending = composer.syncCompletions()
     if (pending) setTimeout(() => view.requestRender(), FRAME_MS)
     else view.requestRender()
@@ -814,7 +883,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     helpKey && `${helpKey} keys`,
   ].filter(Boolean)
   view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
-  if (agent.messages.length || displayHistory(agent).length) showSession(agent, false)
+  if (agent.messages.length || displayHistory(agent).length) showAgentSession(mainView, agent, false)
   for (const e of opts.startupEvents ?? []) onEvent(e)
   // With no provider yet, a welcome card with the steps to a first message replaces the notice.
   const welcome = isNoModel(agent.model) && submission.noProviders()

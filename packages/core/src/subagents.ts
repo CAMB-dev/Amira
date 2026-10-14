@@ -25,8 +25,8 @@ import { Agent, type TurnResult } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions } from "./context.ts"
 import { EventBus } from "./event-bus.ts"
-import { instructionsSection, loadInstructions } from "./instructions.ts"
-import { addNonInteractive, defaultSections, type PromptSection, setSection } from "./prompt.ts"
+import { addNonInteractive, type PromptSection, setSection } from "./prompt.ts"
+import { registerSessionScope } from "./session-routing.ts"
 import { SessionStore } from "./session-store.ts"
 import { addUsage, BudgetLedger, overBudget, usageTokens } from "./subagents/budget.ts"
 import { Child, Group, type SpawnedSubagent } from "./subagents/child.ts"
@@ -38,6 +38,7 @@ import { approveWithHost } from "./subagents/host-approval.ts"
 import { overlaps } from "./subagents/paths.ts"
 import { runRoot } from "./subagents/root.ts"
 import { Admission } from "./subagents/scheduler.ts"
+import { standardSections } from "./subagents/sections.ts"
 import {
   checkResult,
   isObjectSchema,
@@ -129,6 +130,7 @@ export class AgentTree {
   #disposals = new Map<string, { parent: string; done: Promise<void> }>()
 
   constructor(opts: AgentTreeOptions) {
+    registerSessionScope(this, this.#live, this.#spawned, this.#disposals)
     this.#opts = {
       ...opts,
       compaction: opts.compaction ?? (opts.shared ? opts.shared.#opts.compaction : undefined),
@@ -890,8 +892,4 @@ export class AgentTree {
     this.#groupsChanged(child)
     child.settle(result)
   }
-}
-
-function standardSections(cwd: string): PromptSection[] {
-  return defaultSections({ cwd, project: instructionsSection(loadInstructions(cwd)) })
 }

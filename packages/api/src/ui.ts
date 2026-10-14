@@ -37,7 +37,12 @@ export interface StatusItem {
  * A dialog that asks the user something (D42). The TUI shows it inline, print mode cancels
  * it, and headless clients answer it with ui.respond.
  */
-export type UiRequest =
+export type UiRequest = UiRequestData & {
+  /** Display association only; does not grant access to or control over the conversation. */
+  sessionId?: string
+}
+
+type UiRequestData =
   /**
    * A choice among `options`. `sections` split the list into parts with a heading each and
    * keys of their own besides Enter; a key answers with `{ option, key }` (SelectChoice) on
@@ -189,6 +194,8 @@ export interface UiAnswer {
 }
 
 export interface UiRequestOptions {
+  /** Associates the dialog with a conversation for display only; defaults to the host session. */
+  sessionId?: string
   /** Cancels the dialog, e.g. a tool's abort signal. */
   signal?: AbortSignal
   /** Cancels the dialog after this long. Default: waits until answered. */

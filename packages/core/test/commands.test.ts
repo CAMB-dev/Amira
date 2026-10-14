@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
-import type { AnyEvent, CommandDefinition, SessionControl } from "@amira/api"
+import type { AnyEvent, CommandDefinition, OwnedConversation, SessionControl } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import {
   CommandConflictError,
@@ -238,6 +238,56 @@ test("a frontend with full-screen views hands openView to commands; others leave
     openView: (v) => seen.push("sessionId" in v ? v.sessionId : v.kind) > 0,
   })
   expect(seen).toEqual([false, true, "s_child"])
+})
+
+test("frontends can focus an owned conversation without changing the main session", async () => {
+  const { registry, host, agent } = hostSetup()
+  const conversation: OwnedConversation = {
+    id: "owned",
+    key: "design",
+    name: "Design",
+    cwd: "/work",
+    data: { append: () => {}, read: () => [] },
+    history: () => [],
+    status: () => ({ state: "idle", busy: false }),
+    events: {
+      async *[Symbol.asyncIterator]() {},
+    },
+    send: async () => {},
+    stop: async () => {},
+    release: async () => {},
+    createGroup: () => {
+      throw new Error("fixture does not execute")
+    },
+  }
+  const seen: unknown[] = []
+  registry.register(
+    cmd("focus", {
+      run: (_args, ctx) => {
+        seen.push(ctx.focusConversation?.(conversation), ctx.unfocusConversation?.())
+      },
+    }),
+    "test",
+  )
+  for (const frontend of ["rpc", "print"] as const) {
+    expect((await host.run("/focus", { frontend })).ok).toBe(true)
+  }
+  for (const accepted of [true, false]) {
+    expect(
+      (
+        await host.run("/focus", {
+          frontend: "tui",
+          focusConversation: (handle) => {
+            expect(handle).toBe(conversation)
+            return accepted
+          },
+          unfocusConversation: () => accepted,
+        })
+      ).ok,
+    ).toBe(true)
+  }
+  expect(seen).toEqual([undefined, undefined, undefined, undefined, true, true, false, false])
+  expect(host.agent).toBe(agent)
 })
 
 test("running a command hands it the arguments and a context, and reports what it prints", async () => {

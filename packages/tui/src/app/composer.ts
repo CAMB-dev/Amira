@@ -28,6 +28,7 @@ export interface ComposerDeps {
   history: PromptHistory
   commands?: Pick<CommandHost, "complete" | "list" | "completeSkill" | "skills" | "inputLine">
   files?: FileSource
+  commandsEnabled?: () => boolean
   /** Returns the current agent itself: clipboard results also check its identity. */
   agent: () => Pick<Agent, "cwd">
   env: Record<string, string | undefined>
@@ -158,9 +159,12 @@ export function createComposer(deps: ComposerDeps): Composer {
   const syncCompletions = (): Promise<void> | undefined => {
     const recalled = historyNav.recalling
     const hasImages = editor.getParts().some((p) => typeof p !== "string" && "image" in p)
-    const line = editor.lineCount === 1 && !recalled && !hasImages ? editor.getText() : ""
+    const line =
+      editor.lineCount === 1 && !recalled && !hasImages && deps.commandsEnabled?.() !== false
+        ? editor.getText()
+        : ""
     const commandsPending = popups.map((p) => p.update(line)).find(Boolean)
-    const claimed = !hasImages && commands?.inputLine(editor.getText())
+    const claimed = deps.commandsEnabled?.() !== false && !hasImages && commands?.inputLine(editor.getText())
     filePicker.update(recalled || claimed ? "" : editor.textBeforeCaret())
     return commandsPending
   }

@@ -1,5 +1,5 @@
 // Owns slash-command execution, cancellation, key help and command echo correlation.
-import type { FrontendView, KeyHelp, UserMessage } from "@amira/api"
+import type { FrontendView, KeyHelp, OwnedConversation, UserMessage } from "@amira/api"
 import type { CommandHost } from "@amira/core"
 import { type RenderContext, Spinner } from "@amira/tui-kit"
 import { userText } from "../format.ts"
@@ -55,6 +55,9 @@ export interface CommandRunnerOptions {
   quit: () => void
   openView: (view: FrontendView) => boolean
   openRewind: () => boolean
+  focusConversation?: (conversation: OwnedConversation) => boolean
+  unfocusConversation?: () => boolean
+  guardCommand?: (line: string) => boolean
   isCompacting: () => boolean
   interrupt: () => void
 }
@@ -111,7 +114,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
   return {
     async run(line) {
       const commands = options.commands
-      if (!commands) return
+      if (!commands || options.guardCommand?.(line)) return
       const echo = commands.shouldEcho(line)
       if (echo) options.commandEcho(line)
       const abort = new AbortController()
@@ -129,6 +132,8 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
           quit: options.quit,
           openView: options.openView,
           openRewind: options.openRewind,
+          focusConversation: options.focusConversation,
+          unfocusConversation: options.unfocusConversation,
           keys: keyHelp,
           glyphs: () => ({ separator: glyphs.separator, more: glyphs.more }),
           signal: abort.signal,

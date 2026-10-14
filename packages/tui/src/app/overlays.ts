@@ -49,6 +49,8 @@ export interface OverlayManagerDeps {
   emitWaiting: (data: EventMap["ui.waiting"]) => void
   working: () => boolean
   interrupt: () => void
+  approvalCancelled?: (request: EventMap["ui.request"]) => void
+  conversationChrome?: (width: number, ctx: RenderContext) => string[]
   quitting: () => boolean
   editorEmpty: () => boolean
   searchActive: () => boolean
@@ -72,10 +74,12 @@ export class OverlayManager {
   dock: DockedView | undefined
   private inputTop = 0
   private inputBottom = 0
+  private chromeStart: number | undefined
   private readonly lifetimes = new WeakMap<ExtensionViewer, { owner?: object; off?: () => void }>()
   private animationTimer: ReturnType<typeof setInterval> | undefined
   private animationInterval: number | undefined
   private disposed = false
+  private detaching = false
   /** External requests have no core pending entry; their closed IDs live until disposal. */
   private readonly settledRequests = new Set<string>()
   private bottomVisible = true
@@ -87,6 +91,12 @@ export class OverlayManager {
    */
   private readonly forms: (FormRequest | ExtensionSettingsRequest)[] = []
   private form: FormView | ExtensionSettingsView | undefined
+  /** Pending requests retain their actual editors while their conversation is hidden. */
+  private readonly requestDialogs = new Map<string, Dialog>()
+  private readonly requestForms = new Map<
+    string,
+    { request: FormRequest | ExtensionSettingsRequest; view?: FormView | ExtensionSettingsView }
+  >()
 
   constructor(private readonly deps: OverlayManagerDeps) {}
 
@@ -107,6 +117,19 @@ export class OverlayManager {
   }
 
   render(width: number, ctx: RenderContext): string[] {
+    const chrome = this.deps.conversationChrome?.(width, ctx) ?? []
+    if (!chrome.length) {
+      this.chromeStart = undefined
+      return this.renderContent(width, ctx)
+    }
+    const room = Math.max(0, ctx.rows - chrome.length)
+    this.chromeStart = room
+    const rows = this.renderContent(width, { ...ctx, rows: Math.max(1, room) }).slice(0, room)
+    while (rows.length < room) rows.push("")
+    return [...rows, ...chrome].slice(0, ctx.rows)
+  }
+
+  private renderContent(width: number, ctx: RenderContext): string[] {
     if (this.form) return this.form.render(width, ctx)
     if (this.viewer instanceof ExtensionViewer) {
       const budget = Math.max(1, Math.min(Math.floor(ctx.rows / 3), ctx.rows - 2))
@@ -144,6 +167,7 @@ export class OverlayManager {
 
   /** Shows a full-screen view; false when it cannot be shown now (see CommandContext.openView). */
   openView(v: FrontendView): boolean {
+    if (this.detaching || this.disposed) return false
     const { keys, presenters, env } = this.deps
     const source = this.deps.views
     if (source?.canOpen?.(v) === false) return false
@@ -358,6 +382,31 @@ export class OverlayManager {
     this.closeDock()
   }
 
+  /**
+   * Suspends request editors before the current transcript is hidden or replaced.
+   * The focus controller replays pending requests through onUiRequest to restore these instances.
+   */
+  detachConversation(): void {
+    if (this.detaching) return
+    this.detaching = true
+    try {
+      const form = this.form
+      const viewer = this.viewer
+      this.dialogs.splice(0)
+      this.forms.splice(0)
+      this.form = undefined
+      this.viewer = undefined
+      // Remove only visible ownership. Closing a request would discard its editing state.
+      if (form || viewer) this.deps.view().closeOverlay()
+      if (viewer instanceof ExtensionViewer) this.disposeViewer(viewer)
+      this.closeDock()
+      this.deps.inputFocused(true)
+      this.waitingChanged("visibility")
+    } finally {
+      this.detaching = false
+    }
+  }
+
   /** Opens the key reference over the conversation (the help key); a form keeps the screen. */
   openKeyReference() {
     if (this.form) return
@@ -403,20 +452,28 @@ export class OverlayManager {
   private openNextForm() {
     const ui = this.deps.ui
     const next = this.forms[0]
-    if (!ui || !next || this.form || this.viewer || this.dialogs.length) return
+    if (!ui || !next || this.detaching || this.disposed || this.form || this.viewer || this.dialogs.length)
+      return
+    const entry = this.requestForms.get(next.requestId)
+    if (!entry) return
     const options = {
-      requestRender: () => this.deps.view().requestOverlayRender(),
+      requestRender: () => {
+        if (this.form === form) this.deps.view().requestOverlayRender()
+      },
       waiting: this.waitingTitles,
-      onClose: () => this.closeForm(next),
+      onClose: () => this.closeForm(next.requestId, form),
     }
-    this.form =
-      next.kind === "extension-settings"
+    const form =
+      entry.view ??
+      (next.kind === "extension-settings"
         ? new ExtensionSettingsView(uiExtensionSettingsBackend(ui, next), {
             ...options,
             images: this.deps.images,
             previewTheme: this.deps.previewTheme,
           })
-        : new FormView(uiFormBackend(ui, next), options)
+        : new FormView(uiFormBackend(ui, next), options))
+    entry.view = form
+    this.form = form
     this.dock?.hide()
     this.syncAnimation()
     this.deps.view().openOverlay()
@@ -424,11 +481,14 @@ export class OverlayManager {
   }
 
   /** The open form was answered, cancelled, or resolved elsewhere: back to the conversation. */
-  private closeForm(request: FormRequest | ExtensionSettingsRequest) {
-    if (!this.disposed) this.settledRequests.add(request.requestId)
-    const i = this.forms.indexOf(request)
+  private closeForm(requestId: string, form: FormView | ExtensionSettingsView) {
+    // A stale/reentrant close must never remove another editor or open its waiting requests.
+    if (this.requestForms.get(requestId)?.view !== form) return
+    this.requestForms.delete(requestId)
+    if (!this.disposed) this.settledRequests.add(requestId)
+    const i = this.forms.findIndex((request) => request.requestId === requestId)
     if (i !== -1) this.forms.splice(i, 1)
-    if (!this.form) return
+    if (this.form !== form) return
     this.form = undefined
     this.deps.view().closeOverlay()
     if (this.dock) this.deps.dockChanged?.(true)
@@ -473,42 +533,70 @@ export class OverlayManager {
       return
     if (data.kind === "form" || data.kind === "extension-settings") {
       if (this.forms.some((request) => request.requestId === data.requestId)) return
+      if (!this.requestForms.has(data.requestId)) this.requestForms.set(data.requestId, { request: data })
       this.forms.push(data)
       this.openNextForm()
       this.waitingChanged("opened")
       return
     }
-    const existing = this.dialogs.find((dialog) => dialog.request.requestId === data.requestId)
-    if (existing) {
+    const existing = this.requestDialogs.get(data.requestId)
+    if (existing && this.dialogs.includes(existing)) {
       if (existing.update(data)) this.deps.view().requestRender()
       return
     }
-    const dialog = new Dialog(data, (answer) => this.answerDialog(ui, dialog, answer), this.deps.keys)
+    const dialog =
+      existing ?? new Dialog(data, (answer) => this.answerDialog(ui, dialog, answer), this.deps.keys)
+    if (existing) existing.update(data)
+    this.requestDialogs.set(data.requestId, dialog)
     this.dialogs.push(dialog)
     // Over the viewer or a form it shows only as a banner; the bell rings so it is noticed.
     this.waitingChanged("opened")
   }
 
   onUiResolved(data: EventMap["ui.resolved"]) {
-    if (!this.disposed) this.settledRequests.add(data.requestId)
-    const i = this.dialogs.findIndex((d) => d.request.requestId === data.requestId)
+    this.forgetResolvedRequest(data.requestId)
+  }
+
+  private forgetResolvedRequest(requestId: string): void {
+    if (!this.disposed) this.settledRequests.add(requestId)
+    const dialog = this.requestDialogs.get(requestId)
+    this.requestDialogs.delete(requestId)
+    dialog?.close()
+    const i = this.dialogs.findIndex((d) => d.request.requestId === requestId)
     if (i !== -1) this.dialogs.splice(i, 1)
-    const f = this.forms.find((r) => r.requestId === data.requestId)
-    // Answered or cancelled elsewhere (another client, a timeout): close it without answering.
-    if (f && this.form && this.forms[0] === f) {
-      this.form.close()
+    const entry = this.requestForms.get(requestId)
+    // Closing a suspended editor clears it without touching the active conversation.
+    if (entry?.view) {
+      entry.view.close()
       return
     }
-    if (f) this.forms.splice(this.forms.indexOf(f), 1)
-    if (i === -1 && !f) return // A local answer already removed it and emitted its waiting change.
+    this.requestForms.delete(requestId)
+    const f = this.forms.findIndex((r) => r.requestId === requestId)
+    if (f !== -1) this.forms.splice(f, 1)
+    if (i === -1 && f === -1) return // Hidden resolution or an already removed local answer.
     this.openNextForm()
     this.waitingChanged("resolved")
+  }
+
+  /** A settled host request must stop owning input even before its queued event is drained. */
+  reconcileResolvedRequests(): void {
+    const ui = this.deps.ui
+    if (!ui) return
+    const requests = [
+      ...[...this.requestDialogs.values()].map((dialog) => dialog.request),
+      ...[...this.requestForms.values()].map((entry) => entry.request),
+    ]
+    for (const request of requests) {
+      if (ui.requestState(request.requestId) === "settled") this.forgetResolvedRequest(request.requestId)
+    }
   }
 
   handleInput(e: InputEvent): boolean {
     // A form or the viewer owns the keyboard while open: the rest is hidden. Ctrl+L repaints it.
     // Forms and the key reference use wheel arrows; extension views receive pointer coordinates.
     if (!this.hasFullscreen) return false
+    // Chrome is reserved after the overlay; content and caret origins never shift.
+    if (e.type === "mouse" && this.chromeStart !== undefined && e.y >= this.chromeStart) return true
     if (this.deps.keys.is(e, "redraw")) {
       this.deps.view().redrawOverlay()
       return true
@@ -541,14 +629,19 @@ export class OverlayManager {
 
   private answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
     const i = this.dialogs.indexOf(dialog)
-    if (i !== -1) this.dialogs.splice(i, 1)
+    if (i === -1 || this.disposed) return
+    this.dialogs.splice(i, 1)
     const { requestId } = dialog.request
+    this.requestDialogs.delete(requestId)
+    dialog.close()
     if (!this.disposed) this.settledRequests.add(requestId)
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
     // Esc on an approval denies the call and stops the whole turn, as the dialog's keys say.
-    if (answer === undefined && dialog.request.source === "approval" && this.deps.working())
-      this.deps.interrupt()
+    if (answer === undefined && dialog.request.source === "approval") {
+      if (this.deps.approvalCancelled) this.deps.approvalCancelled(dialog.request)
+      else if (this.deps.working()) this.deps.interrupt()
+    }
     const echoed = refused ? undefined : answer
     // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
     // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
@@ -560,13 +653,24 @@ export class OverlayManager {
     this.waitingChanged("resolved")
   }
 
-  /** Closes full-screen overlays; inline dialogs are cancelled at the later shutdown boundary. */
+  /** Releases visible and suspended request editors and closes terminal overlays. */
   dispose() {
+    if (this.disposed) return
     this.disposed = true
     this.syncAnimation()
     this.closeDock()
-    for (const f of this.forms.splice(0)) this.deps.ui?.cancel(f.requestId)
-    this.form?.close()
+    for (const [requestId, entry] of this.requestForms) {
+      this.deps.ui?.cancel(requestId)
+      entry.view?.close()
+    }
+    this.requestForms.clear()
+    this.forms.splice(0)
+    for (const [requestId, dialog] of this.requestDialogs) {
+      this.deps.ui?.cancel(requestId)
+      dialog.close()
+    }
+    this.requestDialogs.clear()
+    this.dialogs.splice(0)
     this.closeView()
     this.settledRequests.clear()
   }

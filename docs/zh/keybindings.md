@@ -56,6 +56,8 @@
 | `edit.redo` | `ctrl+shift+z` | 重做。没有 kitty keyboard protocol 的终端可能把它报告为 Ctrl+Z，需要另行绑定 |
 | `edit.external` | `ctrl+g` | 依次使用 `$VISUAL`、`$EDITOR`、Git 的 `core.editor` 指定的命令编辑消息（如 `code --wait`）；均未指定则 Windows 使用 Notepad，其他系统使用 vi。编辑器退出后，保存的文本回到输入框 |
 
+[扩展拥有的持久会话](extensions.md#扩展拥有的持久会话)在内联或全屏模式获得原生焦点时，F6（`view.focus`，或自定义绑定）返回主会话，不停止任何会话。已聚焦会话空闲且输入框为空时，Esc（`interrupt`）也返回；工作期间，Esc/Ctrl+C（`interrupt`/`cancel`）只停止此会话，不停止后台主会话。对话框、补全列表和历史搜索保留按键优先级。草稿、提示词历史、图片和粘贴内容按会话隔离；`@` 文件补全使用此会话的工作目录。斜杠命令和 skill 只显示提示，不执行：先返回主会话，再显式执行。
+
 ## 补全列表
 
 输入开头是 `/` 或 `$` 时显示命令或 skill 列表；输入 `@word` 时显示文件列表。列表先于输入框处理快捷键。单独输入 `/` 或 `$` 时不预选任何条目，Enter 不执行，按一次 ↓ 选中第一项。skill 必须已明确选中，或名称匹配输入前缀，Enter 才会运行；`$100 is the price` 一类文本仍作为普通消息发送。名称没有匹配项时列表保持打开，如 `no command matches /zzz`；单独输入 `$zzz` 时，要用 Esc 关闭列表才能发送文本。
@@ -113,7 +115,7 @@
 
 | Action | 默认按键 | 行为 |
 | --- | --- | --- |
-| `view.focus` | `f6`、`ctrl+tab` | 在视图与主输入框之间切换焦点，默认视图也可用；Ctrl+Tab 是终端能传递时可用的别名 |
+| `view.focus` | `f6`、`ctrl+tab` | 在视图与主输入框之间切换焦点，默认视图也可用；从原生聚焦的独立会话返回主会话。Ctrl+Tab 是终端能传递时可用的别名 |
 | `view.back` | `escape` | 退出已激活的文本框、返回上一页或关闭根页面；取消视图中的输入提示 |
 | `view.close` | `q`、`ctrl+c` | 关闭整个视图，包括嵌套页面 |
 | `view.scroll-up` | `up` | 向上滚动视图文本一行 |

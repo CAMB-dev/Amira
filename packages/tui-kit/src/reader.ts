@@ -1,4 +1,5 @@
 import { InputParser } from "./input.ts"
+import { discardParserPaste, hasPasteOrigin, registerReaderPasteControl } from "./input-paste-control.ts"
 import type { InputEvent } from "./keys.ts"
 import type { Terminal } from "./terminal.ts"
 
@@ -30,6 +31,18 @@ export class InputReader {
   private readonly escapeTimeoutMs: number
   private readonly sequenceTimeoutMs: number
   private readonly pasteTimeoutMs: number
+  private dispatching = new Set<InputEvent[]>()
+  private discarded = new WeakSet<InputEvent>()
+  private readonly discardPendingPaste = () => {
+    discardParserPaste(this.parser)
+    // feed() parses a whole chunk before dispatch. A callback can change owners (and even
+    // reenter feed) while paste events from that old chunk are still waiting in any frame.
+    for (const events of this.dispatching) {
+      for (const event of events) {
+        if (event.type === "paste" || hasPasteOrigin(event)) this.discarded.add(event)
+      }
+    }
+  }
 
   constructor(
     private terminal: Terminal,
@@ -39,10 +52,12 @@ export class InputReader {
     this.escapeTimeoutMs = opts.escapeTimeoutMs ?? 40
     this.sequenceTimeoutMs = Math.max(this.escapeTimeoutMs, opts.sequenceTimeoutMs ?? 500)
     this.pasteTimeoutMs = opts.pasteTimeoutMs ?? 1500
+    registerReaderPasteControl(this.terminal, this.discardPendingPaste)
   }
 
   start(): void {
     this.stopped = false
+    registerReaderPasteControl(this.terminal, this.discardPendingPaste)
     if (this.off) return
     attached.add(this.terminal)
     this.off = this.terminal.onInput((data) => this.feed(data))
@@ -81,6 +96,13 @@ export class InputReader {
   }
 
   private dispatch(events: InputEvent[]): void {
-    for (const e of events) this.onEvent(e)
+    this.dispatching.add(events)
+    try {
+      for (const e of events) {
+        if (!this.discarded.has(e)) this.onEvent(e)
+      }
+    } finally {
+      this.dispatching.delete(events)
+    }
   }
 }

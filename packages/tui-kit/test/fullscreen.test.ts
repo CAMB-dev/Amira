@@ -5,6 +5,7 @@ import { ScrollView } from "../src/components/scroll-view.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
 import { key } from "../src/keys.ts"
 import { LiveRenderer } from "../src/renderer.ts"
+import { discardLive, pauseFullScreen } from "../src/renderer-controls.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { plain } from "./context.ts"
 import { VirtualScreen } from "./screen.ts"
@@ -52,6 +53,56 @@ test("open enters the alternate screen with alternate scroll; close leaves both"
   full.close()
   full.render()
   expect(term.output).toBe(closing)
+})
+
+test("inactive retained renderers stay silent until resumed, without leaving the alternate screen", async () => {
+  const { term, screen, resize } = setup()
+  const root = new Lines(["main"])
+  const full = new FullScreenRenderer(term, root, { frameIntervalMs: 10 })
+  full.open()
+  full.requestRender()
+  pauseFullScreen(full, true)
+  term.clearWrites()
+  root.lines = ["updated main"]
+  resize(24, 8)
+  full.requestRender()
+  full.render()
+  full.redraw()
+  await Bun.sleep(25)
+  expect(term.output).toBe("")
+  expect(screen.inAltScreen).toBe(true)
+  expect(full.isOpen).toBe(true)
+
+  // Another renderer may have replaced every row while this one was inactive.
+  const owned = new FullScreenRenderer(term, new Lines(["owned"]))
+  owned.open()
+  pauseFullScreen(owned, true)
+  term.clearWrites()
+  pauseFullScreen(full, false)
+  expect(screen.lines[0]).toBe("updated main")
+  expect(term.output).not.toContain(modes.altScreen.off)
+  expect(term.output).not.toContain(modes.altScreen.on)
+  term.clearWrites()
+  owned.close()
+  expect(term.output).toBe("")
+  expect(screen.inAltScreen).toBe(true)
+  full.close()
+  expect(screen.inAltScreen).toBe(false)
+})
+
+test("opening inactive does not switch screens until activation", () => {
+  const { term, screen } = setup()
+  const full = new FullScreenRenderer(term, new Lines(["retained"]))
+  pauseFullScreen(full, true)
+  full.open()
+  full.render()
+  expect(full.isOpen).toBe(true)
+  expect(term.output).toBe("")
+  expect(screen.inAltScreen).toBe(false)
+  pauseFullScreen(full, false)
+  expect(screen.inAltScreen).toBe(true)
+  expect(screen.lines[0]).toBe("retained")
+  full.close()
 })
 
 test("a crash while open restores the main screen: the terminal tracks the modes", () => {
@@ -190,6 +241,27 @@ test("stop resumes a suspended renderer, so held lines are not lost", () => {
   inline.commit(["held"])
   inline.stop({ clear: true })
   expect(screen.mainText).toBe("held")
+})
+
+test("discarding a suspended live renderer stops it without printing held output", async () => {
+  const { term } = setup()
+  const inline = new LiveRenderer(term, new Lines(["live"]))
+  inline.start()
+  inline.suspend()
+  inline.commit(["held"])
+  term.clearWrites()
+  discardLive(inline)
+  term.setSize(24, 8)
+  inline.requestRender()
+  inline.render()
+  inline.commit(["too late"])
+  await Bun.sleep(25)
+  expect(term.output).toBe("")
+  inline.start()
+  expect(term.output).toContain("live")
+  expect(term.output).not.toContain("held")
+  expect(term.output).not.toContain("too late")
+  inline.stop({ clear: true })
 })
 
 function scrollView(n: number, height: number) {

@@ -22,6 +22,8 @@ import type {
   ToolResult,
   ToolResultMessage,
   TuiSettings,
+  UiRequest,
+  UiRequestOptions,
 } from "../src/index.ts"
 
 test("the public API exports stay stable", async () => {
@@ -436,6 +438,73 @@ test("panels can reuse the frontend command spinner without requiring it from ot
 test("the canonical theme glyph export includes the layout symbols", async () => {
   const { DEFAULT_THEME_GLYPHS } = await import("../src/index.ts")
   expect(DEFAULT_THEME_GLYPHS).toMatchSnapshot()
+})
+
+test("native conversation focus, image sends and message display are additive public contracts", () => {
+  const unsupported: Pick<CommandContext, "focusConversation" | "unfocusConversation"> = {}
+  const supported: Pick<CommandContext, "focusConversation" | "unfocusConversation"> = {
+    focusConversation: () => true,
+    unfocusConversation: () => true,
+  }
+  const send: Parameters<OwnedConversation["send"]> = [
+    "Describe this",
+    {
+      images: [{ type: "image", mimeType: "image/png", data: "aW1hZ2U=", name: "diagram.png" }],
+      display: { text: "Describe this [Image #1]" },
+    },
+  ]
+  expect({
+    unsupported,
+    capabilities: Object.keys(supported),
+    send,
+    sendOptionKeys: Object.keys(send[1] ?? {}).sort(),
+  }).toMatchInlineSnapshot(`
+    {
+      "capabilities": [
+        "focusConversation",
+        "unfocusConversation",
+      ],
+      "send": [
+        "Describe this",
+        {
+          "display": {
+            "text": "Describe this [Image #1]",
+          },
+          "images": [
+            {
+              "data": "aW1hZ2U=",
+              "mimeType": "image/png",
+              "name": "diagram.png",
+              "type": "image",
+            },
+          ],
+        },
+      ],
+      "sendOptionKeys": [
+        "display",
+        "images",
+      ],
+      "unsupported": {},
+    }
+  `)
+})
+
+test("conversation question association is an optional public display contract", () => {
+  const options: UiRequestOptions = { sessionId: "owned-design" }
+  const request: UiRequest = { kind: "ask", title: "Design?", questions: [], sessionId: options.sessionId }
+  expect({ options, request }).toMatchInlineSnapshot(`
+    {
+      "options": {
+        "sessionId": "owned-design",
+      },
+      "request": {
+        "kind": "ask",
+        "questions": [],
+        "sessionId": "owned-design",
+        "title": "Design?",
+      },
+    }
+  `)
 })
 
 test("owned conversation types are public and the extension capability remains optional", async () => {

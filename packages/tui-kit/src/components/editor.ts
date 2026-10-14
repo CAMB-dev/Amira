@@ -1,5 +1,6 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { chromeGlyphs } from "../glyphs.ts"
+import { registerEditorState } from "../internal/editor-state.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
 import { graphemes, TAB_WIDTH, textWidth, truncateToWidth, visibleWidth } from "../width.ts"
 import {
@@ -138,6 +139,21 @@ export class Editor implements Component {
     this.prompt = opts.prompt ?? ""
     this.promptWidth = visibleWidth(this.prompt)
     this.pastes = new EditorPastes(opts)
+    const placeholder = opts.placeholder
+    registerEditorState(this, (parts, scopedPlaceholder) => {
+      this.setParts(parts)
+      // setParts deliberately remembers the old content. A native focus boundary must not:
+      // drop every snapshot and kill-ring part, including their paste and image payloads.
+      this.undoStack = []
+      this.redoStack = []
+      this.killRing = []
+      this.lastEdit = undefined
+      this.lastKilled = false
+      this.batching = false
+      this.top = 0
+      this.hidden = { above: 0, below: 0 }
+      this.opts.placeholder = scopedPlaceholder ?? placeholder
+    })
   }
 
   /** The text, folded pastes expanded and images omitted. Cached until the next change. */

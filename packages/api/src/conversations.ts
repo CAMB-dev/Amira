@@ -1,4 +1,4 @@
-import type { Message } from "@amira/ai"
+import type { ImageBlock, Message, MessageDisplay } from "@amira/ai"
 import type { AnyEvent } from "./events.ts"
 import type { SpawnGroup, SpawnGroupOptions } from "./subagents.ts"
 import type { SessionData, ToolDefinition } from "./tools.ts"
@@ -70,7 +70,16 @@ export interface OwnedConversation {
    * Rejects during extension initialization. Start work from a command or session.start
    * handler after initialization; awaiting readiness inside the initializer deadlocks startup.
    */
-  send(text: string, options?: { signal?: AbortSignal }): Promise<void>
+  send(
+    text: string,
+    options?: {
+      signal?: AbortSignal
+      /** Image attachments included in the user message; text may be empty for image-only sends. */
+      images?: ImageBlock[]
+      /** Frontend display metadata preserved in history and events, never sent to the model. */
+      display?: MessageDisplay
+    },
+  ): Promise<void>
   /** Cancels work, questions and descendants; a later explicit send can continue. */
   stop(reason?: string): Promise<void>
   /** Stops, awaits cleanup and relinquishes the lease. Idempotent; history is retained. */

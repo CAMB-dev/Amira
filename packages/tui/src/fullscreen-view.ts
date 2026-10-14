@@ -11,6 +11,7 @@ import {
   truncateToWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { pauseFullScreen } from "../../tui-kit/src/renderer-controls.ts"
 import { DisplayBlock } from "./blocks/display.ts"
 import {
   type Block,
@@ -41,7 +42,7 @@ import { stickyPromptOverlay } from "./pane/sticky-prompt.ts"
 import { OUTPUT_LINES } from "./tool-view.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { TranscriptPane } from "./transcript-pane.ts"
-import { type TranscriptView, View, type ViewHost } from "./view.ts"
+import { activationBoundary, type TranscriptView, View, type ViewHost } from "./view.ts"
 
 /** The renderer's shortest time between frames. */
 const FRAME_MS = 16
@@ -72,7 +73,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     requestRender: () => renderer.requestRender(),
     notice,
     spinner: host.spinner,
-    visible: () => !overlay,
+    visible: () => visible && !overlay,
     get presenters() {
       return host.presenters
     },
@@ -92,6 +93,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   /** The reasoning of the reply streaming now, while it thinks. */
   let reasoning: ReasoningBlock | undefined
   let overlay = false
+  let visible = true
+  let activeBoundary: string | undefined
 
   /** The thinking is over: its line says for how long. True when it was shown. */
   const endReasoning = (): boolean => {
@@ -172,6 +175,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     const header = host.header?.(width, ctx) ?? []
     // The header gap stays fixed; sticky bands overlay the constant-height transcript.
     if (header.length) header.push("")
+    if (activeBoundary) header.push(...activationBoundary(activeBoundary, width, theme))
     paneTop = header.length
     const barRows = findSelect.finding || pane.selected ? 1 : 0
     // One editor row, two edges, status and footer take precedence on short screens.
@@ -282,7 +286,14 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   function printout(): string {
     boundary.clear()
     const color = isColorEnabled()
-    const lines = insetLines(pane.printout(env(geometry().width)), geometry().left)
+    const width = geometry().width
+    const lines = insetLines(
+      [
+        ...(activeBoundary ? activationBoundary(activeBoundary, width, theme) : []),
+        ...pane.printout(env(width)),
+      ],
+      geometry().left,
+    )
     const rows = lines.map((l) => `${presentEmoji(closeStyles(color ? l : stripColors(l)))}\r\n`).join("")
     return `\r\n${rows}\r\n`
   }
@@ -313,13 +324,39 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     start() {
       started = true
       renderer.open()
-      terminal.enableMode(modes.mouse)
-      // A crash or a signal still leaves the conversation on the normal screen.
-      if (terminal instanceof ProcessTerminal) offEmergency = terminal.onEmergencyExit(printout)
+      if (visible) terminal.enableMode(modes.mouse)
+      // Only the visible conversation is printed on a crash or a signal.
+      if (terminal instanceof ProcessTerminal)
+        offEmergency = terminal.onEmergencyExit(() => (visible ? printout() : ""))
       renderer.render()
+    },
+    activate(label) {
+      // Named focus chrome replaces raw session-boundary rows; it is not conversation content.
+      activeBoundary = label
+      pane.invalidate()
+    },
+    setVisible(next) {
+      if (visible === next) return
+      if (!next && started) {
+        mouseHandlers.stopDrag()
+        mouseHandlers.disarm()
+        terminal.disableMode(modes.mouse)
+      }
+      visible = next
+      pauseFullScreen(renderer, !visible)
+      if (visible && started) terminal.enableMode(modes.mouse)
+      subagents.tick()
     },
     requestRender: () => renderer.requestRender(),
     render: () => renderer.render(),
+    replaceReply(content) {
+      if (!reply || content.some((block) => block.type === "thinking" || block.type === "serverTool"))
+        return false
+      reply.source = content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("")
+      reply.finish()
+      pane.invalidate()
+      return true
+    },
     setTheme(next, nextGlyphs) {
       theme = next
       host.theme = next
@@ -333,7 +370,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       overlay = true
       subagents.tick()
       // The overlay takes the mouse: a drag under way would never see its release.
-      mouseHandlers.stopDrag()
+      if (visible) mouseHandlers.stopDrag()
       mouseHandlers.disarm()
     },
     closeOverlay() {
@@ -350,10 +387,12 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       offEmergency?.()
       if (!started) return
       started = false
-      terminal.disableMode(modes.mouseDrag)
-      terminal.disableMode(modes.mouse)
+      if (visible) {
+        terminal.disableMode(modes.mouseDrag)
+        terminal.disableMode(modes.mouse)
+      }
       renderer.close()
-      terminal.write(printout())
+      if (visible) terminal.write(printout())
     },
 
     banner: (line) =>
@@ -484,7 +523,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       ),
     openSession(boundary, messages: Message[], switched, compactionInfo, displays) {
       if (switched) clearTranscript()
-      add(new LinesBlock("history", (w, t) => [sessionBoundary(t, boundary, w)], ""))
+      add(new LinesBlock("history", (w, t) => (activeBoundary ? [] : [sessionBoundary(t, boundary, w)]), ""))
       for (const b of historyBlocks(messages, env, {
         compactionInfo,
         displays,
