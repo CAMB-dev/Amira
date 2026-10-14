@@ -41,6 +41,10 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
+      # Headless terminal rendering needs real CJK glyphs, not just the runner's emoji fonts.
+      - name: Install terminal rendering fonts (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
       - run: bun install --frozen-lockfile
       # bun run test (inside check) uses the repository's isolated test-home preload.
       # No AMIRA_LIVE_* opt-ins or provider secrets are set in this workflow.

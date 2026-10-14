@@ -88,14 +88,21 @@ test("an unpublished session resolves its parent without probing the missing fil
   const dir = fs.mkdtempSync(path.join(tmpdir(), "amira-session-path-"))
   const parent = fs.realpathSync(dir)
   const realpath = spyOn(fs, "realpathSync")
+  const lstat = spyOn(fs, "lstatSync")
+  const stat = spyOn(fs, "statSync")
   const file = path.join(dir, "new.jsonl")
   try {
     expect(canonicalSessionFile(file)).toBe(path.join(parent, "new.jsonl"))
     expect(realpath.mock.calls.some(([target]) => target === dir)).toBe(true)
     expect(realpath.mock.calls.some(([target]) => target === file)).toBe(false)
+    expect(lstat.mock.calls.filter(([target]) => target === file)).toHaveLength(1)
+    expect(lstat.mock.calls.some(([target]) => target === dir)).toBe(false)
+    expect(stat).not.toHaveBeenCalled()
     expect(fs.readdirSync(dir)).toEqual([])
   } finally {
     realpath.mockRestore()
+    lstat.mockRestore()
+    stat.mockRestore()
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
@@ -213,7 +220,33 @@ test("hard-linked session files are refused without needing symlink privileges",
     fs.linkSync(file, path.join(dir, "hard.jsonl"))
     expect(() => canonicalSessionFile(file)).toThrow(/hard.link/i)
     expect(() => canonicalSessionFile(path.join(dir, "hard.jsonl"))).toThrow(/hard.link/i)
+    withAliases(
+      [{ file: path.join(dir, "symbolic.jsonl"), target: file, physical: file, type: "file" }],
+      true,
+      () => expect(() => canonicalSessionFile(path.join(dir, "symbolic.jsonl"))).toThrow(/hard.link/i),
+    )
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a hard link introduced after the initial path probe is still refused", () => {
+  const dir = fs.mkdtempSync(path.join(tmpdir(), "amira-session-hard-link-"))
+  const file = path.join(dir, "session.jsonl")
+  fs.writeFileSync(file, "session")
+  const realpath = fs.realpathSync
+  const resolving = spyOn(fs, "realpathSync").mockImplementation(
+    new Proxy(realpath, {
+      apply(target, receiver, args) {
+        if (args[0] === file) fs.linkSync(file, path.join(dir, "hard.jsonl"))
+        return Reflect.apply(target, receiver, args)
+      },
+    }),
+  )
+  try {
+    expect(() => canonicalSessionFile(file)).toThrow(/hard.link/i)
+  } finally {
+    resolving.mockRestore()
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })

@@ -3,12 +3,14 @@ import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
+import { aliasedDirectory, filesystemGatePath } from "./file-lock-fixtures.ts"
 
 for (const published of [true, false]) {
   test(`gate publication ${published ? "never removes a renamed staging path" : "cleans failed private staging without taking authority"}`, () => {
-    const dir = fs.mkdtempSync(path.join(tmpdir(), "amira-gate-publication-"))
+    const root = fs.mkdtempSync(path.join(tmpdir(), "amira-gate-publication-"))
+    const dir = aliasedDirectory(root)
     const file = path.join(dir, "session.lock")
-    const gate = `${file}.lease-gate`
+    const gate = filesystemGatePath(file)
     const rm = fs.rmSync
     const rename = fs.renameSync
     let removals = 0
@@ -41,7 +43,7 @@ for (const published of [true, false]) {
       removing.mockRestore()
       renaming.mockRestore()
       unlock?.()
-      rm(dir, { recursive: true, force: true })
+      rm(root, { recursive: true, force: true })
     }
   })
 }

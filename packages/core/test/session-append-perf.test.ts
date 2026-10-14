@@ -181,6 +181,7 @@ test("persisted sub-agent appends cost within 2x of held-lease appends", async (
 test("200 new sessions use one transient gate each and stay near the filesystem baseline", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "amira-create-perf-"))
   const baselineDir = mkdtempSync(path.join(tmpdir(), "amira-create-baseline-"))
+  const canonicalDir = fs.realpathSync(dir)
   const text = `${JSON.stringify({ type: "message", message })}\n`
   let nextBaseline = 0
   const baseline = () => {
@@ -230,11 +231,14 @@ test("200 new sessions use one transient gate each and stay near the filesystem 
     // descriptor. Count those operations instead of relying on the speed of CI's disk.
     expect(
       rename.mock.calls.filter(
-        ([, target]) => path.dirname(String(target)) === dir && String(target).endsWith(".lease-gate"),
+        ([, target]) =>
+          path.dirname(String(target)) === canonicalDir && String(target).endsWith(".lease-gate"),
       ),
     ).toHaveLength(200)
     expect(write).not.toHaveBeenCalled()
-    expect(append.mock.calls.filter(([file]) => path.dirname(String(file)) === dir)).toHaveLength(200)
+    expect(append.mock.calls.filter(([file]) => path.dirname(String(file)) === canonicalDir)).toHaveLength(
+      200,
+    )
     expect(readdirSync(dir)).toHaveLength(200)
     expect(readdirSync(dir).every((file) => file.endsWith(".jsonl"))).toBe(true)
   } finally {

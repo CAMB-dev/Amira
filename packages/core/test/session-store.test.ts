@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test"
-import { appendFileSync, chmodSync, existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -129,6 +137,10 @@ test("the first write failing keeps buffered entries for the next attempt", asyn
   expect(() => s.appendMessage(userMessage("lost"))).toThrow()
   expect(s.entries.length).toBe(1)
   expect(s.branch().map((e) => e.type)).toEqual(["model_change"])
+  rmSync(blocker)
+  s.appendMessage(userMessage("retry"))
+  expect(lines(s.file).map((e) => e.type)).toEqual(["session", "model_change", "message"])
+  expect(SessionStore.open(s.file).restore().messages).toEqual([userMessage("retry")])
 })
 
 test("a second writer to the same file is refused instead of interleaving chains", async () => {
