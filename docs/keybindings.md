@@ -144,6 +144,14 @@ focused row to its default. Enter asks inline for user or project settings; Ente
 and notifies the extension immediately. Esc discards the draft. Descriptions wrap below the
 focused row, and values differing from defaults are marked.
 
+In `/provider`, the top **+ Add provider** row starts setup; Enter on a provider opens Edit,
+Set key, Test connection and Remove. Esc closes the page. In full-screen form multiselects,
+typing filters IDs and labels, Backspace edits the filter, Space toggles, Ctrl+A selects all
+filtered options or clears them, and Ctrl+X inverts filtered options, including off-screen matches.
+Selections outside the filter are kept.
+Esc clears a non-empty filter before cancelling the form. These field-local keys do not
+change the text editor bindings or Ctrl+S to save.
+
 In `/resume`, typing searches titles and conversation text, with the matching text under each
 row; Ctrl+D deletes the selected session after a confirmation.
 

@@ -29,7 +29,7 @@ const catalog = createCatalog({
   other: { models: { "deepseek-chat": {} } },
 })
 
-function setup(env: Record<string, string> = {}) {
+function setup(env: Record<string, string | undefined> = {}) {
   const seen: { url: string; auth?: string }[] = []
   const userAgents: (string | null)[] = []
   const fetch = (async (url: string, init: RequestInit = {}) => {
@@ -259,8 +259,193 @@ test("a new key replaces the stored one and is used at once", async () => {
   await expect(admin.setKey("nope", "k")).rejects.toThrow("unknown provider")
 })
 
+test("testing an environment provider after Set key uses the same live credential as streaming", async () => {
+  const { admin, ai, seen } = setup({ MY_DS_KEY: "sk-from-env-000000" })
+  await admin.save(draft({ keySource: "env", apiKeyEnv: "MY_DS_KEY", apiKey: "" }))
+  await admin.setKey("ds-test", "sk-new-key-99998888")
+  const current = admin.draft("ds-test")!
+  expect("apiKey" in current).toBe(false)
+  expect(JSON.stringify(current)).not.toContain("sk-")
+  const reply = ai.stream({
+    model: ai.model("ds-test/deepseek-chat"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  })
+  for await (const _ of reply) {
+    // Drain.
+  }
+  expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+  expect(seen.map((request) => request.auth)).toEqual([
+    "Bearer sk-new-key-99998888",
+    "Bearer sk-new-key-99998888",
+  ])
+  expect(current.keySource).toBe("auth")
+})
+
+test("configured environment fallbacks take precedence over stored keys in drafts and probes", async () => {
+  const { admin, ai, seen } = setup({ FALLBACK_KEY: "sk-fallback-000000" })
+  ai.registerProvider({
+    id: "ds-test",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKeyEnv: "PRIMARY_KEY",
+    apiKeyEnvFallbacks: ["UNSET_KEY", "FALLBACK_KEY"],
+  })
+  writeFileSync(path.join(home, "auth.json"), JSON.stringify({ "ds-test": { apiKey: KEY } }))
+  ai.setStoredKey?.("ds-test", KEY)
+  const current = admin.draft("ds-test")!
+  const reply = ai.stream({
+    model: ai.model("ds-test/deepseek-chat"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  })
+  for await (const _ of reply) {
+    // Drain.
+  }
+  expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+  expect(seen.map((request) => request.auth)).toEqual([
+    "Bearer sk-fallback-000000",
+    "Bearer sk-fallback-000000",
+  ])
+  expect(current.keySource).toBe("env")
+  expect("apiKey" in current).toBe(false)
+})
+
+test("unsaved credential edits override the live key without changing the configured provider", async () => {
+  const { admin, ai, seen } = setup({
+    MY_DS_KEY: "sk-from-env-000000",
+    OTHER_KEY: "sk-other-env-000000",
+    FALLBACK_KEY: "sk-fallback-000000",
+  })
+  await admin.save(draft({ keySource: "env", apiKeyEnv: "MY_DS_KEY", apiKey: "" }))
+  await admin.setKey("ds-test", KEY)
+  const configured = ai.providers().find((p) => p.id === "ds-test")!
+  // A session-only key can differ from auth.json; the public draft must not disclose it.
+  ai.registerProvider({ ...configured, apiKey: "sk-session-000000", apiKeyEnvFallbacks: ["FALLBACK_KEY"] })
+  const current = admin.draft("ds-test")!
+  expect(current.keySource).toBe("auth")
+  expect("apiKey" in current).toBe(false)
+  expect(JSON.stringify(current)).not.toContain("sk-")
+  const saved = settings()
+  const cases: { edit: Partial<ProviderDraft>; auth?: string }[] = [
+    { edit: {}, auth: "Bearer sk-session-000000" },
+    { edit: { apiKey: "" }, auth: "Bearer sk-session-000000" },
+    { edit: { apiKey: "sk-typed-000000" }, auth: "Bearer sk-typed-000000" },
+    { edit: { keySource: "env", apiKey: "sk-ignored-000000" }, auth: "Bearer sk-from-env-000000" },
+    { edit: { keySource: "env", apiKeyEnv: "OTHER_KEY" }, auth: "Bearer sk-other-env-000000" },
+    { edit: { keySource: "env", apiKeyEnv: "UNSET_KEY" } },
+    { edit: { keySource: "none", apiKey: "sk-ignored-000000" } },
+  ]
+  for (const { edit, auth: expected } of cases) {
+    const edited = { ...current, baseUrl: "https://unsaved.example/v1", ...edit }
+    expect((await admin.test(edited, "deepseek-chat")).ok).toBe(true)
+    expect(seen.at(-1)?.auth).toBe(expected)
+    expect(seen.at(-1)?.url).toBe("https://unsaved.example/v1/chat/completions")
+    await admin.listModels(edited)
+    expect(seen.at(-1)?.auth).toBe(expected)
+  }
+  expect(settings()).toEqual(saved)
+  expect(auth()["ds-test"].apiKey).toBe(KEY)
+  expect(ai.providers().find((p) => p.id === "ds-test")?.apiKey).toBe("sk-session-000000")
+})
+
+test.each([
+  {
+    name: "primary environment",
+    env: { PRIMARY_KEY: "sk-primary-000000" },
+    stored: KEY,
+    apiKey: undefined,
+    expected: "sk-primary-000000",
+    keySource: "env",
+  },
+  {
+    name: "stored after empty variables",
+    env: { PRIMARY_KEY: "", FALLBACK_KEY: "" },
+    stored: KEY,
+    apiKey: undefined,
+    expected: KEY,
+    keySource: "auth",
+  },
+  {
+    name: "explicit empty live key",
+    env: { PRIMARY_KEY: "sk-primary-000000" },
+    stored: KEY,
+    apiKey: "",
+    expected: undefined,
+    keySource: "auth",
+  },
+  {
+    name: "no key needed",
+    env: {},
+    stored: undefined,
+    apiKey: undefined,
+    expected: undefined,
+    keySource: "none",
+  },
+])("configured credential precedence: $name", async ({ env, stored, apiKey, expected, keySource }) => {
+  const { admin, ai, seen } = setup(env)
+  ai.registerProvider({
+    id: "ds-test",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    ...(keySource !== "none" && apiKey !== ""
+      ? { apiKeyEnv: "PRIMARY_KEY", apiKeyEnvFallbacks: ["FALLBACK_KEY"] }
+      : {}),
+    ...(apiKey !== undefined ? { apiKey } : {}),
+  })
+  if (stored) {
+    writeFileSync(path.join(home, "auth.json"), JSON.stringify({ "ds-test": { apiKey: stored } }))
+    ai.setStoredKey?.("ds-test", stored)
+  }
+  const current = admin.draft("ds-test")!
+  expect(current.keySource).toBe(keySource)
+  expect("apiKey" in current).toBe(false)
+  const reply = ai.stream({
+    model: ai.model("ds-test/deepseek-chat"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  })
+  for await (const _ of reply) {
+    // Drain.
+  }
+  expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+  expect(seen.map((request) => request.auth)).toEqual([
+    expected ? `Bearer ${expected}` : undefined,
+    expected ? `Bearer ${expected}` : undefined,
+  ])
+})
+
+test("an environment draft uses variable fallbacks, but only a fresh auth draft uses the stored key", async () => {
+  const env = { PRIMARY_KEY: "sk-primary-000000", FALLBACK_KEY: "sk-fallback-000000" }
+  const { admin, ai, seen } = setup(env)
+  ai.registerProvider({
+    id: "ds-test",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKeyEnv: "PRIMARY_KEY",
+    apiKeyEnvFallbacks: ["FALLBACK_KEY"],
+  })
+  writeFileSync(path.join(home, "auth.json"), JSON.stringify({ "ds-test": { apiKey: KEY } }))
+  ai.setStoredKey?.("ds-test", KEY)
+  const current = admin.draft("ds-test")!
+  expect(current.keySource).toBe("env")
+  env.PRIMARY_KEY = ""
+  expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+  expect(seen.at(-1)?.auth).toBe("Bearer sk-fallback-000000")
+  env.FALLBACK_KEY = ""
+  expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+  expect(seen.at(-1)?.auth).toBeUndefined()
+  const refreshed = admin.draft("ds-test")!
+  expect(refreshed.keySource).toBe("auth")
+  expect((await admin.test(refreshed, "deepseek-chat")).ok).toBe(true)
+  expect(seen.at(-1)?.auth).toBe(`Bearer ${KEY}`)
+})
+
 test("a deleted or replaced stored key stops being used at once, and auth.json is made private again", async () => {
-  const { admin, ai, restricted, setCurrent } = setup()
+  const { admin, ai, seen, restricted, setCurrent } = setup()
   setCurrent("ds-test")
   // A provider the session has that is not in the user settings (e.g. from a project file).
   ai.registerProvider({ id: "keyed", dialect: "openai-chat", baseUrl: "http://k", apiKeyEnv: "KEYED_KEY" })
@@ -278,6 +463,13 @@ test("a deleted or replaced stored key stops being used at once, and auth.json i
   await admin.save(draft())
   await admin.save(draft({ keySource: "env", apiKeyEnv: "UNSET_VAR", apiKey: "" }))
   expect(ai.hasKey("ds-test")).toBe(false)
+  const current = admin.draft("ds-test")!
+  expect(current.keySource).toBe("env")
+  expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+  expect(seen.at(-1)?.auth).toBeUndefined()
+  // An unsaved switch back to auth can still deliberately select the retained key.
+  expect((await admin.test({ ...current, keySource: "auth" }, "deepseek-chat")).ok).toBe(true)
+  expect(seen.at(-1)?.auth).toBe(`Bearer ${KEY}`)
 })
 
 test("vendor metadata refreshes a legacy catalog once, with the existing timeout", async () => {
@@ -425,3 +617,201 @@ test.each([
   expect(() => settings()).toThrow()
   expect(() => auth()).toThrow()
 })
+
+test("saving No key never reactivates a retained auth key in a configured probe", async () => {
+  const { admin, ai, seen } = setup()
+  await admin.save(draft())
+  await admin.save({ ...admin.draft("ds-test")!, keySource: "none", baseUrl: "https://new.example/v1" })
+  for await (const _ of ai.stream({
+    model: ai.model("ds-test/deepseek-chat"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  })) {
+  }
+  expect(seen.at(-1)?.auth).toBeUndefined()
+  expect(auth()["ds-test"].apiKey).toBe(KEY)
+  const current = admin.draft("ds-test")!
+  expect(current.keySource).toBe("none")
+  expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+  expect(seen.at(-1)?.auth).toBeUndefined()
+})
+
+test("an explicit same-name switch to an unset environment variable cannot borrow auth.json", async () => {
+  const { admin, ai, seen } = setup()
+  ai.registerProvider({
+    id: "ds-test",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKeyEnv: "PRIMARY_KEY",
+  })
+  writeFileSync(path.join(home, "auth.json"), JSON.stringify({ "ds-test": { apiKey: KEY } }))
+  ai.setStoredKey?.("ds-test", KEY)
+  const current = admin.draft("ds-test")!
+  expect(current.keySource).toBe("auth")
+  await admin.test(current, "deepseek-chat")
+  expect(seen.at(-1)?.auth).toBe(`Bearer ${KEY}`)
+  await admin.test({ ...current, keySource: "env" }, "deepseek-chat")
+  expect(seen.at(-1)?.auth).toBeUndefined()
+})
+
+test.each(["replace", "delete"])(
+  "configured probes keep Ai's in-memory stored key when auth.json changes: %s",
+  async (change) => {
+    const { admin, ai, seen } = setup()
+    ai.registerProvider({ id: "ds-test", dialect: "openai-chat", baseUrl: "https://api.deepseek.com" })
+    ai.setStoredKey?.("ds-test", KEY)
+    const file = path.join(home, "auth.json")
+    writeFileSync(file, JSON.stringify({ "ds-test": { apiKey: KEY } }))
+    const current = admin.draft("ds-test")!
+    if (change === "replace")
+      writeFileSync(file, JSON.stringify({ "ds-test": { apiKey: "sk-other-instance-99999999" } }))
+    else rmSync(file)
+    for await (const _ of ai.stream({
+      model: ai.model("ds-test/deepseek-chat"),
+      systemPrompt: "",
+      messages: [],
+      tools: [],
+    })) {
+    }
+    expect((await admin.test(current, "deepseek-chat")).ok).toBe(true)
+    await admin.listModels(current)
+    expect(seen.map((request) => request.auth)).toEqual([`Bearer ${KEY}`, `Bearer ${KEY}`, `Bearer ${KEY}`])
+    expect(admin.draft("ds-test")?.keySource).toBe("auth")
+    expect("apiKey" in current).toBe(false)
+    expect(JSON.stringify(current)).not.toContain(KEY)
+  },
+)
+
+test("whitespace-only probe and save keys behave like an empty key", async () => {
+  const { admin, ai, seen, restricted } = setup()
+  await admin.save(draft())
+  const current = admin.draft("ds-test")!
+  const before = readFileSync(path.join(home, "auth.json"), "utf8")
+  restricted.length = 0
+  expect((await admin.test({ ...current, apiKey: " \t\n " }, "deepseek-chat")).ok).toBe(true)
+  expect(seen.at(-1)?.auth).toBe(`Bearer ${KEY}`)
+  await admin.save({ ...current, apiKey: " \t\n " })
+  expect(readFileSync(path.join(home, "auth.json"), "utf8")).toBe(before)
+  expect(restricted).toEqual([])
+  for await (const _ of ai.stream({
+    model: ai.model("ds-test/deepseek-chat"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  })) {
+  }
+  expect(seen.at(-1)?.auth).toBe(`Bearer ${KEY}`)
+})
+
+test.each(["replace", "delete", "session-only"])(
+  "blank-key saves preserve the live credential despite disk state: %s",
+  async (change) => {
+    const { admin, ai, seen } = setup()
+    ai.registerProvider({
+      id: "ds-test",
+      dialect: "openai-chat",
+      baseUrl: "https://api.deepseek.com",
+      ...(change === "session-only" ? { apiKey: KEY } : {}),
+    })
+    if (change !== "session-only") ai.setStoredKey?.("ds-test", KEY)
+    const file = path.join(home, "auth.json")
+    if (change === "replace") writeFileSync(file, JSON.stringify({ "ds-test": { apiKey: "local-new" } }))
+    const current = admin.draft("ds-test")!
+    await admin.test({ ...current, apiKey: "   " }, "deepseek-chat")
+    expect(seen.at(-1)?.auth).toBe(`Bearer ${KEY}`)
+    await admin.save({ ...current, apiKey: "   " })
+    for await (const _ of ai.stream({
+      model: ai.model("ds-test/deepseek-chat"),
+      systemPrompt: "",
+      messages: [],
+      tools: [],
+    })) {
+    }
+    expect(seen.at(-1)?.auth).toBe(`Bearer ${KEY}`)
+  },
+)
+
+test("independent draft overrides and source discovery work without the optional source query", async () => {
+  const { ai } = setup()
+  ai.registerProvider({
+    id: "ds-test",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKey: KEY,
+    apiKeyEnv: "PRIMARY_KEY",
+  })
+  const { credentialSource: _source, ...withoutSource } = ai
+  const seen: (string | null)[] = []
+  const fetch = (async (_url: unknown, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers).get("authorization"))
+    if (String(_url).endsWith("/models")) return Response.json({ data: [{ id: "m" }] })
+    return new Response(
+      'data: {"choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }) as typeof globalThis.fetch
+  const admin = createProviderAdmin({
+    ai: withoutSource,
+    home,
+    env: { OTHER_KEY: "fake-independent-env" },
+    fetch,
+  })
+  expect(admin.draft("ds-test")?.keySource).toBe("auth")
+  const changed = { ...admin.draft("ds-test")!, keySource: "env" as const, apiKeyEnv: "OTHER_KEY" }
+  await admin.listModels(changed)
+  expect((await admin.test(changed, "m")).ok).toBe(true)
+  expect(seen).toEqual(["Bearer fake-independent-env", "Bearer fake-independent-env"])
+})
+
+test("blank-key saves cannot reactivate a stored fallback blocked by an empty explicit key", async () => {
+  const { admin, ai, seen } = setup()
+  ai.registerProvider({
+    id: "ds-test",
+    dialect: "openai-chat",
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "",
+  })
+  ai.setStoredKey?.("ds-test", KEY)
+  writeFileSync(path.join(home, "auth.json"), JSON.stringify({ "ds-test": { apiKey: KEY } }))
+  const current = admin.draft("ds-test")!
+  await admin.test({ ...current, apiKey: "   " }, "deepseek-chat")
+  expect(seen.at(-1)?.auth).toBeUndefined()
+  await admin.save({ ...current, apiKey: "   " })
+  for await (const _ of ai.stream({
+    model: ai.model("ds-test/deepseek-chat"),
+    systemPrompt: "",
+    messages: [],
+    tools: [],
+  })) {
+  }
+  expect(seen.at(-1)?.auth).toBeUndefined()
+  expect(auth()["ds-test"].apiKey).toBe(KEY)
+})
+
+test.each([undefined, ""])(
+  "configured fallback-only variables use the live credential without a primary name: %s",
+  async (apiKeyEnv) => {
+    const { admin, ai, seen } = setup({ ALT_KEY: KEY })
+    ai.registerProvider({
+      id: "ds-test",
+      dialect: "openai-chat",
+      baseUrl: "https://api.deepseek.com",
+      apiKeyEnvFallbacks: ["ALT_KEY"],
+    })
+    const current = admin.draft("ds-test")!
+    expect(current.keySource).toBe("env")
+    expect(current.apiKeyEnv).toBeUndefined()
+    for await (const _ of ai.stream({
+      model: ai.model("ds-test/deepseek-chat"),
+      systemPrompt: "",
+      messages: [],
+      tools: [],
+    })) {
+    }
+    const tested = { ...current, apiKeyEnv }
+    expect((await admin.test(tested, "deepseek-chat")).ok).toBe(true)
+    await admin.listModels(tested)
+    expect(seen.map((request) => request.auth)).toEqual([`Bearer ${KEY}`, `Bearer ${KEY}`, `Bearer ${KEY}`])
+  },
+)

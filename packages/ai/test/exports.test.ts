@@ -78,3 +78,32 @@ test("the public ai exports stay stable", async () => {
     "withoutDisplay",
   ])
 })
+
+test("Ai exposes a non-secret live credential source query", async () => {
+  const { createAi } = await import("../src/index.ts")
+  const env = { KEY: "private-env" }
+  const ai = createAi({
+    providers: [{ id: "p", dialect: "openai-chat", baseUrl: "https://fake.example", apiKeyEnv: "KEY" }],
+    env,
+    apiKeys: { p: "private-stored" },
+  })
+  expect(ai.credentialSource?.("p")).toBe("env")
+  expect(Object.keys(ai.providerEndpoint("p")).sort()).toEqual([
+    "apiKey",
+    "baseUrl",
+    "credentialSource",
+    "dialect",
+  ])
+  expect(ai.providerEndpoint("p").credentialSource).toBe("env")
+  expect(ai.providerEndpoint("p").apiKey).toBe("private-env")
+  env.KEY = ""
+  expect(ai.credentialSource?.("p")).toBe("stored")
+  expect(ai.providerEndpoint("p").apiKey).toBe("private-stored")
+  ai.setStoredKey?.("p", undefined)
+  expect(ai.credentialSource?.("p")).toBe("none")
+  expect(ai.providerEndpoint("p").apiKey).toBeUndefined()
+  ai.registerProvider({ ...ai.providers()[0]!, apiKey: "private-explicit" })
+  expect(ai.credentialSource?.("p")).toBe("explicit")
+  expect(ai.providerEndpoint("p").apiKey).toBe("private-explicit")
+  expect(ai.credentialSource?.("unknown")).toBe("none")
+})

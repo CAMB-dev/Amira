@@ -17,6 +17,8 @@ export interface FormOption {
   label?: string
   /** A short muted note after the label, e.g. "128k context · $0.27/M in". */
   description?: string
+  /** Right-aligned multiselect note, or independent trailing columns (rightmost dropped first). */
+  detail?: string | string[]
 }
 
 /** What a field or form validator returns: a message, or undefined when the value is fine. */

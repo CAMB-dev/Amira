@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import {
+  type CommandFrontend,
   draftFromValues,
   type EventMap,
   type ProviderAdmin,
@@ -18,6 +19,7 @@ import {
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
 import commandsExtension from "../src/index.ts"
+import { ProviderConnectionTests } from "../src/provider-tests.ts"
 
 type Request = EventMap["ui.request"]
 
@@ -80,7 +82,13 @@ const CONFIGURED: Listed = [
 
 async function setup(
   answer: (r: Request) => unknown,
-  opts: { dialogs?: boolean; current?: string; providers?: Listed; admin?: Partial<ProviderAdmin> } = {},
+  opts: {
+    dialogs?: boolean
+    current?: string
+    providers?: Listed
+    admin?: Partial<ProviderAdmin>
+    sessionId?: () => string
+  } = {},
 ) {
   const bus = new EventBus()
   const ext = new ExtensionHost({ bus, interceptors: new InterceptorRegistry(), tools: new ToolRegistry() })
@@ -95,7 +103,7 @@ async function setup(
   Object.assign(admin, opts.admin)
   const control = {
     info: () => ({
-      id: "s1",
+      id: opts.sessionId?.() ?? "s1",
       cwd: "/work",
       model: { provider: opts.current ?? "mock", model: "m" },
       contextWindow: 1000,
@@ -112,23 +120,27 @@ async function setup(
     (e) => {
       if (e.type !== "ui.request") return
       asked.push(e.data)
-      const v = answer(e.data)
-      if (v === undefined) ext.ui.cancel(e.data.requestId)
-      else {
-        const problem = ext.ui.respond(e.data.requestId, v)
-        if (problem) throw new Error(problem)
+      const respond = (value: unknown) => {
+        if (value === undefined) ext.ui.cancel(e.data.requestId)
+        else {
+          const problem = ext.ui.respond(e.data.requestId, value)
+          if (problem) throw new Error(problem)
+        }
       }
+      const v = answer(e.data)
+      if (v instanceof Promise) return v.then(respond)
+      respond(v)
     },
     { types: ["ui.request"] },
   )
   const events: unknown[] = []
   bus.subscribe((e) => void events.push(e))
-  const run = async (line: string) => {
-    const r = await host.run(line, { frontend: "tui" })
+  const run = async (line: string, frontend: CommandFrontend = "tui", signal?: AbortSignal) => {
+    const r = await host.run(line, { frontend, signal })
     await bus.flush()
     return { ...r, text: r.output.join("\n") }
   }
-  return { run, calls, drafts, asked, host, events, bus }
+  return { run, calls, drafts, asked, host, events, bus, ui: ext.ui }
 }
 
 test("/provider add falls back to the protocol picker when the catalog is unavailable", async () => {
@@ -404,18 +416,542 @@ test("/provider edit preserves catalog identity, including explicit opt-out", as
   }
 })
 
-test("/provider lists only configured providers; with none it says how to add one", async () => {
-  const some = await setup(() => undefined)
-  const listed = (await some.run("/provider")).text
-  expect(listed).toContain("deepseek")
-  for (const name of ["anthropic", "openai-chat ", "google", "ollama", "presets"]) {
-    expect(listed.split("\n").some((l) => l.trim().startsWith(name))).toBe(false)
+test("print and RPC /provider keep the exact original table and empty output without dialogs", async () => {
+  for (const frontend of ["print", "rpc"] as const) {
+    const some = await setup(() => undefined)
+    const listed = await some.run("/provider", frontend)
+    expect(listed.ok).toBe(true)
+    expect(listed.text).toBe(
+      "Providers:\n   deepseek  openai-chat  https://api.deepseek.com  key set\n*  mock      mock                                   key set\nAdd one with /provider add; change one with /provider edit <id>.",
+    )
+    expect(some.asked).toEqual([])
+    expect(some.calls).toEqual([])
+    const none = await setup(() => undefined, { providers: [] })
+    expect((await none.run("/provider", frontend)).text).toBe(
+      "No providers configured — add one with /provider add",
+    )
+    expect(none.asked).toEqual([])
+    expect((await none.run("/provider edit anthropic", frontend)).error).toBe(
+      "No providers configured — add one with /provider add",
+    )
+
+    const missingKey = await setup(() => undefined, {
+      providers: [
+        {
+          id: "custom",
+          dialect: "openai-chat",
+          baseUrl: "http://localhost:1234",
+          hasKey: false,
+          apiKeyEnv: "CUSTOM_KEY",
+        },
+      ],
+    })
+    expect((await missingKey.run("/provider", frontend)).text).toBe(
+      "Providers:\n   custom  openai-chat  http://localhost:1234  no key (CUSTOM_KEY)\nAdd one with /provider add; change one with /provider edit <id>.",
+    )
+    expect(missingKey.asked).toEqual([])
   }
-  const none = await setup(() => undefined, { providers: [] })
-  expect((await none.run("/provider")).text).toBe("No providers configured — add one with /provider add")
-  expect((await none.run("/provider edit anthropic")).error).toBe(
-    "No providers configured — add one with /provider add",
+})
+
+test("TUI /provider opens a management page with Add first and configured provider metadata", async () => {
+  const { admin } = fakeAdmin()
+  const existing = admin.draft("deepseek")!
+  const longUrl = `https://api.example.com/${"long-path/".repeat(8)}`
+  const session = await setup(() => undefined, {
+    providers: [
+      CONFIGURED[0]!,
+      { id: "env", dialect: "anthropic-messages", baseUrl: longUrl, hasKey: true, apiKeyEnv: "ENV_KEY" },
+      { id: "local", dialect: "openai-chat", baseUrl: "http://localhost:1234/v1/", hasKey: true },
+    ],
+    admin: {
+      draft: (id) =>
+        id === "deepseek"
+          ? existing
+          : {
+              id,
+              dialect: "openai-chat",
+              baseUrl: id === "env" ? longUrl : "http://localhost:1234/v1/",
+              keySource: id === "env" ? "env" : "none",
+              ...(id === "env" ? { apiKeyEnv: "ENV_KEY" } : {}),
+              models: id === "env" ? ["a", "b"] : [],
+            },
+    },
+  })
+  expect((await session.run("/provider")).text).toBe("")
+  expect(session.asked).toHaveLength(1)
+  expect(session.asked[0]).toMatchObject({
+    kind: "select",
+    title: "Providers",
+    options: ["+ Add provider", "deepseek", "env", "local"],
+    sections: [
+      { at: 0, choose: "add" },
+      { at: 1, title: "Configured", choose: "manage" },
+    ],
+    descriptions: [
+      "Configure a provider and its models",
+      "openai-chat · api.deepseek.com · 1 model · key: auth.json",
+      `anthropic-messages · ${longUrl.replace("https://", "").slice(0, 41)}… · 2 models · key: env (ENV_KEY)`,
+      "openai-chat · localhost:1234/v1 · 0 models · key: none",
+    ],
+  })
+  expect(session.calls).toEqual([])
+})
+
+test("the empty management page offers Add and Escape cancels without changing providers", async () => {
+  const session = await setup(() => undefined, { providers: [] })
+  expect((await session.run("/provider")).ok).toBe(true)
+  expect(session.asked[0]).toMatchObject({
+    title: "Providers",
+    options: ["+ Add provider"],
+    sections: [{ at: 0, choose: "add" }],
+  })
+  expect(session.calls).toEqual([])
+})
+
+test("management Add reuses the protocol picker and provider form", async () => {
+  const session = await setup(
+    (r) => {
+      if (r.kind === "select") return r.options[0]
+      if (r.kind === "form") return { id: "new", baseUrl: "http://localhost:1234", keySource: "none" }
+      return undefined
+    },
+    { providers: [] },
   )
+  expect((await session.run("/provider")).text).toBe(
+    'Provider catalog unavailable; choose a protocol to add a custom provider.\nSaved provider "new".',
+  )
+  expect(session.asked.map((r) => r.title)).toEqual([
+    "Providers",
+    "Which protocol does the provider speak?",
+    "Add a provider",
+  ])
+  expect(session.calls).toEqual(["save new"])
+  expect(session.drafts[0]).toMatchObject({ id: "new", dialect: "openai-chat", keySource: "none" })
+})
+
+test("Escape in management Add at the vendor, protocol, or form stage saves nothing", async () => {
+  for (const stop of ["vendor", "protocol", "form"]) {
+    const session = await setup(
+      (r) => {
+        if (r.kind !== "select") return undefined
+        if (r.title === "Providers") return "+ Add provider"
+        if (r.title === "Which provider do you want to add?") {
+          return stop === "vendor" ? undefined : "Custom (choose a protocol)"
+        }
+        return stop === "protocol" ? undefined : r.options[0]
+      },
+      { admin: { vendors: async () => VENDORS } },
+    )
+    expect((await session.run("/provider")).text).toBe("Cancelled; nothing was saved.")
+    expect(session.calls).toEqual([])
+    expect(session.asked).toHaveLength(stop === "vendor" ? 2 : stop === "protocol" ? 3 : 4)
+  }
+})
+
+test("management Edit and Set key reuse existing forms and masked input", async () => {
+  for (const action of ["Edit", "Set key"]) {
+    const session = await setup((r) => {
+      if (r.kind === "select") return r.title === "Providers" ? "deepseek" : action
+      if (r.kind === "form") return { baseUrl: "https://api.deepseek.com/v1" }
+      if (r.kind === "input") return "sk-management-secret"
+      return undefined
+    })
+    expect((await session.run("/provider")).ok).toBe(true)
+    expect(session.asked[1]).toMatchObject({
+      title: "Manage provider deepseek",
+      options: ["Edit", "Set key", "Test connection", "Remove"],
+    })
+    if (action === "Edit") {
+      expect(session.asked[2]).toMatchObject({ kind: "form", title: "Edit provider deepseek" })
+      expect(session.calls).toEqual(["save deepseek"])
+      expect(session.drafts[0]).toMatchObject({
+        id: "deepseek",
+        models: ["deepseek-chat"],
+        keySource: "auth",
+      })
+    } else {
+      expect(session.asked[2]).toMatchObject({ kind: "input", secret: true })
+      expect(session.calls).toEqual(["key deepseek 20"])
+      expect(JSON.stringify(session.events)).not.toContain("sk-management-secret")
+    }
+  }
+})
+
+test("Escape in the action menu, edit form, or key input changes nothing", async () => {
+  for (const action of [undefined, "Edit", "Set key"]) {
+    const session = await setup((r) =>
+      r.kind === "select" ? (r.title === "Providers" ? "deepseek" : action) : undefined,
+    )
+    expect((await session.run("/provider")).ok).toBe(true)
+    expect(session.calls).toEqual([])
+    expect(session.asked).toHaveLength(action ? 3 : 2)
+  }
+})
+
+test("management Remove preserves confirmation, optional key removal, and the in-use guard", async () => {
+  for (const removeKey of [true, false, undefined]) {
+    const session = await setup((r) => {
+      if (r.kind === "select") return r.title === "Providers" ? "deepseek" : "Remove"
+      if (r.kind === "confirm") return r.title.startsWith("Also") ? removeKey : true
+      return undefined
+    })
+    expect((await session.run("/provider")).text).toBe('Removed provider "deepseek".')
+    expect(session.calls).toEqual([`remove deepseek key=${removeKey === true}`])
+    expect(session.asked.slice(2).map((r) => r.title)).toEqual([
+      "Remove provider deepseek?",
+      "Also delete its key (…wxyz) from ~/.amira/auth.json?",
+    ])
+  }
+  for (const answer of [false, undefined]) {
+    const session = await setup((r) =>
+      r.kind === "select" ? (r.title === "Providers" ? "deepseek" : "Remove") : answer,
+    )
+    expect((await session.run("/provider")).text).toBe("Kept it.")
+    expect(session.calls).toEqual([])
+  }
+  const inUse = await setup(
+    (r) => (r.kind === "select" ? (r.title === "Providers" ? "deepseek" : "Remove") : true),
+    { current: "deepseek" },
+  )
+  expect((await inUse.run("/provider")).error).toContain("is in use")
+  expect(inUse.asked).toHaveLength(2)
+  expect(inUse.calls).toEqual([])
+})
+
+test("management labels fallback-only environment credentials without an undefined variable", async () => {
+  const existing = fakeAdmin().admin.draft("deepseek")!
+  const session = await setup(() => undefined, {
+    admin: { draft: () => ({ ...existing, keySource: "env" }) },
+  })
+  await session.run("/provider")
+  const page = session.asked[0]
+  if (page?.kind !== "select") throw new Error("Missing provider page")
+  expect(page.descriptions?.[1]).toContain("key: env")
+  expect(page.descriptions?.[1]).not.toContain("undefined")
+})
+
+test("management connection test picks a configured model, confirms cost, and remembers success", async () => {
+  const existing = fakeAdmin().admin.draft("deepseek")!
+  let tested: { draft: ProviderDraft; model: string; signal?: AbortSignal } | undefined
+  let visits = 0
+  const session = await setup(
+    (r) => {
+      if (r.kind === "select") {
+        if (r.title === "Providers") return ++visits === 1 ? "deepseek" : undefined
+        if (r.title.startsWith("Manage")) return "Test connection"
+        return r.options[1]
+      }
+      return r.kind === "confirm" ? true : undefined
+    },
+    {
+      admin: {
+        draft: () => ({ ...existing, models: ["deepseek-chat", "deepseek-reasoner"] }),
+        test: async (draft, model, signal) => {
+          tested = { draft, model, signal }
+          return { ok: true, latencyMs: 7, message: "OK: connection works" }
+        },
+      },
+    },
+  )
+  expect((await session.run("/provider")).text).toBe("OK: connection works")
+  expect(tested?.model).toBe("deepseek-reasoner")
+  expect(tested?.draft).toMatchObject({
+    id: "deepseek",
+    keySource: "auth",
+    models: ["deepseek-chat", "deepseek-reasoner"],
+  })
+  expect(tested?.signal).toBeInstanceOf(AbortSignal)
+  expect(session.asked[3]).toMatchObject({
+    kind: "confirm",
+    title: "Test deepseek/deepseek-reasoner?",
+    message: "Sends one tiny request to this model. The provider may charge for it.",
+  })
+  expect((await session.run("/provider")).text).toBe("")
+  expect(session.asked[4]).toMatchObject({
+    descriptions: expect.arrayContaining([expect.stringContaining("test: passed (deepseek-reasoner, 7 ms)")]),
+  })
+  expect(session.calls).toEqual([])
+  expect((await session.run("/provider", "rpc")).text).not.toContain("test:")
+  const other = await setup(() => undefined)
+  await other.run("/provider")
+  expect(JSON.stringify(other.asked)).not.toContain("test: passed")
+})
+
+test("connection-test status stays with its session when commands survive new/resume", async () => {
+  let id = "s1"
+  let visits = 0
+  const session = await setup(
+    (request) => {
+      if (request.kind === "select") {
+        if (request.title === "Providers") return ++visits === 1 ? "deepseek" : undefined
+        return request.title.startsWith("Manage") ? "Test connection" : request.options[0]
+      }
+      return request.kind === "confirm" ? true : undefined
+    },
+    { sessionId: () => id },
+  )
+  await session.run("/provider")
+  id = "s2"
+  await session.run("/provider")
+  expect(JSON.stringify(session.asked.at(-1))).not.toContain("test: passed")
+  id = "s1"
+  await session.run("/provider")
+  expect(JSON.stringify(session.asked.at(-1))).toContain("test: passed")
+})
+
+test("connection-test failed results and rejections show errors and remembered failed status", async () => {
+  for (const rejects of [false, true]) {
+    let visits = 0
+    const session = await setup(
+      (r) => {
+        if (r.kind === "select") {
+          if (r.title === "Providers") return ++visits === 1 ? "deepseek" : undefined
+          return r.title.startsWith("Manage") ? "Test connection" : r.options[0]
+        }
+        return r.kind === "confirm" ? true : undefined
+      },
+      {
+        admin: {
+          test: async () => {
+            if (rejects) throw new Error("Endpoint unavailable")
+            return { ok: false, latencyMs: 9, message: "Authentication failed" }
+          },
+        },
+      },
+    )
+    const result = await session.run("/provider")
+    expect(result.ok).toBe(true)
+    expect(result.text).toBe(
+      rejects ? "Connection test failed: Endpoint unavailable" : "Authentication failed",
+    )
+    expect(session.events).toContainEqual(
+      expect.objectContaining({
+        type: "command.output",
+        data: expect.objectContaining({ level: "error", text: result.text }),
+      }),
+    )
+    await session.run("/provider")
+    expect(session.asked[4]).toMatchObject({
+      descriptions: expect.arrayContaining([expect.stringContaining("test: failed (deepseek-chat")]),
+    })
+    expect(session.calls).toEqual([])
+  }
+})
+
+test("an aborted connection test that resolves cannot overwrite a previous success", async () => {
+  const controller = new AbortController()
+  let visits = 0
+  let attempts = 0
+  const session = await setup(
+    (request) => {
+      if (request.kind === "select") {
+        if (request.title === "Providers") return ++visits <= 2 ? "deepseek" : undefined
+        return request.title.startsWith("Manage") ? "Test connection" : request.options[0]
+      }
+      return request.kind === "confirm" ? true : undefined
+    },
+    {
+      admin: {
+        test: async () => {
+          if (++attempts === 1) return { ok: true, latencyMs: 5, message: "First passed" }
+          controller.abort()
+          return { ok: false, latencyMs: 10, message: "Aborted probe resolved as failed" }
+        },
+      },
+    },
+  )
+  await session.run("/provider")
+  const cancelled = await session.run("/provider", "tui", controller.signal)
+  expect(cancelled.text).not.toContain("Aborted probe resolved as failed")
+  await session.run("/provider")
+  expect(JSON.stringify(session.asked.at(-1))).toContain("test: passed")
+  expect(JSON.stringify(session.asked.at(-1))).not.toContain("test: failed")
+})
+
+test("Edit-form connection tests replace the management result only for the saved configuration", async () => {
+  for (const changed of [
+    {},
+    { baseUrl: "https://other.example/v1" },
+    { apiKey: "unsaved-secret" },
+    { models: ["new-model"] },
+    { keySource: "env", apiKeyEnv: "OTHER_KEY" },
+  ]) {
+    let attempts = 0
+    let visits = 0
+    let action: unknown
+    const session = await setup(
+      (request) => {
+        if (request.kind === "select") {
+          if (request.title === "Providers") return ++visits === 1 ? "deepseek" : undefined
+          return request.title.startsWith("Manage") ? "Test connection" : request.options[0]
+        }
+        if (request.kind === "form")
+          return session.ui.runFormAction(request.requestId, "testConnection", changed).then((result) => {
+            action = result
+          })
+        return request.kind === "confirm" ? true : undefined
+      },
+      {
+        admin: {
+          test: async () => ({
+            ok: ++attempts === 1,
+            latencyMs: 7,
+            message: attempts === 1 ? "Passed" : "Edit failed",
+          }),
+        },
+      },
+    )
+    await session.run("/provider")
+    await session.run("/provider edit deepseek")
+    expect(action).toEqual({ message: "Edit failed", tone: "error" })
+    expect(session.drafts).toEqual([])
+    await session.run("/provider")
+    const status = JSON.stringify(session.asked.at(-1))
+    expect(status).toContain(Object.keys(changed).length ? "test: passed" : "test: failed")
+  }
+})
+
+test.each(["", "   "])(
+  "Edit testing and saving a blank key %j retain the saved credential and successful status",
+  async (apiKey) => {
+    let visits = 0
+    let action: unknown
+    const tested: ProviderDraft[] = []
+    const session = await setup(
+      (request) => {
+        if (request.kind === "select") {
+          if (request.title === "Providers") return ++visits <= 2 ? "deepseek" : undefined
+          if (request.title.startsWith("Manage")) return visits === 1 ? "Test connection" : "Edit"
+          return request.options[0]
+        }
+        if (request.kind === "form")
+          return session.ui.runFormAction(request.requestId, "testConnection", { apiKey }).then((result) => {
+            action = result
+            return { apiKey }
+          })
+        return request.kind === "confirm" ? true : undefined
+      },
+      {
+        admin: {
+          test: async (draft) => {
+            tested.push(draft)
+            return {
+              ok: draft.apiKey === undefined,
+              latencyMs: 5,
+              message: draft.apiKey === undefined ? "Saved key passed" : "Alternate key failed",
+            }
+          },
+        },
+      },
+    )
+    expect((await session.run("/provider")).text).toBe("Saved key passed")
+    expect((await session.run("/provider")).text).toBe('Saved provider "deepseek".')
+    expect(action).toEqual({ message: "Saved key passed", tone: "success" })
+    expect(tested).toHaveLength(2)
+    for (const draft of tested) expect(draft).not.toHaveProperty("apiKey")
+    expect(session.drafts).toHaveLength(1)
+    expect(session.drafts[0]).not.toHaveProperty("apiKey")
+    await session.run("/provider")
+    const status = JSON.stringify(session.asked.at(-1))
+    expect(status).toContain("test: passed (deepseek-chat, 5 ms)")
+    expect(status).not.toContain("test: failed")
+  },
+)
+
+test.each([
+  { apiKey: "", expected: undefined },
+  { apiKey: "   ", expected: undefined },
+  { apiKey: "  replacement-secret \t", expected: "replacement-secret" },
+])("recorder normalizes direct-admin test and save key $apiKey", async ({ apiKey, expected }) => {
+  const { admin, drafts } = fakeAdmin()
+  const existing = admin.draft("deepseek")!
+  const tested: ProviderDraft[] = []
+  admin.test = async (draft) => {
+    tested.push(draft)
+    return { ok: draft.apiKey === undefined, latencyMs: 5, message: "Tested" }
+  }
+  const tests = new ProviderConnectionTests()
+  const tracked = tests.wrap("s1", admin)
+  await tracked.test(existing, "deepseek-chat")
+  const savedStatus = "test: passed (deepseek-chat, 5 ms)"
+  expect(tests.status("s1", admin, existing.id)).toBe(savedStatus)
+  const input = { ...existing, apiKey }
+  const result = await tracked.test(input, "deepseek-chat")
+  expect(result.ok).toBe(expected === undefined)
+  expect(tests.status("s1", admin, existing.id)).toBe(savedStatus)
+  expect(tested.at(-1)?.apiKey).toBe(expected)
+  if (expected === undefined) expect(tested.at(-1)).not.toHaveProperty("apiKey")
+  await tracked.save(input)
+  expect(drafts.at(-1)?.apiKey).toBe(expected)
+  if (expected === undefined) expect(drafts.at(-1)).not.toHaveProperty("apiKey")
+  expect(tests.status("s1", admin, existing.id)).toBe(expected === undefined ? savedStatus : undefined)
+  expect(input.apiKey).toBe(apiKey)
+})
+
+test("changing a saved provider's connection configuration hides its old status", async () => {
+  const existing = fakeAdmin().admin.draft("deepseek")!
+  let baseUrl = existing.baseUrl
+  let visits = 0
+  const session = await setup(
+    (request) => {
+      if (request.kind === "select") {
+        if (request.title === "Providers") return ++visits === 1 ? "deepseek" : undefined
+        return request.title.startsWith("Manage") ? "Test connection" : request.options[0]
+      }
+      return request.kind === "confirm" ? true : undefined
+    },
+    { admin: { draft: () => ({ ...existing, baseUrl }) } },
+  )
+  await session.run("/provider")
+  baseUrl = "https://changed.example/v1"
+  await session.run("/provider")
+  expect(JSON.stringify(session.asked.at(-1))).not.toContain("test: passed")
+})
+
+test("saving a replacement key invalidates a test result even when its key hint is unchanged", async () => {
+  let visits = 0
+  const session = await setup(
+    (request) => {
+      if (request.kind === "select") {
+        if (request.title === "Providers") return ++visits === 1 ? "deepseek" : undefined
+        return request.title.startsWith("Manage") ? "Test connection" : request.options[0]
+      }
+      if (request.kind === "form") return { apiKey: "local-new" }
+      return request.kind === "confirm" ? true : undefined
+    },
+    { admin: { storedKeyHint: () => "(set)" } },
+  )
+  await session.run("/provider")
+  await session.run("/provider edit deepseek")
+  expect(session.drafts.at(-1)?.apiKey).toBe("local-new")
+  await session.run("/provider")
+  expect(JSON.stringify(session.asked.at(-1))).not.toContain("test: passed")
+})
+
+test("connection test with no configured models, model Escape, or declined confirmation makes no request", async () => {
+  for (const stop of ["no-models", "model-escape", "decline", "confirm-escape"]) {
+    const existing = fakeAdmin().admin.draft("deepseek")!
+    const session = await setup(
+      (r) => {
+        if (r.kind === "select") {
+          if (r.title === "Providers") return "deepseek"
+          if (r.title.startsWith("Manage")) return "Test connection"
+          return stop === "model-escape" ? undefined : r.options[0]
+        }
+        return stop === "decline" ? false : undefined
+      },
+      { admin: { draft: () => ({ ...existing, models: stop === "no-models" ? [] : existing.models }) } },
+    )
+    const result = await session.run("/provider")
+    expect(result.ok).toBe(true)
+    expect(result.text).toBe(
+      stop === "no-models"
+        ? "No models configured; add one with /provider edit deepseek before testing."
+        : "",
+    )
+    expect(session.calls).toEqual([])
+    expect(session.asked).toHaveLength(stop === "no-models" ? 2 : stop === "model-escape" ? 3 : 4)
+  }
 })
 
 test("the form refuses an id that exists and a base URL that is no URL", async () => {
@@ -433,12 +969,10 @@ test("the form refuses an id that exists and a base URL that is no URL", async (
     baseUrl: "https://api.deepseek.com",
     apiKey: "k",
   })
-  expect(fetched.message).toBe(
-    "The provider listed 2 models; models.dev adds context window and price for 1. Pick them in the list below.",
-  )
+  expect(fetched.message).toBe("2 models listed · models.dev details for 1.")
   expect(fetched.options?.models).toEqual([
-    { value: "deepseek-chat", description: "128k ctx · $0.27/$1.1 per M" },
-    { value: "deepseek-new", description: "not in catalog: defaults apply" },
+    { value: "deepseek-chat", detail: ["128K", "$0.27/$1.1"] },
+    { value: "deepseek-new" },
   ])
   const tested = await ext.ui.runFormAction(id, "testConnection", {})
   expect(tested).toEqual({ message: "Pick or type a model first.", tone: "warning" })
