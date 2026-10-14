@@ -1095,13 +1095,16 @@ for (const pauseBeforeExecution of [true, false]) {
 }
 
 test("/agents view shows a running sub-agent live; main-session lines land in the scrollback after Esc", async () => {
-  const s = await setup([
-    { toolCalls: [{ name: "delegate", args: { roles: ["explorer"] } }] },
-    { toolCalls: [{ name: "read", args: { path: "a.ts" } }], usage: { input: 1500, output: 20 } },
-    { text: "Now waiting.", toolCalls: [{ name: "wait", args: {} }] },
-    { text: "child final answer" },
-    { text: "all done" },
-  ])
+  const s = await setup(
+    [
+      { toolCalls: [{ name: "delegate", args: { roles: ["explorer"] } }] },
+      { toolCalls: [{ name: "read", args: { path: "a.ts" } }], usage: { input: 1500, output: 20 } },
+      { text: "Now waiting.", toolCalls: [{ name: "wait", args: {} }] },
+      { text: "child final answer" },
+      { text: "all done" },
+    ],
+    { cols: 100 },
+  )
   s.terminal.send("go\r")
   await waitFor(s.isWaiting, "the child to block")
   const before = s.screen.mainText
@@ -1127,7 +1130,8 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   expect(lines[13]).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
   expect(s.view()).not.toContain("└ running")
   expect(s.view()).not.toContain("… working")
-  expect(lines.at(-1)).toContain("following")
+  expect(lines.at(-1)).toMatch(/^ {2}following · /)
+  expect(lines.at(-1)).toMatch(/ · f6 → input$/)
   const atOpen = s.screen.mainText
   expect(atOpen).toContain(before.split("\n")[0]!)
   // The child goes on: its reply shows up at the bottom, and the main session finishes.
@@ -1198,24 +1202,28 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the viewer")
   // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
   expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
-  expect(s.screen.lines.at(-1)).toMatch(/ · esc close$/)
+  expect(s.screen.lines.at(-1)).toMatch(/ · esc close · f6 → input$/)
+  const child = s.control.subagents()[0]!
+  const question = `  Stop Check explorer (explorer ${child.id})? y stops it · any other key keeps it running`
   s.terminal.send("x")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Stop Check explorer (explorer s_"), "the question")
-  expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
+  await waitFor(() => s.screen.lines.at(-6) === question, "the question")
+  expect(s.screen.lines.slice(-6, -4)).toEqual([question, `╭${"─".repeat(88)}╮`])
   s.terminal.send("n")
   await waitFor(() => s.screen.lines.at(-1)!.includes("x stop"), "kept")
   expect(s.control.subagents()[0]?.status).toBe("running")
   s.terminal.send("x")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Stop Check explorer"), "asked again")
+  await waitFor(() => s.screen.lines.at(-6) === question, "asked again")
+  expect(s.screen.lines.slice(-6, -4)).toEqual([question, `╭${"─".repeat(88)}╮`])
   s.terminal.send("y")
   s.release()
   await waitFor(() => s.view().includes("‖ stopped by the user"), "stopped")
   expect(s.control.subagents()[0]?.status).toBe("aborted")
   expect(s.screen.lines.at(-1)).not.toContain("x stop")
-  // x on one that ended does nothing.
+  // Once the stop shortcut is gone, x reaches the composer instead.
   s.terminal.send("x")
-  await Bun.sleep(40)
-  expect(s.screen.lines.at(-1)).not.toContain("Stop Check explorer")
+  await waitFor(() => s.screen.lines.at(-1) === "  f6 → view", "unhandled key in composer")
+  expect(s.view()).not.toContain("Stop Check explorer")
+  s.terminal.send("\x15\x1b[9;5u")
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "closed")
   await s.idle()
@@ -1265,7 +1273,7 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   await s.idle()
   s.terminal.send("/agents view 1\r")
   await waitFor(() => s.view().includes("── done ──"), "the viewer")
-  expect(s.screen.lines.at(-2)).toBe("── done ──")
+  expect(s.screen.lines.at(-6)).toBe("── done ──")
   expect(s.screen.lines.at(-1)).toContain("following")
   s.terminal.send("\x1b[5~") // PgUp
   await waitFor(() => !s.screen.lines.at(-1)!.includes("following"), "scrolled up")
@@ -1273,7 +1281,7 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   expect(s.view()).not.toContain("── done ──")
   s.terminal.send("\x1b[H") // Home
   await waitFor(() => s.screen.lines[3] === "" && s.screen.lines[4] === "› task for the explorer", "the top")
-  expect(s.screen.lines.at(-1)).toMatch(/^ {2}1–16 of 46 · /)
+  expect(s.screen.lines.at(-1)).toMatch(/^ {2}1–12 of 46 · /)
   s.terminal.send("\x1b[B") // ↓
   await waitFor(
     () => s.screen.lines[3] === "› task for the explorer" && s.screen.lines[4] === "",
@@ -1285,9 +1293,9 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   await waitFor(() => s.screen.lines.at(-1)!.includes("following") && s.screen.lines.length === 12, "resized")
   await Bun.sleep(60)
   expect(s.screen.lines[0]).toMatch(/^✓ done Check explorer/)
-  expect(s.screen.lines.at(-2)).toBe("── done ──")
-  expect(s.screen.lines.at(-3)).toBe("")
-  expect(s.screen.lines.at(-4)).toBe("  answer line 40")
+  expect(s.screen.lines.at(-6)).toBe("── done ──")
+  expect(s.screen.lines.at(-7)).toBe("")
+  expect(s.screen.lines.at(-8)).toBe("  answer line 40")
   s.terminal.send("q")
   await waitFor(() => !s.screen.inAltScreen, "closed")
   s.terminal.send("\x03")
@@ -1336,10 +1344,11 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   // Bells only: a BEL ending an OSC string (a title, the progress indicator) is not one.
   expect(s.screen.bells - bells).toBe(1)
   expect(s.screen.inAltScreen).toBe(true)
-  // Keys still go to the viewer: "y" does not answer the dialog.
+  // Unhandled y goes to the visible composer, never to the hidden dialog.
   s.terminal.send("y")
-  await Bun.sleep(60)
+  await waitFor(() => s.view().includes("│›y"), "composer input")
   expect(s.host.ui.pending).toHaveLength(1)
+  s.terminal.send("\x15\x1b[9;5u")
   s.terminal.send(ESC)
   await waitFor(() => s.view().includes("Allow bash? (approval)"), "the inline dialog")
   s.terminal.send("\x1b[B\r")

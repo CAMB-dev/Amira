@@ -10,11 +10,12 @@ import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.
  * command opens it with data of its own (CommandContext.openView). Fullscreen is the default;
  * placement "dock" shows a bounded live viewport directly above the input in either TUI mode.
  * The frontend owns scrolling and leaving; the view turns data into semantic lines or widgets.
- * Docks reuse follow, renderReply and lifecycle hooks, but keep keyboard focus in the main
- * input: typing, arrows, Tab and Enter do not activate view widgets or extension shortcuts.
+ * Docks reuse follow, renderReply and lifecycle hooks and initially focus the main input.
+ * Tab can focus selectable dock widgets; read-only docks leave typing and arrows in the input.
  * PgUp/PgDn scroll the dock, wheel events scroll only over it, and End resumes following.
- * Esc closes the dock before cancelling a command or interrupting a turn; the next Esc takes
- * the usual input action. Fullscreen forms and views retain priority while covering a dock.
+ * Empty-input Esc focuses a selectable dock; otherwise Esc closes it before the usual input
+ * action. History search cancels first. A visible dialog permits only dock wheel scrolling.
+ * Fullscreen forms and views retain priority while covering a dock.
  */
 
 /** A piece of a line, styled by meaning rather than by a frontend-specific color. */
@@ -52,6 +53,8 @@ export interface ViewRenderOptions {
    * demand, views redraw only for data, input and lifecycle events (or ViewControl.requestRender).
    */
   requestRefresh?: (intervalMs: number) => void
+  /** Whether the view owns host keyboard focus; false while the main input is focused. */
+  focused?: boolean
   /** Present only on a pushed page; depth starts at 1. View data remains unchanged. */
   page?: { depth: number; data?: unknown }
   /** Presents a finished call with the host's current transcript renderer and theme. */
@@ -156,14 +159,18 @@ export interface ViewDefinition<D = any> {
    * line-only views are unchanged. Esc leaves an activate-gated input first, otherwise goes back
    * a page or closes the root; Ctrl+C always closes.
    * q closes unless a UI input has focus (it types q). Prompts take keys except Ctrl+C; Esc cancels
-   * the prompt. Tab moves focus, arrows operate
-   * the focused widget, Enter activates/submits, and the wheel scrolls under the pointer.
+   * the prompt. Tab toggles main-input focus unless needsTab is true (then it moves widget focus).
+   * Configurable view.focus (F6, with Ctrl+Tab as an alias) switches host focus in either case.
+   * Arrows operate the focused widget, Enter activates/submits,
+   * and the wheel scrolls under the pointer.
    * Keep ui free of side effects: state reconciliation can rebuild it within the same frame.
    */
   ui?(data: D, ctx: UiContext): UiNode
   /** Experimental semantic events; host state changes first, then this handler may override it. */
   onEvent?(event: UiEvent, data: D, view: UiControl): void
   keys?: ViewKey<D>[]
+  /** Keep Tab/Shift+Tab inside the view; the TUI hints view.focus (F6) to reach the main input. */
+  needsTab?: boolean
   /** Experimental host key bar: full (default), only Esc back/close, or hidden. Questions still show. */
   hostKeys?: "full" | "minimal" | "none"
   /**

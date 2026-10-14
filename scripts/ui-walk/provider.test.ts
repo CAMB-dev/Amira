@@ -214,7 +214,7 @@ test("tools fail closed without fixture hooks and bad requests do not advance th
   expect((await post(provider, "main", "")).status).toBe(400)
   expect((await post(provider, "unknown")).status).toBe(404)
   expect(
-    (await fetch(`${provider.baseUrl}/models`, { headers: { Authorization: `Bearer ${provider.token}` } }))
+    (await fetch(`${provider.baseUrl}/unknown`, { headers: { Authorization: `Bearer ${provider.token}` } }))
       .status,
   ).toBe(404)
   expect(provider.requests).toHaveLength(0)
@@ -391,11 +391,51 @@ test("fixture hooks deny worktree agents and never fabricate success for unknown
   await host.unload("ui-walk-fixture")
 })
 
-test("all five bundled scenarios parse and expose the expected routes", async () => {
-  for (const name of ["transcript", "dialogs", "subagents", "long-output", "errors"]) {
+test("all bundled scenarios parse and expose the expected routes", async () => {
+  for (const name of ["transcript", "dialogs", "subagents", "long-output", "errors", "providers"]) {
     const provider = await createProvider(path.join(import.meta.dir, "scenarios", `${name}.json`))
     providers.push(provider)
     expect(provider.scenario.name).toBe(name)
     expect(provider.scenario.routes.main?.length).toBeGreaterThan(0)
+    if (name === "providers") {
+      expect(provider.scenario.models).toHaveLength(200)
+      expect(provider.scenario.models?.filter((model) => model.cost)).toHaveLength(180)
+    }
   }
+})
+
+test("model listing is authenticated and fixture catalog describes only known models", async () => {
+  const directory = await temporary()
+  const file = path.join(directory, "models.json")
+  const models = Array.from({ length: 200 }, (_, i) => ({
+    id: `model-${i}`,
+    ...(i < 4 ? { contextWindow: 400000, cost: { input: 1.25, output: 10 } } : {}),
+  }))
+  await writeFile(
+    file,
+    JSON.stringify({
+      name: "models",
+      description: "Models",
+      prompt: "go",
+      routes: { main: [{ text: "Hi" }] },
+      models,
+    }),
+  )
+  const provider = await createProvider(file)
+  providers.push(provider)
+  expect((await fetch(`${provider.baseUrl}/models`)).status).toBe(401)
+  const response = await fetch(`${provider.baseUrl}/models`, {
+    headers: { Authorization: `Bearer ${provider.token}` },
+  })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ data: models.map(({ id }) => ({ id })) })
+  expect(provider.requests).toEqual([])
+  const home = path.join(directory, "home")
+  await setupFixtures(home, path.join(directory, "cwd"), provider)
+  const cached = JSON.parse(await readFile(path.join(home, "cache", "models.json"), "utf8"))
+  expect(Object.keys(cached.data["ui-walk-demo"].models)).toHaveLength(4)
+  expect(cached.data["ui-walk-demo"].models["model-0"]).toEqual({
+    limit: { context: 400000 },
+    cost: { input: 1.25, output: 10 },
+  })
 })

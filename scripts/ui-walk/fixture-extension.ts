@@ -1,4 +1,9 @@
-import { defineExtension, type ToolResult, textResult } from "../../packages/api/src/index.ts"
+import {
+  defineExtension,
+  type ToolResult,
+  textResult,
+  type ViewDefinition,
+} from "../../packages/api/src/index.ts"
 
 interface Fixture {
   name: string
@@ -15,6 +20,41 @@ export default defineExtension((api) => {
     throw new Error("UI walk fixture results are missing")
   }
   const fixtures = configured as Record<string, Fixture>
+  const focusView: ViewDefinition = {
+    kind: "focus-view",
+    title: () => "Focus walkthrough",
+    follow: false,
+    ui: (_data, ctx) => ({
+      type: "column",
+      children: [
+        { size: 1, node: { type: "bar", left: [{ kind: "accent", text: "Focus walkthrough" }] } },
+        {
+          node: {
+            type: "tree",
+            id: "tasks",
+            items: ["Dashboard", "Swarm", "Workflow"].map((text) => ({
+              key: text,
+              row: [{ kind: "text", text }],
+            })),
+          },
+        },
+        {
+          size: 1,
+          node: {
+            type: "bar",
+            left: [{ kind: "muted", text: ctx.focused === false ? "View inactive" : "View active" }],
+          },
+        },
+      ],
+    }),
+  }
+  api.registerView(focusView)
+  api.registerView({ ...focusView, kind: "focus-tab-view", needsTab: true })
+  api.registerCommand({
+    name: "focus-view",
+    description: "Open the offline focus walkthrough",
+    run: (args, ctx) => void ctx.openView?.({ kind: args === "tabs" ? "focus-tab-view" : "focus-view" }),
+  })
   // Keep the built-in presenters, but replace execution for exactly the fixture's names.
   // Scripted arguments are matched by the interceptors; the inert tool needs no real I/O.
   for (const name of new Set(Object.values(fixtures).map((fixture) => fixture.name))) {

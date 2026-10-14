@@ -144,6 +144,14 @@ focused row to its default. Enter asks inline for user or project settings; Ente
 and notifies the extension immediately. Esc discards the draft. Descriptions wrap below the
 focused row, and values differing from defaults are marked.
 
+In `/provider`, the top **+ Add provider** row starts setup; Enter on a provider opens Edit,
+Set key, Test connection and Remove. Esc closes the page. In full-screen form multiselects,
+typing filters IDs and labels, Backspace edits the filter, Space toggles, Ctrl+A selects all
+filtered options or clears them, and Ctrl+X inverts filtered options, including off-screen matches.
+Selections outside the filter are kept.
+Esc clears a non-empty filter before cancelling the form. These field-local keys do not
+change the text editor bindings or Ctrl+S to save.
+
 In `/resume`, typing searches titles and conversation text, with the matching text under each
 row; Ctrl+D deletes the selected session after a confirmation.
 
@@ -172,6 +180,7 @@ is no hidden Esc or Ctrl+C fallback, so keep a way to leave the view bound.
 
 | Action | Default | What it does |
 | --- | --- | --- |
+| `view.focus` | `f6`, `ctrl+tab` | Toggle focus between the view and the composer, including default views; Ctrl+Tab is an alias where delivered |
 | `view.back` | `escape` | Release an activated text field, go back one page, or close the root page; cancel a view's prompt |
 | `view.close` | `q`, `ctrl+c` | Close the whole view, including any nested pages |
 | `view.scroll-up` | `up` | Scroll view text up a line |
@@ -183,12 +192,48 @@ default. Rebinding or unbinding them affects both the transcript and views. The 
 changing how arrows recall prompt history. To disable all line scrolling in views, unbind
 both the view and shared line-scroll actions.
 
+When the terminal delivers it, F6 (`view.focus`) toggles focus between the extension view
+and the composer in all views, including default views and a full-screen overlay opened
+in inline mode. Ctrl+Tab is an alias where the terminal delivers it. Windows Terminal may
+intercept Ctrl+Tab, and legacy terminals may report it as plain Tab. F6 avoids those
+Ctrl+Tab issues, but VS Code's integrated terminal intercepts F6 by default because
+`workbench.action.focusNextPart` is in `terminal.integrated.commandsToSkipShell`. Add
+`"-workbench.action.focusNextPart"` to `terminal.integrated.commandsToSkipShell` in VS Code
+settings, or remap Amira's `view.focus` to a key your terminal passes. Plain Shift+Tab cannot
+be bound to `view.focus`; it is reserved for permission mode switching and reverse view
+navigation.
+Default views also use Tab and keep `tab→input/view` hints without showing F6.
+Views declaring `ViewDefinition.needsTab: true` keep Tab and Shift+Tab for widget or view
+navigation; their default focus hints show `f6→input/view`, not Ctrl+Tab. The sub-agent viewer
+uses this option, so Tab/Shift+Tab still switch children. Host focus switching never takes
+Shift+Tab.
+
+While the view is focused, `/` focuses the composer and inserts `/` to start a command;
+`i` focuses it without inserting `i`. View-handled printable shortcuts (such as `m`, `p`
+or `s`) keep working; any other unhandled printable key focuses the composer and inserts
+that character. Active view-local text fields and prompts keep their input, including `/`
+and `i`. During history search, Esc cancels the search first and restores the draft; the next
+Esc in an empty composer returns focus to the view or selectable dock. Outside search, Esc
+in an empty composer returns focus immediately; with text, Esc keeps its usual behavior
+and is never intercepted for focus switching. Esc in the view still goes back or
+closes it. Clicking the input focuses the composer. Beside an extension view, its focused
+border uses the accent role; its unfocused border is muted. Selected rows in declarative views
+are dimmed while the view is inactive.
+
+Docks start with the composer focused. F6 enters a dock with selectable content (Ctrl+Tab
+is an alias where delivered); Tab also does so unless the view declares `needsTab: true`.
+Esc in an empty composer returns to a selectable dock, as with fullscreen views; with text,
+Esc closes the dock as before, preserving the draft. Read-only docks keep their existing
+scrolling behavior without taking focus and still close on Esc. While a dialog is visible,
+only wheel scrolling over the dock is allowed; clicking it neither focuses it nor selects content.
+
 Extension-defined shortcuts stay as the extension defines them and take precedence over
-scrolling. In widget-based views, Tab, arrows and Enter still navigate and activate widgets;
-scroll actions apply to the focused scrollable region. A focused text field owns printable
-characters, including `q` and printable back/close bindings. Non-printable close bindings
-(such as Ctrl+C) still close from a text field or prompt. In a confirmation, printable keys
-answer the confirmation instead of closing the view.
+scrolling. In widget-based views with `needsTab: true`, Tab/Shift+Tab navigate widgets;
+arrows and Enter still navigate and activate widgets, and scroll actions apply to the
+focused scrollable region. A focused text field owns printable characters, including `q`
+and printable back/close bindings. Non-printable close bindings (such as Ctrl+C) still close
+from a text field or prompt. In a confirmation, printable keys answer the confirmation
+instead of closing the view.
 
 ### Transcript (full-screen mode)
 

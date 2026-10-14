@@ -9,7 +9,7 @@ import {
   providerFormSpec,
 } from "@amira/api"
 import { EventBus, UiRequests } from "@amira/core"
-import { key, textKey } from "@amira/tui-kit"
+import { key, stripAnsi, textKey } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { FormView, specFormBackend, uiFormBackend } from "../src/form-view.ts"
 
@@ -131,7 +131,7 @@ test.each([false, true])(
   async (hosted) => {
     const form = setup({ hosted })
     try {
-      await waitFor(() => form.screen().includes("The provider listed"), "automatic model list")
+      await waitFor(() => form.screen().includes("models listed"), "automatic model list")
       expect(form.calls).toHaveLength(1)
       form.focus("models")
       expect(form.screen()).toContain("served-model")
@@ -159,7 +159,7 @@ test("a typed auth key fetches only after leaving the key field; changing the UR
     form.view.handleInput(key("tab"))
     await waitFor(() => form.calls.length === 1, "confirmed key fetch")
     expect(form.calls[0]?.draft.apiKey).toBe("sk-fake-secret")
-    await waitFor(() => form.screen().includes("The provider listed"), "first result")
+    await waitFor(() => form.screen().includes("models listed"), "first result")
     form.focus("baseUrl")
     form.view.handleInput(key("u", { ctrl: true }))
     form.type("https://other.example/v1")
@@ -168,7 +168,7 @@ test("a typed auth key fetches only after leaving the key field; changing the UR
     form.view.handleInput(key("tab"))
     await waitFor(() => form.calls.length === 2, "new URL fetch")
     expect(form.calls[1]?.draft.baseUrl).toBe("https://other.example/v1")
-    await waitFor(() => form.screen().includes("The provider listed"), "second result")
+    await waitFor(() => form.screen().includes("models listed"), "second result")
     form.focus("apiKey")
     form.view.handleInput(key("u", { ctrl: true }))
     form.type("sk-new-fake")
@@ -177,7 +177,7 @@ test("a typed auth key fetches only after leaving the key field; changing the UR
     form.view.handleInput(key("tab"))
     await waitFor(() => form.calls.length === 3, "changed key fetch")
     expect(form.calls[2]?.draft.apiKey).toBe("sk-new-fake")
-    await waitFor(() => form.screen().includes("The provider listed"), "third result")
+    await waitFor(() => form.screen().includes("models listed"), "third result")
     form.focus("id")
     form.view.handleInput(key("u", { ctrl: true }))
     form.type("renamed")
@@ -225,7 +225,7 @@ test("remote HTTP warns about plaintext keys and keeps fetching manual", async (
     expect(form.screen()).toContain("Non-loopback HTTP would send the key unencrypted.")
     form.focus("fetchModels")
     form.view.handleInput(key("enter"))
-    await waitFor(() => form.screen().includes("The provider listed"), "manual HTTP fetch")
+    await waitFor(() => form.screen().includes("models listed"), "manual HTTP fetch")
     expect(form.calls).toHaveLength(1)
     expect(form.calls[0]?.signal?.aborted).toBe(false)
     expect(form.calls[0]?.draft.baseUrl).toBe("http://remote.example/v1")
@@ -261,7 +261,7 @@ test("editing an auth key leaves the stored-key fetch running until confirmation
     await waitFor(() => pending.length === 2, "confirmed replacement key")
     expect(form.calls[1]?.draft.apiKey).toBe("sk-confirmed-fake")
     pending[1]!.resolve(MODELS)
-    await waitFor(() => form.screen().includes("The provider listed"), "replacement results")
+    await waitFor(() => form.screen().includes("models listed"), "replacement results")
   } finally {
     for (const p of pending) p.resolve([])
     await form.close()
@@ -330,7 +330,7 @@ test("restoring an in-progress URL edit does not interrupt or repeat its fetch",
     await tick()
     expect(form.calls).toHaveLength(1)
     pending[0]!.resolve(MODELS)
-    await waitFor(() => form.screen().includes("The provider listed"), "original result")
+    await waitFor(() => form.screen().includes("models listed"), "original result")
     expect(form.calls).toHaveLength(1)
     expect(form.calls[0]?.signal?.aborted).toBe(false)
   } finally {
@@ -377,7 +377,7 @@ test("changing the id holding a stored key aborts the old credential's request",
 test.each(["none", "env"] as const)("renaming an id with %s auth does not refetch", async (keySource) => {
   const form = setup({ initial: { keySource, apiKeyEnv: "KEY" }, admin: { envIsSet: () => true } })
   try {
-    await waitFor(() => form.screen().includes("The provider listed"), "first result")
+    await waitFor(() => form.screen().includes("models listed"), "first result")
     form.focus("id")
     form.view.handleInput(key("u", { ctrl: true }))
     form.type("renamed")
@@ -410,7 +410,7 @@ test("a failed automatic fetch appears once inline; custom models and manual ref
     expect(form.view.form.values.models).toEqual(["custom-model"])
     form.focus("fetchModels")
     form.view.handleInput(key("enter"))
-    await waitFor(() => form.screen().includes("The provider listed"), "manual retry")
+    await waitFor(() => form.screen().includes("models listed"), "manual retry")
     expect(form.calls).toHaveLength(2)
     expect(form.view.form.values.models).toEqual(["custom-model"])
     form.view.handleInput(key("s", { ctrl: true }))
@@ -443,3 +443,23 @@ test.each([false, true])(
     }
   },
 )
+
+test("provider form has one credential label and one concise model metadata line", async () => {
+  const form = setup({ initial: { keySource: "auth" } })
+  try {
+    form.focus("apiKey")
+    form.type("fake-secret")
+    form.focus("models")
+    await waitFor(() => form.calls.length === 1 && form.screen().includes("models.dev"), "model metadata")
+    await tick()
+    const screen = stripAnsi(form.screen())
+    expect(screen.split("\n").filter((line) => line.trim() === "API key")).toHaveLength(1)
+    expect(screen).toContain("***********")
+    expect(screen).not.toContain("fake-secret")
+    expect(screen).toContain("Shown masked, never logged.")
+    expect(screen.split("\n").filter((line) => line.includes("models.dev"))).toHaveLength(1)
+    expect(screen).not.toContain("Lists models from the provider with the key above")
+  } finally {
+    await form.close()
+  }
+})

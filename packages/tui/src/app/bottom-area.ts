@@ -31,6 +31,9 @@ type HintItems = Parameters<typeof fitHint>[0]
 /** The input box, its hint and list, the status, live panels and pending messages under the transcript. */
 export interface BottomArea {
   layout(width: number, ctx: RenderContext, budget: number, top?: Component): string[]
+  /** Composer beneath an extension overlay, without transcript panels or a dock. */
+  overlayInput(width: number, ctx: RenderContext, budget: number): string[]
+  searchHint(theme: Theme, width: number): string | undefined
   readonly panelsShown: boolean
   togglePanels(): void
 }
@@ -58,6 +61,7 @@ export interface BottomAreaDeps {
   panels?: PanelRegistry
   dock?: () => DockedView | undefined
   renderDock?: (width: number, ctx: RenderContext, available: number) => string[]
+  focusHint?: (theme: Theme, width: number) => string | undefined
   editor: Editor
   keys: Keybindings
   reaches: (spec: KeySpec) => boolean
@@ -74,6 +78,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   const inputList = ():
     | { lines: (width: number, ctx: RenderContext, maxRows: number) => string[]; hint: () => HintItems }
     | undefined => {
+    if (!editor.focused) return undefined
     if (search.active)
       return { lines: (w, ctx, maxRows) => (maxRows > 0 ? search.render(w, ctx) : []), hint: searchHint }
     const popup = popups.find((p) => p.visible)
@@ -154,6 +159,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   const inputRegion = new View((width, ctx) => {
     const dialog = deps.dialogs()[0]
     if (!dialog) {
+      inputBox.accentFocus = deps.focusHint?.(ctx.theme, width) !== undefined
       const rows = inputBox.render(width, ctx)
       composerRows = rows.length
       return rows
@@ -216,7 +222,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
               .render(width, ctx, deps.dock?.() ? `${keyLabel({ name: "escape" })} close dock` : undefined)
       return commandRows
     }),
-    // A live dock is immediately above the input, but never owns its editor or completion keys.
+    // A live dock is immediately above the input; selectable content can take keyboard focus.
     dock,
     // Both composer and dialog keep their borders intact, with shared-edge status below.
     inputRegion,
@@ -237,13 +243,19 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       }
       return [
         ...rows,
-        ...(showHint ? [`  ${ctx.theme.muted(fitHint(list.hint(), Math.max(1, width - 2)))}`] : []),
+        ...(showHint
+          ? [
+              `  ${deps.focusHint?.(ctx.theme, Math.max(1, width - 2)) ?? ctx.theme.muted(fitHint(list.hint(), Math.max(1, width - 2)))}`,
+            ]
+          : []),
       ]
     }),
     // The key hint, or a note in its place. A find bar or block selection (full screen) shows
     // its own keys above the transcript: the row stays, blank, so the layout does not jump.
     new View((width, ctx) => {
       if (!showHint || deps.dialogs()[0] || inputList()) return []
+      const focusHint = deps.focusHint?.(ctx.theme, Math.max(1, width - 2))
+      if (focusHint) return [`  ${focusHint}`]
       const hintNote = deps.hintNote()
       if (hintNote && Date.now() < hintNote.until) {
         return [`  ${ctx.theme.muted(truncateToWidth(hintNote.text, Math.max(1, width - 2), glyphs.more))}`]
@@ -322,6 +334,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     if (deps.dock?.()) {
       dockRoom = Math.max(0, budget - rest.length)
       rest = draw()
+      if (deps.dock?.()?.finishLayout()) rest = draw()
     }
     // Only optional rows above the interactive region may be clipped. Never choose
     // editor/options/hints by tail slicing the whole bottom area.
@@ -402,6 +415,15 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
 
   return {
     layout: layoutBottom,
+    searchHint: (theme, width) => (search.active ? theme.muted(fitHint(searchHint(), width)) : undefined),
+    overlayInput(width, ctx, budget) {
+      const list = inputList()
+      inputBox.accentFocus = true
+      inputBox.maxRows = Math.max(1, budget - (list ? 1 : 0))
+      const rows = inputBox.render(width, ctx)
+      if (list) rows.push(...list.lines(width, ctx, Math.max(0, budget - rows.length)))
+      return rows
+    },
     get panelsShown() {
       return panelsShown
     },

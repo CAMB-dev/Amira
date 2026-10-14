@@ -50,6 +50,11 @@ export interface OverlayManagerDeps {
   working: () => boolean
   interrupt: () => void
   quitting: () => boolean
+  editorEmpty: () => boolean
+  searchActive: () => boolean
+  searchHint: (theme: Theme, width: number) => string | undefined
+  inputFocused: (focused: boolean) => void
+  renderInput: (width: number, ctx: RenderContext, budget: number) => string[]
   /** Inline mode enables pointer reports only while a dock or fullscreen view uses them. */
   dockChanged?: (open: boolean) => void
   commandActivity?: () => Pick<CommandRunner, "animationActive" | "tickAnimation">
@@ -65,6 +70,8 @@ export class OverlayManager {
    */
   private viewer: ExtensionViewer | KeyReference | undefined
   dock: DockedView | undefined
+  private inputTop = 0
+  private inputBottom = 0
   private readonly lifetimes = new WeakMap<ExtensionViewer, { owner?: object; off?: () => void }>()
   private animationTimer: ReturnType<typeof setInterval> | undefined
   private animationInterval: number | undefined
@@ -99,12 +106,28 @@ export class OverlayManager {
 
   render(width: number, ctx: RenderContext): string[] {
     if (this.form) return this.form.render(width, ctx)
+    if (this.viewer instanceof ExtensionViewer) {
+      const budget = Math.max(1, Math.min(Math.floor(ctx.rows / 3), ctx.rows - 2))
+      const input = this.deps.renderInput(width, ctx, budget)
+      this.inputTop = Math.max(0, ctx.rows - input.length - 1)
+      this.inputBottom = this.inputTop + input.length
+      const rows = this.viewer.render(width, { ...ctx, rows: this.inputTop })
+      while (rows.length < this.inputTop) rows.push("")
+      this.syncAnimation()
+      return [
+        ...rows,
+        ...input,
+        `  ${(!this.viewer.focused && this.deps.searchHint(ctx.theme, Math.max(1, width - 2))) || this.viewer.focusHint(ctx.theme, Math.max(1, width - 2), this.deps.editorEmpty())}`,
+      ]
+    }
     const rows = this.viewer?.render(width, ctx) ?? []
     this.syncAnimation()
     return rows
   }
 
   waitingChanged(change: EventMap["ui.waiting"]["change"]) {
+    if (this.dialogs.length && !this.hasFullscreen && this.dock?.viewer.focused)
+      this.focusView(this.dock.viewer, false)
     const pending = this.dialogs.length + this.forms.length
     const hidden = pending > 0 && (this.viewer !== undefined || (this.form !== undefined && pending > 1))
     this.syncAnimation()
@@ -136,6 +159,7 @@ export class OverlayManager {
       } else {
         const next = new ExtensionViewer(definition, v.data, {
           placement: "dock",
+          hostFocus: true,
           keys,
           toolDetail: this.deps.toolDetail,
           state: v.state,
@@ -149,7 +173,8 @@ export class OverlayManager {
           ...(presenters ? { presenters } : {}),
         })
         const previous = this.dock
-        this.dock = new DockedView(next, keys, v.maxHeight)
+        this.dock = new DockedView(next, keys, v.maxHeight, () => this.focusView(next, false))
+        if (!this.hasFullscreen) this.deps.inputFocused(true)
         this.lifetimes.set(next, {
           owner,
           off: source?.watch?.(request, () => this.dock?.viewer === next && this.closeDock()),
@@ -171,6 +196,7 @@ export class OverlayManager {
     else {
       const next = new ExtensionViewer(definition, v.data, {
         keys,
+        hostFocus: true,
         toolDetail: this.deps.toolDetail,
         state: v.state,
         waiting: this.waitingTitles,
@@ -200,19 +226,67 @@ export class OverlayManager {
       return []
     }
     const rows = this.dock?.render(width, ctx, available) ?? []
+    if (this.dock?.viewer.focused && !this.dock.viewer.selectable) this.focusView(this.dock.viewer, false)
     this.syncAnimation()
     return rows
   }
 
-  /** Fullscreen overlays win; Esc otherwise dismisses the dock before input cancellation. */
+  focusHint(theme: Theme, width: number): string | undefined {
+    return !this.hasFullscreen && !this.dialogs.length && !this.deps.searchActive() && this.dock?.focusable
+      ? this.dock.viewer.focusHint(theme, width, this.deps.editorEmpty())
+      : undefined
+  }
+
+  private focusView(viewer: ExtensionViewer, focused: boolean) {
+    viewer.focused = focused
+    this.deps.inputFocused(!focused)
+    if (this.hasFullscreen) this.deps.view().requestOverlayRender()
+    else this.deps.view().requestRender()
+  }
+
+  /** Returns false only when the original event should continue to the composer. */
+  private handleViewInput(viewer: ExtensionViewer, e: InputEvent): boolean {
+    if (
+      !matchesKey(e, "tab", { shift: true }) &&
+      (this.deps.keys.is(e, "view.focus") || (!viewer.needsTab && matchesKey(e, "tab", { shift: false })))
+    ) {
+      this.focusView(viewer, !viewer.focused)
+      return true
+    }
+    if (!viewer.focused) {
+      if (!this.deps.searchActive() && matchesKey(e, "escape") && this.deps.editorEmpty()) {
+        this.focusView(viewer, true)
+        return true
+      }
+      return false
+    }
+    if (!viewer.typing && (matchesKey(e, "/") || matchesKey(e, "i"))) {
+      this.focusView(viewer, false)
+      return matchesKey(e, "i")
+    }
+    if (viewer.handleInput(e)) return true
+    if (e.type === "paste" || (e.type === "key" && !e.ctrl && !e.alt && e.text)) {
+      this.focusView(viewer, false)
+      return false
+    }
+    return true
+  }
+
+  /** Fullscreen overlays win; a read-only dock retains its original scrolling controls. */
   handleDockInput(e: InputEvent): boolean {
     if (!this.dock || this.hasFullscreen) return false
-    if (matchesKey(e, "escape")) {
+    // Visible dialogs own keyboard and pointer activation; only wheel scrolling reaches the dock.
+    if (this.dialogs.length) return e.type === "mouse" && e.action === "wheel" && this.dock.handleInput(e)
+    if (e.type === "mouse" && e.action === "press" && e.button === "left") {
+      if (this.dock.focusable) this.focusView(this.dock.viewer, this.dock.contains(e))
+    }
+    if (this.dock.focusable && e.type !== "mouse" && this.handleViewInput(this.dock.viewer, e)) return true
+    // Cancel a search before applying the input's ordinary dock-close action.
+    if (this.deps.searchActive() && e.type !== "mouse") return false
+    if (matchesKey(e, "escape") && !this.dock.viewer.focused) {
       this.closeDock()
       return true
     }
-    // A question in the input area retains its navigation keys, but the wheel can scroll the dock.
-    if (this.dialogs.length && e.type !== "mouse") return false
     return this.dock.handleInput(e)
   }
 
@@ -270,6 +344,7 @@ export class OverlayManager {
     const previous = this.dock
     if (!previous) return
     this.dock = undefined
+    if (!this.hasFullscreen) this.deps.inputFocused(true)
     this.syncAnimation()
     this.disposeViewer(previous.viewer)
     this.deps.dockChanged?.(false)
@@ -298,6 +373,7 @@ export class OverlayManager {
   private showOverlay(next: ExtensionViewer | KeyReference) {
     const previous = this.viewer
     this.viewer = next
+    this.deps.inputFocused(false)
     if (previous instanceof ExtensionViewer) this.disposeViewer(previous)
     if (this.viewer !== next) return
     if (next instanceof ExtensionViewer) next.mount()
@@ -312,6 +388,7 @@ export class OverlayManager {
     const previous = this.viewer
     if (!previous) return
     this.viewer = undefined
+    this.deps.inputFocused(!this.dock?.viewer.focused)
     this.syncAnimation()
     this.deps.view().closeOverlay()
     if (this.dock) this.deps.dockChanged?.(true)
@@ -425,7 +502,25 @@ export class OverlayManager {
       this.deps.view().redrawOverlay()
       return true
     }
-    for (const k of overlayKeys(e, !this.form && this.viewer instanceof ExtensionViewer)) {
+    if (!this.form && this.viewer instanceof ExtensionViewer) {
+      const viewer = this.viewer
+      if (e.type === "mouse") {
+        if (e.y >= this.inputTop && e.y < this.inputBottom) {
+          if (e.action === "press" && e.button === "left") this.focusView(viewer, false)
+          return true
+        }
+        if (e.y >= this.inputTop) return true
+        if (e.action === "press" && e.button === "left") this.focusView(viewer, true)
+        // Wheel scrolling over the view need not steal focus from a draft.
+        viewer.handleInput(e)
+        this.deps.view().requestOverlayRender()
+        return true
+      }
+      const handled = this.handleViewInput(viewer, e)
+      this.deps.view().requestOverlayRender()
+      return handled
+    }
+    for (const k of overlayKeys(e, false)) {
       if (this.form) this.form.handleInput(k)
       else this.viewer?.handleInput(k)
     }

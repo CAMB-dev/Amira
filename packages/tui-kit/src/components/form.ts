@@ -4,6 +4,8 @@ import { type InputEvent, isSubmitKey, keyLabel, matchesKey } from "../keys.ts"
 import { bold, inverse, type Theme } from "../style.ts"
 import { graphemes, truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { Editor } from "./editor.ts"
+import { wrapFormHint } from "./form-hint.ts"
+import { renderFormList } from "./form-list.ts"
 import { LineInput } from "./line-input.ts"
 
 export { LineInput, type LineInputOptions } from "./line-input.ts"
@@ -19,6 +21,8 @@ export interface FormChoice {
   value: string
   label?: string
   description?: string
+  /** Right-aligned multiselect note, or independent trailing columns (rightmost dropped first). */
+  detail?: string | string[]
 }
 
 export type FormFieldKind =
@@ -105,8 +109,6 @@ interface Span {
 
 const SUBMIT = "\0submit"
 const CANCEL = "\0cancel"
-/** List rows shown at once; longer lists scroll with the highlight. */
-const LIST_ROWS = 8
 const INDENT = "  "
 const pointer = (ctx: RenderContext) => ctx.glyphs?.pointer ?? defaultGlyphs.pointer ?? "›"
 const separator = (ctx: RenderContext) => ctx.glyphs?.separator ?? defaultGlyphs.separator ?? "·"
@@ -258,9 +260,12 @@ export class Form implements Component {
       const from = this.fields.findIndex((f) => f.def.id === this.focus)
       this.focus = this.fields.slice(from + 1).find((f) => order.includes(f.def.id))?.def.id ?? SUBMIT
     }
-    let header = [bold(theme.accent(truncateToWidth(this.opts.title, width, "…")))]
+    const inner = Math.max(1, width - INDENT.length)
+    let header = [
+      truncateToWidth(INDENT + bold(theme.accent(truncateToWidth(this.opts.title, inner, "…"))), width),
+    ]
     const description = this.opts.description
-      ? wrapText(this.opts.description, width).map((l) => theme.muted(l))
+      ? wrapText(this.opts.description, inner).map((l) => truncateToWidth(INDENT + theme.muted(l), width))
       : []
     const rule = theme.border((ctx.glyphs?.rule ?? "─").repeat(width))
     const footer = this.footer(width, ctx)
@@ -283,10 +288,13 @@ export class Form implements Component {
     while (body.length < bodyRows) body.push("")
     const more = [this.top > 0 ? "↑" : "", this.top + bodyRows < lines.length ? "↓" : ""].filter(Boolean)
     if (more.length) {
-      // The scroll hint takes the end of the last body row.
-      const hint = theme.muted(` ${more.join("")} more`)
-      const room = width - visibleWidth(hint)
-      body[body.length - 1] = truncateToWidth(body[body.length - 1]!, Math.max(0, room)) + hint
+      // Use the last row without a caret: truncating a filter must not hide its cursor.
+      const row = body.findLastIndex((line) => !line.includes(CURSOR_MARKER))
+      if (row >= 0) {
+        const hint = theme.muted(truncateToWidth(` ${more.join("")} more`, width))
+        const room = width - visibleWidth(hint)
+        body[row] = truncateToWidth(body[row]!, Math.max(0, room)) + hint
+      }
     }
     return [...header, ...body, ...footer].slice(0, Math.max(1, ctx.rows))
   }
@@ -383,7 +391,8 @@ export class Form implements Component {
     const f = this.field(this.focus)
     if (!f) return
     f.open = false
-    f.filter = ""
+    if (f.def.type === "multiselect") this.setFilter(f, "")
+    else f.filter = ""
     this.touched.add(f.def.id)
     this.refreshErrors()
   }
@@ -524,15 +533,21 @@ export class Form implements Component {
       toggle(row.value)
       return true
     }
-    if (matchesKey(e, "a", { ctrl: true })) {
-      const all = rows.every((r) => checked.includes(r.value))
+    if (matchesKey(e, "a", { ctrl: true }) || matchesKey(e, "x", { ctrl: true })) {
       const values = new Set(rows.map((r) => r.value))
-      f.value = all ? checked.filter((v) => !values.has(v)) : [...new Set([...checked, ...values])]
+      if (matchesKey(e, "x", { ctrl: true })) {
+        f.value = [
+          ...checked.filter((v) => !values.has(v)),
+          ...[...values].filter((v) => !checked.includes(v)),
+        ]
+      } else {
+        const all = rows.every((r) => checked.includes(r.value))
+        f.value = all ? checked.filter((v) => !values.has(v)) : [...new Set([...checked, ...values])]
+      }
       return true
     }
     if (matchesKey(e, "escape") && f.filter) {
-      f.filter = ""
-      f.highlight = 0
+      this.setFilter(f, "")
       return true
     }
     if (e.type === "paste" && f.def.allowCustom && /[\s,]/.test(e.text.trim())) {
@@ -547,15 +562,24 @@ export class Form implements Component {
   /** Typing into a list's filter; false for keys that are not typing. */
   private filterInput(f: FieldState, e: InputEvent): boolean {
     if (e.type === "focus" || e.type === "mouse") return false
-    if (e.type === "paste") f.filter += e.text.replace(/\s+/g, "").replace(CONTROL, "")
+    let filter = f.filter
+    if (e.type === "paste") filter += e.text.replace(/\s+/g, "").replace(CONTROL, "")
     else if (e.name === "backspace" && !e.ctrl && !e.alt) {
-      if (!f.filter) return false
-      f.filter = graphemes(f.filter).slice(0, -1).join("")
-    } else if (e.text && !e.ctrl && !e.alt && e.name !== "space") f.filter += e.text
+      if (!filter) return false
+      filter = graphemes(filter).slice(0, -1).join("")
+    } else if (e.text && !e.ctrl && !e.alt && e.name !== "space") filter += e.text
     else return false
-    f.highlight = 0
-    f.top = 0
+    this.setFilter(f, filter)
     return true
+  }
+
+  private setFilter(f: FieldState, filter: string): void {
+    const highlighted = f.def.type === "multiselect" ? this.checklistRows(f)[f.highlight]?.value : undefined
+    f.filter = filter
+    const next =
+      highlighted === undefined ? -1 : this.checklistRows(f).findIndex((r) => r.value === highlighted)
+    f.highlight = Math.max(0, next)
+    if (next < 0) f.top = 0
   }
 
   private filtered(f: FieldState): FormChoice[] {
@@ -565,12 +589,12 @@ export class Form implements Component {
   }
 
   /** A checklist's rows: its options, then checked values that are no options, filtered. */
-  private checklistRows(f: FieldState): FormChoice[] {
+  private checklistRows(f: FieldState, filter = f.filter): FormChoice[] {
     const extra = (f.value as string[])
       .filter((v) => !f.options.some((o) => o.value === v))
       .map((value) => ({ value }))
     const all: FormChoice[] = [...f.options, ...extra]
-    const q = f.filter.toLowerCase()
+    const q = filter.toLowerCase()
     return q ? all.filter((o) => `${o.value} ${o.label ?? ""}`.toLowerCase().includes(q)) : all
   }
 
@@ -584,15 +608,21 @@ export class Form implements Component {
     const spans = new Map<string, Span>()
     const inner = Math.max(4, width - INDENT.length)
     let section: string | undefined
-    for (const f of this.shown(values)) {
+    const shown = this.shown(values)
+    for (const f of shown) {
       const start = lines.length
       if (f.def.section !== section) {
         section = f.def.section
         if (section) {
           if (lines.length) lines.push("")
-          lines.push(bold(truncateToWidth(section, width, "…")))
+          // A one-field section can use the field's own label, retaining its focus and status.
+          const redundant =
+            f.def.label === section && shown.filter((f) => f.def.section === section).length === 1
+          if (!redundant)
+            lines.push(truncateToWidth(INDENT + bold(truncateToWidth(section, inner, "…")), width))
           const help = this.opts.sections?.find((s) => s.title === section)?.help
-          if (help) for (const l of wrapText(help, width)) lines.push(theme.muted(l))
+          if (help)
+            for (const l of wrapText(help, inner)) lines.push(truncateToWidth(INDENT + theme.muted(l), width))
         }
       }
       // The section heading scrolls into view with its first field.
@@ -618,7 +648,7 @@ export class Form implements Component {
     const name = focused ? theme.accent(f.def.label) : f.def.label
     const star = f.def.required ? theme.muted(" *") : ""
     const out: string[] = []
-    const label = (prefix = "") => truncateToWidth(`${mark} ${prefix}${name}${star}`, width, "…")
+    const label = (prefix = "", room = width) => truncateToWidth(`${mark} ${prefix}${name}${star}`, room, "…")
     switch (f.def.type) {
       case "text":
       case "secret":
@@ -661,43 +691,64 @@ export class Form implements Component {
             out.push(truncateToWidth(`${INDENT}${theme.muted("filter:")} ${f.filter}${CURSOR_MARKER}`, width))
           const list = this.filtered(f)
           if (!list.length) out.push(INDENT + theme.muted("no match"))
-          const rows = this.listLines(f, list, width, ctx, (o) => o.value === f.value)
+          const rows = renderFormList(f, list, width, ctx, (o) => o.value === f.value)
           active = out.length + Math.max(0, f.highlight - f.top)
           out.push(...rows)
         }
         break
       }
       case "multiselect": {
-        out.push(label())
         const checked = f.value as string[]
+        const total = this.checklistRows(f, "").length
+        const rows = this.checklistRows(f)
+        const count = theme.muted(
+          ` ${separator(ctx)} selected ${checked.length}/${total}${f.filter ? ` ${separator(ctx)} ${rows.length} shown` : ""}`,
+        )
+        const labelRoom = Math.max(2, width - visibleWidth(count))
+        out.push(truncateToWidth(`${label("", labelRoom)}${count}`, width, "…"))
         if (!focused) {
           const names = checked.join(", ")
           out.push(
-            checked.length
-              ? truncateToWidth(`${INDENT}${checked.length} selected: ${names}`, width, "…")
-              : INDENT + theme.muted(f.options.length ? "none selected" : "(no options yet)"),
+            truncateToWidth(
+              checked.length
+                ? `${INDENT}${checked.length} selected: ${names}`
+                : INDENT + theme.muted(f.options.length ? "none selected" : "(no options yet)"),
+              width,
+              "…",
+            ),
           )
           break
         }
-        const rows = this.checklistRows(f)
         const typed = f.filter.trim()
-        if (f.filter) {
-          const adds = f.def.allowCustom && typed && !rows.some((r) => r.value === typed)
-          out.push(
-            truncateToWidth(
-              `${INDENT}${theme.muted("filter:")} ${f.filter}${CURSOR_MARKER}${adds ? theme.muted(`  ${keyLabel({ name: "enter" })} adds it`) : ""}`,
-              width,
-            ),
-          )
-        }
+        const adds = f.def.allowCustom && typed && !rows.some((r) => r.value === typed)
+        const filter = truncateToWidth(
+          `${INDENT}${theme.muted("filter:")} ${f.filter}`,
+          Math.max(0, width - 1),
+          "…",
+        )
+        active = out.length
+        out.push(
+          filter +
+            CURSOR_MARKER +
+            (adds
+              ? theme.muted(
+                  truncateToWidth(
+                    `  ${keyLabel({ name: "enter" })} adds it`,
+                    Math.max(0, width - visibleWidth(filter)),
+                    "…",
+                  ),
+                )
+              : ""),
+        )
         if (!rows.length) {
-          out.push(INDENT + theme.muted(f.filter ? "no match" : "(no options yet)"))
+          out.push(
+            truncateToWidth(INDENT + theme.muted(f.filter ? "no match" : "(no options yet)"), width, "…"),
+          )
         } else {
-          const list = this.listLines(f, rows, width, ctx, (o) => checked.includes(o.value), true)
+          const list = renderFormList(f, rows, width, ctx, (o) => checked.includes(o.value), true)
           active = out.length + (f.highlight - f.top)
           out.push(...list)
         }
-        out.push(INDENT + theme.muted(`${checked.length} selected`))
         break
       }
       case "checkbox":
@@ -730,36 +781,6 @@ export class Form implements Component {
     return { lines: out, active }
   }
 
-  /** Rows of a select's list or a checklist, scrolled to keep the highlight in view. */
-  private listLines(
-    f: FieldState,
-    rows: FormChoice[],
-    width: number,
-    ctx: RenderContext,
-    on: (o: FormChoice) => boolean,
-    boxes = false,
-  ): string[] {
-    const { theme } = ctx
-    f.highlight = Math.max(0, Math.min(f.highlight, rows.length - 1))
-    if (f.highlight < f.top) f.top = f.highlight
-    if (f.highlight >= f.top + LIST_ROWS) f.top = f.highlight - LIST_ROWS + 1
-    f.top = Math.max(0, Math.min(f.top, rows.length - LIST_ROWS))
-    const out = rows.slice(f.top, f.top + LIST_ROWS).map((o, j) => {
-      const i = f.top + j
-      const hl = i === f.highlight
-      const box = boxes ? `${on(o) ? "[x]" : "[ ]"} ` : on(o) ? "● " : "  "
-      const text = `${box}${o.label ?? o.value}`
-      const desc = o.description ? theme.muted(`  ${o.description}`) : ""
-      return truncateToWidth(
-        `${INDENT}${hl ? theme.accent(`${pointer(ctx)} ${text}`) : `  ${text}`}${desc}`,
-        width,
-        "…",
-      )
-    })
-    if (rows.length > LIST_ROWS) out.push(INDENT + theme.muted(`  ${f.highlight + 1}/${rows.length}`))
-    return out
-  }
-
   private footer(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const out = [theme.border((ctx.glyphs?.rule ?? "─").repeat(width))]
@@ -783,7 +804,10 @@ export class Form implements Component {
         width,
       ),
     )
-    out.push(theme.muted(truncateToWidth(this.hint(ctx), width, "…")))
+    const hint = this.hint(ctx)
+    if (this.field(this.focus)?.def.type === "multiselect" && width >= 40 && ctx.rows >= 10) {
+      for (const line of wrapFormHint(hint, width, ` ${separator(ctx)} `)) out.push(theme.muted(line))
+    } else out.push(theme.muted(truncateToWidth(hint, width, "…")))
     return out
   }
 
@@ -803,7 +827,7 @@ export class Form implements Component {
           ? `↑↓ pick ${sep} type to filter ${sep} ${enter} choose ${sep} ${esc} close`
           : `${enter} list ${sep} ←→ change ${sep} ${common}`
       case "multiselect":
-        return `${space} toggle ${sep} type to filter${f.def.allowCustom ? " or add" : ""} ${sep} ${keyLabel({ name: "a", ctrl: true })} all ${sep} ${common}`
+        return `${space} toggle ${sep} type to filter${f.def.allowCustom ? " or add" : ""} ${sep} ${keyLabel({ name: "a", ctrl: true })} all/none filtered options ${sep} ${keyLabel({ name: "x", ctrl: true })} invert filtered options ${sep} ${common}`
       case "checkbox":
         return `${space} toggle ${sep} ${common}`
       case "textarea":

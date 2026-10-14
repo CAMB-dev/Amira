@@ -19,7 +19,7 @@ export interface ProviderDraft {
   baseUrl: string
   /** auth: stored in ~/.amira/auth.json; env: read from `apiKeyEnv`; none: no key (a local server). */
   keySource: ProviderKeySource
-  /** keySource auth: a key to store; empty or unset keeps the stored one. Never persisted elsewhere. */
+  /** keySource auth: a key to store; blank or unset keeps the live configured key on edit. Never persisted elsewhere. */
   apiKey?: string
   /** keySource env: the variable holding the key. */
   apiKeyEnv?: string

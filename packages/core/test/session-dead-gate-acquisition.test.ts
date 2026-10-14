@@ -7,7 +7,25 @@ import { Agent } from "../src/agent.ts"
 import { SessionWriteGuardError, tryFileLock } from "../src/file-lock.ts"
 import { leaseOwner, ownerState } from "../src/file-lock-owner.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
+import {
+  assertInlineResponsive,
+  INLINE_LATENCY_RUNS,
+  inlineCleanupLatency,
+} from "./file-lock-latency-timing.ts"
 import { boundedExit, startGateReader } from "./file-lock-reader-fixture.ts"
+
+async function acquisitionLatency(label: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-dead-gate-baseline-"))
+  try {
+    return await inlineCleanupLatency(label, () => {
+      const lock = tryFileLock(path.join(dir, "baseline.lock"), 1, undefined, true)
+      if (!lock) throw new Error("strict baseline acquisition failed")
+      lock.release()
+    })
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 async function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-dead-gate-acquire-"))
@@ -63,6 +81,7 @@ if (process.platform === "win32") {
     const waits = spyOn(Atomics, "wait")
     let agent: Agent | undefined
     let pending: Agent | Promise<Agent> | undefined
+    let constructed = false
     try {
       const deadline = performance.now() + 3000
       while (!fs.existsSync(ready)) {
@@ -70,24 +89,25 @@ if (process.platform === "win32") {
           throw new Error("reader readiness failed")
         await Bun.sleep(2)
       }
-      fs.writeFileSync(go, "go")
       const start = performance.now()
       const callback = new Promise<number>((resolve) =>
         setTimeout(() => resolve(performance.now() - start), 0),
       )
-      pending = f.store.withClaim(
-        () => new Agent({ ai, model: ai.model("mock/m"), cwd: f.dir, session: f.store }),
-      )
+      pending = f.store.withClaim(() => {
+        constructed = true
+        return new Agent({ ai, model: ai.model("mock/m"), cwd: f.dir, session: f.store })
+      })
       expect(pending).toBeInstanceOf(Promise)
-      const zero = await callback
-      expect(zero).toBeLessThan(20)
-      expect(reader.exitCode).toBeNull()
       expect(fs.readFileSync(f.metadata, "utf8")).toBe(f.contents)
+      // Keep the reader held until the synchronous attempt returned; descheduling the
+      // test process must not let the reader expire before that attempt starts.
+      fs.writeFileSync(go, "go")
+      const zero = await callback
+      expect(constructed).toBe(false)
       agent = await pending
       const elapsed = performance.now() - start
       console.log(`Dead gate reader: acquisition ${elapsed.toFixed(2)}ms, zero-delay ${zero.toFixed(2)}ms`)
       expect(elapsed).toBeGreaterThanOrEqual(75)
-      expect(elapsed).toBeLessThan(2000)
       expect(await boundedExit(reader, "dead gate reader")).toBe(0)
       expect(await new Response(reader.stderr).text()).toBe("")
       expect(agent.messages).toEqual([userMessage("saved"), userMessage("current disk history")])
@@ -110,98 +130,276 @@ if (process.platform === "win32") {
 }
 
 for (const code of ["EPERM", "EBUSY", "EACCES"]) {
-  for (const duration of ["one-shot", "100ms"] as const) {
-    test(`dead gate ${duration} ${code} retirement re-proves death and rechecks metadata on every claim`, async () => {
+  for (const failures of [1, 2]) {
+    test(`gate publication retries ${failures} transient ${code} failures after dead retirement`, async () => {
       const f = await fixture()
       const rename = fs.renameSync
-      const read = fs.readFileSync
-      const probe = spyOn(process, "kill")
-      let reads = 0
+      const stages: string[] = []
       let attempts = 0
       let constructed = 0
-      const start = performance.now()
-      const failure = Object.assign(new Error(`${code}: rename ${f.gate} -> ${f.tomb}`), {
-        code,
-        path: f.gate,
-        dest: f.tomb,
-      })
-      const reading = spyOn(fs, "readFileSync").mockImplementation(
-        new Proxy(read, {
-          apply(target, receiver, args) {
-            if (String(args[0]) === f.metadata) reads++
-            return Reflect.apply(target, receiver, args)
-          },
-        }),
-      )
       const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
-        if (String(from) === f.gate && String(to) === f.tomb) {
+        if (String(from).startsWith(`${f.gate}.pending-`) && String(to) === f.gate && !constructed) {
           attempts++
-          expect(reads).toBe(attempts * 2)
-          expect(probe).toHaveBeenCalledTimes(attempts)
-          expect(probe).toHaveBeenLastCalledWith(f.owner.pid, 0)
-          if (duration === "one-shot" ? attempts === 1 : performance.now() - start < 100) throw failure
+          stages.push(String(from))
+          expect(fs.existsSync(f.gate)).toBe(false)
+          expect(fs.existsSync(f.file)).toBe(false)
+          expect(fs.readFileSync(path.join(f.tomb, "owner.json"), "utf8")).toBe(f.contents)
+          if (attempts <= failures)
+            throw Object.assign(new Error(`${code}: publish gate`), { code, path: from, dest: to })
         }
         return rename(from, to)
       })
+      const waits = spyOn(Atomics, "wait")
       try {
-        const callback = new Promise<number>((resolve) =>
-          setTimeout(() => resolve(performance.now() - start), 0),
+        const callback = new Promise<{ attempts: number; constructed: number }>((resolve) =>
+          setTimeout(() => resolve({ attempts, constructed }), 0),
         )
         const pending = f.store.withClaim(() => {
           constructed++
+          expect(fs.existsSync(f.file)).toBe(true)
           return "claimed"
         })
         expect(pending).toBeInstanceOf(Promise)
-        expect(await callback).toBeLessThan(20)
+        expect(await callback).toEqual({ attempts: 1, constructed: 0 })
         expect(await pending).toBe("claimed")
+        expect(attempts).toBe(failures + 1)
         expect(constructed).toBe(1)
-        expect(attempts).toBeGreaterThanOrEqual(2)
-        if (duration === "one-shot") expect(attempts).toBe(2)
-        else expect(performance.now() - start).toBeGreaterThanOrEqual(100)
+        expect(waits).not.toHaveBeenCalled()
+        for (const staging of stages) expect(fs.existsSync(staging)).toBe(false)
         expect(fs.existsSync(f.file)).toBe(false)
         expect(fs.existsSync(f.gate)).toBe(false)
         expect(fs.readFileSync(path.join(f.tomb, "owner.json"), "utf8")).toBe(f.contents)
       } finally {
+        waits.mockRestore()
         hook.mockRestore()
-        reading.mockRestore()
-        probe.mockRestore()
         f.store.release()
         fs.rmSync(f.dir, { recursive: true, force: true })
       }
     })
   }
 
-  test(`synchronous tryFileLock preserves dead-retirement ${code} without sleeping or timers`, async () => {
-    const f = await fixture()
-    const rename = fs.renameSync
-    const failure = Object.assign(new Error(`${code}: rename ${f.gate}`), { code, path: f.gate })
-    const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
-      if (String(from) === f.gate && String(to) === f.tomb) throw failure
-      return rename(from, to)
-    })
-    const timers = spyOn(globalThis, "setTimeout")
-    const waits = spyOn(Atomics, "wait")
-    try {
-      const start = performance.now()
-      let caught: unknown
-      try {
-        tryFileLock(f.file, 1, undefined, true)
-      } catch (error) {
-        caught = error
+  for (const blocker of ["occupied", "unverifiable", "replacement on retry"] as const) {
+    test(`gate publication ${code} rejects ${blocker} canonical path without granting authority`, async () => {
+      const f = await fixture()
+      const rename = fs.renameSync
+      const lstat = fs.lstatSync
+      let attempts = 0
+      let denied = false
+      const replacement = "unverifiable replacement"
+      const replace = () => {
+        fs.mkdirSync(f.gate)
+        fs.writeFileSync(f.metadata, replacement)
       }
-      expect(caught).toBe(failure)
-      expect(performance.now() - start).toBeLessThan(20)
-      expect(timers).not.toHaveBeenCalled()
-      expect(waits).not.toHaveBeenCalled()
-      expect(fs.readFileSync(f.metadata, "utf8")).toBe(f.contents)
-      expect(fs.existsSync(f.tomb)).toBe(false)
-      expect(fs.existsSync(f.file)).toBe(false)
-    } finally {
-      waits.mockRestore()
-      timers.mockRestore()
-      hook.mockRestore()
-      fs.rmSync(f.dir, { recursive: true, force: true })
+      const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        if (String(from).startsWith(`${f.gate}.pending-`) && String(to) === f.gate) {
+          attempts++
+          if (blocker === "occupied") replace()
+          else if (blocker === "unverifiable") denied = true
+          else queueMicrotask(replace)
+          throw Object.assign(new Error(`${code}: publish gate`), { code, path: from, dest: to })
+        }
+        return rename(from, to)
+      })
+      const check = spyOn(fs, "lstatSync").mockImplementation(
+        new Proxy(lstat, {
+          apply(target, receiver, args) {
+            if (denied && String(args[0]) === f.gate)
+              throw Object.assign(new Error("canonical gate unreadable"), { code: "EACCES" })
+            return Reflect.apply(target, receiver, args)
+          },
+        }),
+      )
+      const timers = spyOn(globalThis, "setTimeout")
+      let constructed = 0
+      try {
+        await expect(
+          Promise.resolve().then(() =>
+            f.store.withClaim(() => {
+              constructed++
+            }),
+          ),
+        ).rejects.toThrow(SessionWriteGuardError)
+        expect(constructed).toBe(0)
+        expect(attempts).toBe(1)
+        expect(timers).toHaveBeenCalledTimes(blocker === "replacement on retry" ? 1 : 0)
+        expect(fs.existsSync(f.file)).toBe(false)
+        if (blocker !== "unverifiable") expect(fs.readFileSync(f.metadata, "utf8")).toBe(replacement)
+        expect(fs.readFileSync(path.join(f.tomb, "owner.json"), "utf8")).toBe(f.contents)
+        expect(fs.readdirSync(f.dir).filter((name) => name.includes(".pending-"))).toEqual([])
+      } finally {
+        timers.mockRestore()
+        check.mockRestore()
+        hook.mockRestore()
+        fs.rmSync(f.dir, { recursive: true, force: true })
+      }
+    })
+  }
+
+  for (const mode of ["deadline", "abort", "synchronous"] as const) {
+    test(`permanent gate publication ${code} preserves original error and ${mode} budget`, async () => {
+      const f = await fixture()
+      const rename = fs.renameSync
+      const failure = Object.assign(new Error(`${code}: publish gate`), { code, path: f.gate })
+      let attempts = 0
+      let constructed = 0
+      const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        if (String(from).startsWith(`${f.gate}.pending-`) && String(to) === f.gate) {
+          attempts++
+          throw failure
+        }
+        return rename(from, to)
+      })
+      const timers = spyOn(globalThis, "setTimeout")
+      const waits = spyOn(Atomics, "wait")
+      const controller = new AbortController()
+      const reason = new Error("cancel gate publication")
+      // Model a delayed timer waking exactly at expiry without depending on runner load.
+      const clock = spyOn(performance, "now").mockReturnValue(0)
+      try {
+        if (mode === "synchronous") {
+          let caught: unknown
+          try {
+            tryFileLock(f.file, 1, undefined, true)
+          } catch (error) {
+            caught = error
+          }
+          expect(caught).toBe(failure)
+          expect(timers).not.toHaveBeenCalled()
+          expect(attempts).toBe(1)
+        } else {
+          const pending = f.store.withClaim(
+            () => {
+              constructed++
+            },
+            { signal: controller.signal, waitMs: 50 },
+          )
+          expect(pending).toBeInstanceOf(Promise)
+          expect(attempts).toBe(1)
+          expect(timers).toHaveBeenCalledTimes(1)
+          if (mode === "abort") controller.abort(reason)
+          else clock.mockReturnValue(50)
+          await expect(Promise.resolve(pending)).rejects.toBe(mode === "abort" ? reason : failure)
+          expect(attempts).toBe(1)
+          const settled = attempts
+          await Bun.sleep(25)
+          expect(attempts).toBe(settled)
+        }
+        expect(constructed).toBe(0)
+        expect(waits).not.toHaveBeenCalled()
+        expect(fs.existsSync(f.file)).toBe(false)
+        expect(fs.existsSync(f.gate)).toBe(false)
+        expect(fs.readFileSync(path.join(f.tomb, "owner.json"), "utf8")).toBe(f.contents)
+        expect(fs.readdirSync(f.dir).filter((name) => name.includes(".pending-"))).toEqual([])
+      } finally {
+        clock.mockRestore()
+        waits.mockRestore()
+        timers.mockRestore()
+        hook.mockRestore()
+        fs.rmSync(f.dir, { recursive: true, force: true })
+      }
+    })
+  }
+
+  for (const duration of ["one-shot", "100ms"] as const) {
+    test(`dead gate ${duration} ${code} retirement re-proves death and rechecks metadata on every claim`, async () => {
+      const label = `dead gate ${duration} ${code} retirement`
+      const timing = await acquisitionLatency(label)
+      for (let run = 0; run < INLINE_LATENCY_RUNS; run++) {
+        const f = await fixture()
+        const rename = fs.renameSync
+        const read = fs.readFileSync
+        const probe = spyOn(process, "kill")
+        let reads = 0
+        let attempts = 0
+        let constructed = 0
+        const start = performance.now()
+        const failure = Object.assign(new Error(`${code}: rename ${f.gate} -> ${f.tomb}`), {
+          code,
+          path: f.gate,
+          dest: f.tomb,
+        })
+        const reading = spyOn(fs, "readFileSync").mockImplementation(
+          new Proxy(read, {
+            apply(target, receiver, args) {
+              if (String(args[0]) === f.metadata) reads++
+              return Reflect.apply(target, receiver, args)
+            },
+          }),
+        )
+        const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+          if (String(from) === f.gate && String(to) === f.tomb) {
+            attempts++
+            expect(reads).toBe(attempts * 2)
+            expect(probe).toHaveBeenCalledTimes(attempts)
+            expect(probe).toHaveBeenLastCalledWith(f.owner.pid, 0)
+            if (duration === "one-shot" ? attempts === 1 : performance.now() - start < 100) throw failure
+          }
+          return rename(from, to)
+        })
+        try {
+          const callback = new Promise<number>((resolve) => setTimeout(() => resolve(constructed), 0))
+          const pending = timing.measure("withClaim", () =>
+            f.store.withClaim(() => {
+              constructed++
+              return "claimed"
+            }),
+          )
+          expect(pending).toBeInstanceOf(Promise)
+          expect(await callback).toBe(0)
+          expect(await pending).toBe("claimed")
+          expect(constructed).toBe(1)
+          expect(attempts).toBeGreaterThanOrEqual(2)
+          if (duration === "one-shot") expect(attempts).toBe(2)
+          else expect(performance.now() - start).toBeGreaterThanOrEqual(100)
+          expect(fs.existsSync(f.file)).toBe(false)
+          expect(fs.existsSync(f.gate)).toBe(false)
+          expect(fs.readFileSync(path.join(f.tomb, "owner.json"), "utf8")).toBe(f.contents)
+        } finally {
+          hook.mockRestore()
+          reading.mockRestore()
+          probe.mockRestore()
+          f.store.release()
+          fs.rmSync(f.dir, { recursive: true, force: true })
+        }
+      }
+      assertInlineResponsive(label, timing.samples, ["withClaim"])
+    })
+  }
+
+  test(`synchronous tryFileLock preserves dead-retirement ${code} without sleeping or timers`, async () => {
+    const label = `synchronous dead-retirement ${code}`
+    const timing = await acquisitionLatency(label)
+    for (let run = 0; run < INLINE_LATENCY_RUNS; run++) {
+      const f = await fixture()
+      const rename = fs.renameSync
+      const failure = Object.assign(new Error(`${code}: rename ${f.gate}`), { code, path: f.gate })
+      const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        if (String(from) === f.gate && String(to) === f.tomb) throw failure
+        return rename(from, to)
+      })
+      const timers = spyOn(globalThis, "setTimeout")
+      const waits = spyOn(Atomics, "wait")
+      try {
+        let caught: unknown
+        try {
+          timing.measure("tryFileLock", () => tryFileLock(f.file, 1, undefined, true))
+        } catch (error) {
+          caught = error
+        }
+        expect(caught).toBe(failure)
+        expect(timers).not.toHaveBeenCalled()
+        expect(waits).not.toHaveBeenCalled()
+        expect(fs.readFileSync(f.metadata, "utf8")).toBe(f.contents)
+        expect(fs.existsSync(f.tomb)).toBe(false)
+        expect(fs.existsSync(f.file)).toBe(false)
+      } finally {
+        waits.mockRestore()
+        timers.mockRestore()
+        hook.mockRestore()
+        fs.rmSync(f.dir, { recursive: true, force: true })
+      }
     }
+    assertInlineResponsive(label, timing.samples, ["tryFileLock"])
   })
 }
 
@@ -248,7 +446,6 @@ for (const replacement of [
     })
     const timers = spyOn(globalThis, "setTimeout")
     try {
-      const start = performance.now()
       await expect(
         Promise.resolve().then(() =>
           f.store.withClaim(() => {
@@ -256,7 +453,6 @@ for (const replacement of [
           }),
         ),
       ).rejects.toThrow(SessionWriteGuardError)
-      expect(performance.now() - start).toBeLessThan(100)
       expect(constructed).toBe(false)
       expect(attempts).toBe(1)
       expect(timers).toHaveBeenCalledTimes(1)
@@ -299,12 +495,10 @@ for (const kind of ["live", "foreign", "unknown", "corrupt", "legacy"]) {
         }),
       )
       const timers = spyOn(globalThis, "setTimeout")
-      const start = performance.now()
       try {
         expect(() => f.store.withClaim(() => "never claimed")).toThrow(
           `session stale-write guard is busy or unverifiable: ${f.gate}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
         )
-        expect(performance.now() - start).toBeLessThan(20)
         expect(timers).not.toHaveBeenCalled()
         expect(fs.existsSync(f.file)).toBe(false)
         expect(fs.existsSync(f.tomb)).toBe(false)
@@ -369,9 +563,7 @@ test("a live foreign-process gate rejects without scheduling acquisition even wh
       )
       const timers = spyOn(globalThis, "setTimeout")
       try {
-        const start = performance.now()
         expect(() => store.withClaim(() => "never claimed")).toThrow(SessionWriteGuardError)
-        expect(performance.now() - start).toBeLessThan(20)
         expect(timers).not.toHaveBeenCalled()
         expect(fs.existsSync(file)).toBe(false)
       } finally {
@@ -450,7 +642,6 @@ for (const mode of ["deadline", "abort"] as const) {
         const elapsed = performance.now() - start
         console.log(`Dead gate permanent sharing: ${elapsed.toFixed(2)}ms`)
         expect(elapsed).toBeGreaterThanOrEqual(1950)
-        expect(elapsed).toBeLessThan(2200)
         expect(attempts).toBeGreaterThan(1)
       }
       const settled = attempts

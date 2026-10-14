@@ -367,6 +367,7 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
   ]
   return {
     kind: "subagent",
+    needsTab: true,
     scrollKey: (data) => data.sessionId,
     title(data, opts) {
       shown = data

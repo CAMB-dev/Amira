@@ -23,9 +23,9 @@ export const DIALECT_NOTES: Record<string, string> = {
 }
 
 const KEY_CHOICES: FormOption[] = [
-  { value: "auth", label: "Store the key in ~/.amira/auth.json" },
-  { value: "env", label: "Read it from an environment variable" },
-  { value: "none", label: "No key (a local server)" },
+  { value: "auth", label: "auth.json" },
+  { value: "env", label: "Environment variable" },
+  { value: "none", label: "No key" },
 ]
 
 const DEFAULTS = "Defaults for models the catalog does not know"
@@ -50,10 +50,23 @@ export function modelDescription(m: ProviderModelInfo): string {
   return parts.join(" · ")
 }
 
+/** Compact limits and catalog prices in the checklist's right-aligned column. */
+function modelOption(m: ProviderModelInfo): FormOption {
+  const context = m.contextWindow ? tokens(m.contextWindow).replace("k", "K") : ""
+  const price = m.inCatalog && m.cost ? `$${m.cost.input}/$${m.cost.output}` : ""
+  const detail = [context, ...(price ? [price] : [])]
+  return {
+    value: m.id,
+    ...(m.name && m.name !== m.id ? { label: `${m.id} (${m.name})` } : {}),
+    ...(context || price ? { detail } : {}),
+  }
+}
+
 /** The draft the values describe; fallback id and non-editable catalog identity come from the caller. */
 export function draftFromValues(values: FormValues, id?: string, catalogId?: string | false): ProviderDraft {
   const finalId = String(values.id ?? id ?? "").trim()
   const keySource = (values.keySource as ProviderKeySource | undefined) ?? "none"
+  const apiKey = typeof values.apiKey === "string" ? values.apiKey.trim() : ""
   const num = (v: unknown) => (typeof v === "number" && v > 0 ? v : undefined)
   const contextWindow = num(values.contextWindow)
   const maxOutput = num(values.maxOutput)
@@ -65,9 +78,7 @@ export function draftFromValues(values: FormValues, id?: string, catalogId?: str
       .trim()
       .replace(/\/+$/, ""),
     keySource,
-    ...(keySource === "auth" && typeof values.apiKey === "string" && values.apiKey
-      ? { apiKey: values.apiKey }
-      : {}),
+    ...(keySource === "auth" && apiKey ? { apiKey } : {}),
     ...(keySource === "env" ? { apiKeyEnv: String(values.apiKeyEnv ?? "").trim() } : {}),
     models: Array.isArray(values.models) ? values.models : [],
     defaults: {
@@ -174,7 +185,7 @@ export function providerFormSpec(
     sections: [
       { title: "Provider" },
       { title: "API key" },
-      { title: "Models", help: "Fetch them from the provider, or type ids into the list." },
+      { title: "Models" },
       { title: DEFAULTS, optional: true },
       { title: "Check" },
     ],
@@ -219,8 +230,8 @@ export function providerFormSpec(
       {
         type: "select",
         id: "keySource",
-        label: "Key",
-        section: "API key",
+        label: "Key source",
+        section: "Provider",
         options: KEY_CHOICES,
         default: start.keySource ?? "auth",
       },
@@ -230,8 +241,14 @@ export function providerFormSpec(
         label: "API key",
         section: "API key",
         when: { field: "keySource", is: "auth" },
-        placeholder: stored ? `leave empty to keep the stored key (${stored})` : "paste the key",
-        help: stored ? `A key is stored (${stored}); typing one replaces it.` : "Shown masked, never logged.",
+        placeholder: stored
+          ? `leave empty to keep the current key (stored: ${stored})`
+          : editing
+            ? "leave empty to keep the current key"
+            : "paste the key",
+        help: stored
+          ? `auth.json has a key (${stored}); a new key replaces it.`
+          : "Shown masked, never logged.",
       },
       {
         type: "text",
@@ -281,7 +298,6 @@ export function providerFormSpec(
               },
             }
           : {}),
-        help: "Lists models from the provider with the key above; models.dev adds context window and price.",
         run: async ({ values, signal, progress }) => {
           const d = draft(values)
           progress(`asking ${d.baseUrl || "the provider"}…`)
@@ -289,15 +305,11 @@ export function providerFormSpec(
           const inCatalog = models.filter((m) => m.inCatalog).length
           return {
             message: models.length
-              ? `The provider listed ${models.length} models; models.dev adds context window and price for ${inCatalog}. Pick them in the list below.`
-              : "The provider listed no models; type their ids into the list below.",
+              ? `${models.length} models listed · models.dev details for ${inCatalog}.`
+              : "No models listed; enter model IDs below.",
             tone: models.length ? "success" : "warning",
             options: {
-              models: models.map((m) => ({
-                value: m.id,
-                ...(m.name && m.name !== m.id ? { label: `${m.id} (${m.name})` } : {}),
-                ...(modelDescription(m) ? { description: modelDescription(m) } : {}),
-              })),
+              models: models.map(modelOption),
             },
           }
         },
@@ -308,9 +320,9 @@ export function providerFormSpec(
         label: "Models",
         section: "Models",
         allowCustom: true,
-        options: known.map((m) => ({ value: m.id, description: modelDescription(m) })),
+        options: known.map(modelOption),
         default: startModels,
-        help: "space picks · type an id and press enter to add one the list lacks.",
+        help: "Type to filter · enter adds an unlisted id. Prices are input/output USD per million tokens.",
       },
       {
         type: "number",
@@ -365,6 +377,7 @@ export function providerFormSpec(
           if (!model) return { message: "Pick or type a model first.", tone: "warning" }
           progress(`sending a tiny request to ${model}…`)
           const r = await admin.test(d, model, signal)
+          signal.throwIfAborted()
           return { message: r.message, tone: r.ok ? "success" : "error" }
         },
       },

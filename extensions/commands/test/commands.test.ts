@@ -1035,9 +1035,9 @@ test("/shell shows and sets the mode; /tools lists, disables and enables tools",
   expect((await host.complete("/shell p")).candidates.map((c) => c.value)).toEqual(["powershell"])
 })
 
-test("/provider lists the configured providers", async () => {
+test("/provider lists the configured providers in print mode", async () => {
   const { run } = await setup()
-  const list = (await run("/provider")).text
+  const list = (await run("/provider", "print")).text
   expect(list).toMatch(/\*\s+deepseek\s+openai-chat/)
   expect(list).toContain("no key (WORK_API_KEY)")
   expect((await run("/provider add")).error).toBe("this host cannot change providers")

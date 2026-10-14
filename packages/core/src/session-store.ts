@@ -444,6 +444,8 @@ export class SessionStore {
       }
     }
     const metadata = data.type === "display" || data.type === "side_usage" || data.type === "title"
+    // The canonical file was revalidated above; reuse its physical lock namespace.
+    const lockFile = `${this.file}.lock`
     const key = sessionFileKey(this.file)
     const held = sessionLocks.get(key)
     if (held) {
@@ -468,14 +470,14 @@ export class SessionStore {
       data.type !== "message" &&
       data.type !== "display" &&
       !existsSync(this.file) &&
-      !existsSync(sessionLockFile(this.file))
+      !existsSync(lockFile)
     ) {
       return write(this)
     }
     // Even unclaimed stores must serialize with other processes. Refresh retained metadata,
     // but preserve the conflict for an unclaimed stale appendMessage/model mutation.
     const result = withTransientFileLock(
-      sessionLockFile(this.file),
+      lockFile,
       () => {
         if (metadata && this.#written && this.#changed()) {
           const fresh = SessionStore.#read(this.file)
@@ -502,11 +504,7 @@ export class SessionStore {
       SESSION_LOCK_STALE_MS,
     )
     if (!result)
-      throw new SessionInUseError(
-        this.file,
-        sessionLockPid(this.file),
-        pendingOwnedLockCleanup(sessionLockFile(this.file)),
-      )
+      throw new SessionInUseError(this.file, sessionLockPid(this.file), pendingOwnedLockCleanup(lockFile))
     return result.value
   }
 

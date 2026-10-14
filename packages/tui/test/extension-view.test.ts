@@ -160,7 +160,7 @@ test("a command opens an extension's view over its data; it follows changes, run
   expect(lines[1]).toBe("1/2 done")
   expect(lines[2]).toBe("─".repeat(80))
   expect(lines.slice(3, 5)).toEqual(["✓ read the diff", "… check the tests"])
-  expect(lines.at(-1)).toBe("  x cancel · c close · ↑↓ pgup pgdn home end scroll · esc close")
+  expect(lines.at(-1)).toBe("  x cancel · c close · ↑↓ pgup pgdn home end scroll · esc close · tab → input")
 
   // The extension changes its data and asks for a redraw: the view shows it.
   s.data.steps.push({ title: "write the summary", state: "running" })
@@ -203,9 +203,9 @@ test("a long body starts at its top unless the view follows its end; the body sc
   top.terminal.send("/progress\r")
   await waitFor(() => top.view().includes("read the diff"), "the top")
   expect(top.screen.lines[2]).toBe("read the diff")
-  expect(top.screen.lines.at(-1)).toMatch(/^ {2}1–9 of 42 · /)
+  expect(top.screen.lines.at(-1)).toMatch(/^ {2}1–5 of 42 · /)
   top.terminal.send("\x1b[B")
-  await waitFor(() => top.screen.lines.at(-1)!.startsWith("  2–10 of 42"), "scrolled a row")
+  await waitFor(() => top.screen.lines.at(-1)!.startsWith("  2–6 of 42"), "scrolled a row")
   // Ctrl+C leaves the view, not Amira.
   top.terminal.send("\x03")
   await waitFor(() => !top.screen.inAltScreen, "closed")
@@ -306,10 +306,9 @@ test("a key can ask to confirm first: y goes ahead, any other key does not", asy
   s.terminal.send("/progress\r")
   await waitFor(() => s.view().includes("check the tests"), "the view")
   s.terminal.send("x")
-  await waitFor(
-    () => s.screen.lines.at(-1) === "  Stop the run? y stops it · any other key keeps it running",
-    "the question",
-  )
+  const question = "  Stop the run? y stops it · any other key keeps it running"
+  await waitFor(() => s.screen.lines.at(-6) === question, "the question")
+  expect(s.screen.lines.slice(-6, -4)).toEqual([question, `╭${"─".repeat(78)}╮`])
   // Any other key keeps it running, and is used up: "q" does not close the view.
   s.terminal.send("q")
   await waitFor(() => answers.length === 1, "no")
@@ -822,19 +821,25 @@ test("a key can ask for a line of text at the bottom of the view; Esc cancels it
   s.terminal.send("/progress\r")
   await waitFor(() => s.view().includes("check the tests"), "the view")
   s.terminal.send("m")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Message to writer: hi"), "the prompt")
+  await waitFor(() => s.screen.lines.some((line) => line.startsWith("  Message to writer: hi")), "the prompt")
   // Keys go to the prompt: "q" and "m" are typed, not run.
   s.terminal.send("q m\r")
   await waitFor(() => s.view().includes("sent: hi q m"), "the answer")
-  expect(s.screen.lines.at(-1)).toBe("  m message · ↑↓ pgup pgdn home end scroll · esc close")
+  expect(s.screen.lines.at(-1)).toBe("  m message · ↑↓ pgup pgdn home end scroll · esc close · tab → input")
   s.terminal.send("m")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Message to writer:"), "the prompt again")
+  await waitFor(
+    () => s.screen.lines.some((line) => line.startsWith("  Message to writer:")),
+    "the prompt again",
+  )
   s.terminal.send(ESC)
   await waitFor(() => answers.length === 2, "cancelled")
   expect(s.screen.inAltScreen).toBe(true)
   // Closing the view cancels a prompt left open.
   s.terminal.send("m")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Message to writer:"), "a third prompt")
+  await waitFor(
+    () => s.screen.lines.some((line) => line.startsWith("  Message to writer:")),
+    "a third prompt",
+  )
   s.terminal.send("\x03")
   await waitFor(() => answers.length === 3, "cancelled by Ctrl+C")
   await waitFor(() => !s.screen.inAltScreen, "Ctrl+C closes even with a prompt")

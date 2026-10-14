@@ -42,6 +42,11 @@ function setup(placement: "fullscreen" | "dock", definition: ViewDefinition) {
     working: () => false,
     interrupt: () => {},
     quitting: () => false,
+    editorEmpty: () => true,
+    searchActive: () => false,
+    searchHint: () => undefined,
+    inputFocused: () => {},
+    renderInput: () => [],
   })
   const open = (data?: unknown) => manager.openView({ kind: definition.kind, placement, data })
   open()

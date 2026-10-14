@@ -57,6 +57,13 @@ export class HistorySearch implements Component {
     this.#match = -1
   }
 
+  /** Restore the draft when cancelling or handing keyboard focus to another pane. */
+  cancel(): void {
+    if (!this.#active) return
+    this.#active = false
+    this.editor.setParts(this.#draft)
+  }
+
   handleKey(e: InputEvent): SearchAction {
     if (e.type === "paste") {
       this.#setQuery(this.#query + e.text.split("\n")[0])
@@ -64,8 +71,7 @@ export class HistorySearch implements Component {
     }
     const keys = this.keys
     if (keys.is(e, "search.cancel")) {
-      this.#active = false
-      this.editor.setParts(this.#draft)
+      this.cancel()
       return "cancelled"
     }
     if (keys.is(e, "search.older")) {

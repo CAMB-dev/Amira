@@ -26,6 +26,11 @@ for (const pressed of ["enter", "escape"] as const) {
       working: () => false,
       interrupt: () => {},
       quitting: () => false,
+      editorEmpty: () => true,
+      searchActive: () => false,
+      searchHint: () => undefined,
+      inputFocused: () => {},
+      renderInput: () => [],
     })
     let status: "working" | "done" = "working"
     let answerBeforeUpdate = false

@@ -294,6 +294,11 @@ test("rpc: ui.configure dialogs asks a form one field at a time", async () => {
 
 test("the rpc schema describes forms, ui.action and ui.progress", () => {
   const schema = rpcSchema() as any
+  expect(schema.$defs.FormOption.properties.detail.oneOf).toEqual([
+    { type: "string" },
+    { type: "array", items: { type: "string" } },
+  ])
+  expect(schema.$defs.FormOption.required).not.toContain("detail")
   const kinds = schema.$defs.UiRequest.oneOf.map((o: any) => o.properties.kind.enum[0])
   expect(kinds).toContain("form")
   const types = schema.$defs.FormField.oneOf.map((o: any) => o.properties.type.enum[0])

@@ -41,6 +41,11 @@ function setup() {
     working: () => false,
     interrupt: () => {},
     quitting: () => false,
+    editorEmpty: () => true,
+    searchActive: () => false,
+    searchHint: () => undefined,
+    inputFocused: () => {},
+    renderInput: () => [],
     commandActivity: () => ({ animationActive: active, tickAnimation: () => ticks++ }),
   })
   const dialog = new Dialog(

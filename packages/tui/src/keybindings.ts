@@ -141,6 +141,7 @@ export const ACTIONS = {
     description: "Release a view's input, go back a page, or close the root page",
   },
   "view.close": { scope: "view", description: "Close the whole extension view" },
+  "view.focus": { scope: "view", description: "Toggle focus between an extension view and the input" },
   "view.scroll-up": { scope: "view", description: "Scroll view text up a line" },
   "view.scroll-down": { scope: "view", description: "Scroll view text down a line" },
   "scroll.up": { scope: "transcript", description: "Scroll the transcript or view up a line" },
@@ -248,6 +249,7 @@ export function defaultKeys(env: Pick<TerminalEnv, "vscode">, platform = process
     "dialog.next-question": ["right"],
     "view.back": ["escape"],
     "view.close": ["q", "ctrl+c"],
+    "view.focus": ["f6", "ctrl+tab"],
     "view.scroll-up": ["up"],
     "view.scroll-down": ["down"],
     "scroll.up": ["shift+up"],
@@ -443,7 +445,11 @@ export function parseKeybindings(
     for (const k of list) {
       const spec = parseKeySpec(k)
       if (typeof spec === "string") warnings.push(`${file}: "${name}": cannot use "${k}": ${spec}`)
-      else good.push(k)
+      else if (name === "view.focus" && spec.name === "tab" && spec.shift && !spec.ctrl && !spec.alt) {
+        warnings.push(
+          `${file}: "${name}": cannot use "${k}": Shift+Tab is reserved for permission mode and reverse view navigation`,
+        )
+      } else good.push(k)
     }
     if (list.length && !good.length) continue
     keys[name] = good

@@ -37,6 +37,8 @@ export interface Scenario {
   description: string
   prompt: string
   routes: Record<string, ScriptedReply[]>
+  /** Optional provider-management fixture: models returned by GET /v1/models. */
+  models?: Array<{ id: string; contextWindow?: number; cost?: { input: number; output: number } }>
 }
 
 export interface ProviderRequest {
@@ -73,9 +75,16 @@ export async function createProvider(
         )
       }
       const url = new URL(request.url)
+      if (request.method === "GET" && url.pathname === "/v1/models") {
+        return Response.json({
+          data: (scenario.models ?? Object.keys(scenario.routes).map((id) => ({ id }))).map((model) => ({
+            id: model.id,
+          })),
+        })
+      }
       if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") {
         return Response.json(
-          { error: { message: "UI walk only serves POST /v1/chat/completions" } },
+          { error: { message: "UI walk only serves GET /v1/models and POST /v1/chat/completions" } },
           { status: 404 },
         )
       }
@@ -299,9 +308,25 @@ export async function setupFixtures(
   const settingsPath = path.join(home, "settings.json")
   await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
   // catalogId:false alone does NOT stop the CLI's global catalog refresh. A fresh cache does.
+  const catalog = provider.scenario.models
+    ? {
+        "ui-walk-demo": {
+          id: "ui-walk-demo",
+          name: "UI walk demo",
+          npm: "@ai-sdk/openai-compatible",
+          api: provider.baseUrl,
+          env: [],
+          models: Object.fromEntries(
+            provider.scenario.models
+              .filter((model) => model.cost)
+              .map((model) => [model.id, { limit: { context: model.contextWindow }, cost: model.cost }]),
+          ),
+        },
+      }
+    : {}
   await writeFile(
     path.join(home, "cache", "models.json"),
-    `${JSON.stringify({ fetchedAt: Date.now(), source: "ui-walk-offline", data: {} })}\n`,
+    `${JSON.stringify({ fetchedAt: Date.now(), source: "ui-walk-offline", data: catalog })}\n`,
   )
   const env: Record<string, string> = {}
   for (const [name, value] of Object.entries(process.env)) {
@@ -367,6 +392,26 @@ function parseScenario(value: unknown): Scenario {
     value.routes.main.length === 0
   ) {
     throw new Error("Invalid UI walk scenario: expected name, description, prompt and routes.main")
+  }
+  if (value.models !== undefined) {
+    if (
+      !Array.isArray(value.models) ||
+      value.models.some(
+        (model) =>
+          !isRecord(model) ||
+          typeof model.id !== "string" ||
+          !model.id.trim() ||
+          (model.contextWindow !== undefined &&
+            (!Number.isFinite(model.contextWindow) || Number(model.contextWindow) <= 0)) ||
+          (model.cost !== undefined &&
+            (!isRecord(model.cost) ||
+              !Number.isFinite(model.cost.input) ||
+              Number(model.cost.input) < 0 ||
+              !Number.isFinite(model.cost.output) ||
+              Number(model.cost.output) < 0)),
+      )
+    )
+      throw new Error("Invalid UI walk models")
   }
   const ids = new Set<string>()
   for (const [route, replies] of Object.entries(value.routes)) {

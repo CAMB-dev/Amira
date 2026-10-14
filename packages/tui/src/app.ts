@@ -10,12 +10,11 @@ import {
   type EventMap,
   type ToolDetailLevel,
 } from "@amira/api"
-import { type Agent, MODE_SUMMARY, parseCommandLine } from "@amira/core"
+import { type Agent, MODE_SUMMARY } from "@amira/core"
 import {
   chooseImageSupport,
   detectEnv,
   Editor,
-  type EditorPart,
   ImageStore,
   type InputEvent,
   InputReader,
@@ -44,6 +43,7 @@ import {
   tildePath,
   welcomeCard,
 } from "./app/startup.ts"
+import { createSubmission } from "./app/submission.ts"
 import { interactiveBanner, interactiveTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
@@ -52,7 +52,6 @@ import { compactionNotice, rememberMessageTime } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { headerLine } from "./header.ts"
-import { imageBytes, MAX_IMAGE_BYTES } from "./image-input.ts"
 import { createInlineView } from "./inline-view.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
 import { contentGeometry, contentMouse } from "./margins.ts"
@@ -140,7 +139,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const editor = new Editor({
     prompt: `${glyphs.user} `,
     placeholder: "Message Amira",
-    onSubmit: (text, info) => submit(text, info.parts, info.display),
+    onSubmit: (text, info) => submission.submit(text, info.parts, info.display),
     foldPastes: FOLD_PASTES,
     isSubmit: (e) => keys.is(e, "submit"),
     isNewline: (e) => keys.is(e, "newline"),
@@ -163,7 +162,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     redraw,
     redrawTerminal: () => view.redraw(),
     runPopup: (line) => {
-      if (line.startsWith("$")) runSkill(line)
+      if (line.startsWith("$")) submission.runSkill(line)
       else commandRunner.run(line)
     },
   })
@@ -201,6 +200,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     dialogs: () => overlays.dialogs,
     dock: () => overlays.dock,
     renderDock: (width, ctx, available) => overlays.renderDock(width, ctx, available),
+    focusHint: (theme, width) => overlays.focusHint(theme, width),
     steering: () => outbox.steering,
     queued: () => outbox.queued,
     mode: () => mode,
@@ -242,6 +242,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     interrupt: () => outbox.interrupt(),
     quitting: () => quitting,
     commandActivity: () => commandRunner,
+    editorEmpty: () => editor.isEmpty,
+    searchActive: () => composer.search.active,
+    searchHint: bottomArea.searchHint,
+    inputFocused: (focused) => {
+      if (!focused) composer.search.cancel()
+      editor.focused = focused
+    },
+    renderInput: bottomArea.overlayInput,
     dockChanged: (open) => {
       if (mode !== "inline") return
       if (open) terminal.enableMode(modes.mouse)
@@ -295,7 +303,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     view,
     takeEcho: (message) => commandRunner.takeEcho(message),
     echoedNote: (message) => commandRunner.echoedNote(message),
-    noModelYet,
+    noModelYet: (parts) => submission.noModelYet(parts),
     canRewind,
     openRewind: () => rewind.openRewind(),
     onInterrupt: () => {
@@ -331,6 +339,20 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     openRewind: () => rewind.openRewind(),
     isCompacting: () => activity.compacting,
     interrupt: () => outbox.interrupt(),
+  })
+
+  const submission = createSubmission({
+    agent: () => agent,
+    editor,
+    history,
+    commands,
+    composer,
+    commandRunner,
+    outbox,
+    view,
+    enterDoes,
+    notice: opts.notice,
+    context: { frontend: "tui", quit: () => quit(), openView: (v) => overlays.openView(v) },
   })
 
   themes.connect((selection) => {
@@ -592,96 +614,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     showNote(`${what} still running — ${key} again to stop them and quit`)
   }
 
-  /** Whether no provider is configured: from the session when it says, else from the CLI's notice. */
-  function noProviders(): boolean {
-    const providers = commands?.control.providers
-    if (providers) {
-      try {
-        return providers().length === 0
-      } catch {}
-    }
-    return opts.notice?.startsWith("No providers") ?? false
-  }
-
-  /**
-   * Sending while no model is picked would only fail: the message stays in the editor, and a
-   * notice says what to do first.
-   */
-  function noModelYet(parts: EditorPart[]): boolean {
-    if (!isNoModel(agent.model)) return false
-    editor.setParts(parts)
-    view.notice(
-      "error",
-      noProviders()
-        ? "No providers configured: add one with /provider add, then pick a model with /model. Your message is still in the input."
-        : "No model selected: pick one with /model. Your message is still in the input.",
-    )
-    return true
-  }
-
-  /**
-   * Enter and the other send keys: runs a slash command at once, sends, or while a turn runs
-   * steers it (D29) or queues the message after it, as `how` says. `parts` is the editor
-   * content as typed, folded pastes apart, for the prompt history; `display` shows the pastes
-   * as their placeholders in the transcript.
-   */
-  function submit(text: string, parts: EditorPart[] = [text], display?: string, how = enterDoes) {
-    const trimmed = text.trim()
-    const hasImages = parts.some((p) => typeof p !== "string" && "image" in p)
-    if (
-      composer.clipboardPending ||
-      (hasImages &&
-        (imageBytes(parts) > MAX_IMAGE_BYTES || (!isNoModel(agent.model) && !agent.model.caps.images)))
-    ) {
-      editor.setParts(parts)
-      view.notice(
-        "warning",
-        composer.clipboardPending
-          ? "Clipboard paste is still loading. Send the message once it finishes."
-          : imageBytes(parts) > MAX_IMAGE_BYTES
-            ? "Images in a message are limited to 5 MB total. Remove an attachment or resize it first."
-            : "This model does not support images. Pick an image-capable model with /model or remove the attachments. Your message is still in the input.",
-      )
-      return
-    }
-    if (!trimmed && !hasImages) return
-    editor.clear()
-    history.add(parts)
-    composer.resetHistory()
-    const message = outbox.prepare(trimmed, parts, display)
-    if (!hasImages && commands && parseCommandLine(trimmed)) commandRunner.run(trimmed)
-    else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed)
-    else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display)
-    else outbox.dispatch(message, parts, how)
-    view.requestRender()
-  }
-
-  /** Sends what the editor holds, as a key other than Enter asks: steering or queued. */
-  function submitDraft(how: WhileWorking) {
-    submit(editor.getText(), editor.getParts(), editor.getDisplayText(), how)
-  }
-
-  /**
-   * Runs a "$skill" line. No echo: the message the skill sends shows as typed, with a note of
-   * what it loaded; a failure shows on its own.
-   */
-  function runSkill(line: string) {
-    void commands!
-      .runSkill(line, { frontend: "tui", quit: () => quit(), openView: (v) => overlays.openView(v) })
-      .then(() => view.requestRender())
-  }
-
-  /**
-   * Runs a line an extension's input handler claimed (e.g. "@writer shorter, please" while a
-   * swarm runs), at once, even during a turn. It shows as typed; the model never gets it.
-   */
-  function runInput(line: string, display?: string) {
-    view.commandEcho(display ?? line)
-    void commands!
-      .runInput(line, { frontend: "tui", quit: () => quit(), openView: (v) => overlays.openView(v) })
-      .then(() => view.requestRender())
-  }
-
   /** Shows this session's boundary and history; switched full-screen sessions start afresh. */
   function showSession(a: Agent, switched: boolean) {
     const displays = displayHistory(a)
@@ -777,7 +709,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         ? contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings, mode === "fullscreen"))
         : e
     if (dockEvent && overlays.handleDockInput(view.dockInput?.(dockEvent) ?? dockEvent)) return redraw()
-    const dialog = overlays.dialogs[0]
+    // Fullscreen extension views keep pending dialogs behind their visible composer.
+    const dialog = overlays.hasFullscreen ? undefined : overlays.dialogs[0]
     if (!dialog) composer.prepareInput(e)
     if (keys.is(e, "redraw")) {
       // Also over a dialog or the search: they are part of the screen.
@@ -805,11 +738,11 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // Paste or prompt history handled the input.
     } else if (keys.is(e, "queue")) {
       // Alt+Enter or Ctrl+Q: the other of what Enter does while a turn runs.
-      submitDraft(otherWay(enterDoes))
+      submission.submitDraft(otherWay(enterDoes))
     } else if (keys.is(e, "submit.steer")) {
-      submitDraft("steer")
+      submission.submitDraft("steer")
     } else if (keys.is(e, "submit.queue")) {
-      submitDraft("queue")
+      submission.submitDraft("queue")
     } else if (keys.is(e, "cancel")) {
       composer.cancelClipboard()
       if (commandRunner.cancel()) {
@@ -883,14 +816,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   if (agent.messages.length || displayHistory(agent).length) showSession(agent, false)
   for (const e of opts.startupEvents ?? []) onEvent(e)
   // With no provider yet, a welcome card with the steps to a first message replaces the notice.
-  const welcome = isNoModel(agent.model) && noProviders()
+  const welcome = isNoModel(agent.model) && submission.noProviders()
   if (welcome) view.notice("info", welcomeCard())
   // A notice about something else (a broken settings file, say) still shows under the card.
   if (opts.notice && !(welcome && opts.notice.startsWith("No providers"))) view.notice("warning", opts.notice)
   // The first frame carries the banner, history and startup messages.
   view.start()
   if (opts.resumePicker) resumeAtStartup({ run: commandRunner.run, agent: () => agent, quit })
-  else if (opts.initialPrompt?.trim()) submit(opts.initialPrompt)
+  else if (opts.initialPrompt?.trim()) submission.submit(opts.initialPrompt)
   if (leftoverInput) reader.feed(leftoverInput)
 
   return exited
