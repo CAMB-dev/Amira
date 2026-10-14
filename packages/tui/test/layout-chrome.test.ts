@@ -1,3 +1,5 @@
+// Snapshot update: intact typing borders and a separate status row shift the transcript viewport.
+// A/C/D/F deliberate oracles: shared grid and right edge, reference roles, · separators, independent truecolor shimmer cadence.
 import { expect, spyOn, test } from "bun:test"
 import { textResult } from "@amira/api"
 import {
@@ -31,7 +33,7 @@ const info = {
 
 test("header aligns workspace/title and cost/context at opposite edges", () => {
   const row = headerLine(info, 100, plain)
-  expect(row).toBe(` ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(33)}$0.42  │  124K / 200K `)
+  expect(row).toBe(`  ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(33)}$0.42  ·  124K / 200K`)
   expect(visibleWidth(row)).toBe(100)
 })
 
@@ -82,8 +84,8 @@ const status = {
 
 test("turn status is one row with capitalized ellipsis label and right-aligned stats", () => {
   const row = activityRow(status, 100, plain)
-  expect(row).toContain(" ⠋ Responding… 4.1s")
-  expect(row.endsWith("1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop ")).toBe(true)
+  expect(row).toContain("⠋ Responding… 4.1s")
+  expect(row.endsWith("1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop")).toBe(true)
   expect(visibleWidth(row)).toBe(100)
   for (const width of [1, 12, 24, 40, 80])
     expect(visibleWidth(activityRow(status, width, plain))).toBeLessThanOrEqual(width)
@@ -136,13 +138,17 @@ test("depth 256 quantizes shimmer; 16, terminal and NO_COLOR do not animate", ()
   }
 })
 
-test("input bottom label is right aligned inside the rounded border", () => {
+test("input status is right aligned below the intact rounded border", () => {
   const box = new InputBox(new Editor({ prompt: "› " }), () => [
     { id: "model", text: "claude-opus-5-5 (high) · ask", align: "right", tone: "accent", priority: 40 },
   ])
   const rows = box.render(80, plain)
   expect(rows[0]).toBe(`╭${"─".repeat(78)}╮`)
-  expect(rows[2]).toBe(`╰─${"─".repeat(46)} claude-opus-5-5 (high) · ask ─╯`)
+  expect(stripAnsi(rows[1]!)).toMatch(/^│› +│$/)
+  expect(rows[2]).toBe(`╰${"─".repeat(78)}╯`)
+  expect(rows[3]).toBe(
+    `${" ".repeat(80 - visibleWidth("claude-opus-5-5 (high) · ask"))}claude-opus-5-5 (high) · ask`,
+  )
   expect(rows.every((row) => visibleWidth(row) === 80)).toBe(true)
 })
 
@@ -244,7 +250,7 @@ test("current step clocks restart for repeated compactions and retry attempts", 
   }
 })
 
-test("stream redraws do not animate faster than spinner frames", () => {
+test("truecolor shimmer advances independently of the 80ms spinner", () => {
   let now = 1000
   const clock = spyOn(Date, "now").mockImplementation(() => now)
   try {
@@ -265,13 +271,13 @@ test("stream redraws do not animate faster than spinner frames", () => {
     }
     const first = label()
     now += 40
-    expect(label()).toBe(first)
+    expect(label()).not.toBe(first)
     now += 40
     spinner.tick()
     const next = label()
     expect(next).not.toBe(first)
     now += 40
-    expect(label()).toBe(next)
+    expect(label()).not.toBe(next)
   } finally {
     clock.mockRestore()
   }
@@ -279,20 +285,20 @@ test("stream redraws do not animate faster than spinner frames", () => {
 
 test("narrow status drops the step clock, then rate and tokens before cutting its label", () => {
   const fifty = activityRow(status, 50, plain)
-  expect(fifty).toContain(" ⠋ Responding…")
+  expect(fifty).toContain("⠋ Responding…")
   expect(fifty).not.toContain("4.1s")
   expect(fifty).not.toContain("tok/s")
   expect(fifty).toContain("⇣12.4k")
-  expect(fifty).toEndWith("1m20s  ⇣12.4k   esc stop ")
+  expect(fifty).toEndWith("1m20s  ⇣12.4k   esc stop")
   const forty = activityRow(status, 40, plain)
-  expect(forty).toContain(" ⠋ Responding…")
+  expect(forty).toContain("⠋ Responding…")
   expect(forty).not.toContain("4.1s")
   expect(forty).toContain("⇣12.4k")
-  expect(forty).toEndWith("1m20s  ⇣12.4k   esc stop ")
-  const thirtyNine = activityRow(status, 39, plain)
-  expect(thirtyNine).not.toContain("⇣")
-  expect(thirtyNine).toEndWith("1m20s   esc stop ")
-  for (const width of [39, 40, 50]) expect(visibleWidth(activityRow(status, width, plain))).toBe(width)
+  expect(forty).toEndWith("1m20s  ⇣12.4k   esc stop")
+  const thirtySeven = activityRow(status, 37, plain)
+  expect(thirtySeven).not.toContain("⇣")
+  expect(thirtySeven).toEndWith("1m20s   esc stop")
+  for (const width of [37, 40, 50]) expect(visibleWidth(activityRow(status, width, plain))).toBe(width)
 })
 
 test("status truncates the bare label before adding exactly one ellipsis", () => {

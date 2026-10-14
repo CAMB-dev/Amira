@@ -10,6 +10,7 @@ import {
 import { stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { timestampIn } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
+import { markerPrefix } from "../grid.ts"
 import { childrenOf, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
 import { type CopyRow, chromeRows, sliceCells } from "../text-selection.ts"
 import {
@@ -168,7 +169,7 @@ export class ToolBlock extends Block {
       const text = `${plural(own, "sub-agent")}${nested ? ` (+${nested} nested)` : ""}${running ? ` · ${running} running` : ""}`
       rows = [
         truncateToWidth(
-          `  ${theme.muted(glyphs.treeLast)} ${running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(text)}`,
+          `${markerPrefix(theme.muted(glyphs.treeLast))}${running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(text)}`,
           treeWidth,
           glyphs.more,
         ),

@@ -1,5 +1,6 @@
+// A/B deliberate oracles: fill-only code surfaces and top-level quote gutters; exact code copy remains source-faithful.
 import { expect, test } from "bun:test"
-import { bg256, defaultGlyphs, type Glyphs, stripAnsi, visibleWidth } from "@amira/tui-kit"
+import { bg256, defaultGlyphs, defaultTheme, type Glyphs, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import type { BlockEnv } from "../src/blocks/base.ts"
 import { codeFrames, ReplyBlock } from "../src/blocks/reply.ts"
@@ -48,14 +49,14 @@ test("code-first replies keep their full surface inside the reply inset instead 
     const e = { ...env(ascii), theme }
     for (const lines of [reply.lines(e), reply.printLines(e)]) {
       expect(lines.map(stripAnsi)).toEqual([
-        `${glyphs.assistant}+- ts${"-".repeat(16)}+`,
-        `${glyphs.assistant}| x${" ".repeat(18)}|`,
-        `${glyphs.assistant}|${" ".repeat(20)}|`,
-        `${glyphs.assistant}+${"-".repeat(20)}+`,
+        "                      ts",
+        "  x                     ",
+        "                        ",
+        "                        ",
       ])
       for (const row of lines) {
         expect(visibleWidth(row)).toBe(24)
-        expect(row).toStartWith(`${glyphs.assistant}\x1b[48;5;234m`)
+        expect(row).toStartWith(`\x1b[48;5;234m${glyphs.assistant}`)
         expect(row).toEndWith("\x1b[49m")
       }
     }
@@ -112,8 +113,8 @@ for (const quoteBar of ["|", "[", ".*"]) {
       const nested = rows.findIndex((row) => row.includes("nested"))
       expect(quoted).toBeGreaterThanOrEqual(0)
       expect(nested).toBeGreaterThanOrEqual(0)
-      expect(copied[quoted]!.from).toBe(2 + visibleWidth(quoteBar) + 1)
-      expect(copied[nested]!.from).toBe(2 + 2 * (visibleWidth(quoteBar) + 1))
+      expect(copied[quoted]!.from).toBe(visibleWidth(quoteBar) + 1)
+      expect(copied[nested]!.from).toBe(2 * (visibleWidth(quoteBar) + 1))
       pane.selectText(
         { block: reply, line: 0, col: 0 },
         { block: reply, line: rows.length - 1, col: Number.POSITIVE_INFINITY },
@@ -141,9 +142,9 @@ test("code frames keep display columns separate from surrogate glyph character o
     pane.add(reply)
     pane.render(e, 20)
     const frame = pane.codeBlocks(reply)[0]!
-    const prefix = `${glyphs.assistant}${markdownGlyphs.codeSide} `
+    const prefix = glyphs.assistant
     expect(frame.col).toBe(visibleWidth(prefix))
-    expect(frame.textCol).toBe(prefix.length)
+    expect(frame.textCol ?? frame.col).toBe(prefix.length)
     expect(frame.textCol).not.toBe(frame.col)
     expect(stripAnsi(pane.lines(reply, e)[frame.rows[0]!]!).startsWith(prefix)).toBe(true)
     const copied = reply.copyRows(pane.plain(reply, e), pane.lines(reply, e))
@@ -182,10 +183,50 @@ test("copy rows retain the glyphs used for rendering after the assistant prefix 
     glyphs.assistant = "different"
     const copied = reply.copyRows(rows, lines)
     expect(copied[0]!.skip).toBe(true)
-    expect(copied[1]).toEqual({ from: 4, to: 8, exact: "code" })
+    expect(copied[1]).toEqual({ from: 2, to: 6, exact: "code" })
     const quote = rows.findIndex((row) => row.includes("quoted"))
-    expect(copied[quote]!.from).toBe(4)
+    expect(copied[quote]!.from).toBe(2)
   } finally {
     glyphs.assistant = assistant
   }
+})
+
+for (const source of ["\nconst a = 'a long line that wraps across rows'", "\n\nvalue", "\n", ""]) {
+  for (const streaming of [false, true]) {
+    test(`unlabelled surface preserves blank code provenance (${streaming ? "streaming" : "finished"}, ${JSON.stringify(source)})`, () => {
+      for (const theme of [plain.theme, { ...defaultTheme, codeBg: bg256(234) }]) {
+        for (const width of [16, 24, 60]) {
+          const reply = new ReplyBlock(`\`\`\`\n${source}${source ? "\n" : ""}\`\`\``, streaming, false)
+          const pane = new TranscriptPane()
+          pane.add(reply)
+          const e = { ...env(defaultGlyphs, width), theme }
+          pane.render(e, 30)
+          expect(pane.codeBlocks(reply)).toHaveLength(1)
+          pane.select(reply)
+          expect(pane.selectCode(0)).toBe(true)
+          expect(pane.codeText()).toBe(source)
+        }
+      }
+    })
+  }
+}
+
+test("surface provenance follows the original tilde fence, not backticks inside its code", () => {
+  const reply = new ReplyBlock("~~~\n```\nvalue\n~~~", false, false)
+  const pane = new TranscriptPane()
+  pane.add(reply)
+  pane.render(env(defaultGlyphs), 30)
+  expect(pane.codeBlocks(reply)).toHaveLength(1)
+  pane.select(reply)
+  expect(pane.selectCode(0)).toBe(true)
+  expect(pane.codeText()).toBe("```\nvalue")
+})
+
+test("ordinary text identical to code cannot extend a code surface boundary", () => {
+  const text = "abcdefghijklmnopqrstuv"
+  const reply = new ReplyBlock(`\`\`\`ts\n${text}\n\`\`\`\n\n${text}`, false, false)
+  const pane = new TranscriptPane()
+  pane.add(reply)
+  pane.render(env(defaultGlyphs), 30)
+  expect(pane.codeBlocks(reply)).toEqual([{ top: 0, bottom: 2, rows: [1], col: 2 }])
 })

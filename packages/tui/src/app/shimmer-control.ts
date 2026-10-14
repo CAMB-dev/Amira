@@ -8,15 +8,9 @@ import type {
   ThemeDefinition,
 } from "@amira/api"
 import { normalizeShimmer, resolveShimmer, SHIMMER_PRESETS } from "@amira/core"
-import {
-  bold,
-  type InputEvent,
-  type RenderContext,
-  type Theme,
-  truncateToWidth,
-  underline,
-} from "@amira/tui-kit"
+import { bold, type InputEvent, type RenderContext, type Theme, underline } from "@amira/tui-kit"
 import { Dialog } from "../dialog.ts"
+import { dialogFrame } from "../dialog-frame.ts"
 import { glyphs } from "../glyphs.ts"
 import { type Keybindings, keyLabel } from "../keybindings.ts"
 
@@ -102,9 +96,7 @@ export class ShimmerControl {
           : theme.muted(underline(bold(variant)))
         : theme.muted(variant),
     )
-    const appearanceLabel = appearanceFocused
-      ? accent(`${glyphs.choice} Appearance: `)
-      : theme.muted("Appearance: ")
+    const appearanceLabel = appearanceFocused ? accent("Appearance: ") : theme.muted("Appearance: ")
     const effect = resolveShimmer(this.deps.definition()?.shimmerEffect)
     const inherited =
       PRESETS.find((preset) =>
@@ -112,8 +104,9 @@ export class ShimmerControl {
       ) ?? effect.style
     const label = this.preset === "theme" ? `theme (${inherited})` : this.preset
     const shimmer = `Shimmer: ${label}`
-    return `${appearanceLabel}${variants.join(separator)}${separator}${
-      this.focus === "shimmer" ? accent(`${glyphs.choice} ${shimmer}`) : theme.muted(shimmer)
+    const marker = this.focus === "list" ? "" : accent(`${glyphs.choice} `)
+    return `${marker}${appearanceLabel}${variants.join(separator)}${separator}${
+      this.focus === "shimmer" ? accent(shimmer) : theme.muted(shimmer)
     }`
   }
 
@@ -226,10 +219,13 @@ export class ShimmerControl {
       `${this.colorName(normalized?.colors)}${pair ? ` (${pair.join(" → ")})` : ""}`,
     ]
     const rows = KNOBS.map((key, index) => {
-      const text = `${index === this.knob ? glyphs.choice : " "} ${key}: ${values[index]}`
-      return index === this.knob ? theme.accent(text) : theme.muted(text)
+      const text = `${key}: ${values[index]}`
+      return index === this.knob
+        ? `${theme.accent(glyphs.choice)} ${theme.text(text)}`
+        : `  ${theme.muted(text)}`
     })
-    const room = Math.max(1, maxRows - 2)
+    // Reserve title, interior hint and bottom edge before choosing the visible knob window.
+    const room = Math.max(1, maxRows - 3)
     const start = Math.max(0, Math.min(this.knob, rows.length - room))
     const choose = this.deps.keys.label("dialog.choose")?.toLowerCase()
     const cancel = this.deps.keys.label("dialog.cancel")?.toLowerCase()
@@ -240,13 +236,15 @@ export class ShimmerControl {
       cancel && `${cancel} restores`,
     ]
       .filter(Boolean)
-      .join(" · ")
-    return [theme.accent("Customize shimmer"), ...rows.slice(start, start + room), theme.muted(hint)]
-      .slice(0, Math.max(1, maxRows))
-      .map(
-        (row) =>
-          `${theme.accent(glyphs.dialogBar)} ${truncateToWidth(row, Math.max(1, width - 2), glyphs.more)}`,
-      )
+      .join(` ${glyphs.separator} `)
+    return dialogFrame(
+      bold(theme.text("Customize shimmer")),
+      [...rows.slice(start, start + room), theme.muted(hint)],
+      width,
+      ctx,
+      theme.accent,
+      maxRows,
+    )
   }
 }
 

@@ -38,6 +38,8 @@ export interface BottomArea {
 export interface BottomAreaDeps {
   agent: () => Agent
   activity: () => TurnActivity
+  /** The activity row survived the final bottom-aligned viewport budget. */
+  activityVisible?: (visible: boolean, ctx: RenderContext) => void
   themePreview?: () => boolean
   view: () => Pick<TranscriptView, "runningTools" | "capturing">
   noticeStrip: () => NoticeStrip
@@ -67,12 +69,14 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   const { editor, keys, reaches, enterDoes, spinner, search, popups, filePicker } = deps
   /** The list shown below the input box, if any, with its key hint. */
   const inputList = ():
-    | { lines: (width: number, ctx: RenderContext) => string[]; hint: () => HintItems }
+    | { lines: (width: number, ctx: RenderContext, maxRows: number) => string[]; hint: () => HintItems }
     | undefined => {
-    if (search.active) return { lines: (w, ctx) => search.render(w, ctx), hint: searchHint }
+    if (search.active)
+      return { lines: (w, ctx, maxRows) => (maxRows > 0 ? search.render(w, ctx) : []), hint: searchHint }
     const popup = popups.find((p) => p.visible)
-    if (popup) return { lines: (w, ctx) => popup.render(w, ctx), hint: popupHint }
-    if (filePicker.visible) return { lines: (w, ctx) => filePicker.render(w, ctx), hint: fileHint }
+    if (popup) return { lines: (w, ctx, maxRows) => popup.render(w, ctx, maxRows), hint: popupHint }
+    if (filePicker.visible)
+      return { lines: (w, ctx, maxRows) => filePicker.render(w, ctx, maxRows), hint: fileHint }
     return undefined
   }
   const newlineKey = keys.label("newline", reaches)
@@ -105,6 +109,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   const inputBox = new InputBox(editor, statusItems)
   /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
   let dialogRows = 0
+  let composerRows = 0
   /** The user folded the live panels to one line each (panels.toggle). */
   let panelsCollapsed = false
   /** Whether the last frame showed a panel: only then does the fold key act. */
@@ -115,6 +120,10 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let panelRows = 0
   /** The most rows the list below the input had since it opened (full screen keeps them). */
   let listRows = 0
+  let listRoom = Number.POSITIVE_INFINITY
+  let showHint = true
+  let bottomBudget = Number.POSITIVE_INFINITY
+  let interactiveStart = 0
 
   /** The panels' rows; unfolded, a blank row sets each panel apart from the one before. */
   const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
@@ -132,19 +141,33 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       .filter((rows) => rows.length > 0)
       .flatMap((rows, i) => (i > 0 && !collapsed ? ["", ...rows] : rows))
 
+  let activityRows: string[] = []
   let dockRoom = 0
   const dock = new View((width, ctx) => deps.renderDock?.(width, ctx, dockRoom) ?? [])
+  const inputRegion = new View((width, ctx) => {
+    const dialog = deps.dialogs()[0]
+    if (!dialog) {
+      const rows = inputBox.render(width, ctx)
+      composerRows = rows.length
+      return rows
+    }
+    const lines = dialog.render(width, ctx)
+    dialogRows = lines.length
+    return [...lines, ...(bottomBudget > 1 ? statusLine(statusItems(), width, ctx) : [])]
+  })
   const bottom = [
     new View((width, ctx) => (deps.mode() === "inline" ? (deps.header?.(width, ctx) ?? []) : [])),
     // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
     // They give way to everything else under the transcript: folded, then cut, when rows are short.
     new View((width, ctx) => {
-      let lines = panelRoom < 2 ? [] : panelLines(width, ctx, panelsCollapsed)
+      let lines = panelRoom < 1 ? [] : panelLines(width, ctx, panelsCollapsed)
       if (!panelsCollapsed && lines.length + 1 > panelRoom) lines = panelLines(width, ctx, true)
-      if (lines.length + 1 > panelRoom) lines = lines.slice(0, Math.max(0, panelRoom - 1))
+      if (lines.length > panelRoom) lines = lines.slice(0, Math.max(0, panelRoom))
       panelsShown = lines.length > 0
-      panelRows = panelsShown ? lines.length + 1 : 0
-      return panelsShown ? [...lines, ""] : []
+      // An intact composer already separates a one-row folded panel on a short screen.
+      const gap = panelsShown && lines.length < panelRoom ? [""] : []
+      panelRows = panelsShown ? lines.length + gap.length : 0
+      return panelsShown ? [...lines, ...gap] : []
     }),
     new View((width, ctx) => [
       ...deps
@@ -165,7 +188,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     // the whole turn; running tools are counted here and named on their own rows. How to
     // interrupt stays on the row as well as the existing hint line.
     new View((width, ctx) => {
-      return deps.activity().render(width, ctx, {
+      activityRows = deps.activity().render(width, ctx, {
         running: deps.view().runningTools,
         waiting: deps.dialogs().length > 0 && !deps.themePreview?.(),
         preview: deps.themePreview?.(),
@@ -174,18 +197,12 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
           ? `${keyLabel({ name: "escape" })} close dock`
           : `${keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
       })
+      return activityRows
     }),
     // A live dock is immediately above the input, but never owns its editor or completion keys.
     dock,
-    // The input box carries the status in its bottom border. A dialog takes the box's place;
-    // the status then gets a line of its own under it.
-    new View((width, ctx) => {
-      const dialog = deps.dialogs()[0]
-      if (!dialog) return inputBox.render(width, ctx)
-      const lines = dialog.render(width, ctx)
-      dialogRows = lines.length
-      return [...lines, ...statusLine(statusItems(), width, ctx)]
-    }),
+    // Both composer and dialog keep their borders intact, with shared-edge status below.
+    inputRegion,
     // The command or skill list, file list or history search opens below the input box, in place of
     // the hint, so the box stays where it is while the list changes with each key. Full screen,
     // the bottom area is drawn up from the screen's last row: the list keeps the most rows it had
@@ -196,24 +213,27 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         listRows = 0
         return []
       }
-      const rows = list.lines(width, ctx)
+      const rows = list.lines(width, ctx, listRoom)
       if (deps.mode() === "fullscreen") {
-        listRows = Math.max(listRows, rows.length)
+        listRows = Math.min(listRoom, Math.max(listRows, rows.length))
         while (rows.length < listRows) rows.push("")
       }
-      return [...rows, ctx.theme.muted(fitHint(list.hint(), width))]
+      return [
+        ...rows,
+        ...(showHint ? [`  ${ctx.theme.muted(fitHint(list.hint(), Math.max(1, width - 2)))}`] : []),
+      ]
     }),
     // The key hint, or a note in its place. A find bar or block selection (full screen) shows
     // its own keys above the transcript: the row stays, blank, so the layout does not jump.
     new View((width, ctx) => {
-      if (deps.dialogs()[0] || inputList()) return []
+      if (!showHint || deps.dialogs()[0] || inputList()) return []
       const hintNote = deps.hintNote()
       if (hintNote && Date.now() < hintNote.until) {
-        return [ctx.theme.muted(truncateToWidth(hintNote.text, width, glyphs.more))]
+        return [`  ${ctx.theme.muted(truncateToWidth(hintNote.text, Math.max(1, width - 2), glyphs.more))}`]
       }
       if (deps.view().capturing) return [""]
       return [
-        ` ${fitHint(inputHint(ctx.theme), Math.max(0, width - 1), ctx.theme.muted(`  ${glyphs.treePipe}  `))}`,
+        `  ${fitHint(inputHint(ctx.theme), Math.max(0, width - 2), ctx.theme.muted(`  ${glyphs.separator}  `))}`,
       ]
     }),
   ]
@@ -227,8 +247,11 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const draw = () => {
       let afterDock = 0
       let passedDock = false
+      let total = 0
       const rows = parts.flatMap((c) => {
         const lines = c.render(width, ctx)
+        if (c === inputRegion) interactiveStart = total
+        total += lines.length
         if (passedDock) afterDock += lines.length
         if (c === dock) passedDock = true
         return lines
@@ -238,6 +261,10 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     }
     // First fit the ordinary bottom area, then give the dock only the rows it leaves.
     dockRoom = 0
+    listRoom = Number.POSITIVE_INFINITY
+    bottomBudget = budget
+    showHint = budget >= (inputList() ? 3 : 2)
+    inputBox.maxRows = Number.POSITIVE_INFINITY
     const dialog = deps.dialogs()[0]
     if (dialog) dialog.maxRows = Math.max(1, budget)
     panelRoom = Number.POSITIVE_INFINITY
@@ -256,11 +283,34 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       dialog.maxRows = Math.max(1, budget - (rest.length - dialogRows))
       rest = draw()
     }
+    if (!dialog && inputList() && rest.length > budget) {
+      // Keep a framed editor, one selected option and its hint before optional chrome.
+      const prefix = Math.min(interactiveStart, Math.max(0, budget - 6))
+      inputBox.maxRows = Math.max(1, budget - prefix - (showHint ? 1 : 0) - 1)
+      rest = draw()
+      listRoom = Math.max(0, budget - prefix - composerRows - (showHint ? 1 : 0))
+      listRows = Math.min(listRows, listRoom)
+      rest = draw()
+    }
+    if (!dialog && !inputList() && rest.length > budget) {
+      // Reserve the footer and all other bottom rows before sizing editor text.
+      inputBox.maxRows = Math.max(1, budget - (rest.length - composerRows))
+      rest = draw()
+    }
     if (deps.dock?.()) {
       dockRoom = Math.max(0, budget - rest.length)
       rest = draw()
     }
-    return rest
+    // Only optional rows above the interactive region may be clipped. Never choose
+    // editor/options/hints by tail slicing the whole bottom area.
+    const essential = rest.slice(interactiveStart)
+    const prefixRoom = Math.max(0, budget - essential.length)
+    const visible =
+      budget > 0
+        ? [...rest.slice(Math.max(0, interactiveStart - prefixRoom), interactiveStart), ...essential]
+        : []
+    deps.activityVisible?.(budget > 0 && activityRows.some((row) => visible.includes(row)), ctx)
+    return visible
   }
 
   /**

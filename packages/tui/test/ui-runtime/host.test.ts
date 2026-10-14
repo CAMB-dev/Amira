@@ -1,3 +1,4 @@
+// D deliberate snapshot: focused widget cursors consistently use › while preserving widget geometry.
 import { expect, test } from "bun:test"
 import type { UiControl, UiEvent, UiNode, UiState, ViewDefinition } from "@amira/api"
 import { CURSOR_MARKER, key, monoTheme, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"

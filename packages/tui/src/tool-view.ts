@@ -27,6 +27,7 @@ import {
 import { renderToolLines, type ToolLayoutLine, terminalText } from "./diff-view.ts"
 import { formatDuration, formatElapsed, stampRows, summarizeArgs, timestampRoom } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { CONTENT_INSET, MARKER_WIDTH, markerPrefix } from "./grid.ts"
 
 /** Where the TUI finds the presenter of a tool; the core's ToolRendererRegistry is one. */
 export interface PresenterSource {
@@ -105,10 +106,9 @@ function treeHead(theme: Theme, last = false): string {
 
 /** Internal rail prefix for a tool's sub-agent rows as well as its own output. */
 export function treeContinuation(theme: Theme, last = false): string {
-  const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
-  if (last) return " ".repeat(cells + 2)
+  if (last) return CONTENT_INSET
   const pipe = theme.muted(glyphs.treePipe)
-  return `  ${pipe}${" ".repeat(Math.max(0, cells - visibleWidth(pipe)))}`
+  return markerPrefix(pipe)
 }
 
 type Outcome = "done" | "failed" | "interrupted" | "blocked" | "unknownTool" | "invalidArgs"
@@ -265,11 +265,11 @@ function headLine(
   const right = opts.right ?? ""
   const reserved = right ? visibleWidth(right) + 2 : 0
   const fitsRight = right !== "" && width - reserved >= 12
-  const room = (fitsRight ? width - reserved : width) - visibleWidth(`  ${bullet} ${label} `)
+  const room = (fitsRight ? width - reserved : width) - visibleWidth(`${markerPrefix(bullet)}${label} `)
   const shown = summary && room >= 8 ? clipMiddle(summary, room) : summary
   const style = opts.muted ? theme.muted : (opts.summaryStyle ?? theme.text)
   const text = shown ? ` ${style(shown)}` : ""
-  const left = `  ${bullet} ${label}${text}`
+  const left = `${markerPrefix(bullet)}${label}${text}`
   if (!fitsRight) return truncateToWidth(left, width, glyphs.more)
   const cut = truncateToWidth(left, width - reserved, glyphs.more)
   return `${cut}${" ".repeat(Math.max(2, width - visibleWidth(cut) - visibleWidth(right)))}${right}`
@@ -389,7 +389,7 @@ export function finishedToolLines(
     }),
   ]
 
-  opts.onRow?.(0, 3 + Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast)))
+  opts.onRow?.(0, MARKER_WIDTH)
 
   let result: string
   /** The result line says what the presenter made of a call cut short. */
@@ -417,7 +417,7 @@ export function finishedToolLines(
       ? ` ${glyphs.separator} ${formatDuration(call.durationMs)}`
       : ""
   }${approval}`
-  const prefix = `${continuation}  `
+  const prefix = continuation
   const failed = outcome !== "done"
   let body: ToolLayoutLine[] = []
   if ((ran || cutShort) && detail !== "collapsed") {
@@ -508,7 +508,7 @@ export function finishedToolLines(
     cutBody(body, detail, failed),
     theme,
     Math.max(0, width - visibleWidth(continuation)),
-    "  ",
+    "",
     onWrap,
     onRow,
   )
@@ -552,8 +552,8 @@ export function runningToolLines(
           fallbackPresenter.running(call.args, call.partial),
         ).slice(-limit)
       : []
-  const prefix = `    ${theme.muted(glyphs.treePipe)} `
-  opts.onRow?.(0, visibleWidth(`  ${spinner} `))
+  const prefix = markerPrefix(theme.muted(glyphs.treePipe))
+  opts.onRow?.(0, visibleWidth(`${spinner} `))
   live.forEach((_, i) => {
     opts.onRow?.(i + 1, visibleWidth(prefix))
   })
@@ -655,7 +655,7 @@ export function exploredLine(
     byVerb.set(verb, (byVerb.get(verb) ?? 0) + 1)
   }
   const s = theme.muted(` ${glyphs.separator} `)
-  const lead = `  ${treeHead(theme, opts.last)} `
+  const lead = markerPrefix(treeHead(theme, opts.last))
   const tail = opts.expanded ? "" : `  ${theme.muted(glyphs.folded)}`
   const parts = [...byVerb].map(([verb, count]) => {
     const [label, noun, many] = Object.hasOwn(EXPLORATION_LABELS, verb)
@@ -680,7 +680,7 @@ export function exploredLines(
   // Do not hide a failed or otherwise ineligible call, even if a caller supplies one by mistake.
   const eligible = explored.length === calls.length
   if (eligible && !expanded) {
-    opts.onRow?.(0, 3 + Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast)))
+    opts.onRow?.(0, MARKER_WIDTH)
     return stampRows(
       [exploredLine(theme, explored, timestampRoom(width, opts.timestamp), opts)],
       theme,

@@ -1,3 +1,4 @@
+// A/C/D style oracles: root markers at 0, content at 2, logical two-cell child rails and muted chrome.
 import { expect, spyOn, test } from "bun:test"
 import { type ChildSession, defineTool, type SpawnGroup, textResult } from "@amira/api"
 import { closeImageApp, parallel, setup, waitFor } from "./app-harness.ts"
@@ -39,7 +40,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {5}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend · explorer · \d+s · 4\.1k tok\n {5}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\.ts\n {5}└ Add status bar test · coder · queued\n/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] US market trend · explorer · \d+s · 4\.1k tok\n {2}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\.ts\n {2}└ Add status bar test · coder · queued\n/m.exec(
         live(),
       )
     if (!match) return false
@@ -58,7 +59,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
     // Each one's rows became its end line, committed with the call right under its head, in order.
     expect(text).toMatch(
       new RegExp(
-        `^ {2}└ delegate {2}✓ trend is up \\(\\+1 line\\) · \\d+\\.\\ds +${firstReplyClock}\\n {5}├ ✓ US market trend · explorer · \\d+\\.\\ds · 4\\.1k tok\\n {5}└ ✓ Add status bar test · coder · \\d+\\.\\ds · 1\\.2k tok$`,
+        `^└ delegate {2}✓ trend is up \\(\\+1 line\\) · \\d+\\.\\ds +${firstReplyClock}\\n {2}├ ✓ US market trend · explorer · \\d+\\.\\ds · 4\\.1k tok\\n {2}└ ✓ Add status bar test · coder · \\d+\\.\\ds · 1\\.2k tok$`,
         "m",
       ),
     )
@@ -149,7 +150,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s {2}(\d{2}:\d{2})\n {2}└ delegate {2}✓ child answer\n {5}└ ✓ Look around · explorer · \d+\.\ds · 0 tok/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s {2}(\d{2}:\d{2})\n└ delegate {2}✓ child answer\n {2}└ ✓ Look around · explorer · \d+\.\ds · 0 tok/m.exec(
         live(),
       )
     if (!match) return false
@@ -162,7 +163,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   const text = all()
   expect(text).toMatch(
     new RegExp(
-      `^ {2}├ slow big\\.log {2}✓ slow result +${firstReplyClock}\\n {2}└ delegate {2}✓ child answer\\n {5}└ ✓ Look around · explorer · \\d+\\.\\ds · 0 tok$`,
+      `^├ slow big\\.log {2}✓ slow result +${firstReplyClock}\\n└ delegate {2}✓ child answer\\n {2}└ ✓ Look around · explorer · \\d+\\.\\ds · 0 tok$`,
       "m",
     ),
   )
@@ -191,7 +192,7 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {2}│ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] First pass · explorer · \d+s · 0 tok\n {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Second pass · explorer · \d+s · 0 tok$/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] First pass · explorer · \d+s · 0 tok\n[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Second pass · explorer · \d+s · 0 tok$/m.exec(
         live(),
       )
     if (!match) return false
@@ -202,7 +203,7 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   await idle()
   expect(all()).toMatch(
     new RegExp(
-      `^ {2}├ delegate {2}✓ one +${firstReplyClock}\\n {2}│ {2}└ ✓ First pass · explorer · \\d+\\.\\ds · 0 tok\\n {2}└ delegate {2}✓ two\\n {5}└ ✓ Second pass · explorer · \\d+\\.\\ds · 0 tok$`,
+      `^├ delegate {2}✓ one +${firstReplyClock}\\n│ └ ✓ First pass · explorer · \\d+\\.\\ds · 0 tok\\n└ delegate {2}✓ two\\n {2}└ ✓ Second pass · explorer · \\d+\\.\\ds · 0 tok$`,
       "m",
     ),
   )
@@ -226,7 +227,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Outer task · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Inner check · explorer · \d+s · 0 tok\n/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Outer task · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Inner check · explorer · \d+s · 0 tok\n/m.exec(
         live(),
       )
     if (!match) return false
@@ -237,7 +238,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await idle()
   expect(all()).toMatch(
     new RegExp(
-      `^ {2}└ delegate {2}✓ outer done · \\d+\\.\\ds +${firstReplyClock}\\n {5}└ ✓ Outer task · explorer · \\d+\\.\\ds · 0 tok\\n {7}└ ✓ Inner check · explorer · \\d+\\.\\ds · 0 tok$`,
+      `^└ delegate {2}✓ outer done · \\d+\\.\\ds +${firstReplyClock}\\n {2}└ ✓ Outer task · explorer · \\d+\\.\\ds · 0 tok\\n {4}└ ✓ Inner check · explorer · \\d+\\.\\ds · 0 tok$`,
       "m",
     ),
   )
@@ -312,7 +313,7 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
     tree: true,
     onWrite: (screen) => {
       firstReplyClock ||=
-        /^ {2}└ launch {2}✓ Started in the background +(\d{2}:\d{2})$/m.exec(screen.text)?.[1] ?? ""
+        /^└ launch {2}✓ Started in the background +(\d{2}:\d{2})$/m.exec(screen.text)?.[1] ?? ""
     },
   })
   const gate = new Promise<void>((r) => {
@@ -348,10 +349,10 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   await idle()
   // The call is committed; its sub-agent runs on in the live region.
   expect(firstReplyClock).toMatch(/^\d{2}:\d{2}$/)
-  expect(all()).toMatch(new RegExp(`^ {2}└ launch {2}✓ Started in the background +${firstReplyClock}$`, "m"))
+  expect(all()).toMatch(new RegExp(`^└ launch {2}✓ Started in the background +${firstReplyClock}$`, "m"))
   await waitFor(
     () =>
-      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] launch · 1 sub-agent · running in background · \d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(
+      /^└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] launch · 1 sub-agent · running in background · \d+s\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(
         live(),
       ),
     "background rows",
@@ -422,7 +423,7 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   await idle()
   await waitFor(
     () =>
-      /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] flow · 3 sub-agents · running in background · \d+s\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/3 agents\n/m.test(
+      /^└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] flow · 3 sub-agents · running in background · \d+s\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/3 agents\n/m.test(
         live(),
       ),
     "one line for the group",
@@ -482,17 +483,17 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await s.shows("Started group")
       await waitFor(
         () =>
-          /^ {2}└ ([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) in the background\n {5}└ \1 workflow demo · Explore · 0\/1 agents$/m.test(
+          /^└ ([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) in the background\n {2}└ \1 workflow demo · Explore · 0\/1 agents$/m.test(
             s.live(),
           ),
         "the background tree",
       )
-      expect(s.live().match(/^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] in the background$/gm)).toHaveLength(1)
+      expect(s.live().match(/^└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] in the background$/gm)).toHaveLength(1)
       expect(s.live().match(/workflow demo/g)).toHaveLength(1)
       expect(s.live()).not.toContain("Scan api")
       if (mode === "inline") {
         expect(s.live()).toMatch(
-          /^ {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/1 agents\n\n \/work\/proj /m,
+          /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0\/1 agents\n\n {2}\/work\/proj /m,
         )
       }
       release()
@@ -504,7 +505,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         await waitFor(() => !s.live().includes("workflow demo"), "the group gone")
       } else {
         await waitFor(
-          () => /^ {2}└ ✓ in the background\n {5}└ ✓ workflow demo · Explore · 0\/1 agents$/m.test(s.live()),
+          () => /^└ ✓ in the background\n {2}└ ✓ workflow demo · Explore · 0\/1 agents$/m.test(s.live()),
           "the ended background tree",
         )
       }
@@ -533,11 +534,11 @@ test("inline: commands and streaming replies leave one blank row above the metad
     s.terminal.send("/print\r")
     await s.shows("Command output")
     await s.idle()
-    expect(s.all()).toMatch(/^ {2}└ Command output\n\n \/work\/proj /m)
+    expect(s.all()).toMatch(/^└ Command output\n\n {2}\/work\/proj /m)
     s.terminal.send("go\r")
     await waitFor(() => s.live().includes("Streaming reply"), "the streaming reply")
     expect(s.agent.status).not.toBe("idle")
-    expect(s.live()).toMatch(/^ {2}Streaming reply[^\n]*\n\n \/work\/proj /m)
+    expect(s.live()).toMatch(/^ {2}Streaming reply[^\n]*\n\n {2}\/work\/proj /m)
     release()
     await s.idle()
   } finally {

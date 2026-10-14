@@ -1,3 +1,4 @@
+// A/C/D style oracles: root markers at 0, content at 2, logical two-cell child rails and muted chrome.
 import { expect, test } from "bun:test"
 import { defineTool, textResult } from "@amira/api"
 import { monoTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
@@ -34,14 +35,14 @@ test("live previews share six rows, keep every head, and search/copy/selection s
   const calls = [tool(1), tool(2), tool(3)]
   for (const call of calls) pane.add(call)
   const rows = pane.render(env, 16).map(stripAnsi)
-  expect(rows.filter((row) => row.startsWith("  ⠋ Running"))).toHaveLength(3)
-  expect(rows.filter((row) => row.startsWith("    │ "))).toEqual([
-    "    │ 1-latest",
-    "    │ 1-tail",
-    "    │ 2-latest",
-    "    │ 2-tail",
-    "    │ 3-latest",
-    "    │ 3-tail",
+  expect(rows.filter((row) => row.startsWith("⠋ Running"))).toHaveLength(3)
+  expect(rows.filter((row) => row.startsWith("│ "))).toEqual([
+    "│ 1-latest",
+    "│ 1-tail",
+    "│ 2-latest",
+    "│ 2-tail",
+    "│ 3-latest",
+    "│ 3-tail",
   ])
   pane.find("1-tail")
   expect(pane.matchCount).toBe(1)
@@ -94,9 +95,9 @@ test("running previews use the muted pipe even for a last call, fit narrow width
         expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true)
         if (width === 100)
           expect(rows.slice(1).map(stripAnsi)).toEqual([
-            `    ${pipe} 1-earlier`,
-            `    ${pipe} 1-latest`,
-            `    ${pipe} 1-tail`,
+            `${pipe} 1-earlier`,
+            `${pipe} 1-latest`,
+            `${pipe} 1-tail`,
           ])
       }
     }
@@ -115,7 +116,7 @@ test("running previews use the muted pipe even for a last call, fit narrow width
   call.touch()
   boundary.update([call])
   expect(pane.render(env, 10).join("\n")).not.toContain("───")
-  expect(pane.plain(call, env)[0]).toStartWith("  └ Ran check-1")
+  expect(pane.plain(call, env)[0]).toStartWith("└ Ran check-1")
 })
 
 test("/agents host renderer uses the same heads, pipes, total cap and transient rule", () => {
@@ -151,14 +152,14 @@ test("/agents host renderer uses the same heads, pipes, total cap and transient 
   )
   const ctx = { theme: monoTheme, color: false, rows: 30 }
   const rows = viewer.render(100, ctx).map(stripAnsi)
-  expect(rows.filter((row) => row.startsWith("  ⠋ Running"))).toHaveLength(3)
-  expect(rows.filter((row) => row.startsWith("    │ "))).toEqual([
-    "    │ 1-latest",
-    "    │ 1-tail",
-    "    │ 2-latest",
-    "    │ 2-tail",
-    "    │ 3-latest",
-    "    │ 3-tail",
+  expect(rows.filter((row) => row.startsWith("⠋ Running"))).toHaveLength(3)
+  expect(rows.filter((row) => row.startsWith("│ "))).toEqual([
+    "│ 1-latest",
+    "│ 1-tail",
+    "│ 2-latest",
+    "│ 2-tail",
+    "│ 3-latest",
+    "│ 3-tail",
   ])
   const rule = rows.indexOf("  ───")
   expect(rows.slice(rule - 1, rule + 2)).toEqual(["", "  ───", ""])
@@ -166,7 +167,7 @@ test("/agents host renderer uses the same heads, pipes, total cap and transient 
   const finished = viewer.render(100, ctx).map(stripAnsi)
   expect(finished).not.toContain("  ───")
   expect(finished.join("\n")).not.toContain("-tail")
-  expect(finished).toContain("  └ Ran check-3  ✓ done")
+  expect(finished).toContain("└ Ran check-3  ✓ done")
 })
 
 test("/agents long commands leave two cells before elapsed time and finished results retain their rail", () => {
@@ -203,7 +204,7 @@ test("/agents long commands leave two cells before elapsed time and finished res
   done = true
   const finished = viewer.render(80, ctx).map(stripAnsi)
   expect(finished.find((row) => row.includes("Ran"))).not.toContain("✓")
-  expect(finished).toContain("  │  ✓ 1 line · 17.6s")
+  expect(finished).toContain("│ ✓ 1 line · 17.6s")
   expect(finished.every((row) => visibleWidth(row) <= 80)).toBe(true)
 })
 
@@ -253,8 +254,8 @@ test("/agents and fullscreen give one streaming call three rows beside two silen
     {},
     { now: () => 4000, presenters: env.presenters },
   )
-  const liveRows = (rows: string[]) => rows.map(stripAnsi).filter((row) => row.startsWith("    │ "))
-  const expected = ["    │ 2-earlier", "    │ 2-latest", "    │ 2-tail"]
+  const liveRows = (rows: string[]) => rows.map(stripAnsi).filter((row) => row.startsWith("│ "))
+  const expected = ["│ 2-earlier", "│ 2-latest", "│ 2-tail"]
   expect(liveRows(viewer.render(100, { theme: monoTheme, color: false, rows: 30 }))).toEqual(expected)
   expect(liveRows(pane.render(env, 16))).toEqual(expected)
 })
@@ -335,8 +336,8 @@ for (const mode of ["fullscreen", "inline"] as const) {
         s
           .live()
           .split("\n")
-          .filter((row) => row.startsWith("    │ ")),
-      ).toEqual(["    │ 2-earlier", "    │ 2-latest", "    │ 2-tail"])
+          .filter((row) => row.startsWith("│ ")),
+      ).toEqual(["│ 2-earlier", "│ 2-latest", "│ 2-tail"])
       for (const release of releases) release()
       await s.shows("After the checks.")
       await s.idle()
@@ -378,20 +379,20 @@ for (const mode of ["fullscreen", "inline"] as const) {
       expect(
         rows.filter((row) => /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/.test(row) && row.includes("stream check-")),
       ).toHaveLength(3)
-      expect(rows.filter((row) => row.startsWith("    │ "))).toEqual([
-        "    │ 1-latest",
-        "    │ 1-tail",
-        "    │ 2-latest",
-        "    │ 2-tail",
-        "    │ 3-latest",
-        "    │ 3-tail",
+      expect(rows.filter((row) => row.startsWith("│ "))).toEqual([
+        "│ 1-latest",
+        "│ 1-tail",
+        "│ 2-latest",
+        "│ 2-tail",
+        "│ 3-latest",
+        "│ 3-tail",
       ])
       for (const release of releases) release()
       await s.shows("After the checks.")
       await s.idle()
       expect(s.all()).not.toContain("-tail")
       expect(s.all().split("\n")).not.toContain("  ───")
-      expect(s.all()).toContain("  └ stream check-3  ✓ finished-3")
+      expect(s.all()).toContain("└ stream check-3  ✓ finished-3")
     } finally {
       for (const release of releases) release()
       await closeImageApp(s)

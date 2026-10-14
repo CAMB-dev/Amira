@@ -125,8 +125,10 @@ export async function readClipboard(opts: ClipboardOptions): Promise<ClipboardCo
       cwd: opts.cwd,
       env: opts.env,
       stdoutOnly: true,
-      timeoutMs: 5000,
-      signal: opts.signal ?? AbortSignal.timeout(6000),
+      timeoutMs: 15000,
+      signal: opts.signal
+        ? AbortSignal.any([opts.signal, AbortSignal.timeout(16000)])
+        : AbortSignal.timeout(16000),
     })
     if (r.timedOut || r.aborted || !r.settled) throw new Error("Clipboard read timed out or was interrupted.")
     return r

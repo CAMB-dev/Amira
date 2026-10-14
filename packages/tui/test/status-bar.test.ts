@@ -1,3 +1,4 @@
+// A deliberate oracles: text starts at content column2; recovered gutter cell shifts fitting thresholds by one.
 import { expect, test } from "bun:test"
 import { defaultTheme, Editor, key, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
@@ -24,11 +25,11 @@ const items = [
 test("the status sits in the bottom border, left items after the corner, right ones before the other", () => {
   const line = statusBorder(items, 90, plain)
   expect(line).toBe(
-    `╰─ deepseek-flash ${"─".repeat(11)} ctx 29.4k/128k (23%) · $0.042 · feat/status-bar* · custom ─╯`,
+    `╰ deepseek-flash ${"─".repeat(12)} ctx 29.4k/128k (23%) · $0.042 · feat/status-bar* · custom ─╯`,
   )
   expect(visibleWidth(line)).toBe(90)
   // At least three rules keep the two sides apart.
-  expect(statusBorder(items, 82, plain)).toContain("deepseek-flash ─── ctx")
+  expect(statusBorder(items, 82, plain)).toContain("deepseek-flash ──── ctx")
 })
 
 test("as the border narrows, items go lowest priority first: other extensions', branch, cost, context", () => {
@@ -36,19 +37,19 @@ test("as the border narrows, items go lowest priority first: other extensions', 
   for (let width = 6; width <= 90; width++) {
     const line = at(width)
     expect([width, visibleWidth(line)]).toEqual([width, width])
-    expect(line.startsWith("╰─")).toBe(true)
+    expect(line.startsWith(width >= 10 ? "╰ " : "╰─")).toBe(true)
     expect(line.endsWith("─╯")).toBe(true)
   }
-  expect(at(81)).toBe(
-    `╰─ deepseek-flash ${"─".repeat(11)} ctx 29.4k/128k (23%) · $0.042 · feat/status-bar* ─╯`,
+  expect(at(80)).toBe(
+    `╰ deepseek-flash ${"─".repeat(11)} ctx 29.4k/128k (23%) · $0.042 · feat/status-bar* ─╯`,
   )
-  expect(at(60)).toBe(`╰─ deepseek-flash ${"─".repeat(9)} ctx 29.4k/128k (23%) · $0.042 ─╯`)
-  expect(at(45)).toBe(`╰─ deepseek-flash ${"─".repeat(3)} ctx 29.4k/128k (23%) ─╯`)
-  expect(at(30)).toBe(`╰─ deepseek-flash ${"─".repeat(11)}╯`)
+  expect(at(60)).toBe(`╰ deepseek-flash ${"─".repeat(10)} ctx 29.4k/128k (23%) · $0.042 ─╯`)
+  expect(at(45)).toBe(`╰ deepseek-flash ${"─".repeat(4)} ctx 29.4k/128k (23%) ─╯`)
+  expect(at(30)).toBe(`╰ deepseek-flash ${"─".repeat(12)}╯`)
   // A lone item too wide is cut; the border keeps its corners.
-  expect(at(12)).toBe("╰─ deep… ──╯")
+  expect(at(12)).toBe("╰ deeps… ──╯")
   // With less room than a few characters, it is left out.
-  expect(at(10)).toBe("╰────────╯")
+  expect(at(9)).toBe("╰───────╯")
   expect(at(7)).toBe("╰─────╯")
 })
 
@@ -58,7 +59,7 @@ test("items of equal priority go from the last one", () => {
     20,
     plain,
   )
-  expect(line).toBe("╰─ aaaa ──── bbbb ─╯")
+  expect(line).toBe("╰ aaaa ───── bbbb ─╯")
 })
 
 test("the border and separators take the border and muted colors, items their tone", () => {
@@ -79,24 +80,25 @@ test("without items the border is plain", () => {
 
 test("as a line of its own, left items from the left edge and right ones against the right", () => {
   expect(statusLine(items.slice(0, 3), 60, plain)).toEqual([
-    `deepseek-flash${" ".repeat(17)}ctx 29.4k/128k (23%) · $0.042`,
+    "  deepseek-flash               ctx 29.4k/128k (23%) · $0.042",
   ])
-  expect(statusLine(items, 40, plain)).toEqual([`deepseek-flash${" ".repeat(6)}ctx 29.4k/128k (23%)`])
-  expect(statusLine(items, 20, plain)).toEqual(["deepseek-flash"])
-  expect(statusLine(items, 10, plain)).toEqual(["deepseek-…"])
+  expect(statusLine(items, 40, plain)).toEqual(["  deepseek-flash    ctx 29.4k/128k (23%)"])
+  expect(statusLine(items, 20, plain)).toEqual(["  deepseek-flash"])
+  expect(statusLine(items, 10, plain)).toEqual(["  deepsee…"])
   expect(statusLine([], 40, plain)).toEqual([])
   for (let width = 1; width <= 90; width++) {
     expect(visibleWidth(statusLine(items, width, plain)[0] ?? "")).toBeLessThanOrEqual(width)
   }
 })
 
-test("the input box draws the status in its border, next to the rows hidden below", () => {
+test("the input box keeps its bottom edge intact and puts status and hidden counts below it", () => {
   const editor = new Editor({ prompt: "› " })
   const box = new InputBox(editor, () => items.slice(0, 2))
   expect(box.render(50, plain).map(stripAnsi)).toEqual([
     `╭${"─".repeat(48)}╮`,
-    `│ › ${" ".repeat(44)} │`,
-    `╰─ deepseek-flash ${"─".repeat(8)} ctx 29.4k/128k (23%) ─╯`,
+    `│›${" ".repeat(47)}│`,
+    `╰${"─".repeat(48)}╯`,
+    `  deepseek-flash${" ".repeat(14)}ctx 29.4k/128k (23%)`,
   ])
   editor.setText(Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n"))
   for (let i = 0; i < 12; i++) editor.handleInput(key("up"))
@@ -104,11 +106,14 @@ test("the input box draws the status in its border, next to the rows hidden belo
   const bottom = rows.at(-1)!
   expect(visibleWidth(bottom)).toBe(50)
   // The count of hidden rows stays; the status gives way around it.
-  expect(bottom).toMatch(/ ↓ \d+ rows ─╯$/)
-  expect(bottom.startsWith("╰─ deepseek-flash")).toBe(true)
+  expect(bottom).toMatch(/ ↓ \d+ rows$/)
+  expect(bottom.startsWith("  deepseek-flash")).toBe(true)
+  expect(stripAnsi(rows.at(-2)!)).toBe(`╰${"─".repeat(48)}╯`)
   // Narrower, the hidden rows' count outlasts every status item.
-  const narrow = box.render(16, { ...plain, rows: 9 }).at(-1)!
-  expect(narrow).toMatch(/^╰─+ ↓ \d+ rows ─╯$/)
+  const narrowRows = box.render(16, { ...plain, rows: 9 }).map(stripAnsi)
+  const narrow = narrowRows.at(-1)!
+  expect(narrow).toMatch(/^ +↓ \d+ rows$/)
+  expect(narrowRows.at(-2)).toBe(`╰${"─".repeat(14)}╯`)
   expect(visibleWidth(narrow)).toBe(16)
   // Too narrow for a border, the box is bare and so is the status.
   expect(box.render(7, plain).some((r) => r.includes("deepseek"))).toBe(false)
@@ -120,16 +125,16 @@ test("wide characters and emoji are measured by their cells", () => {
     expect([width, visibleWidth(statusBorder(wide, width, plain))]).toEqual([width, width])
   }
   // 模型名 is six cells, 分支🚀* seven.
-  expect(statusBorder(wide, 24, plain)).toBe("╰─ 模型名 ─── 分支🚀* ─╯")
-  expect(statusBorder(wide, 20, plain)).toBe("╰─ 模型名 ─────────╯")
+  expect(statusBorder(wide, 24, plain)).toBe("╰ 模型名 ──── 分支🚀* ─╯")
+  expect(statusBorder(wide, 20, plain)).toBe("╰ 模型名 ──────────╯")
   // A wide character that would straddle the cut is left out, not split.
   expect(visibleWidth(statusBorder(wide, 12, plain))).toBe(12)
 })
 
 test("a lone item with room for fewer than a few characters is left out, not cut to a stub", () => {
   const lone = [entry("model", "deepseek-flash", 40, "left")]
-  expect(statusBorder(lone, 11, plain)).toBe("╰─ dee… ──╯")
-  expect(statusBorder(lone, 10, plain)).toBe("╰────────╯")
-  expect(statusLine(lone, 4, plain)).toEqual(["dee…"])
+  expect(statusBorder(lone, 11, plain)).toBe("╰ deep… ──╯")
+  expect(statusBorder(lone, 9, plain)).toBe("╰───────╯")
+  expect(statusLine(lone, 4, plain)).toEqual([])
   expect(statusLine(lone, 3, plain)).toEqual([])
 })

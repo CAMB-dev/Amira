@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { userMessage } from "@amira/ai"
 import { defaultTheme, stripAnsi, surfaceTheme } from "@amira/tui-kit"
@@ -7,13 +8,13 @@ import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
 test("commands use plain muted rows while actual model messages retain the user band", () => {
   const theme = { ...defaultTheme, ...surfaceTheme("dark") }
-  expect(commandEchoLines(theme, "/theme", 40)).toEqual([`  ${theme.muted("› /theme")}`])
+  expect(commandEchoLines(theme, "/theme", 40)).toEqual([`${theme.muted("› /theme")}`])
   const wrapped = commandEchoLines(theme, "/theme a long command line", 17).map(stripAnsi)
-  expect(wrapped).toEqual(["  › /theme a long", "    command line"])
+  expect(wrapped).toEqual(["› /theme a long", "  command line"])
   const rows = userLines(theme, userMessage("Hello model"), 40)
   expect(rows).toHaveLength(3)
   expect(rows[0]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
-  expect(stripAnsi(rows[1]!)).toBe(`  › Hello model${" ".repeat(25)}`)
+  expect(stripAnsi(rows[1]!)).toBe(`› Hello model${" ".repeat(27)}`)
   expect(rows[1]).toContain("\x1b[48;")
   expect(rows[2]).toBe(rows[0])
 })
@@ -77,7 +78,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
         expect(s.agent.messages).toHaveLength(0)
         expect(history.entries.map((entry) => entry.text)).toEqual(["/btw question"])
         s.terminal.send("\x1b[A")
-        await waitFor(() => s.live().includes("› /btw question"), "command recalled")
+        await waitFor(() => s.live().includes("│›/btw question"), "command recalled")
       } finally {
         await closeImageApp(s)
       }
@@ -108,7 +109,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
         expect(s.all()).not.toContain(line)
       }
       s.terminal.send("/bt")
-      await waitFor(() => s.live().includes("❯ /btw"), "command completion")
+      await waitFor(() => s.live().includes("› /btw"), "command completion")
       s.terminal.send("\r")
       await waitFor(() => runs === 4, "completed command ran")
       await s.idle()

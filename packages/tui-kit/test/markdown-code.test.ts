@@ -1,3 +1,4 @@
+// B deliberate oracles: reading surfaces replace frames, with muted right-aligned language and full content-width wrapping.
 import { expect, test } from "bun:test"
 import { RESET, stripAnsi } from "../src/ansi.ts"
 import { MarkdownStream, renderMarkdown } from "../src/components/markdown-stream.ts"
@@ -39,6 +40,7 @@ function painted(row: string): boolean[] {
 }
 
 function surface(rows: string[], width: number, indent = 0) {
+  expect(rows.length).toBeGreaterThan(0)
   for (const row of rows) {
     expect(visibleWidth(row)).toBe(width)
     expect(painted(row)).toEqual(Array.from({ length: width }, (_, col) => col >= indent))
@@ -48,12 +50,12 @@ function surface(rows: string[], width: number, indent = 0) {
 test("code surfaces close at full width, including label, blank rows and syntax resets", () => {
   const rows = renderMarkdown("```ts\nconst x = 1\n\nabcdefghijklmnopqrst\n```", 16, theme)
   expect(rows.map(stripAnsi)).toEqual([
-    "╭─ ts──────────╮",
-    "│ const x = 1  │",
-    `│${" ".repeat(14)}│`,
-    "│ abcdefghijklm│",
-    "│ nopqrst      │",
-    `╰${"─".repeat(14)}╯`,
+    "              ts",
+    "const x = 1     ",
+    "                ",
+    "abcdefghijklmnop",
+    "qrst            ",
+    "                ",
   ])
   surface(rows, 16)
 })
@@ -62,12 +64,12 @@ test("list code surfaces leave the list indent unpainted on every row", () => {
   const rows = renderMarkdown("- item\n  ```ts\n  const x = 1\n\n  界界界\n  ```", 12, theme)
   expect(rows.map(stripAnsi)).toEqual([
     "• item",
-    "  ╭─ ts────╮",
-    "  │ const x│",
-    "  │  = 1   │",
-    "  │        │",
-    "  │ 界界界 │",
-    "  ╰────────╯",
+    "          ts",
+    "  const x = ",
+    "  1         ",
+    "            ",
+    "  界界界    ",
+    "            ",
   ])
   surface(rows.slice(1), 12, 2)
   for (const width of [3, 4, 5, 6, 7]) {
@@ -87,7 +89,7 @@ test("code frames do not reserve the first-row timestamp budget", () => {
   const rows = renderMarkdown("```a-language-that-is-too-long\nx\n```", 12, theme, {
     firstRowWidth: 3,
   })
-  expect(rows.map(stripAnsi)).toEqual(["╭─ a-langu…╮", "│ x        │", "╰──────────╯"])
+  expect(rows.map(stripAnsi)).toEqual(["a-language-…", "x           ", "            "])
   surface(rows, 12)
 })
 
@@ -97,12 +99,22 @@ test("streamed live, partial committed and final code rows use the same closed s
   stream.maxRows = 1
   const committed: string[] = []
   const ctx = { ...context, commit: (rows: string[]) => committed.push(...rows) }
+  let written = ""
+  let checkpoint = false
+  const closing = source.indexOf("```", 3)
   for (const char of source) {
+    written += char
     stream.append(char)
     const live = stream.render(10, ctx)
-    const code = live.filter((row) => stripAnsi(row).startsWith("│") || stripAnsi(row).startsWith("╭─"))
-    surface(code, 10)
+    // Fence/body phase, not an escape sequence, identifies these live code rows.
+    if (written.startsWith("```ts\n") && written.length <= closing && live.length) surface(live, 10)
+    if (written === "```ts\nconst") {
+      checkpoint = true
+      expect(live.map(stripAnsi)).toEqual(["const     "])
+      surface(live, 10)
+    }
   }
+  expect(checkpoint).toBe(true)
   const rows = [...committed, ...stream.take(10)]
   expect(rows).toEqual(renderMarkdown(source, 10, theme, { hyperlinks: false }))
   surface(rows, 10)

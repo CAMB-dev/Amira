@@ -1,3 +1,4 @@
+// B/D deliberate oracles: rounded title/footer borders, normal bold titles, › cursors and filter: label.
 import { expect, test } from "bun:test"
 import type { AskQuestion } from "@amira/api"
 import { CURSOR_MARKER, defaultTheme, key, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"
@@ -14,9 +15,19 @@ function open(request: DialogRequest, keys?: Keybindings) {
   const press = (...names: string[]) => {
     for (const n of names) dialog.handleInput(key(n as never))
   }
-  /** The rows without the bar, as they read. */
+  /** Behavioral rows without the new frame; raw frame geometry is asserted separately. */
   const rows = (width = 60) =>
-    dialog.render(width, plain).map((l) => l.replace(/^┃ ?/, "").replace(CURSOR_MARKER, ""))
+    dialog.render(width, plain).flatMap((l, i, frame) => {
+      const row = stripAnsi(l.replace(CURSOR_MARKER, ""))
+      if (row.startsWith("╭ ")) return [row.slice(2).replace(/─*╮$/, "").trimEnd()]
+      if (row.startsWith("╰")) return []
+      if (row.startsWith("│›")) return [`› ${row.slice(2, -1).trimEnd()}`]
+      if (row.startsWith("│ ")) {
+        const content = row.slice(2, -1).trimEnd()
+        return [i === frame.length - 2 ? content : content ? `  ${content}` : ""]
+      }
+      return [row]
+    })
   return { dialog, answers, type, press, rows }
 }
 
@@ -109,7 +120,7 @@ test("select highlights its initial option, and Enter keeps it", () => {
     options: ["low", "high (current)", "default (not sent)"],
     initial: "high (current)",
   })
-  expect(d.rows()).toContain("❯ 2 high (current)")
+  expect(d.rows()).toContain("› 2 high (current)")
   d.press("enter")
   expect(d.answers).toEqual(["high (current)"])
 })
@@ -137,7 +148,7 @@ test("select navigates and filters from an initial option; Escape cancels", () =
 test("select scrolls its initial option into view and falls back for an unknown option", () => {
   const options = Array.from({ length: 20 }, (_, i) => `option ${i}`)
   const last = open({ kind: "select", requestId: "r", title: "Pick", options, initial: "option 19" })
-  expect(last.rows().some((row) => row.includes("❯") && row.includes("option 19"))).toBe(true)
+  expect(last.rows().some((row) => row.includes("›") && row.includes("option 19"))).toBe(true)
   last.press("enter")
   expect(last.answers).toEqual(["option 19"])
   const unknown = open({ kind: "select", requestId: "r", title: "Pick", options, initial: "missing" })
@@ -226,30 +237,32 @@ const ask = (questions = QUESTIONS) =>
 
 test("every dialog is a block with a bar down its left, the question, the options and the keys", () => {
   expect(approval().dialog.render(60, plain)).toEqual([
-    "┃ ? Allow bash? (approval)",
-    "┃   policy",
-    '┃   {"command":"rm -rf build/ && bun run build"}',
-    "┃",
-    "┃   Yes",
-    "┃   Yes, and don't ask again this session",
-    "┃   No",
-    "┃   Other…",
-    "┃",
-    "┃ ↑↓ select · n no · esc deny",
+    "╭ \u001b[1mAllow bash?\u001b[22m (approval)───────────────────────────────────╮",
+    "│ policy                                                   │",
+    '│ {"command":"rm -rf build/ && bun run build"}             │',
+    "│                                                          │",
+    "│ Yes                                                      │",
+    "│ Yes, and don't ask again this session                    │",
+    "│ No                                                       │",
+    "│ Other…                                                   │",
+    "│                                                          │",
+    "│ ↑↓ select · n no · esc deny                              │",
+    "╰──────────────────────────────────────────────────────────╯",
   ])
   expect(ask().dialog.render(60, plain)).toEqual([
-    "┃ 1/2 · Approach",
-    "┃ ? Which approach do you prefer?",
-    "┃",
-    "┃ ❯ 1 Rewrite (Recommended)  Start over",
-    "┃   2 Patch                  Fix it in place",
-    "┃   3 Other…",
-    "┃",
-    "┃ ←→ question · ↑↓ move · enter next · esc cancel",
+    "╭ \u001b[1mWhich approach do you prefer?\u001b[22m────────────────────────────╮",
+    "│ 1/2 · Approach                                           │",
+    "│                                                          │",
+    "│›1 Rewrite (Recommended)  Start over                      │",
+    "│ 2 Patch                  Fix it in place                 │",
+    "│ 3 Other…                                                 │",
+    "│                                                          │",
+    "│ ←→ question · ↑↓ move · enter next · esc cancel          │",
+    "╰──────────────────────────────────────────────────────────╯",
   ])
   expect(open({ kind: "input", requestId: "i", title: "Name", placeholder: "your name" }).rows()).toEqual([
-    "? Name",
-    "❯ your name",
+    "Name",
+    "› your name",
     "",
     "enter submit · esc cancel",
   ])
@@ -262,7 +275,7 @@ test("a confirm starts with nothing selected: Enter and y do nothing until a cho
   early.press("enter")
   expect(early.answers).toEqual([])
   early.press("down")
-  expect(early.rows()[4]).toBe("❯ Yes")
+  expect(early.rows()[4]).toBe("› Yes")
   expect(early.rows().at(-1)).toBe("↑↓ move · n no · enter choose · esc deny")
   early.press("enter")
   expect(early.answers).toEqual([true])
@@ -274,7 +287,7 @@ test("a confirm starts with nothing selected: Enter and y do nothing until a cho
   expect(always.answers).toEqual(["always"])
   // A confirm without the extras offers yes and no only; ↑ first picks the last one.
   const plainConfirm = open({ kind: "confirm", requestId: "c", title: "Go?" })
-  expect(plainConfirm.rows()).toEqual(["? Go?", "", "  Yes", "  No", "", "↑↓ select · n no · esc cancel"])
+  expect(plainConfirm.rows()).toEqual(["Go?", "", "  Yes", "  No", "", "↑↓ select · n no · esc cancel"])
   plainConfirm.press("up", "enter")
   expect(plainConfirm.answers).toEqual([false])
 })
@@ -285,7 +298,7 @@ test("Other opens a text field in its row; Esc closes the field, then cancels th
   expect(d.rows().slice(5, 9)).toEqual([
     "  Yes, and don't ask again this session",
     "  No",
-    "❯ Type your answer",
+    "› Type your answer",
     "",
   ])
   expect(d.rows().at(-1)).toBe("enter submit · esc back")
@@ -293,11 +306,11 @@ test("Other opens a text field in its row; Esc closes the field, then cancels th
   d.press("enter")
   d.type("no, use trash")
   expect(d.answers).toEqual([])
-  expect(d.rows()[7]).toBe("❯ no, use trash")
+  expect(d.rows()[7]).toBe("› no, use trash")
   d.press("escape")
   expect(d.answers).toEqual([])
   // Closed, the text stays with the choice, and choosing it again edits it.
-  expect(d.rows()[7]).toBe('❯ Other… "no, use trash"')
+  expect(d.rows()[7]).toBe('› Other… "no, use trash"')
   d.press("enter")
   d.type("!")
   d.press("enter")
@@ -324,13 +337,13 @@ test("a confirm's always choice says how far it reaches when the asker says so",
   press("down", "down", "enter")
   expect(answers).toEqual(["always"])
   expect(dialogEchoLines(r, "always", plain.theme)).toEqual([
-    "┃ ? Allow bash? ❯ Yes, and don't ask again for bash (policy)",
+    "  \u001b[1mAllow bash?\u001b[22m › Yes, and don't ask again for bash (policy)",
   ])
 })
 
 test("a digit chooses an option of a short list; it shows before the option", () => {
   const { answers, type, rows } = select(["red", "green", "blue"])
-  expect(rows(40)).toContain("❯ 1 red")
+  expect(rows(40)).toContain("› 1 red")
   expect(rows(40)).toContain("  2 green")
   type("2")
   expect(answers).toEqual(["green"])
@@ -342,7 +355,7 @@ test("in a long list digits filter, so ids with digits can be found", () => {
   expect(rows().some((l) => /^. \d /.test(l))).toBe(false)
   type("4o")
   expect(answers).toEqual([])
-  expect(rows()).toContain("❯ openai/gpt-4o")
+  expect(rows()).toContain("› openai/gpt-4o")
   dialog.handleInput(key("enter"))
   expect(answers).toEqual(["openai/gpt-4o"])
 })
@@ -360,38 +373,43 @@ test("a diff review fits the rows it has: title, options and keys stay, the diff
   const { dialog, rows } = review(54)
   dialog.maxRows = 12
   const lines = rows()
-  expect(lines.length).toBe(12)
-  expect(lines[0]).toBe("? Merge the worktree?")
+  expect(dialog.render(60, plain)).toHaveLength(12)
+  expect(lines.length).toBe(11)
+  expect(lines[0]).toBe("Merge the worktree?")
   expect(lines.slice(-4)).toEqual([
-    "❯ 1 merge",
+    "› 1 merge",
     "  2 keep worktree",
     "  3 discard",
     "↑↓ move · enter choose · esc cancel",
   ])
-  // 7 rows for the diff: 3 from the start, a marker, 3 from the end.
-  expect(lines.slice(1, 8)).toEqual([
-    "+ line 1",
-    "+ line 2",
-    "+ line 3",
-    "… 48 more lines …",
-    "+ line 52",
-    "+ line 53",
-    "+ line 54",
+  // Six diff rows leave a distinct footer and bottom edge: first 3, marker, final 2.
+  expect(lines.slice(1, 7)).toEqual([
+    "  + line 1",
+    "  + line 2",
+    "  + line 3",
+    "  … 49 more lines …",
+    "  + line 53",
+    "  + line 54",
   ])
   // Every row still has the bar.
-  expect(dialog.render(60, plain).every((l) => l.startsWith("┃"))).toBe(true)
+  expect(
+    dialog
+      .render(60, plain)
+      .map(stripAnsi)
+      .map((row) => row[0]),
+  ).toEqual(["╭", ...Array(10).fill("│"), "╰"])
 })
 
 test("a short diff is shown whole with room to breathe, and a tall terminal shows more of a long one", () => {
   const short = review(5)
   short.dialog.maxRows = 24
   const rows = short.rows()
-  expect(rows[0]).toBe("? Merge the worktree?")
+  expect(rows[0]).toBe("Merge the worktree?")
   expect(rows.some((l) => l.includes("+ line 5"))).toBe(true)
   expect(rows.some((l) => l.includes("more lines"))).toBe(false)
   expect(rows.slice(-6)).toEqual([
     "",
-    "❯ 1 merge",
+    "› 1 merge",
     "  2 keep worktree",
     "  3 discard",
     "",
@@ -406,18 +424,19 @@ test("with barely any room the options scroll and the title still shows", () => 
   const { dialog, rows } = review(20, ["a", "b", "c", "d", "e"])
   dialog.maxRows = 5
   const lines = rows()
-  expect(lines[0]).toBe("? Merge the worktree?")
+  expect(lines[0]).toBe("Merge the worktree?")
   expect(lines.at(-1)).toBe("↑↓ move · enter choose · esc cancel")
   expect(lines.length).toBeLessThanOrEqual(5)
-  expect(lines).toContain("❯ 1 a")
+  expect(lines).toContain("› 1 a")
 })
 
 test("a long select is cut to the rows it has", () => {
   const { dialog, rows } = select(Array.from({ length: 30 }, (_, i) => `option ${i}`))
   dialog.maxRows = 6
   const lines = rows()
-  expect(lines[0]).toBe("? Model")
-  expect(lines.length).toBe(6)
+  expect(lines[0]).toBe("Model")
+  expect(dialog.render(60, plain)).toHaveLength(6)
+  expect(lines.length).toBe(5)
   expect(lines.at(-2)).toBe("  1/30")
 })
 
@@ -425,8 +444,7 @@ test("a tight approval gives up its blank rows and message before its options", 
   const { dialog, rows } = approval()
   dialog.maxRows = 7
   expect(rows()).toEqual([
-    "? Allow bash? (approval)",
-    "  policy …",
+    "Allow bash? (approval)",
     "  Yes",
     "  Yes, and don't ask again this session",
     "  No",
@@ -437,11 +455,11 @@ test("a tight approval gives up its blank rows and message before its options", 
 
 test("narrow, descriptions go under their labels; CJK text wraps by its width", () => {
   expect(ask().rows(30)).toEqual([
-    "1/2 · Approach",
-    "? Which approach do you",
+    "Which approach do you",
+    "  1/2 · Approach",
     "  prefer?",
     "",
-    "❯ 1 Rewrite (Recommended)",
+    "› 1 Rewrite (Recommended)",
     "    Start over",
     "  2 Patch",
     "    Fix it in place",
@@ -459,17 +477,18 @@ test("narrow, descriptions go under their labels; CJK text wraps by its width", 
     },
   ])
   const lines = cjk.dialog.render(30, plain)
-  expect(lines.map((l) => l.replace(/^┃ ?/, ""))).toEqual([
-    "? 你想用哪种方法来实现这个功",
-    "  能？",
-    "",
-    "❯ 1 重写（推荐）",
-    "    从头开始写这个模块",
-    "  2 修补",
-    "    就地修复",
-    "  3 Other…",
-    "",
-    "enter choose · esc cancel",
+  expect(lines.map(stripAnsi)).toEqual([
+    "╭ 你想用哪种方法来实现这个功─╮",
+    "│ 能？                       │",
+    "│                            │",
+    "│›1 重写（推荐）             │",
+    "│   从头开始写这个模块       │",
+    "│ 2 修补                     │",
+    "│   就地修复                 │",
+    "│ 3 Other…                   │",
+    "│                            │",
+    "│ enter choose · esc cancel  │",
+    "╰────────────────────────────╯",
   ])
   for (const l of lines) expect(Bun.stringWidth(l)).toBeLessThanOrEqual(30)
 })
@@ -478,20 +497,20 @@ test("several questions are asked one after another and answered together", () =
   const { answers, type, press, rows } = ask()
   type("2")
   expect(answers).toEqual([])
-  expect(rows()[0]).toBe("2/2 · Extras")
-  expect(rows()).toContain("❯ 1 [ ] Tests")
+  expect(rows()[0]).toBe("What else should I do?")
+  expect(rows()).toContain("› 1 [ ] Tests")
   // ← goes back to the answered question, with the cursor on its answer; → no further than
   // the first question not answered.
   press("left")
-  expect(rows()[0]).toBe("1/2 · Approach")
-  expect(rows()).toContain("❯ 2 Patch                  Fix it in place")
+  expect(rows()[0]).toBe("Which approach do you prefer?")
+  expect(rows()).toContain("› 2 Patch                  Fix it in place")
   press("right", "right")
-  expect(rows()[0]).toBe("2/2 · Extras")
+  expect(rows()[0]).toBe("What else should I do?")
   // Space and digits check; Enter submits.
   press("space")
   type("3")
   expect(rows()).toContain("  1 [x] Tests")
-  expect(rows()).toContain("❯ 3 [x] Changelog")
+  expect(rows()).toContain("› 3 [x] Changelog")
   expect(rows(80).at(-1)).toBe("←→ question · ↑↓ move · space toggle · enter submit · esc back")
   press("enter")
   expect(answers).toEqual([[{ selected: ["Patch"] }, { selected: ["Tests", "Changelog"] }]])
@@ -500,11 +519,11 @@ test("several questions are asked one after another and answered together", () =
 test("Esc on a later question goes back to the one before, keeping the answers; on the first it cancels", () => {
   const { answers, type, press, rows } = ask()
   type("1")
-  expect(rows()[0]).toBe("2/2 · Extras")
+  expect(rows()[0]).toBe("What else should I do?")
   press("escape")
   expect(answers).toEqual([])
-  expect(rows()[0]).toBe("1/2 · Approach")
-  expect(rows()).toContain("❯ 1 Rewrite (Recommended)  Start over")
+  expect(rows()[0]).toBe("Which approach do you prefer?")
+  expect(rows()).toContain("› 1 Rewrite (Recommended)  Start over")
   press("escape")
   expect(answers).toEqual([undefined])
 })
@@ -513,12 +532,12 @@ test("in a multi-select, Other takes text next to the options checked", () => {
   const { answers, type, press, rows } = ask([QUESTIONS[1]!])
   type("1")
   press("up")
-  expect(rows()).toContain("❯ 4 [ ] Other…")
+  expect(rows()).toContain("› 4 [ ] Other…")
   // Enter on an empty Other opens it rather than submitting.
   press("enter")
   type("release notes")
   press("enter")
-  expect(rows()).toContain('❯ 4 [x] Other… "release notes"')
+  expect(rows()).toContain('› 4 [x] Other… "release notes"')
   expect(answers).toEqual([])
   press("enter")
   expect(answers).toEqual([[{ selected: ["Tests"], other: "release notes" }]])
@@ -528,29 +547,39 @@ test("the answer stays in the transcript as one line per question under the bar"
   const theme = plain.theme
   const r: DialogRequest = { kind: "ask", requestId: "q", title: "2 questions", questions: QUESTIONS }
   expect(dialogEchoLines(r, [{ selected: ["Patch"] }, { selected: [], other: "none" }], theme)).toEqual([
-    "┃ ? Which approach do you prefer? ❯ Patch",
-    '┃ ? What else should I do? ❯ "none"',
+    "  \u001b[1mWhich approach do you prefer?\u001b[22m › Patch",
+    '  \u001b[1mWhat else should I do?\u001b[22m › "none"',
   ])
-  expect(dialogEchoLines(r, undefined, theme)).toEqual(["┃ ? 2 questions ❯ cancelled"])
+  expect(dialogEchoLines(r, undefined, theme)).toEqual(["  \u001b[1m2 questions\u001b[22m › cancelled"])
   const confirm: DialogRequest = { kind: "confirm", requestId: "c", title: "Allow bash?", always: true }
   expect(dialogEchoLines(confirm, "always", theme)).toEqual([
-    "┃ ? Allow bash? ❯ Yes, and don't ask again this session",
+    "  \u001b[1mAllow bash?\u001b[22m › Yes, and don't ask again this session",
   ])
   const secret: DialogRequest = { kind: "input", requestId: "s", title: "Key", secret: true }
-  expect(dialogEchoLines(secret, "sk-1", theme)).toEqual(["┃ ? Key ❯ (hidden)"])
+  expect(dialogEchoLines(secret, "sk-1", theme)).toEqual(["  \x1b[1mKey\x1b[22m › (hidden)"])
 })
 
-test("colors: the bar and ❯ in the accent, an approval's bar in the warning color; without color the glyphs still tell", () => {
+test("colors: the bar and › in the accent, an approval's bar in the warning color; without color the glyphs still tell", () => {
   const ctx = { ...plain, theme: defaultTheme, color: true }
-  const accentBar = `\x1b[36m┃\x1b[39m`
+  const accentBar = defaultTheme.accent("╭ ")
   const lines = ask().dialog.render(60, ctx)
-  expect(lines.every((l) => l.startsWith(accentBar))).toBe(true)
-  expect(lines.some((l) => l.includes(`\x1b[36m❯\x1b[39m`))).toBe(true)
+  const assertEdges = (rows: string[], style: (text: string) => string) => {
+    expect(rows[0]).toStartWith(style("╭ "))
+    expect(rows[0]).toEndWith(style(stripAnsi(rows[0]!).match(/─*╮$/)![0]))
+    for (const row of rows.slice(1, -1)) {
+      expect(row).toStartWith(style("│"))
+      expect(row).toEndWith(style("│"))
+    }
+    expect(rows.at(-1)).toBe(style(`╰${"─".repeat(58)}╯`))
+  }
+  expect(lines[0]).toStartWith(accentBar)
+  assertEdges(lines, defaultTheme.accent)
+  expect(lines.some((l) => l.includes(`\x1b[36m›\x1b[39m`))).toBe(true)
   const warn = approval().dialog.render(60, ctx)
-  expect(warn.every((l) => l.startsWith(`\x1b[33m┃\x1b[39m`))).toBe(true)
-  // Stripped of color, the selected row is the one with ❯.
-  expect(lines.map(stripAnsi).filter((l) => l.includes("❯"))).toEqual([
-    "┃ ❯ 1 Rewrite (Recommended)  Start over",
+  assertEdges(warn, defaultTheme.warning)
+  // Stripped of color, the selected row is the one with ›.
+  expect(lines.map(stripAnsi).filter((l) => l.includes("›"))).toEqual([
+    "│›1 Rewrite (Recommended)  Start over                      │",
   ])
 })
 
@@ -606,13 +635,13 @@ test("the position row of a scrolled list gives way before the title when rows a
   dialog.maxRows = 3
   const lines = rows()
   expect(lines.length).toBe(3)
-  expect(lines[0]).toBe("? Model")
-  expect(lines[1]).toBe("❯ option 0")
+  expect(lines[0]).toBe("Model")
+  expect(lines[1]).toBe("› option 0")
 })
 
 test("an input answered with nothing echoes as (empty), not as a bare question", () => {
   const r: DialogRequest = { kind: "input", requestId: "e", title: "Note" }
-  expect(dialogEchoLines(r, "", plain.theme)).toEqual(["┃ ? Note ❯ (empty)"])
+  expect(dialogEchoLines(r, "", plain.theme)).toEqual(["  \u001b[1mNote\u001b[22m › (empty)"])
 })
 
 const sectioned = () =>
@@ -630,9 +659,9 @@ const sectioned = () =>
 test("a select's sections: a heading over their options, and their own Enter label and keys", () => {
   const { rows, press } = sectioned()
   expect(rows()).toEqual([
-    "? Sub-agents",
+    "Sub-agents",
     "",
-    "❯ 1 Fix the parser · coder",
+    "› 1 Fix the parser · coder",
     "  2 Scan the logs · explorer",
     "  Kept worktrees",
     "  3 sa_1 · 3 files",
@@ -653,7 +682,7 @@ test("a section's key answers with the option it was pressed on; elsewhere it do
   b.type("p")
   // Not typed into the filter either.
   expect(b.answers).toEqual([])
-  expect(b.rows().join("\n")).not.toContain("filter ❯")
+  expect(b.rows().join("\n")).not.toContain("filter:")
   b.press("enter")
   expect(b.answers).toEqual(["sa_1 · 3 files"])
 })
@@ -664,7 +693,7 @@ test("once a filter is typed, a section's key is part of it and leaves the hint"
   expect(rows().at(-1)).not.toContain("p print")
   type("p")
   expect(answers).toEqual([])
-  expect(rows().join("\n")).toContain("filter ❯ exp")
+  expect(rows().join("\n")).toContain("filter: exp")
   expect(rows().join("\n")).toContain("Scan the logs · explorer")
   press("enter")
   expect(answers).toEqual(["2. Scan the logs · explorer"])
@@ -676,6 +705,6 @@ test("a filtered sectioned list has no headings; the echo names the key's label"
   expect(rows().join("\n")).not.toContain("Kept worktrees")
   const r = sectioned().dialog.request
   expect(dialogEchoLines(r, { option: "1. Fix the parser · coder", key: "p" }, plain.theme)).toEqual([
-    "┃ ? Sub-agents ❯ 1. Fix the parser · coder · print",
+    "  \u001b[1mSub-agents\u001b[22m › 1. Fix the parser · coder · print",
   ])
 })

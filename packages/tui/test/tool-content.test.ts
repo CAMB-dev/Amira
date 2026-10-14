@@ -1,3 +1,4 @@
+// A deliberate oracles: renderer-owned chrome remains fixed at two cells; literal tool content and search/copy are preserved.
 import { expect, test } from "bun:test"
 import type { ToolPresenter } from "@amira/api"
 import { defaultTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
@@ -45,7 +46,7 @@ test("search keeps literal glyph-prefixed tool content and highlights only that 
       const from = marked[0]!.indexOf("\x1b[7;4m")
       const to = marked[0]!.indexOf("\x1b[27;24m", from)
       expect(stripAnsi(marked[0]!.slice(from, to))).toBe(query)
-      expect(stripAnsi(marked[0]!.slice(0, from))).toBe(last ? "     " : "  │  ")
+      expect(stripAnsi(marked[0]!.slice(0, from))).toBe(last ? "  " : "│ ")
     }
   }
 })
@@ -61,7 +62,7 @@ test("a choice matching the result label retains its description, styling, searc
     const text = rows.map(stripAnsi)
     const choice = text.findIndex((row) => row.includes("Fix it in place"))
     expect(choice).toBeGreaterThan(1)
-    expect(text[choice]).toBe(last ? "     ✓ Patch  Fix it in place" : "  │  ✓ Patch  Fix it in place")
+    expect(text[choice]).toBe(last ? "  ✓ Patch  Fix it in place" : "│ ✓ Patch  Fix it in place")
     expect(rows[choice]).toContain(defaultTheme.success("✓ "))
     expect(rows[choice]).toContain(defaultTheme.text("Patch"))
     expect(rows[choice]).toContain(defaultTheme.muted("  Fix it in place"))
@@ -97,7 +98,7 @@ test("description-implied wrapping survives every multiline tool-label fragment"
         defaultTheme.text("A A A A A A A A"),
       )
       expect(rows.find((row) => stripAnsi(row).includes("Explanation"))).toContain(
-        defaultTheme.muted("Explanation"),
+        defaultTheme.muted("  Explanation"),
       )
       expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true)
     }

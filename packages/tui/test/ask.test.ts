@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { afterEach, expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AskQuestion, defineTool, textResult } from "@amira/api"
@@ -149,15 +150,25 @@ async function setup(steps: MockStep[], o: Options) {
   })
   const live = () => screen.lines.join("\n")
   const all = () => [...screen.scrollback, ...screen.lines].join("\n")
-  /** The dialog as it shows now: the rows with its bar, down to its keys. */
+  /** Semantic rows of the open rounded frame; raw geometry is covered by layout-grid.test. */
   const dialog = () => {
-    const lines = screen.lines.map((l) => l.trimEnd())
-    // The open dialog is the last run of barred rows, ending with its keys (echoes have none).
-    const end = lines.findLastIndex((l) => l.startsWith("┃") && / cancel$| back$| deny$/.test(l))
+    const lines = screen.lines
+    const end = lines.findLastIndex((line) => /^╰─+╯$/.test(line.trimStart()))
     if (end === -1) return []
-    let start = end
-    while (start > 0 && lines[start - 1]!.startsWith("┃")) start--
-    return lines.slice(start, end + 1)
+    const start = lines.findLastIndex((line, i) => i < end && line.trimStart().startsWith("╭ "))
+    if (start === -1) return []
+    const left = lines[start]!.indexOf("╭")
+    // The footer is an interior row; normalize only the intact frame and marker gutter.
+    expect(lines[end]!.slice(left)).toMatch(/^╰─+╯$/)
+    return lines.slice(start, end).map((line, i) => {
+      const row = line.slice(left)
+      if (i === 0) return `  ${row.slice(2, -1).replace(/─+$/, "").trimEnd()}`
+      expect(row).toStartWith("│")
+      expect(row).toEndWith("│")
+      if (row.startsWith("│›")) return `› ${row.slice(2, -1).trimEnd()}`
+      const text = row.slice(2, -1).trimEnd()
+      return text ? `  ${text}` : ""
+    })
   }
   const shows = (s: string) => waitFor(() => all().includes(s), JSON.stringify(s))
   const idle = async () => {
@@ -181,26 +192,26 @@ for (const mode of MODES) {
     s.terminal.send("fix the bug\r")
     await waitFor(() => s.dialog().length > 0, "the dialog")
     expect(s.dialog()).toEqual([
-      "┃ 1/2 · Approach",
-      "┃ ? Which approach do you prefer?",
-      "┃",
-      "┃ ❯ 1 Rewrite (Recommended)  Start over",
-      "┃   2 Patch                  Fix it in place",
-      "┃   3 Other…",
-      "┃",
-      "┃ ←→ question · ↑↓ move · enter next · esc cancel",
+      "  Which approach do you prefer?",
+      "  1/2 · Approach",
+      "",
+      "› 1 Rewrite (Recommended)  Start over",
+      "  2 Patch                  Fix it in place",
+      "  3 Other…",
+      "",
+      "  ←→ question · ↑↓ move · enter next · esc cancel",
     ])
     s.terminal.send("2")
-    await waitFor(() => s.dialog()[0] === "┃ 2/2 · Extras", "the second question")
+    await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
     // Back to the first and forward again: the answer is kept.
     s.terminal.send(LEFT)
-    await waitFor(() => s.dialog().includes("┃ ❯ 2 Patch                  Fix it in place"), "back")
+    await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "back")
     s.terminal.send("\x1b[C")
-    await waitFor(() => s.dialog()[0] === "┃ 2/2 · Extras", "forward")
+    await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "forward")
     s.terminal.send(" ")
     s.terminal.send("3")
-    await waitFor(() => s.dialog().includes("┃ ❯ 3 [x] Changelog"), "checked")
-    expect(s.dialog()).toContain("┃   1 [x] Tests")
+    await waitFor(() => s.dialog().includes("› 3 [x] Changelog"), "checked")
+    expect(s.dialog()).toContain("  1 [x] Tests")
     s.terminal.send("\r")
     await s.shows("Patching it.")
     await s.idle()
@@ -214,7 +225,7 @@ for (const mode of MODES) {
       ].join("\n"),
     )
     // No echo of the dialog: the tool call's result shows the answers.
-    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ❯")
+    expect(s.all()).not.toContain("  Which approach do you prefer? ›")
     // Each question's label, with the answer whole under it.
     expect(s.all()).toMatch(/Approach\n +Patch\n/)
     expect(s.dialog()).toEqual([])
@@ -228,7 +239,7 @@ for (const mode of MODES) {
     s.terminal.send("go\r")
     await waitFor(() => s.dialog().length > 0, "the dialog")
     s.terminal.send("2")
-    await waitFor(() => s.dialog()[0] === "┃ 2/2 · Extras", "the second question")
+    await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
     s.terminal.send(" ")
     s.terminal.send("2")
     s.terminal.send("4")
@@ -272,8 +283,8 @@ for (const mode of MODES) {
     await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
     // Digits and y are text in the field.
     s.terminal.send("both, 2 steps")
-    await waitFor(() => s.dialog().includes("┃ ❯ 3 both, 2 steps"), "typed")
-    expect(s.dialog().at(-1)).toBe("┃ enter submit · esc back")
+    await waitFor(() => s.dialog().includes("› 3 both, 2 steps"), "typed")
+    expect(s.dialog().at(-1)).toBe("  enter submit · esc back")
     s.terminal.send("\r")
     await s.shows("ok")
     await s.idle()
@@ -282,7 +293,7 @@ for (const mode of MODES) {
     )
     expect(s.all()).toMatch(
       new RegExp(
-        `^ {2}└ Asked Which approach do you prefer\\? +${TIMESTAMP}\\n {5}✓ \\(own words\\) "both, 2 steps"$`,
+        `^└ Asked Which approach do you prefer\\? +${TIMESTAMP}\\n {2}✓ \\(own words\\) "both, 2 steps"$`,
         "m",
       ),
     )
@@ -291,13 +302,13 @@ for (const mode of MODES) {
     s.terminal.send(`${UP}\r`)
     await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
     s.terminal.send(ESC)
-    await waitFor(() => s.dialog().includes("┃ ❯ 3 Other…"), "the field closed")
+    await waitFor(() => s.dialog().includes("› 3 Other…"), "the field closed")
     s.terminal.send(ESC)
     await s.shows("fine")
     await s.idle()
     const results = s.agent.messages.filter((m) => m.role === "toolResult")
     expect(JSON.stringify(results.at(-1))).toContain("The user declined to answer.")
-    expect(s.all()).not.toContain("┃ ? Which approach do you prefer? ❯")
+    expect(s.all()).not.toContain("  Which approach do you prefer? ›")
     s.terminal.send("\x03")
     await s.exited
   })
@@ -318,16 +329,15 @@ for (const mode of MODES) {
     s.terminal.send("go\r")
     await waitFor(() => s.dialog().length > 0, "the dialog")
     expect(s.dialog()).toEqual([
-      "┃ ? Which approach do you",
-      "┃   prefer?",
-      "┃",
-      "┃ ❯ 1 Rewrite (Recommended)",
-      "┃     Start over",
-      "┃   2 Patch",
-      "┃     Fix it in place",
-      "┃   3 Other…",
-      "┃",
-      "┃ enter choose · esc cancel",
+      "  Which approach do you prefer?",
+      "",
+      "› 1 Rewrite (Recommended)",
+      "    Start over",
+      "  2 Patch",
+      "    Fix it in place",
+      "  3 Other…",
+      "",
+      "  enter choose · esc cancel",
     ])
     s.terminal.send("1")
     await s.shows("a")
@@ -335,24 +345,24 @@ for (const mode of MODES) {
     s.terminal.send("again\r")
     await waitFor(() => s.dialog().length > 0, "the CJK dialog")
     expect(s.dialog()).toEqual([
-      "┃ ? 你想用哪种方法来实现这个功能",
-      "┃   ？",
-      "┃",
-      "┃ ❯ 1 重写（推荐）",
-      "┃     从头开始写这个模块",
-      "┃   2 修补",
-      "┃     就地修复",
-      "┃   3 Other…",
-      "┃",
-      "┃ enter choose · esc cancel",
+      "  你想用哪种方法来实现这个功能",
+      "  ？",
+      "",
+      "› 1 重写（推荐）",
+      "    从头开始写这个模块",
+      "  2 修补",
+      "    就地修复",
+      "  3 Other…",
+      "",
+      "  enter choose · esc cancel",
     ])
     s.terminal.send("2")
     await s.shows("b")
     await s.idle()
     // The echo wraps like any line: the answer follows the question.
-    expect(s.all()).toMatch(new RegExp(`^ {2}└ Asked 你想用…功能？ {2}${TIMESTAMP}\\n {5}✓ 修补$`, "m"))
+    expect(s.all()).toMatch(new RegExp(`^└ Asked 你想用哪…个功能？ {2}${TIMESTAMP}\\n {2}✓ 修补$`, "m"))
     expect(s.all()).toMatch(
-      new RegExp(`^ {2}└ Asked Which …refer\\? {2}${TIMESTAMP}\\n {5}✓ Rewrite \\(Recommended\\)$`, "m"),
+      new RegExp(`^└ Asked Which ap… prefer\\? {2}${TIMESTAMP}\\n {2}✓ Rewrite \\(Recommended\\)$`, "m"),
     )
     s.terminal.send("\x03")
     await s.exited
@@ -370,36 +380,36 @@ for (const mode of MODES) {
     s.terminal.send("clean up\r")
     await waitFor(() => s.dialog().length > 0, "the approval")
     expect(s.dialog()).toEqual([
-      "┃ ? Allow wipe? (approval)",
-      "┃   it deletes files",
-      "┃",
-      "┃   Yes",
-      "┃   Yes, and don't ask again this session",
-      "┃   No",
-      "┃   Other…",
-      "┃",
-      "┃ ↑↓ select · n no · esc deny",
+      "  Allow wipe? (approval)",
+      "  it deletes files",
+      "",
+      "  Yes",
+      "  Yes, and don't ask again this session",
+      "  No",
+      "  Other…",
+      "",
+      "  ↑↓ select · n no · esc deny",
     ])
     // Nothing is preselected: an Enter typed now does not answer it.
     s.terminal.send("\r")
     await Bun.sleep(30)
     expect(s.host.ui.pending.length).toBe(1)
     s.terminal.send(`${DOWN}${DOWN}`)
-    await waitFor(() => s.dialog().includes("┃ ❯ Yes, and don't ask again this session"), "moved")
+    await waitFor(() => s.dialog().includes("› Yes, and don't ask again this session"), "moved")
     // The bar is drawn in the palette warning, the ❯ in the accent.
-    expect(s.terminal.output).toContain("\x1b[38;2;226;179;86m┃")
-    expect(s.terminal.output).toContain("\x1b[38;2;120;219;226m❯")
+    expect(s.terminal.output).toContain("\x1b[38;2;226;179;86m╭")
+    expect(s.terminal.output).toContain("\x1b[38;2;120;219;226m›")
     s.terminal.send("\r")
     await s.shows("wiped twice")
     await s.idle()
     expect(s.host.ui.pending).toEqual([])
-    expect(s.all()).not.toContain("┃ ? Allow wipe? ❯")
+    expect(s.all()).not.toContain("  Allow wipe? ›")
     // Asked once for both calls.
-    expect(s.all().split("? Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
+    expect(s.all().split("Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
     // Each call says who let it run.
     expect(s.all()).toMatch(
       new RegExp(
-        `^ {2}${mode === "fullscreen" ? "├" : "└"} wipe {2}✓ wiped · allowed by you +${TIMESTAMP}\\n {2}└ wipe {2}✓ wiped · allowed · session rule$`,
+        `^${mode === "fullscreen" ? "├" : "└"} wipe {2}✓ wiped · allowed by you +${TIMESTAMP}\\n└ wipe {2}✓ wiped · allowed · session rule$`,
         "m",
       ),
     )
@@ -415,7 +425,7 @@ test("Esc on an approval denies the call and stops the turn; meanwhile the activ
   })
   s.terminal.send("clean up\r")
   await waitFor(() => s.dialog().length > 0, "the approval")
-  expect(s.live()).toMatch(/^ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}esc stop$/m)
+  expect(s.live()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}esc stop$/m)
   s.terminal.send(ESC)
   await s.idle()
   expect(s.host.ui.pending).toEqual([])
@@ -440,7 +450,7 @@ test("an approval refused with free text tells the model what to do instead", as
   expect(s.toolResult("wipe")).toContain("the user said no: move them to the trash")
   expect(s.all()).toMatch(
     new RegExp(
-      `^ {2}└ wipe +${TIMESTAMP}\\n {5}⊘ Tool call not approved: the user said no: move them\\n {5}to the trash$`,
+      `^└ wipe +${TIMESTAMP}\\n {2}⊘ Tool call not approved: the user said no: move them to\\n {2}the trash$`,
       "m",
     ),
   )
@@ -448,22 +458,22 @@ test("an approval refused with free text tells the model what to do instead", as
   await s.exited
 })
 
-test("with NO_COLOR the bar and ❯ still mark the dialog and its selection", async () => {
+test("with NO_COLOR the bar and › still mark the dialog and its selection", async () => {
   setColorEnabled(false)
   for (const mode of MODES) {
     const s = await setup([askUser([QUESTIONS[0]!]), { text: "done" }], { mode })
     s.terminal.send("go\r")
     await waitFor(() => s.dialog().length > 0, "the dialog")
     expect(s.dialog().slice(0, 4)).toEqual([
-      "┃ ? Which approach do you prefer?",
-      "┃",
-      "┃ ❯ 1 Rewrite (Recommended)  Start over",
-      "┃   2 Patch                  Fix it in place",
+      "  Which approach do you prefer?",
+      "",
+      "› 1 Rewrite (Recommended)  Start over",
+      "  2 Patch                  Fix it in place",
     ])
     // No colors at all: foreground colors are SGR 30–39 and 90–97.
     expect(s.terminal.output).not.toMatch(new RegExp(`${String.fromCharCode(27)}\\[(3\\d|9[0-7])m`))
     s.terminal.send(`${DOWN}`)
-    await waitFor(() => s.dialog().includes("┃ ❯ 2 Patch                  Fix it in place"), "moved")
+    await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "moved")
     s.terminal.send("\r")
     await s.shows("done")
     await s.idle()

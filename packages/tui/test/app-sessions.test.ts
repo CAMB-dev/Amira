@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, spyOn, test } from "bun:test"
 import { userMessage } from "@amira/ai"
 import { defineTool, textResult } from "@amira/api"
@@ -94,7 +95,7 @@ for (const error of [new AgentBusyError("busy"), new Error("old session failure"
       s.terminal.send("pending input\r")
       s.commands!.switchTo(next)
       await Bun.sleep(30)
-      expect(s.live()).toContain("│ › pending input")
+      expect(s.live()).toMatch(/^│›pending input.*│$/m)
       expect(s.live()).not.toContain("queued ›")
       expect(s.all()).not.toContain(error.message)
       s.mock.push({ text: "new session reply" })
@@ -314,13 +315,13 @@ test("Esc twice opens the rewind picker; the message picked is cut off and back 
   await shows("second answer")
   await idle()
   terminal.send("\x1b[27u\x1b[27u")
-  await waitFor(() => live().includes("? Rewind the conversation"), "the picker")
-  // Newest first.
-  expect(live()).toMatch(/❯ 1 second question\n.*2 first question/)
+  await waitFor(() => live().includes("Rewind the conversation"), "the picker")
+  // A/B: newest first, with the focused cursor in the marker column and the right border preserved.
+  expect(live()).toMatch(/^│›1 second question {40}│\n│ 2 first question {41}│$/m)
   terminal.send("\r")
   await shows("Files were not restored")
   expect(rewound).toEqual([2])
-  expect(live()).toContain("› second question")
+  expect(live()).toContain("│›second question")
   expect(all()).toContain("Rewound the conversation")
   terminal.send("\x03")
   terminal.send("\x03")
@@ -350,11 +351,11 @@ test("a command opens the same rewind picker through openRewind", async () => {
   await shows("an answer")
   await idle()
   terminal.send("/rewind\r")
-  await waitFor(() => live().includes("? Rewind the conversation"), "the picker")
+  await waitFor(() => live().includes("Rewind the conversation"), "the picker")
   terminal.send("\r")
   await shows("Files were not restored")
   expect(rewound).toEqual([0])
-  expect(live()).toContain("› a question")
+  expect(live()).toContain("│›a question")
   terminal.send("\x03")
   terminal.send("\x03")
   await exited
@@ -404,7 +405,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         },
       })
       terminal.send("\x1b[27u\x1b[27u")
-      await waitFor(() => live().includes("? Rewind the conversation"), "message picker")
+      await waitFor(() => live().includes("Rewind the conversation"), "message picker")
       terminal.send("\r")
       await waitFor(
         () => live().includes(variant === "disabled" ? "files will not be restored" : "Restore files too?"),
@@ -476,7 +477,7 @@ test("a background result during a turn shows as a notice where it joins, not as
       live()
         .split("\n")
         .includes(
-          ` shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys  │  enter steer  │  ${QUEUE_HINT.toLowerCase()} queue`,
+          `  shift+tab mode  ·  esc stop  ·  ctrl+o detail  ·  ? keys  ·  enter steer  ·  ${QUEUE_HINT.toLowerCase()} queue`,
         ),
     "working",
   )
@@ -486,10 +487,10 @@ test("a background result during a turn shows as a notice where it joins, not as
   await shows("then saw report: B")
   await idle()
   const text = all()
-  expect(text.indexOf("  └ read")).toBeLessThan(text.indexOf("└ ✓ explorer finished · agent"))
+  expect(text.indexOf("└ read")).toBeLessThan(text.indexOf("└ ✓ explorer finished · agent"))
   expect(text.indexOf("└ ✓ explorer finished · agent")).toBeLessThan(text.indexOf("then saw report: B"))
   // A block of the transcript like any other: one blank line before it and after it.
-  expect(text).toMatch(/[^\n]\n\n {2}└ ✓ explorer finished · agent · 41s · 12\.3k tok\n\n {2}then saw/)
+  expect(text).toMatch(/[^\n]\n\n└ ✓ explorer finished · agent · 41s · 12\.3k tok\n\n {2}then saw/)
   terminal.send("\x03")
   await exited
 })
@@ -582,22 +583,22 @@ test("extension dialogs are answered inline: confirm, select and input", async (
     )
   }, "asker")
   terminal.send("go\r")
-  await waitFor(() => live().includes("? Proceed? (asker)"), "confirm")
+  await waitFor(() => live().includes("Proceed? (asker)"), "confirm")
   expect(live()).toContain("It is safe")
   // Nothing is preselected: ↓ picks Yes, then Enter answers.
   terminal.send("\x1b[B\r")
-  await waitFor(() => live().includes("? Pick one"), "select")
+  await waitFor(() => live().includes("Pick one"), "select")
   terminal.send("\x1b[B\r")
-  await waitFor(() => live().includes("? Name"), "input")
+  await waitFor(() => live().includes("Name"), "input")
   terminal.send("Ada\r")
-  await waitFor(() => live().includes("? Skip me"), "second input")
+  await waitFor(() => live().includes("Skip me"), "second input")
   terminal.send("\x1b[27u")
   await shows("thanks")
   await idle()
   const result = agent.messages.find((m) => m.role === "toolResult")
   expect(result?.content[0]).toEqual({ type: "text", text: "true green Ada undefined" })
-  expect(all()).toContain("? Pick one ❯ green")
-  expect(all()).toContain("? Skip me ❯ cancelled")
+  expect(all()).toContain("Pick one › green")
+  expect(all()).toContain("Skip me › cancelled")
   expect(host.ui.pending).toEqual([])
   terminal.send("\x03")
   await exited

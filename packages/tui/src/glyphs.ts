@@ -44,15 +44,13 @@ const defaults = {
   subagentAborted: "⊘",
   /** What the model thought before it answered. */
   thought: "∴",
-  /** Dialog questions and their answers. */
-  question: "?",
   /**
    * Runs down the left of a dialog (a question the user answers inline) and its echo. Box
    * drawing, so it joins into one line from row to row.
    */
   dialogBar: "┃",
   /** Before the selected option of a dialog. */
-  choice: "❯",
+  choice: "›",
   /**
    * An option of a multi-select dialog, chosen or not. ASCII rather than ☐/☒: fonts such as
    * Cascadia lack those, and the fallback font draws them wider than a cell.
@@ -80,7 +78,7 @@ const defaults = {
   boxBottomLeft: "╰",
   boxBottomRight: "╯",
   /** Before the selected row of a list (dialogs, completion lists), and a dialog's echo. */
-  pointer: "❯",
+  pointer: "›",
   /** Starts the history search line, and sits between its label and the query. */
   search: "⌕",
   searchPrompt: "›",
@@ -102,6 +100,8 @@ export const glyphs: Glyphs = { ...defaults }
 /** Definitions are validated by the core registry; absent keys always reset to the defaults. */
 export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
   for (const key of Object.keys(defaults) as (keyof Glyphs)[]) {
-    glyphs[key] = overrides[key] ?? defaults[key]
+    const value = overrides[key] ?? defaults[key]
+    // Legacy API cursor overrides follow the current product cursor without changing the public table.
+    glyphs[key] = (key === "choice" || key === "pointer") && value === "❯" ? "›" : value
   }
 }

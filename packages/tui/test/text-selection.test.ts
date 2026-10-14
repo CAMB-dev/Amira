@@ -4,6 +4,7 @@ import { bg256, defaultGlyphs, ImageStore, stripAnsi } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { fakeProvider } from "../../tui-kit/test/fake-images.ts"
 import { Block, type BlockEnv, type BlockImages, ReplyBlock, userBlock } from "../src/blocks.ts"
+import { setGlyphs } from "../src/glyphs.ts"
 import { cellsOf, chromeRows, markCells, sliceCells, wordAt } from "../src/text-selection.ts"
 import type { BlockKind } from "../src/transcript.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
@@ -132,7 +133,8 @@ test("dragging across rows and blocks marks them and copies what is shown, less 
   // The rows in between are marked, the gutter of the first before the mark, and a cell after
   // each for its line break; blank rows show just that cell.
   const end = `${ON} ${OFF}`
-  expect(drawn[from]).toBe(`  › ${ON}hello there${OFF}${end}`)
+  // Deliberate grid fixture update: marker starts at x0 and readable user text at x2.
+  expect(drawn[from]).toBe(`› ${ON}hello there${OFF}${end}`)
   expect(drawn[from + 1]).toBe(end)
   expect(drawn[rowOf(drawn, "After.")]).toBe(`${ON}  After.${OFF}${end}`)
   // The last row up to the cell the drag ended on.
@@ -287,19 +289,19 @@ test("code copies as written: tabs kept when a line is selected whole; a fence t
   expect(text.split("\n").at(-1)).toBe("a line that is long enough to wrap at forty columns wide")
 })
 
-test("partial code selection excludes right borders and full selection rejoins wide-character padding", () => {
+test("partial fill-only code selection excludes padding and full selection rejoins wide-character padding", () => {
   const pane = new TranscriptPane()
   const source = "abcdef\n界界a b c界d\n\nx|"
   const reply = new ReplyBlock(`\`\`\`\n${source}\n\`\`\``, false, false)
-  // Four content cells are the minimum framed layout; narrower blocks are unframed.
+  // Deliberate code fixture update: fill-only code gets all seven cells after the x2 gutter.
   const e = env(9)
   pane.add(reply)
   const rows = pane.render(e, 30)
   const code = rowOf(rows, "abcd")
-  expect(stripAnsi(rows[code]!)).toBe("  │ abcd│")
+  expect(stripAnsi(rows[code]!)).toBe("  abcdef ")
   pane.startDrag(code, colOf(rows, "abcd") + 1)
   pane.dragTo(code, 100)
-  expect(pane.selectedText()).toBe("bcd")
+  expect(pane.selectedText()).toBe("bcdef")
   const lines = pane.lines(reply, e)
   pane.selectText(
     { block: reply, line: 0, col: 0 },
@@ -371,8 +373,8 @@ test("a message on its band copies as its text without the fill or inter-block g
   const first = rowOf(rows, "first line")
   const padding = `\x1b[48;5;236m${" ".repeat(40)}\x1b[49m`
   expect(rows[first - 1]).toBe(padding)
-  expect(stripAnsi(rows[first]!)).toBe(`  › first line${" ".repeat(26)}`)
-  expect(stripAnsi(rows[first + 1]!)).toBe(`    second line${" ".repeat(25)}`)
+  expect(stripAnsi(rows[first]!)).toBe(`› first line${" ".repeat(28)}`)
+  expect(stripAnsi(rows[first + 1]!)).toBe(`  second line${" ".repeat(27)}`)
   expect(rows[first + 2]).toBe(padding)
   expect(rows[first + 3]).toBe("")
   pane.startDrag(first, 0)
@@ -382,4 +384,17 @@ test("a message on its band copies as its text without the fill or inter-block g
   pane.startDrag(first, 0)
   pane.dragTo(first + 1, 100)
   expect(pane.selectedText()).toBe("first line\nsecond line")
+})
+
+test("two-cell ASCII tree marker consumes the grid gap without entering copied content", () => {
+  setGlyphs({ treeLast: "`-" })
+  try {
+    expect(chromeRows(["`-read a.ts", "    indented code", "  next row"])).toEqual([
+      { from: 2 },
+      { from: 2 },
+      { from: 2 },
+    ])
+  } finally {
+    setGlyphs()
+  }
 })

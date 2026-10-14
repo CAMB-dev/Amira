@@ -1,5 +1,6 @@
 import { graphemes, inverse, TAB_WIDTH, type Theme, visibleWidth } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
+import { MARKER_WIDTH } from "./grid.ts"
 
 /** An escape sequence at a position (sticky): CSI, OSC, DCS/APC/PM/SOS, or a two-byte one. */
 export const ESCAPE =
@@ -167,7 +168,12 @@ const marks = () => [
   glyphs.error,
   glyphs.interrupted,
 ]
-const leadPattern = () => new RegExp(`^ *(?:(?:${[...new Set(marks())].map(escapeRe).join("|")}) +)+`, "u")
+const leadPattern = () => {
+  const prefixes = [...new Set(marks())].map(
+    (mark) => `${escapeRe(mark)}${visibleWidth(mark) >= MARKER_WIDTH ? " *" : " +"}`,
+  )
+  return new RegExp(`^ *(?:${prefixes.join("|")})+`, "u")
+}
 
 /**
  * Rows of a tool call, a notice or command output: the symbols in front (a bullet, a tree, a

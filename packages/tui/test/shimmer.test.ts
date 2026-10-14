@@ -7,45 +7,47 @@ import { createTurnActivity } from "../src/app/activity.ts"
 import { shimmerLabel } from "../src/app/activity-row.ts"
 import { configureShimmer } from "../src/app/shimmer.ts"
 
-// Prototype motion sampled at animationMs 0, 700, 1400, then rounded to the existing
-// 16 gradient stops / 8 fade steps. Each entry asserts a cell's actual RGB ANSI.
-const dark = ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"]
+// Deliberate style update: truecolor edges now use 32 fade steps (still 16 stops).
 const frames: Record<ShimmerPreset, string[][]> = {
-  off: [dark, dark, dark],
+  off: [
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+  ],
   soft: [
-    dark,
-    ["150;0;0", "176;0;64", "98;0;112", "24;0;66", "0;0;0"],
-    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;120"],
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+    ["150;0;0", "171;0;62", "98;0;112", "24;0;66", "0;0;8"],
+    ["0;0;0", "0;0;0", "0;0;0", "4;0;11", "0;0;113"],
   ],
   sharp: [
-    dark,
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
     ["0;0;0", "0;0;0", "0;0;0", "64;0;176", "0;0;240"],
     ["240;0;0", "176;0;64", "112;0;128", "0;0;0", "0;0;0"],
   ],
   wide: [
-    dark,
-    ["210;0;0", "110;0;40", "42;0;48", "8;0;22", "0;0;0"],
-    ["120;0;0", "132;0;48", "98;0;112", "64;0;176", "0;0;240"],
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+    ["210;0;0", "116;0;42", "42;0;48", "10;0;28", "0;0;8"],
+    ["113;0;0", "127;0;46", "102;0;116", "64;0;176", "0;0;225"],
   ],
   bounce: [
-    dark,
-    ["0;0;0", "66;0;24", "98;0;112", "64;0;176", "0;0;150"],
-    ["0;0;0", "0;0;0", "0;0;0", "8;0;22", "0;0;150"],
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+    ["0;0;0", "61;0;22", "91;0;104", "64;0;176", "0;0;158"],
+    ["0;0;0", "0;0;0", "0;0;0", "8;0;22", "0;0;143"],
   ],
   pulse: [
-    dark,
-    ["180;0;0", "132;0;48", "84;0;96", "48;0;132", "0;0;180"],
-    ["150;0;0", "110;0;40", "70;0;80", "40;0;110", "0;0;150"],
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+    ["173;0;0", "127;0;46", "81;0;92", "46;0;127", "0;0;173"],
+    ["143;0;0", "105;0;38", "67;0;76", "38;0;105", "0;0;143"],
   ],
   wave: [
-    ["210;0;0", "196;0;14", "154;0;56", "112;0;98", "56;0;154"],
-    ["56;0;154", "112;0;98", "168;0;42", "196;0;14", "210;0;0"],
-    ["42;0;168", "0;0;210", "0;0;210", "28;0;182", "70;0;140"],
+    ["203;0;0", "189;0;14", "149;0;54", "108;0;95", "54;0;149"],
+    ["54;0;149", "108;0;95", "162;0;41", "189;0;14", "203;0;0"],
+    ["41;0;162", "0;0;203", "0;0;203", "27;0;176", "68;0;135"],
   ],
   reveal: [
-    dark,
-    ["240;0;0", "132;0;48", "42;0;48", "0;0;0", "0;0;0"],
-    ["240;0;0", "176;0;64", "112;0;128", "64;0;176", "0;0;180"],
+    ["0;0;0", "0;0;0", "0;0;0", "0;0;0", "0;0;0"],
+    ["240;0;0", "127;0;46", "42;0;48", "4;0;11", "0;0;0"],
+    ["240;0;0", "176;0;64", "112;0;128", "64;0;176", "0;0;188"],
   ],
 }
 
@@ -86,7 +88,7 @@ for (const preset of Object.keys(frames) as ShimmerPreset[]) {
   })
 }
 
-test("unconfigured soft is byte-for-byte the previous sweep", () => {
+test("unconfigured soft keeps prototype sweep motion with 32 fade steps", () => {
   const ctx = context()
   for (const time of [0, 80, 400, 700, 1400, 1799, 1800, 2200]) {
     const label = "Responding…"
@@ -94,7 +96,7 @@ test("unconfigured soft is byte-for-byte the previous sweep", () => {
     const previous = [...label]
       .map((char, cell) => {
         const distance = Math.abs(cell - center)
-        const fade = distance < 3 ? Math.round(Math.cos(((distance / 3) * Math.PI) / 2) ** 2 * 8) : 0
+        const fade = distance < 3 ? Math.round(Math.cos(((distance / 3) * Math.PI) / 2) ** 2 * 32) : 0
         const stop = Math.round((cell / (label.length - 1)) * 15)
         return (fade ? ctx.theme[`shimmer${stop}Fade${fade}`]! : ctx.theme.muted)(char)
       })
@@ -125,11 +127,11 @@ test("bounce returns, reveal fades, pulse breathes and hard wave stays fully lit
   ])
   configureShimmer(ctx.theme, resolveShimmer(undefined, "pulse"))
   expect(cellColors(shimmerLabel("ABCDE", ctx, 1000))).toEqual([
-    "210;0;0",
-    "154;0;56",
-    "98;0;112",
-    "56;0;154",
-    "0;0;210",
+    "218;0;0",
+    "160;0;58",
+    "102;0;116",
+    "58;0;160",
+    "0;0;218",
   ])
   configureShimmer(ctx.theme, resolveShimmer(undefined, { preset: "wave", edge: "hard" }))
   expect(cellColors(shimmerLabel("ABCDE", ctx, 0))).toEqual([
@@ -192,7 +194,7 @@ test("every effect degrades to plain muted text without shimmer colour support",
   }
 })
 
-test("idle picker preview uses the existing spinner ticks and animation clock", () => {
+test("idle picker preview advances with real elapsed time independently of spinner ticks", () => {
   let now = 1000
   const clock = spyOn(Date, "now").mockImplementation(() => now)
   try {
@@ -204,7 +206,7 @@ test("idle picker preview uses the existing spinner ticks and animation clock", 
     const first = activity.render(100, ctx, options)[0]!
     expect(stripAnsi(first)).toContain("Responding…")
     now += 700
-    expect(activity.render(100, ctx, options)[0]).toBe(first)
+    expect(activity.render(100, ctx, options)[0]).not.toBe(first)
     spinner.tick()
     expect(activity.render(100, ctx, options)[0]).not.toBe(first)
     expect(activity.working).toBe(false)

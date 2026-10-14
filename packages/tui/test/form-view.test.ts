@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AnyEvent, defineTool, type FormSpec, textResult } from "@amira/api"
@@ -124,7 +125,7 @@ test("a form opens full screen, queues a dialog behind it, and gives the inline 
   expect(calls).toEqual(["ping https://ci.example/hook"])
   terminal.send("\x13")
   // Back on the main screen: the transcript is intact and the queued dialog shows inline.
-  await waitFor(() => !screen.inAltScreen && live().includes("? Deploy too? (other)"), "inline dialog")
+  await waitFor(() => !screen.inAltScreen && live().includes("Deploy too? (other)"), "inline dialog")
   expect(all()).toContain("› set it up")
   terminal.send("\x1b[B\r")
   expect(await later).toBe(true)
@@ -164,12 +165,12 @@ test("Esc on a changed form asks first; the form closes when its request is reso
 test("a secret input dialog is masked and its answer is not echoed", async () => {
   const { host, terminal, live, all, exited } = await setup([])
   const key = host.ui.api("x").input("API key", { secret: true })
-  await waitFor(() => live().includes("? API key"), "dialog")
+  await waitFor(() => live().includes("API key"), "dialog")
   terminal.send("\x1b[200~sk-abc-123\n\x1b[201~")
   await waitFor(() => live().includes("**********"), "mask")
   terminal.send("\r")
   expect(await key).toBe("sk-abc-123")
-  await waitFor(() => all().includes("? API key ❯ (hidden)"), "answer line")
+  await waitFor(() => all().includes("API key › (hidden)"), "answer line")
   expect(all()).not.toContain("sk-abc")
   terminal.send("\x03")
   await exited
@@ -181,7 +182,7 @@ test("narrow and short terminals: the form scrolls and resizes while editing", a
   await waitFor(() => screen.lines.join("\n").includes("Webhook"), "form")
   terminal.send("https://a.b")
   terminal.send("\t\t\t")
-  await waitFor(() => screen.lines.join("\n").includes("❯ Note"), "scrolled to note")
+  await waitFor(() => screen.lines.join("\n").includes("› Note"), "scrolled to note")
   expect(screen.lines.join("\n")).toContain("[ Save ]")
   screen.resize(40, 12)
   terminal.setSize(40, 12)

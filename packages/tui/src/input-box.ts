@@ -8,7 +8,7 @@ import {
   type Theme,
   themeToken,
 } from "@amira/tui-kit"
-import { type StatusEntry, statusBorder } from "./status-bar.ts"
+import { type StatusEntry, statusLine } from "./status-bar.ts"
 
 const focusedThemes = new WeakMap<Theme, Theme>()
 const inputThemes = new WeakMap<Theme, Theme>()
@@ -25,18 +25,21 @@ export function inputRows(rows: number): number {
 }
 
 /**
- * The editor in a rounded frame, with the status in its bottom border. Longer text scrolls
- * inside it; the border says how many rows are out of view above and below (the rows below at
- * the right end of the status, which gives way before that count does).
+ * The editor in an intact rounded frame, with status on a separate shared-edge row below.
+ * Longer text scrolls inside it; hidden rows above label the top edge and hidden rows below
+ * stay at the right of the status, outlasting lower-priority items.
  */
 export class InputBox implements Component {
+  /** Total composer rows, including its edges and separate status. */
+  maxRows = Number.POSITIVE_INFINITY
+  private input: Component
   private box: Box
 
   constructor(
     private editor: Editor,
-    status: () => readonly StatusEntry[] = () => [],
+    private status: () => readonly StatusEntry[] = () => [],
   ) {
-    const input: Component = {
+    this.input = {
       render: (width, ctx) => {
         if (!ctx.color || !editor.focused) return editor.render(width, ctx)
         let theme = inputThemes.get(ctx.theme)
@@ -47,38 +50,39 @@ export class InputBox implements Component {
         return editor.render(width, { ...ctx, theme })
       },
     }
-    this.box = new Box(input, {
+    this.box = new Box(this.input, {
+      markerGutter: true,
       labels: () => {
         const { above } = this.editor.hidden
         return above > 0 ? { top: `↑ ${above} ${above === 1 ? "row" : "rows"}` } : {}
-      },
-      bottom: (width, ctx) => {
-        const { below } = this.editor.hidden
-        const more: StatusEntry[] = below
-          ? [
-              {
-                id: "input.below",
-                align: "right",
-                tone: "muted",
-                priority: Number.POSITIVE_INFINITY,
-                text: `↓ ${below} ${below === 1 ? "row" : "rows"}`,
-              },
-            ]
-          : []
-        return statusBorder([...status(), ...more], width, ctx)
       },
     })
   }
 
   render(width: number, ctx: RenderContext): string[] {
-    this.editor.maxRows = inputRows(ctx.rows)
+    const framed = width >= 8 && this.maxRows >= 4
+    const chrome = width < 8 ? 0 : (framed ? 2 : 0) + (this.maxRows >= 2 ? 1 : 0)
+    this.editor.maxRows = Math.min(inputRows(ctx.rows), Math.max(1, this.maxRows - chrome))
     const border = this.editor.focused ? themeToken(ctx.theme, "borderFocused") : undefined
-    if (!border) return this.box.render(width, ctx)
-    let theme = focusedThemes.get(ctx.theme)
-    if (!theme) {
-      theme = { ...ctx.theme, border }
+    let theme = ctx.theme
+    if (border) {
+      theme = focusedThemes.get(ctx.theme) ?? { ...ctx.theme, border }
       focusedThemes.set(ctx.theme, theme)
     }
-    return this.box.render(width, { ...ctx, theme })
+    const rows = (framed ? this.box : this.input).render(width, { ...ctx, theme })
+    if (width < 8 || this.maxRows < 2) return rows
+    const { below } = this.editor.hidden
+    const more: StatusEntry[] = below
+      ? [
+          {
+            id: "input.below",
+            align: "right",
+            tone: "muted",
+            priority: Number.POSITIVE_INFINITY,
+            text: `↓ ${below} ${below === 1 ? "row" : "rows"}`,
+          },
+        ]
+      : []
+    return [...rows, ...statusLine([...this.status(), ...more], width, ctx)]
   }
 }

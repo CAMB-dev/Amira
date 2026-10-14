@@ -30,6 +30,8 @@ import { userLines } from "../src/format.ts"
 import { finishedToolLines } from "../src/tool-view.ts"
 import { renderViewLines } from "../src/view-lines.ts"
 
+// Style oracles keep the marker at column 0, readable text/footer at 2, and shared frame edges.
+
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
   while (!check()) {
@@ -158,7 +160,7 @@ test("a command opens an extension's view over its data; it follows changes, run
   expect(lines[1]).toBe("1/2 done")
   expect(lines[2]).toBe("─".repeat(80))
   expect(lines.slice(3, 5)).toEqual(["✓ read the diff", "… check the tests"])
-  expect(lines.at(-1)).toBe("x cancel · c close · ↑↓ pgup pgdn home end scroll · esc close")
+  expect(lines.at(-1)).toBe("  x cancel · c close · ↑↓ pgup pgdn home end scroll · esc close")
 
   // The extension changes its data and asks for a redraw: the view shows it.
   s.data.steps.push({ title: "write the summary", state: "running" })
@@ -174,7 +176,7 @@ test("a command opens an extension's view over its data; it follows changes, run
 
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "the inline UI")
-  expect(s.view()).toContain("│ › Message Amira")
+  expect(s.view()).toMatch(/^│›Message Amira +│$/m)
   expect(s.screen.altSwitches).toEqual([true, false])
 
   // A key can close the view too; opening it again shows it anew.
@@ -201,9 +203,9 @@ test("a long body starts at its top unless the view follows its end; the body sc
   top.terminal.send("/progress\r")
   await waitFor(() => top.view().includes("read the diff"), "the top")
   expect(top.screen.lines[2]).toBe("read the diff")
-  expect(top.screen.lines.at(-1)).toMatch(/^1–9 of 42 · /)
+  expect(top.screen.lines.at(-1)).toMatch(/^ {2}1–9 of 42 · /)
   top.terminal.send("\x1b[B")
-  await waitFor(() => top.screen.lines.at(-1)!.startsWith("2–10 of 42"), "scrolled a row")
+  await waitFor(() => top.screen.lines.at(-1)!.startsWith("  2–10 of 42"), "scrolled a row")
   // Ctrl+C leaves the view, not Amira.
   top.terminal.send("\x03")
   await waitFor(() => !top.screen.inAltScreen, "closed")
@@ -213,7 +215,7 @@ test("a long body starts at its top unless the view follows its end; the body sc
   const end = await setup({ rows: 12, view: long(true) })
   end.terminal.send("/progress\r")
   await waitFor(() => end.view().includes("row 39"), "the end")
-  expect(end.screen.lines.at(-1)).toMatch(/^following · /)
+  expect(end.screen.lines.at(-1)).toMatch(/^ {2}following · /)
   end.terminal.send(ESC)
   await waitFor(() => !end.screen.inAltScreen, "closed")
   end.terminal.send("\x03")
@@ -305,7 +307,7 @@ test("a key can ask to confirm first: y goes ahead, any other key does not", asy
   await waitFor(() => s.view().includes("check the tests"), "the view")
   s.terminal.send("x")
   await waitFor(
-    () => s.screen.lines.at(-1) === "Stop the run? y stops it · any other key keeps it running",
+    () => s.screen.lines.at(-1) === "  Stop the run? y stops it · any other key keeps it running",
     "the question",
   )
   // Any other key keeps it running, and is used up: "q" does not close the view.
@@ -456,10 +458,10 @@ test("user-message lines use transcript wrapping, marker, note and background in
     expect(rows.slice(2 + expected.length, 2 + 2 * expected.length)).toEqual(expected)
     if (theme === monoTheme) {
       expect(expected.map(stripAnsi)).toEqual([
-        "  › A task that wraps across",
-        "    several rows",
-        "    and a second line",
-        "    └ a display note",
+        "› A task that wraps across",
+        "  several rows",
+        "  and a second line",
+        "└ a display note",
       ])
     } else expect(expected[0]).not.toBe(stripAnsi(expected[0]!))
   }
@@ -478,8 +480,8 @@ test("semantic view text cannot inject terminal styling", () => {
   expect(rendered.join("\n")).not.toContain("\x1b[31m")
   const rows = rendered.map(stripAnsi)
   expect(rows[0]).toBe("Title row")
-  expect(rows[2]).toBe("  › Task")
-  expect(rows[3]).toBe("    └ Note")
+  expect(rows[2]).toBe("› Task")
+  expect(rows[3]).toBe("└ Note")
   expect(rows.join("\n")).not.toContain("\x1b")
 })
 
@@ -539,7 +541,7 @@ test("keys sharing a label share a footer item, empty labels stay out, and the a
   }
   const lines = new ExtensionViewer(view, {}).render(40, renderContext).map(stripAnsi)
   expect(lines[0]).toBe("◆ A rather long title that has t… 2 of 5")
-  expect(lines.at(-1)).toBe("←→ switch · x y stop · esc close")
+  expect(lines.at(-1)).toBe("  ←→ switch · x y stop · esc close")
   const wide = new ExtensionViewer(view, {}).render(120, renderContext).map(stripAnsi)
   expect(wide[0]).toMatch(/^◆ A rather long title .*screen +2 of 5$/)
   expect(wide[0]).toHaveLength(120)
@@ -720,12 +722,12 @@ test("renderTools groups only consecutive exploration and preserves exact host s
     expect(text.join("\n")).not.toContain("✓ +1")
     expect(rows.some((row) => row.includes(theme.error("✗ missing")))).toBe(true)
     if (level === "full") {
-      expect(text.filter((row) => row === "  ├ read a.ts")).toHaveLength(2)
+      expect(text.filter((row) => row === "├ read a.ts")).toHaveLength(2)
       expect(text.join("\n")).not.toContain("▸")
       expect(text.filter((row) => row.trim().endsWith("second"))).toHaveLength(2)
     } else {
-      expect(text[0]).toBe("  ├ Read 2 files  ▸")
-      expect(text.at(-1)).toBe("  └ Listed 2 directories  ▸")
+      expect(text[0]).toBe("├ Read 2 files  ▸")
+      expect(text.at(-1)).toBe("└ Listed 2 directories  ▸")
       expect(rows[2]).toContain(theme.muted("▸"))
     }
     if (level !== "collapsed") {
@@ -744,8 +746,8 @@ test("renderTool in an open view uses the registry passed by the app", async () 
     },
   })
   s.terminal.send("/progress\r")
-  await waitFor(() => s.view().includes("  ├ test from registry  ✓ presented result"), "the presenter")
-  expect(s.view()).toContain("  ├ test from registry  ✓ presented result")
+  await waitFor(() => s.view().includes("├ test from registry  ✓ presented result"), "the presenter")
+  expect(s.view()).toContain("├ test from registry  ✓ presented result")
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "closed")
   s.terminal.send("\x03")
@@ -820,19 +822,19 @@ test("a key can ask for a line of text at the bottom of the view; Esc cancels it
   s.terminal.send("/progress\r")
   await waitFor(() => s.view().includes("check the tests"), "the view")
   s.terminal.send("m")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer: hi"), "the prompt")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Message to writer: hi"), "the prompt")
   // Keys go to the prompt: "q" and "m" are typed, not run.
   s.terminal.send("q m\r")
   await waitFor(() => s.view().includes("sent: hi q m"), "the answer")
-  expect(s.screen.lines.at(-1)).toBe("m message · ↑↓ pgup pgdn home end scroll · esc close")
+  expect(s.screen.lines.at(-1)).toBe("  m message · ↑↓ pgup pgdn home end scroll · esc close")
   s.terminal.send("m")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer:"), "the prompt again")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Message to writer:"), "the prompt again")
   s.terminal.send(ESC)
   await waitFor(() => answers.length === 2, "cancelled")
   expect(s.screen.inAltScreen).toBe(true)
   // Closing the view cancels a prompt left open.
   s.terminal.send("m")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Message to writer:"), "a third prompt")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Message to writer:"), "a third prompt")
   s.terminal.send("\x03")
   await waitFor(() => answers.length === 3, "cancelled by Ctrl+C")
   await waitFor(() => !s.screen.inAltScreen, "Ctrl+C closes even with a prompt")
@@ -866,11 +868,11 @@ test("transcript helpers share main reply/tool styles, closing rails and running
   const ctx = { ...renderContext, theme: defaultTheme, color: true }
   const rows = viewer.render(80, ctx)
   expect(rows[2]).toContain(defaultTheme.path("a.ts"))
-  expect(stripAnsi(rows[2]!)).toBe("  └ read a.ts  ✓ done")
+  expect(stripAnsi(rows[2]!)).toBe("└ read a.ts  ✓ done")
   expect(rows[4]).toBe(`  ${defaultTheme.strong!("Now waiting.")}`)
   expect(rows.slice(5, 8).map(stripAnsi)).toEqual(["", "  ───", ""])
-  expect(stripAnsi(rows[8]!)).toMatch(/^ {2}⠋ wait +1s$/)
+  expect(stripAnsi(rows[8]!)).toMatch(/^⠋ wait +1s$/)
   expect(visibleWidth(rows[8]!)).toBe(80)
   now += 80
-  expect(stripAnsi(viewer.render(80, ctx)[8]!)).toMatch(/^ {2}⠙ wait +1s$/)
+  expect(stripAnsi(viewer.render(80, ctx)[8]!)).toMatch(/^⠙ wait +1s$/)
 })

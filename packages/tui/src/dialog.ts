@@ -1,17 +1,20 @@
 import { type AskAnswer, type ConfirmAnswer, type EventMap, type SelectChoice, sectionOf } from "@amira/api"
 import { rankMatches, sessionSnippet } from "@amira/core"
 import {
+  bold,
   type Component,
   Editor,
   type InputEvent,
   LineInput,
   type RenderContext,
   type StyleFn,
+  stripAnsi,
   type Theme,
   truncateToWidth,
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { dialogFrame } from "./dialog-frame.ts"
 import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
@@ -25,7 +28,7 @@ export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | SelectChoice |
 /** Options of a list shown at once; longer lists scroll with the selection. */
 const MAX_OPTIONS = 10
 
-/** Where a dialog's bar and title start: "┃ ". */
+/** The marker gutter used by committed answered-question rows. */
 const BAR_WIDTH = 2
 
 /** The labels of a confirm's choices, which its echo repeats. */
@@ -81,13 +84,15 @@ interface Fit {
   indicator: boolean
   /** The "3/12" row under options that scroll. */
   position: boolean
+  /** Section headings give way before selected options and the footer. */
+  headings: boolean
 }
 
 /**
  * The one component for every question the user answers inline (ui.request): a confirm, a
  * select (typing filters it), a diff review, an input (plain or secret) and the questions of
- * ask_user. It is a block with a bar down its left: the question, a muted message or diff, the
- * options as a list (❯ marks the selected one; digits choose in short lists; a multi-select
+ * ask_user. It has a rounded frame: the title, a muted message or diff, the
+ * options as a list (› marks the selected one; digits choose in short lists; a multi-select
  * checks them with Space), and the keys at the bottom. A select's sections put a heading over
  * their options and add keys of their own, shown while one of them is selected; once a filter
  * is typed, every key goes to it. A confirm starts with nothing selected: Enter does nothing
@@ -217,19 +222,29 @@ export class Dialog implements Component {
 
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
-    const bar = barStyle(this.request, theme)(glyphs.dialogBar)
-    const inner = Math.max(1, width - BAR_WIDTH)
-    const rows = this.request.kind === "input" ? this.#renderInput(inner, ctx) : this.#renderList(inner, ctx)
-    return rows.map((l) => (l ? `${bar} ${l}` : bar))
+    const border = barStyle(this.request, theme)
+    const inner = Math.max(1, width - 3)
+    const title = this.#titleRows(inner, theme)[0] ?? ""
+    // Body producers include their two-cell gutter; the frame absorbs one into its side.
+    const body =
+      this.request.kind === "input" ? this.#renderInput(inner + 2, ctx) : this.#renderList(inner + 2, ctx)
+    return dialogFrame(title, body, width, ctx, border, this.maxRows)
+  }
+
+  get #bodyBudget(): number {
+    return this.maxRows < 4 ? Math.max(1, this.maxRows - 1) : Math.max(2, this.maxRows - 2)
   }
 
   #renderInput(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const r = this.request as Extract<DialogRequest, { kind: "input" }>
     const hint = theme.muted(
-      fitHint([this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "cancel", 3)], width),
+      fitHint(
+        [this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "cancel", 3)],
+        Math.max(1, width - 2),
+      ),
     )
-    const title = this.#titleRows(width, theme)
+    const title = this.#titleRows(Math.max(1, width - 2), theme).slice(1)
     const editor = this.#editor
     editor?.setPrompt(`${glyphs.pointer} `)
     // The whole text, to see whether it fits with the title.
@@ -243,8 +258,8 @@ export class Dialog implements Component {
     let body = render()
     // A blank row before the keys goes first, then the title gives way, then the text scrolls
     // inside the rows left (the caret stays in view): a row of title stays while two are left.
-    const blank = title.length + body.length + 2 <= this.maxRows ? [""] : []
-    const room = Math.max(1, this.maxRows - 1 - blank.length)
+    const blank = title.length + body.length + 2 <= this.#bodyBudget ? [""] : []
+    const room = Math.max(1, this.#bodyBudget - 1 - blank.length)
     if (editor && body.length > room - 1) {
       editor.maxRows = Math.max(1, room - (room > 1 ? 1 : 0))
       body = render()
@@ -258,7 +273,7 @@ export class Dialog implements Component {
     const r = this.request
     const page = this.#current
     const choices = this.#choices()
-    const title = this.#titleRows(width, theme)
+    const title = this.#titleRows(Math.max(1, width - 2), theme).slice(1)
     const message =
       r.kind === "confirm" && r.message
         ? r.message
@@ -268,9 +283,9 @@ export class Dialog implements Component {
     // A diff to review, or what an approval is about as its tool presents it (a command, a diff).
     const diff =
       r.kind === "diff-review"
-        ? renderToolLines(parseUnifiedDiff(r.diff), theme, width)
+        ? renderToolLines(parseUnifiedDiff(r.diff), theme, Math.max(1, width - 2))
         : r.kind === "confirm" && r.preview?.length
-          ? renderToolLines(r.preview, theme, width)
+          ? renderToolLines(r.preview, theme, Math.max(1, width - 2))
           : []
     const indicator =
       this.#pages.length > 1
@@ -282,10 +297,12 @@ export class Dialog implements Component {
             ),
           )
         : undefined
-    const filter = this.#filter
-      ? [truncateToWidth(`${theme.muted(`filter ${glyphs.pointer}`)} ${this.#filter}`, width, glyphs.more)]
-      : []
-    const hint = theme.muted(fitHint(this.#footer(), width))
+    // At the four-row minimum, the selected answer and hint take precedence over the filter.
+    const filter =
+      this.#filter && this.#bodyBudget >= 3
+        ? [truncateToWidth(`${theme.muted("filter:")} ${this.#filter}`, Math.max(1, width - 2), glyphs.more)]
+        : []
+    const hint = theme.muted(fitHint(this.#footer(), Math.max(1, width - 2)))
     const fit: Fit = {
       blanks: 2,
       inlineDescriptions: false,
@@ -294,13 +311,14 @@ export class Dialog implements Component {
       title: title.length,
       indicator: indicator !== undefined,
       position: true,
+      headings: true,
     }
     const layout = (diffRows: number) => {
       const out: string[] = []
       if (fit.indicator && indicator) out.push(indicator)
       out.push(...fitTitle(title, fit.title))
       out.push(...cutEnd(message, fit.message, theme))
-      if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme))
+      if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme, Math.max(1, width - 2)))
       if (fit.blanks > 1) out.push("")
       out.push(...filter, ...this.#optionRows(choices, width, fit, theme))
       if (fit.blanks > 0) out.push("")
@@ -309,27 +327,27 @@ export class Dialog implements Component {
     }
     // The diff takes what the rest leaves, and a diff cut short is worth more than blank rows.
     // The rest gives rows back in this order.
-    if (diff.length && layout(0).length + diff.length > this.maxRows) fit.blanks = 0
-    const fits = () => layout(0).length <= this.maxRows
+    if (diff.length && layout(0).length + diff.length > this.#bodyBudget) fit.blanks = 0
+    const fits = () => layout(0).length <= this.#bodyBudget
     // Each step gives up a row (or a way of drawing) while it can.
     const steps: [can: () => boolean, take: () => void][] = [
       [() => fit.blanks > 0, () => fit.blanks--],
       [() => !fit.inlineDescriptions, () => (fit.inlineDescriptions = true)],
-      [() => fit.message > 1, () => fit.message--],
-      [() => fit.options > 1, () => fit.options--],
       [() => fit.message > 0, () => fit.message--],
+      [() => fit.headings, () => (fit.headings = false)],
+      [() => fit.options > 1, () => fit.options--],
       [() => fit.position, () => (fit.position = false)],
-      [() => fit.title > 1, () => fit.title--],
+      [() => fit.title > 0, () => fit.title--],
       [() => fit.indicator, () => (fit.indicator = false)],
     ]
     for (const [can, take] of steps) {
       while (!fits() && can()) take()
     }
-    const room = this.maxRows - layout(0).length
+    const room = this.#bodyBudget - layout(0).length
     const rows = layout(Number.isFinite(room) ? Math.max(0, room) : diff.length)
     // Local pickers keep their explicit control hints even below the usual three-row minimum.
-    return this.selection.footer?.length && rows.length > this.maxRows
-      ? rows.slice(-Math.max(1, this.maxRows))
+    return this.selection.footer?.length && rows.length > this.#bodyBudget
+      ? rows.slice(-Math.max(1, this.#bodyBudget))
       : rows
   }
 
@@ -364,7 +382,7 @@ export class Dialog implements Component {
     const rows: string[] = []
     for (const { c, selected, lead, typed, description } of items) {
       const heading = this.#heading(c)
-      if (heading) rows.push(truncateToWidth(`  ${theme.muted(heading)}`, width, glyphs.more))
+      if (heading && fit.headings) rows.push(truncateToWidth(`  ${theme.muted(heading)}`, width, glyphs.more))
       const leadWidth = visibleWidth(lead)
       if (c.other && this.#field && selected) {
         const field = this.#field.render(Math.max(4, width - leadWidth), theme, {
@@ -393,16 +411,18 @@ export class Dialog implements Component {
     return rows
   }
 
-  /** The question with its "?", and who asked in muted text; wrapped under itself. */
+  /** The bold title, and who asked in muted text; wrapped under itself. */
   #titleRows(width: number, theme: Theme): string[] {
     const r = this.request
     const sourceLabel = r.sourceLabel ?? r.source
     const from = sourceLabel ? theme.muted(` (${sourceLabel})`) : ""
     const question = this.#current?.question ?? r.title
-    const rows = wrapText(`${question}${from}`, Math.max(1, width - 2))
-    const title = rows.map((l, i) => (i === 0 ? `${theme.accent(glyphs.question)} ${l}` : `  ${l}`))
+    const title = wrapText(`${bold(theme.text(question))}${from}`, Math.max(1, width))
     const header = this.selection.header?.(theme)
-    if (header) title.push(truncateToWidth(header, width, glyphs.more))
+    if (header) {
+      const marked = stripAnsi(header).startsWith(`${glyphs.choice} `)
+      title.push(truncateToWidth(header, width + (marked ? 2 : 0), glyphs.more))
+    }
     return title
   }
 
@@ -682,14 +702,14 @@ function pagesOf(r: DialogRequest): Page[] {
   }
 }
 
-/** The bar's color: approvals of tool calls in the warning color, other questions in the accent. */
+/** Border semantics: approvals warn, other live questions use the interactive accent. */
 function barStyle(r: DialogRequest, theme: Theme): StyleFn {
   return r.source === "approval" ? theme.warning : theme.accent
 }
 
 /**
  * What stays in the transcript once a dialog is answered: a line per question under the same
- * bar, "┃ ? Allow bash? › Yes". A secret answer is never shown.
+ * empty marker gutter, "  Allow bash? › Yes". A secret answer is never shown.
  */
 export function dialogEchoLines(
   r: DialogRequest,
@@ -697,12 +717,11 @@ export function dialogEchoLines(
   theme: Theme,
   width = Number.POSITIVE_INFINITY,
 ): string[] {
-  const bar = barStyle(r, theme)(glyphs.dialogBar)
-  // Wrapped, a line goes on under its question, the bar still at its left.
+  // Completed questions are transcript content, not a live typing container.
   const line = (question: string, shown: string) => {
-    const text = `${theme.accent(glyphs.question)} ${question} ${theme.muted(`${glyphs.pointer} ${shown}`)}`
-    const rows = Number.isFinite(width) ? wrapText(text, Math.max(1, width - BAR_WIDTH - 2)) : [text]
-    return rows.map((l, i) => (i === 0 ? `${bar} ${l}` : `${bar}   ${l}`))
+    const text = `${bold(theme.text(question))} ${theme.muted(`${glyphs.pointer} ${shown}`)}`
+    const rows = Number.isFinite(width) ? wrapText(text, Math.max(1, width - BAR_WIDTH)) : [text]
+    return rows.map((l) => `  ${l}`)
   }
   if (answer === undefined) return line(r.title, "cancelled")
   if (r.kind === "ask" && Array.isArray(answer)) {
@@ -742,6 +761,7 @@ function askAnswerText(a: AskAnswer): string {
 
 /** A wrapped title cut to `rows`, its last row ending in an ellipsis when cut. */
 function fitTitle(title: string[], rows: number): string[] {
+  if (rows <= 0) return []
   if (title.length <= rows) return title
   const kept = title.slice(0, Math.max(1, rows))
   kept[kept.length - 1] = `${kept[kept.length - 1]}${glyphs.more}`
@@ -761,9 +781,15 @@ function cutEnd(lines: string[], rows: number, theme: Theme): string[] {
  * Lines cut to `rows`: the start and the end, with a marker in the middle saying how many
  * were left out. The start (file names, first hunk) gets the extra row.
  */
-function cutMiddle(lines: string[], rows: number, theme: Theme): string[] {
+function cutMiddle(lines: string[], rows: number, theme: Theme, width: number): string[] {
   if (lines.length <= rows) return lines
   if (rows <= 0) return []
+  if (rows === 2) {
+    // Keep both ends even when a standalone omission row would consume the tail.
+    const marker = theme.muted(`${glyphs.more} ${lines.length - 2} more lines ${glyphs.more}`)
+    const head = truncateToWidth(lines[0]!, Math.max(1, width - visibleWidth(marker) - 1), glyphs.more)
+    return [`${head} ${marker}`, lines.at(-1)!]
+  }
   const keep = rows - 1
   const head = Math.ceil(keep / 2)
   const tail = keep - head

@@ -1,3 +1,4 @@
+// A/D deliberate oracles: fields hang at content column 2; form cursors use › and filters use a colon.
 import { describe, expect, test } from "bun:test"
 import { CURSOR_MARKER } from "../src/component.ts"
 import {
@@ -8,6 +9,7 @@ import {
   LineInput,
 } from "../src/components/form.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
+import { defaultGlyphs } from "../src/glyphs.ts"
 import { InputParser } from "../src/input.ts"
 import { type InputEvent, key, textKey } from "../src/keys.ts"
 import { FakeTerminal } from "../src/terminal.ts"
@@ -122,6 +124,46 @@ function makeForm(over: Partial<FormOptions> = {}) {
 }
 
 describe("Form", () => {
+  test("configured ASCII pointers and separators follow field, list, action and footer focus", () => {
+    const { form } = makeForm({
+      fields: [
+        {
+          id: "mode",
+          type: "select",
+          label: "Mode",
+          options: [{ value: "a", label: "Alpha", description: "First" }],
+        },
+        { id: "tags", type: "multiselect", label: "Tags", options: [{ value: "x" }] },
+        { id: "go", type: "action", label: "Fetch" },
+      ],
+      validate: () => ({}),
+    })
+    const ctx = { ...plain, rows: 40, glyphs: { ...defaultGlyphs, pointer: ">", separator: "|" } }
+    const view = () => form.render(100, ctx).join("\n")
+    expect(view()).toContain("> Mode")
+    expect(view()).toContain("Alpha ◂▸ | First")
+    expect(view()).toContain("enter list | ←→ change | tab/↑↓ move | ctrl+s save | esc cancel")
+    form.handleInput(key("enter"))
+    expect(view()).toContain("  > ● Alpha")
+    form.handleInput(key("escape"))
+    form.handleInput(key("tab"))
+    expect(view()).toContain("> Tags")
+    expect(view()).toContain("  > [ ] x")
+    form.handleInput(key("tab"))
+    form.setActionState("go", { running: true, text: "Fetching" })
+    expect(view()).toContain("> [ Fetch ]")
+    expect(view()).toContain("Fetching | esc stops it")
+    form.setActionState("go", { running: false })
+    form.handleInput(key("tab"))
+    expect(view()).toContain("> [ Save ]")
+    form.handleInput(key("tab"))
+    expect(view()).toContain("> [ Cancel ]")
+    expect(view()).not.toMatch(/[›·]/)
+    form.setValues({ tags: ["x"] })
+    form.handleInput(key("escape"))
+    expect(view()).toContain("Discard your changes? y discard | n keep editing")
+  })
+
   test("all field hints use lower-case keys without lower-casing prose or buttons", () => {
     for (const [type, lead] of [
       ["text", "enter next"],
@@ -189,7 +231,7 @@ describe("Form", () => {
     form.handleInput(key("right"))
     expect(form.values.mode).toBe("b")
     form.handleInput(key("enter"))
-    expect(view()).toContain("❯ ● Beta")
+    expect(view()).toContain("› ● Beta")
     expect(view().split("\n").at(-1)).toBe("↑↓ pick · type to filter · enter choose · esc clo…")
     expect(view(40, 80).split("\n").at(-1)).toBe("↑↓ pick · type to filter · enter choose · esc close")
     type(form, "c")
@@ -281,7 +323,7 @@ describe("Form", () => {
     while (form.focused !== "max") form.handleInput(key("tab"))
     const lines = form.render(40, { ...plain, rows })
     expect(lines.length).toBe(rows)
-    expect(lines.join("\n")).toContain("❯ Max")
+    expect(lines.join("\n")).toContain("› Max")
     expect(lines.join("\n")).toContain("[ Save ]")
     expect(lines.join("\n")).toContain("↑")
     // Tiny: still a title, a body row and the buttons.
@@ -326,7 +368,7 @@ describe("Form", () => {
     expect(screen.cursorVisible).toBe(true)
     const row = screen.lines.findIndex((l) => l.includes("你好"))
     expect(screen.y).toBe(row)
-    expect(screen.x).toBe(3 + 4)
+    expect(screen.x).toBe(2 + 4)
     screen.resize(30, 10)
     term.setSize(30, 10)
     full.render()

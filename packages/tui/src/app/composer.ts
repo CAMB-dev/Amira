@@ -34,6 +34,7 @@ export interface ComposerDeps {
   terminal: Pick<Terminal, "suspend">
   clipboard?: (cwd: string, signal: AbortSignal) => Promise<ClipboardContent>
   showNote: (text: string) => void
+  clearNote?: (text: string) => void
   requestRender: () => void
   redraw: () => void
   redrawTerminal: () => void
@@ -67,6 +68,7 @@ export function createComposer(deps: ComposerDeps): Composer {
   let clipboardRead: AbortController | undefined
 
   function cancelClipboard() {
+    if (clipboardRead) deps.clearNote?.("Reading clipboard…")
     clipboardRead?.abort()
     clipboardRead = undefined
   }
@@ -103,6 +105,11 @@ export function createComposer(deps: ComposerDeps): Composer {
     clipboardRead = read
     const signal = AbortSignal.any([clipboardAbort.signal, read.signal])
     const session = deps.agent()
+    const readingNote = setTimeout(() => {
+      if (!signal.aborted && deps.agent() === session) showNote("Reading clipboard…")
+    }, 1000)
+    const cancelNote = () => clearTimeout(readingNote)
+    signal.addEventListener("abort", cancelNote, { once: true })
     try {
       const result = await (deps.clipboard
         ? deps.clipboard(deps.agent().cwd, signal)
@@ -114,7 +121,12 @@ export function createComposer(deps: ComposerDeps): Composer {
     } catch (err) {
       if (!signal.aborted) showNote(err instanceof Error ? err.message : String(err))
     } finally {
-      if (clipboardRead === read) clipboardRead = undefined
+      cancelNote()
+      signal.removeEventListener("abort", cancelNote)
+      if (clipboardRead === read) {
+        clipboardRead = undefined
+        deps.clearNote?.("Reading clipboard…")
+      }
       if (!clipboardAbort.signal.aborted) redraw()
     }
   }

@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { textResult } from "@amira/api"
 import { createTheme, defaultTheme, stripAnsi } from "@amira/tui-kit"
@@ -36,25 +37,25 @@ for (const variant of ["dark", "light"] as const) {
       80,
     )
     expect(running[0]).not.toContain("├")
-    expect(running[1]).toBe(`    ${theme.muted("│")} ${theme.muted("live")}`)
+    expect(running[1]).toBe(`${theme.muted("│")} ${theme.muted("live")}`)
     const children = subagentRows(sub, 6000, 80, theme, false)
-    expect(children[0]).toContain(theme.muted("  ├"))
+    expect(children[0]).toContain(theme.muted("├"))
   })
 }
 
 test("sub-agent trees put the spinner after each running arm and status before finished titles", () => {
   const rows = treeRows([{ ...sub, id: "child", parent: "main" }], 6000, 80, defaultTheme)
   expect(rows.map(stripAnsi)[0]).toMatch(
-    /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] List and summarise files · explorer · 6s · 31k tok$/,
+    /^└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] List and summarise files · explorer · 6s · 31k tok$/,
   )
-  expect(rows.map(stripAnsi)[1]).toMatch(/^ {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash cd src && ls$/)
+  expect(rows.map(stripAnsi)[1]).toMatch(/^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash cd src && ls$/)
   const end = { status: "done" as const, durationMs: 6000, tokens: 31_000 }
   expect(stripAnsi(subagentEndLine(sub, end, 100, defaultTheme))).toBe(
-    "  └ ✓ List and summarise files · explorer · 6.0s · 31k tok",
+    "└ ✓ List and summarise files · explorer · 6.0s · 31k tok",
   )
   expect(
     stripAnsi(subagentEndLine(sub, { ...end, status: "error", error: "failed" }, 100, defaultTheme)),
-  ).toStartWith("  └ ✗ List")
+  ).toStartWith("└ ✗ List")
   const notice = userLines(
     defaultTheme,
     {
@@ -64,15 +65,15 @@ test("sub-agent trees put the spinner after each running arm and status before f
     },
     100,
   )
-  expect(notice.map(stripAnsi)).toEqual(["  └ ✓ List and summarise files · explorer · 6s · 31k tok"])
+  expect(notice.map(stripAnsi)).toEqual(["└ ✓ List and summarise files · explorer · 6s · 31k tok"])
 })
 
 test("ASCII sub-agent trees keep their two-cell arms and nested tool indentation", () => {
   setGlyphs({ treeBranch: "|-", treeLast: "`-", treePipe: "|", subagentDone: "v" })
   try {
     const rows = subagentRows(sub, 6000, 80, defaultTheme).map(stripAnsi)
-    expect(rows[0]).toMatch(/^ {2}`- [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] List/)
-    expect(rows[1]).toMatch(/^ {5}`- [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash/)
+    expect(rows[0]).toMatch(/^`-[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] List/)
+    expect(rows[1]).toMatch(/^ {2}`-[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash/)
     const notice = userLines(
       defaultTheme,
       {
@@ -82,7 +83,7 @@ test("ASCII sub-agent trees keep their two-cell arms and nested tool indentation
       },
       80,
     )
-    expect(notice.map(stripAnsi)).toEqual(["  `- v List files · explorer · 6s"])
+    expect(notice.map(stripAnsi)).toEqual(["`-v List files · explorer · 6s"])
   } finally {
     setGlyphs()
   }

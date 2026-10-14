@@ -135,6 +135,11 @@ export class ReplyBlock extends Block {
   private lastRenders: BlockRenders | undefined
   /** The Markdown chrome and reply prefix used by the last rendering, for copying its rows. */
   private lastGlyphs: Glyphs = defaultGlyphs
+  private markerRows = new Set<string>()
+  private readonly recordMarkerRow = (row: string) => {
+    this.markerRows.add(row)
+  }
+  private codeColumns = new Set<number>()
   private lastAssistant = glyphs.assistant
   private alternatives = new ReplyAlternatives()
   /** What the stream was made with from the renderers: their generation, or -1 without them. */
@@ -201,7 +206,10 @@ export class ReplyBlock extends Block {
       hyperlinks: this.hyperlinks,
       glyphs: env.glyphs,
       firstRowWidth,
-      headingMarkers: true,
+      headingMarkers: false,
+      markerOutset: 2,
+      onMarkerRow: this.recordMarkerRow,
+      onCodeRow: this.recordCodeRow,
     }
     if (images || renders?.renders.source) opts.nodes = this.nodes(env.theme, images, renders?.renders)
     const imageRows = images ? images.store.maxRows() : 0
@@ -217,6 +225,8 @@ export class ReplyBlock extends Block {
         this.streamImageRows !== imageRows ||
         this.streamRenders !== generation
       ) {
+        this.markerRows.clear()
+        this.codeColumns.clear()
         // Images are laid out afresh with it: only those of its rows are kept.
         this.marks.clear()
         this.stream = new MarkdownStream(opts)
@@ -235,15 +245,18 @@ export class ReplyBlock extends Block {
         rows: Number.POSITIVE_INFINITY,
       }
       rows = this.stream.render(width, ctx)
-      while (rows.length && rows[rows.length - 1]!.trim() === "") rows = rows.slice(0, -1)
+      while (rows.length && rows[rows.length - 1] === "") rows = rows.slice(0, -1)
     } else {
       // Its marks are laid out afresh: a stream made before (folded while streaming) starts over.
       this.stream = undefined
       this.marks.clear()
       const { text } = foldMarkdown(this.source, this.folded)
+      this.markerRows.clear()
+      this.codeColumns.clear()
       rows = renderMarkdown(text, width, env.theme, opts)
     }
-    const lines = this.layOut(replyRows(rows), images !== undefined)
+    const lines = this.layOut(replyRows(rows, this.markerRows), images !== undefined)
+    codeSurfaces.set(lines, this.surfaceFrames(lines, width, env.theme))
     return stampRows(lines, env.theme, env.width, this.timestamp)
   }
 
@@ -367,6 +380,53 @@ export class ReplyBlock extends Block {
     return lines
   }
 
+  private readonly recordCodeRow = (_row: string, kind: "top" | "body" | "bottom", col: number) => {
+    if (kind === "top") this.codeColumns.add(col)
+  }
+
+  /** Match each source fence's complete row sequence, never infer provenance from blank text. */
+  private surfaceFrames(lines: readonly string[], width: number, theme: Theme): CodeFrame[] {
+    const plain = lines.map(stripAnsi)
+    const assistant = this.lastAssistant
+    const inset = visibleWidth(assistant)
+    const frames: CodeFrame[] = []
+    let next = 0
+    for (const fence of fencedCode(foldMarkdown(this.source, this.folded).text)) {
+      let found: CodeFrame | undefined
+      for (const col of this.codeColumns) {
+        const open = this.#streaming && !fence.closed
+        const body = `${fence.mark}${fence.lang}\n${fence.shown.join("\n")}`
+        const source = open ? body : `${body}${fence.shown.length ? "\n" : ""}${fence.mark}`
+        const stream = new MarkdownStream({ highlight: false })
+        stream.append(source)
+        const room = Math.max(1, width - col)
+        const preview = stream.render(room, { theme, color: true, rows: Number.POSITIVE_INFINITY })
+        const rendered = (open ? preview : stream.take(room)).map(stripAnsi)
+        const prefix = assistant + " ".repeat(col)
+        const expected = rendered.map((row) => prefix + row)
+        for (let top = next; top + expected.length <= plain.length; top++) {
+          if (!expected.every((row, index) => row === plain[top + index])) continue
+          const bottom = this.#streaming && !fence.closed ? undefined : top + expected.length - 1
+          const textCol = assistant.length + col
+          const column = inset + col
+          const end = bottom ?? top + expected.length
+          found = {
+            top,
+            ...(bottom === undefined ? {} : { bottom }),
+            rows: Array.from({ length: Math.max(0, end - top - 1) }, (_, index) => top + index + 1),
+            col: column,
+            ...(textCol !== column ? { textCol } : {}),
+          }
+          next = top + expected.length
+          break
+        }
+        if (found) break
+      }
+      if (found) frames.push(found)
+    }
+    return frames
+  }
+
   copyText(): string {
     return this.alternatives.copy(this.source).trim()
   }
@@ -382,19 +442,21 @@ export class ReplyBlock extends Block {
     const rows: CopyRow[] = plain.map(() => ({ from: indent }))
     // A quote's bars are chrome too; both glyphs may contain regexp punctuation.
     const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    const bars = new RegExp(`^${escapeRe(this.lastAssistant)}((?:${escapeRe(this.lastGlyphs.quoteBar)} ?)+)`)
+    const bars = new RegExp(
+      `^(?:${escapeRe(this.lastAssistant)})?((?:${escapeRe(this.lastGlyphs.quoteBar)} ?)+)`,
+    )
     for (const [i, p] of plain.entries()) {
       const m = bars.exec(p)
-      if (m) rows[i] = { from: indent + visibleWidth(m[1]!) }
+      if (m) rows[i] = { from: visibleWidth(m[0]) }
     }
     const fences = fencedCode(foldMarkdown(this.source, this.folded).text)
     // Frames are matched to the fences of the source in order; one that matches none (a fence
     // the source is not read for, say in a nested list) copies row by row.
     let next = 0
-    for (const f of codeFrames(plain, this.lastGlyphs, this.lastAssistant)) {
+    for (const f of codeFrames(plain, this.lastGlyphs, this.lastAssistant, lines)) {
       rows[f.top] = { from: 0, skip: true }
       if (f.bottom !== undefined) rows[f.bottom] = { from: 0, skip: true }
-      const side = this.lastGlyphs.codeSide
+      const side = codeSurfaces.has(lines) ? "" : this.lastGlyphs.codeSide
       const shown = f.rows.map((r) => {
         const text = plain[r]!.slice(f.textCol ?? f.col)
         return side && text.endsWith(side) ? text.slice(0, -side.length) : text
@@ -429,6 +491,10 @@ export class ReplyBlock extends Block {
     return rows
   }
 
+  override searchRows(plain: readonly string[], lines: readonly string[]): CopyRow[] {
+    return this.copyRows(plain, lines)
+  }
+
   override foldable(): boolean {
     // Folded, its images are their alt text.
     return this.#hasImages || foldMarkdown(this.source, false).foldable
@@ -460,8 +526,11 @@ export class ReplyBlock extends Block {
         glyphs: env.glyphs,
         nodes: this.nodes(env.theme, undefined, env.renders?.renders, true),
         firstRowWidth,
-        headingMarkers: true,
+        headingMarkers: false,
+        markerOutset: 2,
+        onMarkerRow: this.recordMarkerRow,
       }),
+      this.markerRows,
     )
     return stampRows(lines, env.theme, env.width, this.timestamp)
   }
@@ -478,12 +547,17 @@ export interface CodeFrame {
   textCol?: number
 }
 
-/** The frames of code blocks in rows of rendered Markdown (without styles). */
+const codeSurfaces = new WeakMap<readonly string[], CodeFrame[]>()
+
+/** Code surfaces use host metadata; legacy border detection supports existing extension output. */
 export function codeFrames(
   plain: readonly string[],
   markdownGlyphs: Glyphs = defaultGlyphs,
   assistant = "",
+  lines?: readonly string[],
 ): CodeFrame[] {
+  const surfaces = lines && codeSurfaces.get(lines)
+  if (surfaces) return surfaces
   const { codeTop, codeSide, codeBottom } = markdownGlyphs
   const out: CodeFrame[] = []
   for (let i = 0; i < plain.length; i++) {
@@ -514,6 +588,9 @@ const ANY_FENCE = /^ *(`{3,}|~{3,})/
 
 /** A fenced code block of Markdown: its lines as drawn (tabs as spaces) and as written. */
 interface Fence {
+  mark: string
+  lang: string
+  closed: boolean
   shown: string[]
   exact: string[]
 }
@@ -531,6 +608,7 @@ function fencedCode(markdown: string): Fence[] {
         close[1]!.length >= open.mark.length &&
         !line.trim().slice(close[1]!.length).trim()
       ) {
+        open.fence.closed = true
         open = undefined
         continue
       }
@@ -546,7 +624,17 @@ function fencedCode(markdown: string): Fence[] {
     }
     const start = ANY_FENCE.exec(line)
     if (start) {
-      open = { mark: start[1]!, indent: /^ */.exec(line)![0].length, fence: { shown: [], exact: [] } }
+      open = {
+        mark: start[1]!,
+        indent: /^ */.exec(line)![0].length,
+        fence: {
+          mark: start[1]!,
+          lang: line.slice(start[0].length).trim().split(/\s+/)[0] ?? "",
+          closed: false,
+          shown: [],
+          exact: [],
+        },
+      }
       out.push(open.fence)
     }
   }

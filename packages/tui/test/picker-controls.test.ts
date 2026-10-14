@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { bold, createTheme, stripAnsi, underline, visibleWidth } from "@amira/tui-kit"
 import { ShimmerControl, ThemePickerDialog } from "../src/app/shimmer-control.ts"
@@ -30,17 +31,22 @@ test("picker controls highlight the focused label and value in bold accent, not 
   const theme = createTheme({ colorDepth: "truecolor", env: {} })
   const row = () =>
     dialog.render(80, { theme, color: true, rows: 24 }).find((line) => line.includes("Appearance:"))!
-  expect(stripAnsi(row())).toBe("┃ ❯ Appearance: auto · dark · light · Shimmer: theme (soft)")
-  expect(row()).toContain(bold(theme.accent("❯ Appearance: ")))
+  const framed = (text: string, selected = false) =>
+    selected
+      ? `│›${text}${" ".repeat(77 - visibleWidth(text))}│`
+      : `│ ${text}${" ".repeat(77 - visibleWidth(text))}│`
+  expect(stripAnsi(row())).toBe(framed("Appearance: auto · dark · light · Shimmer: theme (soft)", true))
+  expect(row()).toContain(bold(theme.accent("›")))
+  expect(row()).toContain(bold(theme.accent("Appearance: ")))
   expect(row()).toContain(bold(theme.accent("auto")))
   expect(row()).toContain(theme.muted("Shimmer: theme (soft)"))
   dialog.handleInput(key("tab"))
-  expect(stripAnsi(row())).toBe("┃ Appearance: auto · dark · light · ❯ Shimmer: theme (soft)")
-  expect(row()).toContain(bold(theme.accent("❯ Shimmer: theme (soft)")))
+  expect(stripAnsi(row())).toBe(framed("Appearance: auto · dark · light · Shimmer: theme (soft)", true))
+  expect(row()).toContain(bold(theme.accent("Shimmer: theme (soft)")))
   expect(row()).toContain(theme.muted(underline(bold("auto"))))
   dialog.handleInput(key("down"))
   expect(shimmer.focus).toBe("list")
-  expect(stripAnsi(row())).toBe("┃ Appearance: auto · dark · light · Shimmer: theme (soft)")
+  expect(stripAnsi(row())).toBe(framed("Appearance: auto · dark · light · Shimmer: theme (soft)"))
   expect(row()).toContain(theme.muted("Appearance: "))
   expect(row()).toContain(theme.muted("Shimmer: theme (soft)"))
   expect(row()).not.toContain(bold(theme.accent("auto")))
@@ -52,7 +58,7 @@ test("picker controls highlight the focused label and value in bold accent, not 
 test("picker selection and focus survive NO_COLOR, custom focus glyphs and narrow truncation", () => {
   const before = { ...glyphs }
   try {
-    for (const choice of ["❯", ">", "→"]) {
+    for (const choice of ["›", ">", "→"]) {
       setGlyphs({ choice })
       const { dialog, shimmer } = picker()
       const theme = createTheme({ env: { NO_COLOR: "1" } })

@@ -88,7 +88,7 @@ export interface Theme {
   dim: StyleFn
   borderFocused: StyleFn
   thinking: StyleFn
-  /** The first gradient stop; shimmerEnd and shimmer0…shimmer15 expose quantized steps. */
+  /** First gradient stop; shimmer0…15 have Fade1…32 in truecolor, Fade1…8 at depth 256. */
   shimmer: StyleFn
   [token: string]: StyleFn
 }
@@ -98,17 +98,18 @@ export interface Theme {
  * one out gets the value from here.
  */
 const ansiMarkdownTheme = {
-  heading: compose(bold, cyan),
-  /** Headings of level 3 and deeper. */
-  subheading: bold,
+  heading1: compose(bold, underline, blue),
+  heading: compose(bold, blue),
+  /** Headings of level 3 and deeper share the reference color, with italic emphasis. */
+  subheading: compose(bold, italic, blue),
   strong: bold,
   emphasis: italic,
   strike: strikethrough,
   /** Inline `code`. */
-  code: magenta,
+  code: blue,
   link: compose(underline, blue),
   /** The URL shown after a link's text when the terminal cannot make it clickable. */
-  linkUrl: gray,
+  linkUrl: blue,
   /** An image shown as its alt text, when it is not a clickable link. */
   image: italic,
   quote: italic,
@@ -145,7 +146,7 @@ export const terminalTheme: Theme = {
   warning: yellow,
   border: gray,
   path: blue,
-  command: magenta,
+  command: blue,
   fg2: (s) => s,
   dim: gray,
   borderFocused: cyan,
@@ -347,21 +348,21 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     warning: fg(p.warning, yellow),
     border: fg(p.border),
     path: fg(p.path, blue),
-    command: fg(p.command, magenta),
+    command: fg(p.command, blue),
     fg2: fg(p.fg2, plainText),
     dim: fg(p.dim),
     borderFocused: fg(p.borderFocused, cyan),
     thinking: fg(p.thinking),
-    heading1: depth === "16" ? ansiMarkdownTheme.heading : compose(bold, fg(p.heading1)),
+    heading1: depth === "16" ? ansiMarkdownTheme.heading1 : compose(bold, underline, fg(p.heading1)),
     heading: depth === "16" ? ansiMarkdownTheme.heading : compose(bold, fg(p.heading)),
-    subheading: depth === "16" ? bold : compose(bold, fg(p.fg2)),
-    code: fg(p.command, magenta),
+    subheading: depth === "16" ? ansiMarkdownTheme.subheading : compose(bold, italic, fg(p.heading)),
+    code: fg(p.command, blue),
     link: compose(underline, fg(p.path, blue)),
-    linkUrl: fg(p.muted),
+    linkUrl: fg(p.path, blue),
     quoteBar: fg(p.dim),
     listMarker: fg(p.muted),
     rule: fg(p.dim),
-    codeFrame: fg(p.dim),
+    codeFrame: fg(p.muted),
     tableBorder: fg(p.dim),
     keyword: fg(p.keyword, blue),
     string: fg(p.string, green),
@@ -371,12 +372,13 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     shimmerEnd: fg(shimmerEnd, blue),
   }
   if (depth === "16") return theme
+  const fades = depth === "truecolor" ? 32 : 8
   for (let i = 0; i < 16; i++) {
     const highlight = blend(shimmer, shimmerEnd, i / 15)
     theme[`shimmer${i}`] = fg(highlight)
-    // Quantize the soft edges once, not on each spinner frame.
-    for (let fade = 1; fade <= 8; fade++) {
-      theme[`shimmer${i}Fade${fade}`] = fg(blend(p.muted, highlight, fade / 8))
+    // Quantize soft edges once; indexed terminals retain their bounded eight-step fallback.
+    for (let fade = 1; fade <= fades; fade++) {
+      theme[`shimmer${i}Fade${fade}`] = fg(blend(p.muted, highlight, fade / fades))
     }
   }
   const chipStyle = (background: Hex, fallback: number) => {

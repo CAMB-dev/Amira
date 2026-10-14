@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, expect, jest, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -101,7 +101,7 @@ test("Windows reader uses PowerShell STA, saves PNG through a fake runner and cl
   const run: NonNullable<ClipboardOptions["run"]> = async (argv, opts) => {
     expect(argv.slice(0, 5)).toEqual(["powershell.exe", "-NoProfile", "-NonInteractive", "-STA", "-Command"])
     expect(opts.stdoutOnly).toBe(true)
-    expect(opts.timeoutMs).toBe(5000)
+    expect(opts.timeoutMs).toBe(15000)
     expect(opts.cwd).toBe(dir)
     const script = argv[5]!
     expect(script.indexOf("ContainsText")).toBeLessThan(script.indexOf("ContainsImage"))
@@ -254,4 +254,172 @@ test("oversized clipboard images are refused and their temporary files are remov
     }),
   ).rejects.toThrow("5 MB")
   expect(existsSync(file)).toBe(false)
+})
+
+// Drive the real readClipboard boundary without spawning a clipboard tool or waiting in real time.
+function simulatedClipboardRun(completionMs: number, honorDeadline = true) {
+  jest.useFakeTimers()
+  // AbortSignal.timeout uses native timers, so route its actual requested duration through the clock.
+  const timeout = spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), ms)
+    return controller.signal
+  })
+  let signal!: AbortSignal
+  const run: NonNullable<ClipboardOptions["run"]> = async (_argv, opts) => {
+    signal = opts.signal!
+    return new Promise((resolve) => {
+      const complete = setTimeout(() => finish(result("text:c2xvdyBjbGlwYm9hcmQ=")), completionMs)
+      const deadline = honorDeadline
+        ? setTimeout(() => finish({ ...result(), timedOut: true }), opts.timeoutMs)
+        : undefined
+      const abort = () => finish({ ...result(), aborted: true })
+      function finish(value: RunResult) {
+        clearTimeout(complete)
+        if (deadline !== undefined) clearTimeout(deadline)
+        signal.removeEventListener("abort", abort)
+        resolve(value)
+      }
+      if (signal.aborted) abort()
+      else signal.addEventListener("abort", abort, { once: true })
+    })
+  }
+  return {
+    run,
+    get signal() {
+      return signal
+    },
+    restore() {
+      timeout.mockRestore()
+      jest.clearAllTimers()
+      jest.useRealTimers()
+    },
+  }
+}
+
+for (const withCaller of [false, true]) {
+  test(`clipboard run succeeds after eight simulated seconds ${withCaller ? "with" : "without"} caller signal`, async () => {
+    const clock = simulatedClipboardRun(8000)
+    const caller = withCaller ? new AbortController() : undefined
+    try {
+      const done = readClipboard({
+        cwd: dir,
+        platform: "win32",
+        which: which("pwsh"),
+        signal: caller?.signal,
+        run: clock.run,
+      })
+      // Attach immediately so a regressed early timeout cannot produce an unhandled rejection.
+      const outcome = done.catch((error: unknown) => error)
+      jest.advanceTimersByTime(8000)
+      // The former 6s safety signal fails here; the former 5s runner deadline fails the result below.
+      expect(clock.signal.aborted).toBe(false)
+      expect(await outcome).toEqual({ type: "text", text: "slow clipboard" })
+      if (caller) expect(caller.signal.aborted).toBe(false)
+    } finally {
+      clock.restore()
+    }
+  })
+}
+
+test("clipboard run enforces its fifteen second runner deadline", async () => {
+  const clock = simulatedClipboardRun(20000)
+  let settled = false
+  try {
+    const done = readClipboard({ cwd: dir, platform: "win32", which: which("pwsh"), run: clock.run })
+    const outcome = done
+      .catch((error: unknown) => error)
+      .then((value) => {
+        settled = true
+        return value
+      })
+    jest.advanceTimersByTime(14999)
+    // Drain the runner, call, readClipboard and outcome continuations before checking it is pending.
+    for (let turn = 0; turn < 6; turn++) await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(clock.signal.aborted).toBe(false)
+    jest.advanceTimersByTime(1)
+    expect(await outcome).toMatchObject({ message: "Clipboard read timed out or was interrupted." })
+    expect(clock.signal.aborted).toBe(false)
+  } finally {
+    clock.restore()
+  }
+})
+
+for (const withCaller of [false, true]) {
+  test(`clipboard safety abort fires at sixteen simulated seconds ${withCaller ? "with" : "without"} caller signal`, async () => {
+    // A process runner that does not honor its deadline must still receive the safety abort.
+    const clock = simulatedClipboardRun(20000, false)
+    const caller = withCaller ? new AbortController() : undefined
+    try {
+      const done = readClipboard({
+        cwd: dir,
+        platform: "win32",
+        which: which("pwsh"),
+        signal: caller?.signal,
+        run: clock.run,
+      })
+      const outcome = done.catch((error: unknown) => error)
+      jest.advanceTimersByTime(15999)
+      expect(clock.signal.aborted).toBe(false)
+      jest.advanceTimersByTime(1)
+      expect(clock.signal.aborted).toBe(true)
+      expect(await outcome).toMatchObject({ message: "Clipboard read timed out or was interrupted." })
+      if (caller) expect(caller.signal.aborted).toBe(false)
+    } finally {
+      clock.restore()
+    }
+  })
+}
+
+test("caller can cancel a clipboard run after two simulated seconds", async () => {
+  const clock = simulatedClipboardRun(8000)
+  const caller = new AbortController()
+  try {
+    const done = readClipboard({
+      cwd: dir,
+      platform: "win32",
+      which: which("pwsh"),
+      signal: caller.signal,
+      run: clock.run,
+    })
+    const outcome = done.catch((error: unknown) => error)
+    jest.advanceTimersByTime(2000)
+    expect(clock.signal.aborted).toBe(false)
+    caller.abort()
+    expect(clock.signal.aborted).toBe(true)
+    expect(await outcome).toMatchObject({ message: "Clipboard read timed out or was interrupted." })
+    jest.advanceTimersByTime(6000)
+    expect(clock.signal.aborted).toBe(true)
+  } finally {
+    clock.restore()
+  }
+})
+
+test("clipboard always combines caller cancellation with a 16 second safety signal", async () => {
+  const deadline = new AbortController()
+  const timeout = spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    expect(ms).toBe(16000)
+    return deadline.signal
+  })
+  const caller = new AbortController()
+  try {
+    await expect(
+      readClipboard({
+        cwd: dir,
+        platform: "win32",
+        which: which("pwsh"),
+        signal: caller.signal,
+        run: async (_argv, opts) => {
+          expect(opts.timeoutMs).toBe(15000)
+          expect(opts.signal).not.toBe(caller.signal)
+          deadline.abort()
+          expect(opts.signal!.aborted).toBe(true)
+          return { ...result(), aborted: true }
+        },
+      }),
+    ).rejects.toThrow("interrupted")
+  } finally {
+    timeout.mockRestore()
+  }
 })

@@ -180,11 +180,19 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
           const width = Math.max(1, opts.width - visibleWidth(gutter))
           const firstRowWidth = Math.max(1, timestampRoom(opts.width, at) - visibleWidth(gutter))
           const text = i === lastText ? b.text + sources : b.text
-          const markdown = { ...markdownOptions(opts), firstRowWidth }
+          const markerRows = new Set<string>()
+          const markdown = {
+            ...markdownOptions(opts),
+            firstRowWidth,
+            markerOutset: 2,
+            onMarkerRow: (row: string) => {
+              markerRows.add(row)
+            },
+          }
           const rows = opts.nodes
             ? committedMarkdown(text, width, theme, markdown)
             : renderMarkdown(text, width, theme, markdown)
-          const lines = replyRows(rows)
+          const lines = replyRows(rows, markerRows)
           if (lines.length) {
             assistantSeen = true
             lines[0] = timestampRow(lines[0]!, theme, opts.width, at)

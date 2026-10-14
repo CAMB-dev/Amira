@@ -1,3 +1,4 @@
+// D deliberate oracle: the focus/list cursor is ›; authored widget nesting stays unchanged.
 import { expect, test } from "bun:test"
 import type { UiEvent, UiNode, UiTreeItem, ViewSegment } from "@amira/api"
 import { key, monoTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
@@ -182,9 +183,9 @@ test("timeline lead is a shared cell-width column, nodes replace disclosure, und
   s.press("down")
   s.press("right")
   const lines = s.render()
-  expect(lines[0]).toBe("» 10:12:31 ✓ ○ Plan".padEnd(30))
+  expect(lines[0]).toBe("› 10:12:31 ✓ ○ Plan".padEnd(30))
   expect(lines[1]).toBe("             │ ───────────────")
-  expect(lines[2]).toBe("❯ 界 ✓       ◉ Build".padEnd(29)) // 界 occupies two cells.
+  expect(lines[2]).toBe("› 界 ✓       ◉ Build".padEnd(29)) // 界 occupies two cells.
   expect(lines[3]).toBe("             │ Body".padEnd(30))
   expect(lines[4]).toBe(lines[1])
   expect(lines[5]).toBe("             ○ Done".padEnd(30))

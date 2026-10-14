@@ -39,12 +39,13 @@ test("runtime knob-only overrides preserve the theme's motion and palette stops"
   const { themes } = runtime(definition, { width: 3 })
   try {
     const theme = themes.current.theme
+    // Deliberate color fixture update: truecolor uses 32 fade steps, preserving prototype motion.
     expect(shimmerLabel("ABCDE", { ...plain, theme, color: true }, 700)).toBe(
-      "\x1b[38;2;180;0;0mA\x1b[39m" +
-        "\x1b[38;2;132;0;48mB\x1b[39m" +
-        "\x1b[38;2;84;0;96mC\x1b[39m" +
-        "\x1b[38;2;48;0;132mD\x1b[39m" +
-        "\x1b[38;2;0;0;180mE\x1b[39m",
+      "\x1b[38;2;173;0;0mA\x1b[39m" +
+        "\x1b[38;2;127;0;46mB\x1b[39m" +
+        "\x1b[38;2;81;0;92mC\x1b[39m" +
+        "\x1b[38;2;46;0;127mD\x1b[39m" +
+        "\x1b[38;2;0;0;173mE\x1b[39m",
     )
   } finally {
     themes.dispose()
@@ -90,7 +91,7 @@ test("theme reload recomputes motion and colors while retaining a user knob over
     const theme = themes.current.theme
     expect(theme).not.toBe(previous)
     expect(shimmerLabel("ABCDE", { ...plain, theme, color: true }, 0)).toStartWith(
-      "\x1b[38;2;0;210;0mA\x1b[39m",
+      "\x1b[38;2;0;203;0mA\x1b[39m",
     )
   } finally {
     themes.dispose()

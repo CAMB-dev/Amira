@@ -94,10 +94,10 @@ test("named presets fit the picker header; longer inherited labels use normal na
   const inherited = control(undefined, { name: "custom", shimmerEffect: "reveal" }).shimmer
   inherited.handleInput(key("tab"))
   const inheritedHeader = inherited.header("light", plain.theme)
-  expect(stripAnsi(inheritedHeader)).toBe("Appearance: auto · dark · light · ❯ Shimmer: theme (reveal)")
+  expect(stripAnsi(inheritedHeader)).toBe("› Appearance: auto · dark · light · Shimmer: theme (reveal)")
   const narrow = truncateToWidth(inheritedHeader, 58, "…")
   expect(visibleWidth(narrow)).toBe(58)
-  expect(stripAnsi(narrow)).toBe("Appearance: auto · dark · light · ❯ Shimmer: theme (revea…")
+  expect(stripAnsi(narrow)).toBe("› Appearance: auto · dark · light · Shimmer: theme (revea…")
 })
 
 test("knob edits stay sparse and inherit the theme; panel Enter returns to Shimmer then applies", () => {
@@ -167,4 +167,18 @@ test("numeric knobs respect core bounds and panel text never reaches the theme f
   shimmer.handleInput(key("right"))
   expect(shimmer.override).toEqual({ width: 20, period: 5000 })
   expect(shimmer.handleInput({ ...key("a"), text: "a" })).toBe(true)
+})
+
+test("custom shimmer panel shares the rounded dialog frame and two-cell content grid", () => {
+  const { shimmer } = control()
+  const rows = shimmer.render(60, plain, 10).map(stripAnsi)
+  expect(rows[0]).toStartWith("╭ Customize shimmer")
+  expect(rows[0]).toEndWith("╮")
+  expect(rows[1]).toStartWith("│›style:")
+  expect(rows[2]).toStartWith("│ width:")
+  expect(rows.at(-2)).toStartWith("│ ↑↓ knob")
+  expect(rows.at(-2)).toEndWith("│")
+  expect(rows.at(-1)).toBe(`╰${"─".repeat(58)}╯`)
+  expect(rows.at(-1)).toEndWith("╯")
+  expect(rows.every((row) => visibleWidth(row) === 60)).toBe(true)
 })

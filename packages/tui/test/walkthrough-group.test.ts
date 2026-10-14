@@ -1,3 +1,4 @@
+// A/C/D style oracles: root markers at 0, content at 2, logical two-cell child rails and muted chrome.
 import { expect, spyOn, test } from "bun:test"
 import { emptyUsage, userMessage } from "@amira/ai"
 import type { AnyEvent, EventMap, SpawnGroupInfo } from "@amira/api"
@@ -65,8 +66,8 @@ function setup(mode: "inline" | "fullscreen") {
 
 function guides(ascii: boolean) {
   return ascii
-    ? { branch: "|-", last: "`-", first: "  |   ", final: "      ", activity: "         " }
-    : { branch: "├", last: "└", first: "  │  ", final: "     ", activity: "       " }
+    ? { branch: "|-", last: "`-", gap: "", first: "| ", final: "  ", activity: "    " }
+    : { branch: "├", last: "└", gap: " ", first: "│ ", final: "  ", activity: "    " }
 }
 
 for (const ascii of [false, true]) {
@@ -91,19 +92,19 @@ for (const ascii of [false, true]) {
         const rows = text().split("\n")
         const first = rows.findIndex((row) => row.includes("First task · explorer"))
         const last = rows.findIndex((row) => row.includes("Last task · explorer"))
-        expect(rows[first - 1]).toStartWith(`  ${g.branch} ⠋ `)
-        expect(rows[first]).toBe(`${g.first}${g.last} ⠋ First task · explorer · 0s · 0 tok`)
-        expect(rows[last - 1]).toStartWith(`  ${g.last} ⠋ `)
-        expect(rows[last]).toBe(`${g.final}${g.last} ⠋ Last task · explorer · 0s · 0 tok`)
-        expect(rows[last + 1]).toBe(`${g.activity}${g.last} ⠋ bash ls src`)
+        expect(rows[first - 1]).toStartWith(`${g.branch}${g.gap}⠋ `)
+        expect(rows[first]).toBe(`${g.first}${g.last}${g.gap}⠋ First task · explorer · 0s · 0 tok`)
+        expect(rows[last - 1]).toStartWith(`${g.last}${g.gap}⠋ `)
+        expect(rows[last]).toBe(`${g.final}${g.last}${g.gap}⠋ Last task · explorer · 0s · 0 tok`)
+        expect(rows[last + 1]).toBe(`${g.activity}${g.last}${g.gap}⠋ bash ls src`)
         expect(text()).toContain("Restored prompt")
         // /agents temporarily covers the transcript; restoring it uses the same group routes.
         view.openOverlay()
         view.renderOverlay()
         view.closeOverlay()
         view.render()
-        expect(text()).toContain(`${g.first}${g.last} ⠋ First task`)
-        expect(text()).toContain(`${g.final}${g.last} ⠋ Last task`)
+        expect(text()).toContain(`${g.first}${g.last}${g.gap}⠋ First task`)
+        expect(text()).toContain(`${g.final}${g.last}${g.gap}⠋ Last task`)
       } finally {
         view.stop()
         setGlyphs()
@@ -124,10 +125,10 @@ for (const ascii of [false, true]) {
       view.stop()
       const g = guides(ascii)
       expect(screen.mainText).toContain(
-        `  ${g.branch} ⠋ started by a command · in the background\n${g.first}${g.last} ⠋ First task`,
+        `${g.branch}${g.gap}⠋ started by a command · in the background\n${g.first}${g.last}${g.gap}⠋ First task`,
       )
       expect(screen.mainText).toContain(
-        `  ${g.last} ⠋ started by a command · in the background\n${g.final}${g.last} ⠋ Last task`,
+        `${g.last}${g.gap}⠋ started by a command · in the background\n${g.final}${g.last}${g.gap}⠋ Last task`,
       )
       expect(screen.mainText).toContain("Restored prompt")
     } finally {
@@ -169,7 +170,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           queued: false,
         })
       view.render()
-      expect(text()).toContain("  └ ⠋ in the background\n     └ ⠋ workflow demo · Explore · 0/2 agents")
+      expect(text()).toMatch(/^└ ⠋ in the background\n {2}└ ⠋ workflow demo · Explore · 0\/2 agents$/m)
       expect(text().match(/workflow demo/g)).toHaveLength(1)
     } finally {
       view.stop()
@@ -193,11 +194,11 @@ test("fullscreen: adding a sibling invalidates a finished group's cached arm and
     view.render()
     start("Last task")
     view.render()
-    expect(text()).toContain("  ├ ✓ started by a command · in the background\n  │  └ ✓ First task")
+    expect(text()).toContain("├ ✓ started by a command · in the background\n│ └ ✓ First task")
     view.replyDelta("A reply ends the tree.")
     view.replyEnd([])
     view.render()
-    expect(text()).toContain("     └ ⠋ Last task")
+    expect(text()).toContain("  └ ⠋ Last task")
   } finally {
     view.stop()
     clock.mockRestore()
@@ -232,11 +233,11 @@ test("group rails use gray and reserve their full width before clipping children
   block.last = false
   const rows = block.lines(env)
   expect(rows[0]).toContain(defaultTheme.muted("├"))
-  expect(rows[1]).toStartWith(`  ${defaultTheme.muted("│")}${defaultTheme.muted("  └")}`)
+  expect(rows[1]).toStartWith(`${defaultTheme.muted("│")} ${defaultTheme.muted("└")}`)
   expect(rows.every((row) => visibleWidth(row) <= env.width)).toBe(true)
-  expect(stripAnsi(rows[1]!)).toStartWith("  │  └ ⠋ ")
+  expect(stripAnsi(rows[1]!)).toStartWith("│ └ ⠋ ")
   block.last = true
   const lastRows = block.lines(env)
-  expect(lastRows[1]).toStartWith(`   ${defaultTheme.muted("  └")}`)
-  expect(stripAnsi(lastRows[1]!)).toStartWith("     └ ⠋ ")
+  expect(lastRows[1]).toStartWith(`  ${defaultTheme.muted("└")}`)
+  expect(stripAnsi(lastRows[1]!)).toStartWith("  └ ⠋ ")
 })

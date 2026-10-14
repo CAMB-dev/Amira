@@ -1,3 +1,4 @@
+// D deliberate oracle: the focus/list cursor is ›; authored widget nesting stays unchanged.
 import { expect, test } from "bun:test"
 import type { UiNode } from "@amira/api"
 import { key, monoTheme, stripAnsi } from "@amira/tui-kit"
@@ -181,7 +182,7 @@ test("dock fallback skips a short anonymous heading without moving widget focus"
     expect(scrolled).toContain("Heading")
     expect(scrolled).toContain("BODY-7")
     expect(scrolled).not.toContain("BODY-0")
-    expect(scrolled).toContain("❯ [Answer]")
+    expect(scrolled).toContain("› [Answer]")
   } finally {
     viewer.dispose()
   }

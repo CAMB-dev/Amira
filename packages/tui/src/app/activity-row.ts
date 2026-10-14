@@ -1,6 +1,7 @@
 import { bold, type RenderContext, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens, formatDuration } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
+import { markerPrefix } from "../grid.ts"
 import { formatElapsed } from "../tool-view.ts"
 import { paintShimmer as shimmerLabel } from "./shimmer.ts"
 
@@ -15,13 +16,14 @@ export interface ActivityRowInfo {
   rate: number
   stop: string
   animationMs: number
+  shimmerVisible?: (visible: boolean) => void
 }
 
 /** One line above the composer; stats give way before the interrupt hint. */
 export function activityRow(info: ActivityRowInfo, width: number, ctx: RenderContext): string {
   const { theme } = ctx
   const label = info.label[0]!.toUpperCase() + info.label.slice(1).replace(/[.…]+$/, "")
-  const prefix = ` ${theme.accent(info.spinner)} `
+  const prefix = markerPrefix(theme.accent(info.spinner))
   let step = ` ${theme.muted(info.stepMs < 1000 ? formatElapsed(info.stepMs) : formatDuration(info.stepMs))}`
   const stats = [theme.muted(formatElapsed(info.turnMs).replaceAll(" ", ""))]
   if (info.tokens > 0) {
@@ -64,6 +66,7 @@ export function activityRow(info: ActivityRowInfo, width: number, ctx: RenderCon
   const endingWidth = visibleWidth(glyphs.more)
   const shown =
     labelRoom >= endingWidth ? truncateToWidth(label, labelRoom - endingWidth, "") + glyphs.more : ""
+  info.shimmerVisible?.(shown.length > 0)
   const head = truncateToWidth(prefix, room, "") + shimmerLabel(shown, ctx, info.animationMs) + step
-  return `${head}${" ".repeat(Math.max(0, width - visibleWidth(head) - visibleWidth(right) - 1))}${right} `
+  return `${head}${" ".repeat(Math.max(0, width - visibleWidth(head) - visibleWidth(right)))}${right}`
 }

@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, spyOn, test } from "bun:test"
 import { textResult } from "@amira/api"
 import { defaultTheme, Editor, fg256, italic, stripAnsi, type Theme, visibleWidth } from "@amira/tui-kit"
@@ -29,7 +30,7 @@ test("tool summaries use path and command tokens without changing their text", (
     const call = { name: "tool", args, result: textResult("done") }
     const rows = finishedToolLines(theme, undefined, call, "collapsed", 80)
     expect(rows[0]).toContain(style(summary))
-    expect(stripAnsi(rows[0]!)).toBe(`  ├ tool ${summary}  ✓ done`)
+    expect(stripAnsi(rows[0]!)).toBe(`├ tool ${summary}  ✓ done`)
     expect(rows[0]).toContain(theme.muted("├"))
     expect(rows[0]).toContain(theme.fg2("tool"))
     expect(rows).toHaveLength(1)
@@ -52,7 +53,7 @@ test("tool summaries use path and command tokens without changing their text", (
     expect(failed).toHaveLength(1)
     expect(failed[0]).toContain(theme.error("✗ failed"))
     const expanded = finishedToolLines(theme, undefined, call, "full", 80)
-    expect(expanded[1]).toBe(`  ${theme.muted("│")}  ${theme.success("✓ done")}${theme.muted("")}`)
+    expect(expanded[1]).toBe(`${theme.muted("│")} ${theme.success("✓ done")}${theme.muted("")}`)
     const running = runningToolLines(theme, undefined, { ...call, startedAt: 0 }, 1000, "⠋", 80)
     expect(running[0]).toContain(style(summary))
     expect(running[0]).toContain(theme.accent("⠋"))
@@ -79,9 +80,9 @@ test("file headers and program output use path and secondary foreground tokens",
 
 test("reasoning labels use thinking while expanded text retains muted italics", () => {
   const rows = reasoningLines(theme, "a thought", { thinking: true, expanded: true }, 80)
-  expect(rows[0]).toBe(`  ${theme.thinking("∴")} ${theme.thinking("Thinking")}`)
+  expect(rows[0]).toBe(`${theme.muted("∴")} ${theme.muted("Thinking")}`)
   expect(rows[1]).toContain(theme.muted(italic("a thought")))
-  expect(rows.map(stripAnsi)).toEqual(["  ∴ Thinking", "    a thought"])
+  expect(rows.map(stripAnsi)).toEqual(["∴ Thinking", "  a thought"])
 })
 
 test("the editor border follows focus without changing the frame", () => {
@@ -162,6 +163,6 @@ test("status separators use dim without recoloring status text", () => {
     priority: 1,
   }))
   expect(statusLine(entries, 80, context)).toEqual([
-    theme.muted("one") + theme.dim(" · ") + theme.muted("two"),
+    `  ${theme.muted("one")}${theme.dim(" · ")}${theme.muted("two")}`,
   ])
 })

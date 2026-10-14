@@ -9,6 +9,7 @@ import {
   stripAnsi,
   stripColors,
   truncateToWidth,
+  wrapText,
 } from "@amira/tui-kit"
 import { DisplayBlock } from "./blocks/display.ts"
 import {
@@ -19,7 +20,6 @@ import {
   DetailNoticeBlock,
   ExploredBlock,
   exploredRun,
-  fixedLine,
   LinesBlock,
   ReasoningBlock,
   ReplyBlock,
@@ -34,9 +34,10 @@ import { createMouse } from "./fullscreen/mouse.ts"
 import { runningBoundary } from "./fullscreen/running-boundary.ts"
 import { createSubagentBlocks } from "./fullscreen/subagent-blocks.ts"
 import { glyphs } from "./glyphs.ts"
+import { CONTENT_INSET, contentRoom } from "./grid.ts"
 import { sessionBoundary } from "./history.ts"
 import { contentGeometry, insetLines, marginView } from "./margins.ts"
-import { stickyPrompt, stickyPromptLines } from "./pane/sticky-prompt.ts"
+import { stickyPromptOverlay } from "./pane/sticky-prompt.ts"
 import { OUTPUT_LINES } from "./tool-view.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { TranscriptPane } from "./transcript-pane.ts"
@@ -167,23 +168,25 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.
     if (overlay) return host.overlay.render(width, ctx)
     const header = host.header?.(width, ctx) ?? []
-    // The existing header gap is the first sticky row; only additional band rows cost space.
+    // The header gap stays fixed; sticky bands overlay the constant-height transcript.
     if (header.length) header.push("")
     paneTop = header.length
     const barRows = findSelect.finding || pane.selected ? 1 : 0
-    const budget = Math.max(1, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - barRows - paneTop)
+    // One editor row, two edges, status and footer take precedence on short screens.
+    // Still leave at least one transcript row and its scroll note.
+    const bottomRoom = Math.max(1, ctx.rows - paneTop - barRows - 2)
+    const budget = Math.min(bottomRoom, Math.max(5, ctx.rows - MIN_TRANSCRIPT_ROWS - 1 - barRows - paneTop))
     const bottom = host.bottom(width, ctx, budget)
     const available = Math.max(1, ctx.rows - bottom.length - barRows - 1 - paneTop)
     const frameEnv = env(width)
-    let sticky: string[] = []
+    pinned = undefined
+    pinnedRows = 0
     const rows = pane.render(frameEnv, available, (layout) => {
-      pinned = header.length ? stickyPrompt(pane.blocks, layout) : undefined
-      sticky = pinned ? stickyPromptLines(pinned, frameEnv, available) : []
-      return Math.max(0, sticky.length - 1)
+      const sticky = header.length ? stickyPromptOverlay(pane.blocks, layout, frameEnv, available) : undefined
+      pinned = sticky?.block
+      pinnedRows = sticky?.lines.length ?? 0
+      return sticky?.lines ?? []
     })
-    pinnedRows = sticky.length
-    if (pinnedRows) header.splice(header.length - 1, 1, ...sticky)
-    paneTop = header.length
     paneRows = rows.length
     // Rendering refreshes matches as text streams in; the bar uses this frame's counts.
     const bar = findSelect.finding
@@ -351,9 +354,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
 
     banner: (line) =>
       add(
-        typeof line === "string"
-          ? fixedLine("banner", line)
-          : new LinesBlock("banner", (width, t) => [truncateToWidth(line(t), width, glyphs.more)]),
+        new LinesBlock("banner", (width, t) =>
+          wrapText(typeof line === "function" ? line(t) : line, contentRoom(width)).map(
+            (row) => CONTENT_INSET + row,
+          ),
+        ),
       ),
     user(m) {
       // A message sent: the selection has done its work (and Esc goes back to stopping turns).

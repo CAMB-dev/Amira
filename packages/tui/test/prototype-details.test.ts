@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { bold, createTheme, Editor, visibleWidth } from "@amira/tui-kit"
+import { bold, createTheme, Editor, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { activityRow } from "../src/app/activity-row.ts"
 import { ReplyBlock } from "../src/blocks.ts"
 import { renderToolLines } from "../src/diff-view.ts"
@@ -34,7 +34,7 @@ test("prototype details: warning dirty marker, quiet divider, folded glyph and r
     ctx,
   )
   expect(header).toContain("\x1b[38;2;226;179;86m*\x1b[39m")
-  expect(header).toContain(theme.dim("  │  "))
+  expect(header).toContain(theme.dim("  ·  "))
   const grouped = exploredLine(
     theme,
     [
@@ -98,10 +98,12 @@ test("prototype details: spaced status stats, fg2 stop key and focused input pal
     { id: "model", text: "claude-opus-5-5 (high) · ask", align: "right", tone: "accent", priority: 40 },
   ]).render(100, ctx)
   expect(input[0]).toContain("\x1b[38;2;86;86;86m")
-  expect(input[1]).toContain(bold(theme.accent("› ")))
-  expect(input[2]).toContain(theme.accent("claude-opus-5-5"))
-  expect(input[2]).toContain(theme.muted(" (high)"))
-  expect(input[2]).toContain(theme.muted("ask"))
+  expect(input[1]).toContain(bold(theme.accent("›")))
+  expect(stripAnsi(input[2]!)).toBe(`╰${"─".repeat(98)}╯`)
+  expect(stripAnsi(input[1]!)).toMatch(/^│›Message Amira +│$/)
+  expect(input[3]).toContain(theme.accent("claude-opus-5-5"))
+  expect(input[3]).toContain(theme.muted(" (high)"))
+  expect(input[3]).toContain(theme.muted("ask"))
   for (const row of input) expect(visibleWidth(row)).toBe(100)
 })
 
@@ -120,7 +122,7 @@ test("prototype details: sky heading and quiet list markers retain semantic Mark
     hyperlinks: false,
     nodes: new Map(),
   })
-  expect(rows[0]).toContain("\x1b[38;2;111;179;232mStatus bar layout")
+  expect(rows[0]).toContain("\x1b[38;2;122;162;247mStatus bar layout")
   const list = rows.filter((row) => row.includes("•"))
   expect(list).toHaveLength(2)
   for (const row of list) expect(row).toContain("\x1b[38;2;114;114;114m•")

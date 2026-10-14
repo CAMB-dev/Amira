@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { afterAll, expect, spyOn, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -125,7 +126,7 @@ test("the picker opens for @, inserts the chosen path with a space, and a direct
   await waitUntil(() => picker.open)
   expect(picker.open).toBe(true)
   picker.update("see @edit")
-  expect(picker.render(60, plain)).toEqual(["❯ packages/tui-kit/src/components/editor.ts"])
+  expect(picker.render(60, plain)).toEqual(["› packages/tui-kit/src/components/editor.ts"])
   expect(picker.handleKey(key("tab"))).toEqual({
     type: "insert",
     replace: 5,
@@ -140,7 +141,7 @@ test("↑↓ move the selection, Esc closes until the word changes, other keys p
   const picker = new FilePicker(fileList(files), () => {})
   picker.update("@app")
   expect(picker.handleKey(key("down"))).toEqual({ type: "handled" })
-  expect(picker.render(60, plain)[1]).toBe("❯ docs/app-notes.md")
+  expect(picker.render(60, plain)[1]).toBe("› docs/app-notes.md")
   expect(picker.handleKey(key("left"))).toBeUndefined()
   expect(picker.handleKey(key("escape"))).toEqual({ type: "handled" })
   expect(picker.open).toBe(false)
@@ -189,16 +190,16 @@ test("while the project is listed the picker shows a status row, then matches as
   expect(picker.render(60, plain)).toEqual(["  ⠋ indexing… 0 files"])
   src.emit(["src/app.ts", "README.md"])
   await flushScheduledWork()
-  expect(picker.render(60, plain)).toEqual(["❯ src/app.ts", "  ⠋ indexing… 2 files"])
+  expect(picker.render(60, plain)).toEqual(["› src/app.ts", "  ⠋ indexing… 2 files"])
   // The list keys work on what is there.
   expect(picker.handleKey(key("tab"))).toEqual({ type: "insert", replace: 4, text: "@src/app.ts " })
   src.emit(["app.ts"])
   await flushScheduledWork()
-  expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts", "  ⠋ indexing… 3 files"])
+  expect(picker.render(60, plain)).toEqual(["› app.ts", "  src/app.ts", "  ⠋ indexing… 3 files"])
   src.finish()
   await waitUntil(() => src.index.listing().done)
   await flushScheduledWork()
-  expect(picker.render(60, plain)).toEqual(["❯ app.ts", "  src/app.ts"])
+  expect(picker.render(60, plain)).toEqual(["› app.ts", "  src/app.ts"])
   expect(updates).toBeGreaterThan(0)
   picker.dispose()
 })
@@ -223,7 +224,7 @@ test("while a new query is still searched without a match yet, the last list sta
   )
   const picker = new FilePicker(fileList(big), () => {})
   picker.update("@t1")
-  await waitUntil(() => picker.render(80, plain)[0] === "❯ gen/d1/t1.ts")
+  await waitUntil(() => picker.render(80, plain)[0] === "› gen/d1/t1.ts")
   const before = picker.render(80, plain)
   // Only the last entry matches: the first slice finds nothing.
   picker.update("@targ")
@@ -231,7 +232,7 @@ test("while a new query is still searched without a match yet, the last list sta
   expect(picker.open).toBe(false)
   expect(picker.render(80, plain)).toEqual(before)
   expect(picker.handleKey(key("tab"))).toEqual({ type: "handled" })
-  await waitUntil(() => picker.render(80, plain)[0] === "❯ zz/target-match.ts")
+  await waitUntil(() => picker.render(80, plain)[0] === "› zz/target-match.ts")
   expect(picker.open).toBe(true)
   // A query that matches nothing at all closes the list once searched.
   picker.update("@qqq")
@@ -246,10 +247,10 @@ test("the selection stays on the path moved to while more matches arrive", async
   src.emit(["b1.ts", "b2.ts"])
   await flushScheduledWork()
   picker.handleKey(key("down"))
-  expect(picker.render(60, plain)[1]).toBe("❯ b2.ts")
+  expect(picker.render(60, plain)[1]).toBe("› b2.ts")
   src.emit(["b.ts"])
   await flushScheduledWork()
-  expect(picker.render(60, plain)).toEqual(["  b.ts", "  b1.ts", "❯ b2.ts", "  ⠋ indexing… 3 files"])
+  expect(picker.render(60, plain)).toEqual(["  b.ts", "  b1.ts", "› b2.ts", "  ⠋ indexing… 3 files"])
   picker.dispose()
 })
 
@@ -264,7 +265,7 @@ test("a very large listing: a key searches one slice, the rest follows between f
   expect(updates).toBe(0)
   await waitUntil(() => updates > 0)
   picker.update("@file1234")
-  await waitUntil(() => picker.render(80, plain)[0] === "❯ pkg14/mod11/sub2/file1234.ts")
+  await waitUntil(() => picker.render(80, plain)[0] === "› pkg14/mod11/sub2/file1234.ts")
   // No status row once the listing is complete.
   expect(picker.render(80, plain).some((l) => l.includes("indexing"))).toBe(false)
   picker.dispose()

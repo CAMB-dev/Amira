@@ -1,4 +1,4 @@
-import { bold, compose, type RenderContext, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { bold, compose, type RenderContext, themeToken, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
 import { displayTitle } from "./title.ts"
@@ -34,7 +34,7 @@ export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext):
     contextStyle(ctx, info.used ?? 0, info.limit)(used) +
     (info.limit ? theme.muted(` / ${compactTokens(info.limit).toUpperCase()}`) : "")
   const cost = info.cost ? theme.muted(info.cost) : ""
-  const divider = theme.dim(`  ${glyphs.treePipe}  `)
+  const divider = theme.dim(`  ${glyphs.separator}  `)
   let right = cost ? cost + divider + context : context
   if (visibleWidth(right) > width - 2) right = context
   if (visibleWidth(right) >= width) return truncateToWidth(right, width, glyphs.more)
@@ -42,7 +42,8 @@ export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext):
   const branch = info.branch
     ? `${theme.muted(`${glyphs.branch} ${info.branch}`)}${info.dirty ? theme.warning("*") : ""}  `
     : ""
-  const cwd = theme.fg2(info.cwd)
+  const path = themeToken(theme, "path") ?? theme.fg2
+  const cwd = path(info.cwd)
   const title = info.title ? theme.muted(`  ${glyphs.separator}  ${displayTitle(info.title)}`) : ""
   let left = branch + cwd + title
   if (visibleWidth(left) > room) left = branch + cwd
@@ -51,13 +52,13 @@ export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext):
     const tail = info.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? info.cwd
     left =
       cwdRoom >= 4
-        ? branch + theme.fg2(truncateToWidth(`${glyphs.more}/${tail}`, cwdRoom, glyphs.more))
+        ? branch + path(truncateToWidth(`${glyphs.more}/${tail}`, cwdRoom, glyphs.more))
         : truncateToWidth(branch || cwd, room, glyphs.more)
   }
+  if (visibleWidth(left) === 0) left = ""
   return (
-    (left ? ` ${left}` : "") +
-    " ".repeat(Math.max(0, width - visibleWidth(left) - (left ? 1 : 0) - visibleWidth(right) - 1)) +
-    right +
-    " "
+    (left ? `  ${left}` : "") +
+    " ".repeat(Math.max(0, width - visibleWidth(left) - (left ? 2 : 0) - visibleWidth(right))) +
+    right
   )
 }
