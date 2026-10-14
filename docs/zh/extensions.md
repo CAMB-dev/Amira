@@ -352,7 +352,7 @@ function taskTitle(opts: ViewRenderOptions): ViewLine {
 
 `AGENT_STATUS_BADGES` 是导出的显示表，以 `AgentStatusState` 为键。每项包含 `{ symbol, ascii, role, label }`：默认 Unicode 符号、ASCII 替代符号、语义主题角色和明确的状态词。例如，`AGENT_STATUS_BADGES.stopped` 为 `{ symbol: "‖", ascii: "|", role: "warning", label: "stopped" }`。宿主辅助函数还会应用主题覆盖和动画。`{ pad: true }` 将状态词补齐到七个单元格，使任务名对齐；默认不补齐。
 
-请将完整的 info/result 传给 `agentStatusState(agent)`，而不只是 `agent.status`，以保留提前结束的备注。导出的 `AgentStatusSource` 类型也支持旧状态字符串和对话树节点。共用映射把 `done` 加任何已定义的提前结束 `note`（包括空字符串）解释为 `stopped`；用户暂停中的活动轮次解释为 `paused`，不会显示为 `working`。这不会改变生命周期结果的契约。扩展中需要对齐的行可调用 `opts.statusBadge?.(agentStatusState(agent), { pad: true })`。按名称导入该函数或显示表，需要宿主构建已导出它们。可选辅助函数只保护前端缺少该方法时的调用，不会让缺少命名导出的旧宿主能够加载这些导入。若要支持旧版宿主构建，请使用下例的命名空间导入和功能检测。`API_VERSION` 保持不变，不能据此判断这些能力；版本管理由维护者另行决定。
+请将完整的 info/result 传给 `agentStatusState(agent)`，而不只是 `agent.status`，以保留提前结束的备注。导出的 `AgentStatusSource` 类型也支持旧状态字符串和对话树节点。共用映射把 `done` 加任何已定义的提前结束 `note`（包括空字符串）解释为 `stopped`；用户暂停中的活动轮次解释为 `paused`，不会显示为 `working`。这不会改变生命周期结果的契约。扩展中需要对齐的行可调用 `opts.statusBadge?.(agentStatusState(agent), { pad: true })`。按名称导入该函数或显示表，需要宿主构建已导出它们。可选辅助函数只保护前端缺少该方法时的调用，不会让缺少命名导出的旧宿主能够加载这些导入。若要支持旧版宿主构建，请使用下例的命名空间导入和功能检测。这些能力自 API 0.1.48 起提供；仍建议做功能检测。
 
 ```ts
 import * as amira from "@amira/api"
@@ -477,7 +477,7 @@ api.registerCommand({
 })
 ```
 
-自行实现 `presentQuestionsInView` 并注册 `saved-notes`；从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能把独立会话的问题放进被遮挡的主会话对话框，也不能在视图无法展示问题时推断用户选择。新增的公共会话接口、`api.conversations` 能力和 `ToolSession.restricted` 要求维护者在发布前提升 `API_VERSION`。此处不修改版本文件；仍须检测能力是否可用。
+自行实现 `presentQuestionsInView` 并注册 `saved-notes`；从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能把独立会话的问题放进被遮挡的主会话对话框，也不能在视图无法展示问题时推断用户选择。会话接口、`api.conversations` 和 `ToolSession.restricted` 自 API 0.1.51 起提供；仍应先检测能力是否可用，让旧宿主能正常降级。
 
 ### 子 agent 控制
 

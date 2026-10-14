@@ -371,7 +371,7 @@ function taskTitle(opts: ViewRenderOptions): ViewLine {
 
 `AGENT_STATUS_BADGES` is the exported display table, keyed by `AgentStatusState`. Each entry has `{ symbol, ascii, role, label }`: the default Unicode symbol, ASCII fallback, semantic theme role, and explicit state word. For example, `AGENT_STATUS_BADGES.stopped` is `{ symbol: "‖", ascii: "|", role: "warning", label: "stopped" }`. Rendering through the host helper additionally respects theme overrides and animation. `{ pad: true }` pads the label to seven cells so task names line up; the default is unpadded.
 
-Pass the complete info/result to `agentStatusState(agent)`, not just `agent.status`, so early-end notes are retained. Its exported `AgentStatusSource` type also accepts legacy state strings and transcript nodes. The shared mapper interprets `done` plus any defined early-end `note` (including an empty string) as `stopped`, and an active user pause as `paused`, never `working`; it does not change lifecycle result contracts. For aligned extension rows, call `opts.statusBadge?.(agentStatusState(agent), { pad: true })`. Named imports of the mapper or table require a host build that exports them. The optional helper only protects calls on frontends where it is absent; it does not make missing named imports compatible. Extensions supporting older host builds should use a namespace import and feature detection, as below. `API_VERSION` is unchanged and cannot identify these capabilities; versioning is handled separately by the maintainer.
+Pass the complete info/result to `agentStatusState(agent)`, not just `agent.status`, so early-end notes are retained. Its exported `AgentStatusSource` type also accepts legacy state strings and transcript nodes. The shared mapper interprets `done` plus any defined early-end `note` (including an empty string) as `stopped`, and an active user pause as `paused`, never `working`; it does not change lifecycle result contracts. For aligned extension rows, call `opts.statusBadge?.(agentStatusState(agent), { pad: true })`. Named imports of the mapper or table require a host build that exports them. The optional helper only protects calls on frontends where it is absent; it does not make missing named imports compatible. Extensions supporting older host builds should use a namespace import and feature detection, as below. These capabilities arrived in API 0.1.48; feature detection is still recommended.
 
 ```ts
 import * as amira from "@amira/api"
@@ -505,7 +505,7 @@ api.registerCommand({
 })
 ```
 
-Implement `presentQuestionsInView` and register `saved-notes` separately, read the main session's status from `api.session()`, and read this conversation's transcript/status from its handle. Do not route an owned question through a hidden main-session dialog or infer a choice when your view cannot display it. The new public conversation interfaces, `api.conversations` capability and `ToolSession.restricted` require a maintainer-managed `API_VERSION` bump before release. The version file is not changed here; feature detection is still required.
+Implement `presentQuestionsInView` and register `saved-notes` separately, read the main session's status from `api.session()`, and read this conversation's transcript/status from its handle. Do not route an owned question through a hidden main-session dialog or infer a choice when your view cannot display it. The conversation interfaces, `api.conversations` and `ToolSession.restricted` arrived in API 0.1.51; still feature-detect them so older hosts degrade cleanly.
 
 ### Sub-agent controls
 
