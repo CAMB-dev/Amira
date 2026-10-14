@@ -166,7 +166,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     }
     const lines = dialog.render(width, ctx)
     dialogRows = lines.length
-    return [...lines, ...(bottomBudget > 1 ? statusLine(statusItems(), width, ctx) : [])]
+    // Status is optional: leave three rows for title, selection and footer first.
+    return [...lines, ...(bottomBudget > 3 ? statusLine(statusItems(), width, ctx) : [])]
   })
   const bottom = [
     new View((width, ctx) => (deps.mode() === "inline" ? (deps.header?.(width, ctx) ?? []) : [])),
@@ -314,7 +315,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       rest = draw()
     }
     if (dialog && rest.length > budget) {
-      dialog.maxRows = Math.max(1, budget - (rest.length - dialogRows))
+      // Title, selection and footer take precedence over optional rows above the dialog.
+      dialog.maxRows = Math.max(1, Math.min(3, budget), budget - (rest.length - dialogRows))
       rest = draw()
     }
     if (!dialog && inputList() && rest.length > budget) {

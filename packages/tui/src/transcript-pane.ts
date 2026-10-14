@@ -416,8 +416,15 @@ export class TranscriptPane {
   reveal(block: Block): void {
     const env = this.env
     if (!env || block.index < 0) return
-    if (this.uncoveredRows().some((r) => r.block === block && r.line >= 0)) return
-    this.revealRows(block, 0, this.lines(block, env).length - 1)
+    const lines = this.lines(block, env)
+    const padding = userBandPaddingIn(lines)
+    if (
+      this.uncoveredRows().some(
+        (r) => r.block === block && r.line >= padding && r.line < lines.length - padding,
+      )
+    )
+      return
+    this.revealRows(block, 0, lines.length - 1)
   }
 
   /** Scrolls so lines `from` to `to` of `block` are in view, unless they are: as `reveal` does. */
