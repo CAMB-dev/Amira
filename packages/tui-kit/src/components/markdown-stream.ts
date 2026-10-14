@@ -41,6 +41,11 @@ export interface MarkdownStreamOptions {
   firstRowWidth?: number
   /** Show a heading's # markers in the theme's accent style. Defaults to false. */
   headingMarkers?: boolean
+  /** A host marker gutter reclaimed by list and quote prefixes. */
+  markerOutset?: number
+  onMarkerRow?: (row: string) => void
+  /** Host-only code chrome metadata; language labels and surface edges are not searchable text. */
+  onCodeRow?: (row: string, kind: "top" | "body" | "bottom", col: number) => void
   glyphs?: Glyphs
   /** Make links clickable with OSC 8. Defaults to what the terminal is known to support. */
   hyperlinks?: boolean
@@ -179,6 +184,9 @@ export class MarkdownStream implements Component {
   private readonly hyperlinks: boolean
   private readonly highlight: boolean
   private readonly headingMarkers: boolean
+  private readonly markerOutset: number
+  private readonly onMarkerRow: MarkdownStreamOptions["onMarkerRow"]
+  private readonly onCodeRow: MarkdownStreamOptions["onCodeRow"]
   private readonly nodes: MarkdownNodes | undefined
   private state = newState()
   /** Text not processed yet: complete lines, then the partial line being written. */
@@ -200,6 +208,9 @@ export class MarkdownStream implements Component {
     this.hyperlinks = opts.hyperlinks ?? supportsHyperlinks()
     this.highlight = opts.highlight ?? true
     this.headingMarkers = opts.headingMarkers ?? false
+    this.markerOutset = opts.markerOutset ?? 0
+    this.onMarkerRow = opts.onMarkerRow
+    this.onCodeRow = opts.onCodeRow
     const rowsFor = opts.imageRows
     this.nodes =
       opts.nodes ??
@@ -287,7 +298,8 @@ export class MarkdownStream implements Component {
     if (this.src !== "" && !this.src.endsWith("\n")) this.src += "\n"
     this.processLines(env, sink, true)
     finish(this.state, env, sink)
-    while (rows.length > 0 && rows[rows.length - 1]!.trim() === "") rows.pop()
+    // Filled code edges are spaces even without color; only paragraph gaps are empty rows.
+    while (rows.length > 0 && rows[rows.length - 1] === "") rows.pop()
     this.state = newState()
     this.src = ""
     this.codeThrough = 0
@@ -308,6 +320,9 @@ export class MarkdownStream implements Component {
       glyphs: this.glyphs,
       hyperlinks: this.hyperlinks,
       highlight: this.highlight,
+      markerOutset: this.markerOutset,
+      ...(this.onMarkerRow ? { markerRow: this.onMarkerRow } : {}),
+      ...(this.onCodeRow ? { codeRow: this.onCodeRow } : {}),
       ...(this.headingMarkers ? { headingMarker: this.theme.accent } : {}),
       refs: this.state.refs,
     }

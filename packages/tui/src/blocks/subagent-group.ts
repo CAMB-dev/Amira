@@ -1,5 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { glyphs } from "../glyphs.ts"
+import { markerPrefix } from "../grid.ts"
 import { backgroundLabel, isActive, type SubagentNode, subtree, treeRows } from "../subagents.ts"
 import { treeContinuation } from "../tool-view.ts"
 import { Block, type BlockEnv } from "./base.ts"
@@ -59,7 +60,7 @@ export class SubagentGroupBlock extends Block {
     const tree = theme.muted(arm + " ".repeat(cells - visibleWidth(arm)))
     const continuation = treeContinuation(theme, this.last)
     const treeWidth = Math.max(0, width - visibleWidth(continuation))
-    const head = `  ${tree} ${this.running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(backgroundLabel(env.groups, roots))}`
+    const head = `${markerPrefix(tree)}${this.running ? theme.accent(env.spinner) : theme.success(glyphs.subagentDone)} ${theme.muted(backgroundLabel(env.groups, roots))}`
     return [
       truncateToWidth(head, width, glyphs.more),
       ...treeRows(list, env.now, treeWidth, theme, env.groups, true, env.spinner).map((row) =>

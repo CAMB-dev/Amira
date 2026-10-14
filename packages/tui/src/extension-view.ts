@@ -289,7 +289,7 @@ export class ExtensionViewer implements Component {
     let state = this.#page.scrolls.get(key)
     if (!state) {
       state = {
-        scroll: new ScrollView((width, ctx) => this.#body(width, ctx.theme)),
+        scroll: new ScrollView((width, ctx) => this.#body(width, ctx)),
         placed: this.#view.follow !== false,
       }
       this.#page.scrolls.set(key, state)
@@ -496,7 +496,7 @@ export class ExtensionViewer implements Component {
     this.#animating = false
     if (this.#ui) return this.#renderUi(width, ctx)
     const { theme } = ctx
-    const opts = this.#renderOptions(width, theme)
+    const opts = this.#renderOptions(width, theme, ctx.glyphs)
     const head: string[] = []
     const title =
       this.#page.title ?? this.#call("title", () => this.#view.title(this.#data, opts)) ?? this.kind
@@ -554,7 +554,7 @@ export class ExtensionViewer implements Component {
       // Bound stabilization so a view whose content oscillates with state cannot spin forever.
       for (let attempt = 0; attempt < 8; attempt++) {
         const node = this.#view.ui!(this.#data, {
-          ...this.#renderOptions(width, ctx.theme),
+          ...this.#renderOptions(width, ctx.theme, ctx.glyphs),
           height,
           state: runtime.state,
         })
@@ -573,8 +573,9 @@ export class ExtensionViewer implements Component {
     if (!body) {
       runtime.clearFrame()
       const title =
-        this.#call("title", () => this.#view.title(this.#data, this.#renderOptions(width, ctx.theme))) ??
-        this.kind
+        this.#call("title", () =>
+          this.#view.title(this.#data, this.#renderOptions(width, ctx.theme, ctx.glyphs)),
+        ) ?? this.kind
       body = this.#renderLines(
         [
           typeof title === "string" ? { kind: "accent", text: title } : title,
@@ -594,9 +595,10 @@ export class ExtensionViewer implements Component {
     )
   }
 
-  #body(width: number, theme: Theme): string[] {
+  #body(width: number, ctx: RenderContext): string[] {
+    const { theme } = ctx
     const lines: ViewLine[] = this.#call("render", () =>
-      this.#view.render?.(this.#data, this.#renderOptions(width, theme)),
+      this.#view.render?.(this.#data, this.#renderOptions(width, theme, ctx.glyphs)),
     ) ?? [
       {
         kind: "error",
@@ -616,7 +618,7 @@ export class ExtensionViewer implements Component {
     })
   }
 
-  #renderOptions(width: number, theme: Theme): ViewRenderOptions {
+  #renderOptions(width: number, theme: Theme, markdownGlyphs?: RenderContext["glyphs"]): ViewRenderOptions {
     const now = this.#now()
     let finished = false
     let separated = false
@@ -688,9 +690,15 @@ export class ExtensionViewer implements Component {
       },
       renderReply: (text) => {
         finished ||= !!text.trim()
-        return this.#hostRows(
-          replyRows(renderMarkdown(text, Math.max(1, width - visibleWidth(glyphs.assistant)), theme)),
-        )
+        const markers = new Set<string>()
+        const rows = renderMarkdown(text, Math.max(1, width - visibleWidth(glyphs.assistant)), theme, {
+          glyphs: markdownGlyphs,
+          markerOutset: 2,
+          onMarkerRow: (row) => {
+            markers.add(row)
+          },
+        })
+        return this.#hostRows(replyRows(rows, markers))
       },
     }
   }
@@ -726,7 +734,7 @@ export class ExtensionViewer implements Component {
   }
 
   #footer(theme: Theme, width: number): string[] {
-    return this.#footerHeight ? [this.#keyBar(theme, width)] : []
+    return this.#footerHeight ? [`  ${this.#keyBar(theme, Math.max(1, width - 2))}`] : []
   }
 
   #navigationLabel(action: "view.back" | "view.close", typing = !!this.#ui?.typing): string | undefined {

@@ -433,23 +433,26 @@ export class FilePicker implements Component {
     return { type: "insert", replace: 1 + (this.#query ?? "").length, text }
   }
 
-  render(width: number, ctx: RenderContext): string[] {
-    if (!this.visible) return []
+  render(width: number, ctx: RenderContext, maxRows = Number.POSITIVE_INFINITY): string[] {
+    if (!this.visible || maxRows <= 0) return []
     const t = ctx.theme
+    const listing = this.#listing
+    const status = !!listing && (this.#indexing || listing.partial)
+    const statusRows = status && (!this.#results.length || maxRows > 1) ? 1 : 0
     const rows = this.#results.length
       ? pickerRows(
           this.#results.map((label) => ({ label })),
           this.#selected,
           width,
           t,
+          maxRows - statusRows,
         )
       : []
-    const listing = this.#listing
-    if (this.#indexing && listing) {
+    if (statusRows && this.#indexing && listing) {
       // Lined up with the rows' text, as the "searched the first …" row is.
       const status = `  ${t.accent(this.#spinner.glyph)} ${t.muted(`indexing… ${count(listing.files)} files`)}`
       rows.push(truncateToWidth(status, width, "…"))
-    } else if (listing?.partial) {
+    } else if (statusRows && listing?.partial) {
       rows.push(truncateToWidth(t.muted(`  searched the first ${count(listing.files)} files`), width, "…"))
     }
     return rows

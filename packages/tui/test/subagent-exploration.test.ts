@@ -1,6 +1,7 @@
+// A/C/D style oracles: root markers at 0, content at 2, logical two-cell child rails and muted chrome.
 import { expect, test } from "bun:test"
 import { type ExtensionAPI, emptyUsage, type Message, type SubagentInfo, textResult } from "@amira/api"
-import { monoTheme, stripAnsi } from "@amira/tui-kit"
+import { defaultGlyphs, monoTheme, stripAnsi } from "@amira/tui-kit"
 import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"
 import { ExtensionViewer } from "../src/extension-view.ts"
 
@@ -47,6 +48,27 @@ function fixture(messages: Message[]) {
 
 const toggle = { type: "key", name: "o", ctrl: true, alt: false, shift: false } as const
 
+test("/agents Markdown replies use the available ASCII glyphs and follow context changes", () => {
+  const messages: Message[] = [{ role: "user", content: [{ type: "text", text: "Check files" }] }]
+  const s = fixture(messages)
+  messages.push(s.assistant([{ type: "text", text: "- ASCII bullet\n\n> ASCII quote\n\n- [x] ASCII task" }]))
+  const render = (glyphs = defaultGlyphs) =>
+    s.viewer.render(80, { theme: monoTheme, color: false, rows: 30, glyphs }).map(stripAnsi).join("\n")
+  try {
+    const ascii = render({ ...defaultGlyphs, bullets: ["*"], quoteBar: ">", taskDone: "[x]" })
+    expect(ascii).toContain("* ASCII bullet")
+    expect(ascii).toContain("> ASCII quote")
+    expect(ascii).toContain("[x] ASCII task")
+    expect(ascii).not.toMatch(/[•▎✓]/)
+    const restored = render()
+    expect(restored).toContain("• ASCII bullet")
+    expect(restored).toContain("▎ ASCII quote")
+    expect(restored).toContain("[✓] ASCII task")
+  } finally {
+    s.viewer.dispose()
+  }
+})
+
 test("/agents groups calls across steps, counts repeat targets and unfolds with Ctrl+O without a summary", () => {
   const messages: Message[] = [{ role: "user", content: [{ type: "text", text: "Check files" }] }]
   const s = fixture(messages)
@@ -61,22 +83,22 @@ test("/agents groups calls across steps, counts repeat targets and unfolds with 
     s.result("b", "read", "second result\nsecond body"),
   )
   const folded = s.render()
-  expect(folded).toContain("  └ Read 2 files · Searched 1 pattern  ▸")
+  expect(folded).toContain("└ Read 2 files · Searched 1 pattern  ▸")
   expect(folded.join("\n")).not.toContain("Explored")
   expect(folded.join("\n")).not.toContain("first result")
   expect(s.viewer.handleInput(toggle)).toBe(true)
   const full = s.render()
-  expect(full.filter((row) => row === "  ├ read a.ts")).toHaveLength(2)
-  expect(full).toContain("  └ web_search TODO")
+  expect(full.filter((row) => row === "├ read a.ts")).toHaveLength(2)
+  expect(full).toContain("└ web_search TODO")
   expect(full.join("\n")).toContain("first result")
   expect(full.join("\n")).toContain("first body")
   expect(full.join("\n")).toContain("second result")
   expect(full.join("\n")).toContain("second body")
   expect(full.join("\n")).not.toContain("Read 2 files")
   expect(full.join("\n")).not.toContain("▸")
-  expect(full.indexOf("  Finished checking.")).toBeGreaterThan(full.indexOf("  └ web_search TODO"))
+  expect(full.indexOf("  Finished checking.")).toBeGreaterThan(full.indexOf("└ web_search TODO"))
   s.viewer.handleInput(toggle)
-  expect(s.render()).toContain("  └ Read 2 files · Searched 1 pattern  ▸")
+  expect(s.render()).toContain("└ Read 2 files · Searched 1 pattern  ▸")
 })
 
 test("/agents keeps errors, rejections, edits and commands between successful runs", () => {
@@ -103,15 +125,15 @@ test("/agents keeps errors, rejections, edits and commands between successful ru
     s.result("d", "read", "fourth"),
   )
   const rows = s.render()
-  const first = rows.indexOf("  ├ Read 2 files  ▸")
-  const last = rows.indexOf("  └ Read 2 files  ▸")
+  const first = rows.indexOf("├ Read 2 files  ▸")
+  const last = rows.indexOf("└ Read 2 files  ▸")
   expect(first).toBeGreaterThanOrEqual(0)
   expect(last).toBeGreaterThan(first)
   expect(rows.slice(first + 1, last)).toEqual([
-    "  ├ read missing.ts  ✗ missing",
-    "  ├ read blocked.ts  ⊘ denied",
-    "  ├ edit a.ts  ✓ changed",
-    "  ├ bash check  ✓ checked",
+    "├ read missing.ts  ✗ missing",
+    "├ read blocked.ts  ⊘ denied",
+    "├ edit a.ts  ✓ changed",
+    "├ bash check  ✓ checked",
   ])
 })
 
@@ -163,5 +185,5 @@ test("/agents does not batch over running calls, replies or associated children 
   expect(child).toBeGreaterThan(rows.findIndex((line) => line.kind === "text" && line.text === "started"))
   expect(child).toBeLessThan(rows.findIndex((line) => line.kind === "text" && line.text === "third"))
   const fallback = s.definition.render!(s.data, { width: 100, now: 1000 })
-  expect(fallback.some((line) => line.kind === "text" && line.text === "  ├ read a.ts  ✓ first")).toBe(true)
+  expect(fallback.some((line) => line.kind === "text" && line.text === "├ read a.ts  ✓ first")).toBe(true)
 })

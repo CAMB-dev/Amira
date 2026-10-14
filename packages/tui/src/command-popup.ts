@@ -186,9 +186,9 @@ export class CommandPopup implements Component {
     return !r.command && r.text === this.sigil && !this.#navigated
   }
 
-  render(width: number, ctx: RenderContext): string[] {
+  render(width: number, ctx: RenderContext, maxRows = Number.POSITIVE_INFINITY): string[] {
     const r = this.#shown
-    return r && this.visible ? this.#lines(r, ctx, width) : []
+    return r && this.visible && maxRows > 0 ? this.#lines(r, ctx, width, maxRows) : []
   }
 
   /** The result for the text in the editor, if it has arrived. */
@@ -201,7 +201,7 @@ export class CommandPopup implements Component {
     return isInputFor(this.sigil, this.#text) && this.#result.text ? this.#result : undefined
   }
 
-  #lines(r: Result, ctx?: RenderContext, width = 80): string[] {
+  #lines(r: Result, ctx?: RenderContext, width = 80, maxRows = Number.POSITIVE_INFINITY): string[] {
     const theme = ctx?.theme
     const muted = (s: string) => (theme ? theme.muted(s) : s)
     if (!r.candidates.length) {
@@ -234,6 +234,6 @@ export class CommandPopup implements Component {
     // A bare sigil names nothing yet: no row is marked until one is picked, as Enter does nothing.
     const selected = this.#pickedNothing(r) ? -1 : this.#selected
     if (!theme) return rows.map((row) => row.label)
-    return pickerRows(rows, selected, width, theme)
+    return pickerRows(rows, selected, width, theme, maxRows)
   }
 }

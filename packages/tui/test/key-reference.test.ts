@@ -1,3 +1,4 @@
+// A/D deliberate oracles: content-column headings/footer and no question prefix.
 import { expect, test } from "bun:test"
 import { key, textKey, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
@@ -26,7 +27,7 @@ test("Esc, q, Ctrl+C and the help key close it; other keys scroll or do nothing"
   const { ref, closed } = open()
   ref.render(60, { ...plain, rows: 12 })
   expect(ref.handleInput(key("pagedown"))).toBe(true)
-  expect(ref.render(60, { ...plain, rows: 12 }).at(-1)).toMatch(/^\d+–\d+ of \d+ · /)
+  expect(ref.render(60, { ...plain, rows: 12 }).at(-1)).toMatch(/^ {2}\d+–\d+ of \d+ · /)
   expect(ref.handleInput(textKey("x"))).toBe(false)
   expect(closed()).toBe(0)
 })
@@ -54,7 +55,7 @@ test("rebound reference labels and its footer are lower-case, while prose keeps 
   expect(text).toMatch(/^ {2}f6 +Choose the selected option/m)
   expect(text).toContain("Input")
   expect(text).toContain("Block selection")
-  expect(rows.at(-1)).toBe("↑↓ pgup pgdn home end scroll · esc close")
+  expect(rows.at(-1)).toBe("  ↑↓ pgup pgdn home end scroll · esc close")
 })
 
 test("keys the terminal cannot send are left out; an action with none says so", () => {

@@ -14,17 +14,27 @@ export interface PickerRow {
 const LABEL_SHARE = 0.4
 
 /**
- * Draws the rows of a completion list (commands, skills, files): ❯ before the selected one
+ * Draws the rows of a completion list (commands, skills, files): › before the selected one
  * (none while `selected` is -1), and descriptions in a column after the labels. The column is
  * as wide as the longest label of the whole list, so it stays put while the list scrolls, but
  * at most 40% of the width: a longer label is cut with "…" rather than pushing every
  * description out of view.
  */
-export function pickerRows(rows: PickerRow[], selected: number, width: number, theme: Theme): string[] {
+export function pickerRows(
+  rows: PickerRow[],
+  selected: number,
+  width: number,
+  theme: Theme,
+  maxRows = Number.POSITIVE_INFINITY,
+): string[] {
   const n = rows.length
+  const roomRows = Math.max(0, Math.floor(maxRows))
+  if (!roomRows) return []
+  const counter = n > Math.min(PICKER_ROWS, roomRows) && roomRows > 1 ? 1 : 0
+  const count = Math.min(PICKER_ROWS, roomRows - counter)
   const at = Math.max(0, selected)
-  const start = Math.min(Math.max(0, at - PICKER_ROWS + 1), Math.max(0, n - PICKER_ROWS))
-  const shown = rows.slice(start, start + PICKER_ROWS)
+  const start = Math.min(Math.max(0, at - count + 1), Math.max(0, n - count))
+  const shown = rows.slice(start, start + count)
   const described = rows.some((r) => r.description)
   const room = Math.max(8, Math.floor((width - 2) * LABEL_SHARE))
   const col = Math.min(room, Math.max(...rows.map((r) => visibleWidth(r.label))))
@@ -39,6 +49,6 @@ export function pickerRows(rows: PickerRow[], selected: number, width: number, t
         : `  ${label}${pad}${desc}`
     return truncateToWidth(line, width, glyphs.more)
   })
-  if (n > PICKER_ROWS) lines.push(theme.muted(`  ${at + 1}/${n}`))
+  if (n > count && roomRows > lines.length) lines.push(theme.muted(`  ${at + 1}/${n}`))
   return lines
 }

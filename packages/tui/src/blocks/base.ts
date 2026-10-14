@@ -6,11 +6,11 @@ import {
   stripAnsi,
   type Theme,
   truncateToWidth,
-  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { messageTimestamp, timestampIn, userBandPaddingIn, userLines, userText } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
+import { MARKER_WIDTH } from "../grid.ts"
 import type { ReplyRenderers } from "../markdown-nodes.ts"
 import type { SpawnGroups, SubagentNode } from "../subagents.ts"
 import { type CopyRow, chromeRows, gutterRows, sliceCells } from "../text-selection.ts"
@@ -242,9 +242,10 @@ export class LinesBlock extends Block {
   }
 
   override copyRows(plain: readonly string[], lines: readonly string[] = this.lastLines): CopyRow[] {
+    if (this.kind === "banner") return plain.map((row) => ({ from: row.startsWith("  ") ? MARKER_WIDTH : 0 }))
     if (this.kind !== "user" && this.kind !== "command") return chromeRows(plain)
     // A message or a command echo sits behind "› ", its rows lined up after it.
-    const gutter = visibleWidth(glyphs.user) + 3
+    const gutter = MARKER_WIDTH
     const rows: CopyRow[] = gutterRows(plain, gutter)
     const padding = userBandPaddingIn(lines)
     for (let i = 0; i < padding; i++) {

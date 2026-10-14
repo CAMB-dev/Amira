@@ -164,7 +164,7 @@ test("every built-in JSON is statically imported and passes the shared registry 
   expect(registry.list()).toHaveLength(jsons.length)
 })
 
-test("the six built-ins keep the specified accent and heading colors without changing status or surfaces", () => {
+test("the six built-ins separate reference colors from accent without changing status or surfaces", () => {
   expect(builtinThemes.map((theme) => theme.name).sort()).toEqual([
     "amber",
     "amira",
@@ -173,22 +173,23 @@ test("the six built-ins keep the specified accent and heading colors without cha
     "lavender",
     "mono",
   ])
+  // Reference sky replaces decorative heading/path hues; each interactive accent stays unchanged.
   const colors = {
     amber: [
-      ["#e9a23b", "#f2b85c", "#dd8f63", "#e58a5a"],
-      ["#b86e0a", "#a8610a", "#b3532a", "#b5532a"],
+      ["#e9a23b", "#7aa2f7", "#7aa2f7", "#7aa2f7", "#7aa2f7"],
+      ["#b86e0a", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
     ],
     burnt: [
-      ["#e5792f", "#ef9148", "#d9a45c", "#e7a15e"],
-      ["#b8510f", "#a8470c", "#94671f", "#94671f"],
+      ["#e5792f", "#7aa2f7", "#7aa2f7", "#7aa2f7", "#7aa2f7"],
+      ["#b8510f", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
     ],
     lavender: [
-      ["#a99cf0", "#bdb3f5", "#8fb8ea", "#e2b07a"],
-      ["#5848b8", "#4a3ca3", "#2f6aa6", "#94601f"],
+      ["#a99cf0", "#7aa2f7", "#7aa2f7", "#7aa2f7", "#7aa2f7"],
+      ["#5848b8", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
     ],
     mono: [
-      ["#e6e6e6", "#f2f2f2", "#cfcfcf", "#bdbdbd"],
-      ["#111111", "#000000", "#333333", "#444444"],
+      ["#e6e6e6", "#7aa2f7", "#7aa2f7", "#7aa2f7", "#7aa2f7"],
+      ["#111111", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
     ],
   } as const
   for (const [name, variants] of Object.entries(colors)) {
@@ -199,6 +200,7 @@ test("the six built-ins keep the specified accent and heading colors without cha
         theme[variant]?.heading1,
         theme[variant]?.heading,
         theme[variant]?.path,
+        theme[variant]?.command,
       ]).toEqual([...variants[index]!])
       for (const token of ["success", "error", "warning", "userBg", "codeBg", "diffAddedBg"] as const)
         expect(theme[variant]?.[token]).toBeUndefined()

@@ -1,3 +1,4 @@
+// B deliberate oracle: claimed-code fallbacks are filled surfaces, with language at top right.
 import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
 import type { RenderContext } from "../src/component.ts"
@@ -137,16 +138,16 @@ test("a claimed code block is held until it closes, shown live as code, then com
   // Live: the code so far, no bottom yet; nothing of it committed, and nothing asked for yet.
   expect(m.render(30, ctx).map(stripAnsi)).toEqual([
     "",
-    `╭─ diagram${"─".repeat(19)}╮`,
-    `│ A --> B${" ".repeat(20)}│`,
+    `${" ".repeat(23)}diagram`,
+    `A --> B${" ".repeat(23)}`,
   ])
   expect(committed).toEqual(["Here:"])
   m.append("B --> C")
   expect(m.render(30, ctx).map(stripAnsi)).toEqual([
     "",
-    `╭─ diagram${"─".repeat(19)}╮`,
-    `│ A --> B${" ".repeat(20)}│`,
-    `│ B --> C${" ".repeat(20)}│`,
+    `${" ".repeat(23)}diagram`,
+    `A --> B${" ".repeat(23)}`,
+    `B --> C${" ".repeat(23)}`,
   ])
   expect(calls).toEqual([])
   m.append("\n```\nafter")
@@ -157,10 +158,10 @@ test("a claimed code block is held until it closes, shown live as code, then com
       code: "A --> B\nB --> C",
       info: "diagram big",
       fallback: [
-        `╭─ diagram${"─".repeat(19)}╮`,
-        `│ A --> B${" ".repeat(20)}│`,
-        `│ B --> C${" ".repeat(20)}│`,
-        `╰${"─".repeat(28)}╯`,
+        `${" ".repeat(23)}diagram`,
+        `A --> B${" ".repeat(23)}`,
+        `B --> C${" ".repeat(23)}`,
+        " ".repeat(30),
       ],
       col: 0,
       commit: true,
@@ -172,7 +173,7 @@ test("a claimed code block is held until it closes, shown live as code, then com
   const c2 = committing()
   plainCode.append("```js\nx()\n")
   plainCode.render(30, c2.ctx)
-  expect(c2.committed.map(stripAnsi)).toEqual([`╭─ js${"─".repeat(24)}╮`, `│ x()${" ".repeat(24)}│`])
+  expect(c2.committed.map(stripAnsi)).toEqual([`${" ".repeat(28)}js`, `x()${" ".repeat(27)}`])
 })
 
 test("a claimed block never commits in parts: taller than the live region, its end shows live", () => {
@@ -182,9 +183,9 @@ test("a claimed block never commits in parts: taller than the live region, its e
   m.maxRows = 3
   m.append(`\`\`\`diagram\n${Array.from({ length: 8 }, (_, i) => `line ${i}`).join("\n")}\n`)
   expect(m.render(30, ctx).map(stripAnsi)).toEqual([
-    `│ line 5${" ".repeat(21)}│`,
-    `│ line 6${" ".repeat(21)}│`,
-    `│ line 7${" ".repeat(21)}│`,
+    `line 5${" ".repeat(24)}`,
+    `line 6${" ".repeat(24)}`,
+    `line 7${" ".repeat(24)}`,
   ])
   expect(committed).toEqual([])
   m.append("```\n")
@@ -204,9 +205,9 @@ test("a claimed block the text ends inside is rendered too; in a list it keeps i
   const n = new MarkdownStream({ hyperlinks: false, highlight: false, nodes: none.nodes })
   n.append("```diagram\nA\n```")
   expect(n.take(30).map(stripAnsi)).toEqual([
-    `╭─ diagram${"─".repeat(19)}╮`,
-    `│ A${" ".repeat(26)}│`,
-    `╰${"─".repeat(28)}╯`,
+    `${" ".repeat(23)}diagram`,
+    `A${" ".repeat(29)}`,
+    " ".repeat(30),
   ])
 })
 
@@ -232,10 +233,10 @@ test("through the renderer: a rendering still on its way holds what follows, the
   r.render()
   // Waiting: what follows is held back, drawn live with the fallback in its place.
   expect(screen.lines.slice(0, 5)).toEqual(["before", "", "(fallback)", "", "after"])
-  finish(["┌─┐", "│A│", "└─┘"])
+  finish(["┌─┐", "│A│", "  └─┘"])
   await Bun.sleep(10)
   r.render()
-  expect(screen.lines.slice(0, 7)).toEqual(["before", "", "┌─┐", "│A│", "└─┘", "", "after"])
+  expect(screen.lines.slice(0, 7)).toEqual(["before", "", "┌─┐", "│A│", "  └─┘", "", "after"])
   r.stop()
   // One that fails goes as its fallback, once.
   const failed = findImageMarker(pendingBlock(Promise.resolve(undefined), ["fb"]))!

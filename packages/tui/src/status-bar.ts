@@ -93,7 +93,7 @@ function join(xs: readonly StatusEntry[], theme: Theme): string {
 }
 
 /**
- * The bottom border of the input box with the status in it: `╰─ left ───── right ─╯`, left
+ * The bottom border of the input box with the status in it: `╰ left ────── right ─╯`, left
  * items after the corner, right ones against the other, the border filled in between. Items
  * that do not fit go, lowest priority first; the border keeps its corners and is always
  * exactly `width` cells (at least 6).
@@ -101,18 +101,19 @@ function join(xs: readonly StatusEntry[], theme: Theme): string {
 export function statusBorder(items: readonly StatusEntry[], width: number, ctx: RenderContext): string {
   const { theme } = ctx
   const line = theme.border
-  // "╰─" and "─╯", a space on each side of a group, and "─" between: at least three between
+  // The left label starts at content column2; "─╯" closes the right edge. At least three rules between
   // two groups, so they read apart.
-  const fits = (l: number, r: number) => 2 + (l ? l + 2 : 0) + (l && r ? 3 : 1) + (r ? r + 2 : 0) + 2 <= width
-  const { left, right } = fitItems(items, fits, () => width - 7)
+  const fits = (l: number, r: number) =>
+    2 - (l ? 1 : 0) + (l ? l + 2 : 0) + (l && r ? 3 : 1) + (r ? r + 2 : 0) + 2 <= width
+  const { left, right } = fitItems(items, fits, (item) => width - (item.align === "left" ? 6 : 7))
   const l = sideWidth(left)
   const r = sideWidth(right)
-  const fill = width - 4 - (l ? l + 2 : 0) - (r ? r + 2 : 0)
+  const fill = width - 4 + (l ? 1 : 0) - (l ? l + 2 : 0) - (r ? r + 2 : 0)
   const bottomLeft = ctx.glyphs?.boxBottomLeft ?? "╰"
   const bottomRight = ctx.glyphs?.boxBottomRight ?? "╯"
   if (fill < 1) return line(`${bottomLeft}${glyphs.rule.repeat(Math.max(0, width - 2))}${bottomRight}`)
   return (
-    line(`${bottomLeft}${glyphs.rule}`) +
+    line(`${bottomLeft}${l ? "" : glyphs.rule}`) +
     (l ? ` ${join(left, theme)} ` : "") +
     line(glyphs.rule.repeat(fill)) +
     (r ? ` ${join(right, theme)} ` : "") +
@@ -126,10 +127,10 @@ export function statusBorder(items: readonly StatusEntry[], width: number, ctx: 
  * without items.
  */
 export function statusLine(items: readonly StatusEntry[], width: number, ctx: RenderContext): string[] {
-  const fits = (l: number, r: number) => l + r + (l && r ? 2 : 0) <= width
-  const { left, right } = fitItems(items, fits, () => width)
+  const fits = (l: number, r: number) => l + r + (l && r ? 2 : 0) <= width - 2
+  const { left, right } = fitItems(items, fits, () => width - 2)
   if (!left.length && !right.length) return []
-  if (!right.length) return [join(left, ctx.theme)]
-  const gap = width - sideWidth(left) - sideWidth(right)
-  return [join(left, ctx.theme) + " ".repeat(Math.max(0, gap)) + join(right, ctx.theme)]
+  if (!right.length) return [`  ${join(left, ctx.theme)}`]
+  const gap = width - 2 - sideWidth(left) - sideWidth(right)
+  return [`  ${join(left, ctx.theme)}${" ".repeat(Math.max(0, gap))}${join(right, ctx.theme)}`]
 }

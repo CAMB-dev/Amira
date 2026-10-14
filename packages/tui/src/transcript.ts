@@ -1,5 +1,6 @@
 import { type StyleFn, type Theme, textWidth, wrapText } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
+import { CONTENT_INSET, markerPrefix } from "./grid.ts"
 
 /** What a block of the transcript is; the spacing rule depends on it. */
 export type BlockKind =
@@ -112,9 +113,9 @@ export function noticeLines(theme: Theme, level: NoticeLevel, text: string, widt
   const mark = glyphs[level]
   const glyph = level === "success" ? theme.success(mark) : style(mark)
   // Rows after the first hang under the text, past a mark that may be two cells (an emoji).
-  const pad = " ".repeat(textWidth(mark) + 1)
+  const pad = CONTENT_INSET
   return hanging(text, width - pad.length).map((l, i) =>
-    i === 0 ? `${glyph} ${style(l)}` : `${pad}${style(l)}`,
+    i === 0 ? `${markerPrefix(glyph)}${style(l)}` : `${pad}${style(l)}`,
   )
 }
 
@@ -122,14 +123,14 @@ export function noticeLines(theme: Theme, level: NoticeLevel, text: string, widt
  * The details of a notice (e.g. what a provider answered to a failed request), muted and
  * hanging under its text like the notice's own later rows.
  */
-export function noticeDetailLines(theme: Theme, level: NoticeLevel, detail: string, width = 80): string[] {
-  const pad = " ".repeat(textWidth(glyphs[level]) + 1)
+export function noticeDetailLines(theme: Theme, _level: NoticeLevel, detail: string, width = 80): string[] {
+  const pad = CONTENT_INSET
   return hanging(detail, width - pad.length).map((l) => `${pad}${theme.muted(l)}`)
 }
 
 /**
- * Output of a command, hanging under its echo like a tool's result. An error is marked with
- * "✗" after the result mark too, so it reads as one without colors. A row of columns (cells two
+ * Output of a command, hanging under its echo like a tool's result. An error replaces the
+ * result marker with "✗", so the cue remains explicit without a second gutter. A row of columns (cells two
  * spaces or more apart, as /help and /cost print them) wraps under its last column, so the
  * columns stay lined up.
  */
@@ -140,11 +141,9 @@ export function commandOutputLines(
   width = 80,
 ): string[] {
   const style = level === "error" ? theme.error : level === "warning" ? theme.warning : theme.text
-  const mark = level === "error" ? `${theme.error(glyphs.error)} ` : ""
-  const lead = level === "error" ? textWidth(glyphs.error) + 1 : 0
-  return hanging(text, width - 4 - lead, true).map(
-    (l, i) =>
-      `  ${i === 0 ? theme.muted(glyphs.result) : " "} ${i === 0 ? mark : " ".repeat(lead)}${style(l)}`,
+  const marker = level === "error" ? theme.error(glyphs.error) : theme.muted(glyphs.result)
+  return hanging(text, width - CONTENT_INSET.length, true).map(
+    (l, i) => `${i === 0 ? markerPrefix(marker) : CONTENT_INSET}${style(l)}`,
   )
 }
 
@@ -174,7 +173,7 @@ function farColumnRows(line: string, width: number): string[] | undefined {
  * column 0; with `columns`, a line's rows after its first line up under its last column.
  */
 function hanging(text: string, width: number, columns = false): string[] {
-  const room = Math.max(10, width)
+  const room = Math.max(1, width)
   return text.split("\n").flatMap((l) => {
     if (!l) return [""]
     const rows = wrapText(l, room)

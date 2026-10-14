@@ -30,6 +30,7 @@ import {
   userLines,
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
+import { CONTENT_INSET, contentRoom, markerPrefix } from "./grid.ts"
 import { historyLines } from "./history.ts"
 import { displayCommit } from "./inline-display.ts"
 import { ACTIONS, type Action } from "./keybindings.ts"
@@ -98,10 +99,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
       return theme
     },
   })
+  const markerRows = new Set<string>()
   const streaming = new MarkdownStream({
     hyperlinks: host.hyperlinks,
     nodes,
-    headingMarkers: true,
+    headingMarkers: false,
+    markerOutset: 2,
+    onMarkerRow: (row) => {
+      markerRows.add(row)
+    },
   })
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
@@ -129,7 +135,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     return Math.max(1, width - visibleWidth(glyphs.assistant))
   }
   const drawReply = (rows: string[], width: number, t: Theme, committing = false) => {
-    const lines = replyRows(rows)
+    const lines = replyRows(rows, markerRows)
     if (lines.length && !replyStamped) {
       lines[0] = timestampRow(lines[0]!, t, width, replyAt)
       if (committing) replyStamped = true
@@ -348,8 +354,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const count = plural(group.length, "sub-agent")
       const head =
         callId === undefined
-          ? `  ${tree} ${t.accent(host.spinner.glyph)} ${t.muted(backgroundLabel(spawnGroups, group))}`
-          : `  ${tree} ${t.accent(host.spinner.glyph)} ${t.fg2(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
+          ? `${markerPrefix(tree)}${t.accent(host.spinner.glyph)} ${t.muted(backgroundLabel(spawnGroups, group))}`
+          : `${markerPrefix(tree)}${t.accent(host.spinner.glyph)} ${t.fg2(callNames.get(callId) ?? "agent")}${sep}${count}${sep}${t.muted(`running in background${sep}${formatElapsed(now - started)}`)}`
       rows.push(truncateToWidth(head, width, glyphs.more))
       rows.push(
         ...treeRows(group.flatMap(subtree), now, treeWidth, t, spawnGroups, true, host.spinner.glyph).map(
@@ -677,7 +683,9 @@ export function createInlineView(host: ViewHost): TranscriptView {
         ...(transcript.last === undefined ? [""] : []),
         ...transcript.block(
           "banner",
-          wrapText(typeof line === "function" ? line(theme) : line, Math.max(1, contentWidth())),
+          wrapText(typeof line === "function" ? line(theme) : line, contentRoom(contentWidth())).map(
+            (row) => CONTENT_INSET + row,
+          ),
         ),
       ]),
     user: (m) => commitBlock("user", userLines(theme, m, contentWidth(), messageTimestamp(m) ?? Date.now())),
@@ -712,6 +720,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       const early = streaming.committedRows > 0
       const rows = streaming.take(replyWidth(contentWidth()))
       if (rows.length) commit(transcript.continue("assistant", drawReply(rows, contentWidth(), theme, true)))
+      markerRows.clear()
       replyAt = undefined
       transcript.end()
       // Thinking that came after the text (or with none) goes after it.

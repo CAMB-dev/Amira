@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
@@ -78,17 +79,17 @@ test("denied approval keeps the live blocked styling after a session resumes wit
       80,
       { last: true },
     )
-    expect(live.map(stripAnsi)).toEqual(["  └ publish  ⊘ Tool call not approved: the user said no"])
+    expect(live.map(stripAnsi)).toEqual(["└ publish  ⊘ Tool call not approved: the user said no"])
     expect(live[0]).toContain(defaultTheme.muted("publish"))
     expect(live[0]).toBe(
-      `  ${defaultTheme.muted("└")} ${defaultTheme.muted("publish")}  ${defaultTheme.muted("⊘ Tool call not approved: the user said no")}${defaultTheme.muted("")}`,
+      `${defaultTheme.muted("└")} ${defaultTheme.muted("publish")}  ${defaultTheme.muted("⊘ Tool call not approved: the user said no")}${defaultTheme.muted("")}`,
     )
 
     await agent.dispose("switch")
     resumed = new Agent({ ...options, session: SessionStore.open(session.file) })
     const history = historyLines(defaultTheme, resumed.messages, { width: 80 })
     const toolRow = history.findIndex(
-      (line) => stripAnsi(line) === "  └ publish  ⊘ Tool call not approved: the user said no",
+      (line) => stripAnsi(line) === "└ publish  ⊘ Tool call not approved: the user said no",
     )
     expect(history.slice(toolRow, toolRow + live.length)).toEqual(live)
     expect(resumed.messages.find((message) => message.role === "toolResult")).toMatchObject({

@@ -1,3 +1,4 @@
+// D deliberate oracle: the focus/list cursor is ›; authored widget nesting stays unchanged.
 import { expect, test } from "bun:test"
 import type { UiEvent, UiNode, UiTreeItem } from "@amira/api"
 import { CURSOR_MARKER, defaultTheme, key, monoTheme, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"
@@ -261,8 +262,8 @@ test("table uses shared column widths and right alignment; identified rows selec
   }
   const s = setup(node, 20, 5)
   expect(s.plain().slice(0, 3)).toEqual([
-    "❯ Name         Count",
-    "❯ alpha            2",
+    "› Name         Count",
+    "› alpha            2",
     "  beta            42",
   ])
   s.press("down")
@@ -443,7 +444,7 @@ test("focus remains visible when wheel scrolls a tree's selection out of view", 
     alt: false,
     shift: false,
   })
-  expect(s.plain()[0]).toStartWith("» ")
+  expect(s.plain()[0]).toStartWith("› ")
   expect(s.runtime.state.selected.tree).toBe("0")
 })
 

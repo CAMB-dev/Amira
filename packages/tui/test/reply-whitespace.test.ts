@@ -1,3 +1,4 @@
+// A/B/D deliberate oracles: shared gutter, complete right-edge clocks and borderless code.
 import { expect, spyOn, test } from "bun:test"
 import { FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
@@ -61,7 +62,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     }
     try {
       const together = render([`    ${fence}`])
-      expect(together.shown).toContain("  │ const answer = 42")
+      expect(together.shown).toContain("  const answer = 42")
       expect(render(["  ", "  ", fence])).toEqual(together)
     } finally {
       clock.mockRestore()
@@ -88,7 +89,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       view.replyDelta(fence)
       view.replyEnd([])
       view.render()
-      expect(text()).toContain("  │ const answer = 42")
+      expect(text()).toContain("  const answer = 42")
       expect(text()).toContain("Thought for 4s")
     } finally {
       view.stop()
@@ -117,7 +118,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       expect(view.replyEnd([])).toBe(true)
       view.render()
       expect(text()).toContain("Thought for 6s")
-      expect(text()).toContain("  │ const answer = 42")
+      expect(text()).toContain("  const answer = 42")
     } finally {
       view.stop()
       clock.mockRestore()
@@ -137,7 +138,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         view.replyDelta(fence)
         view.replyEnd([])
         view.render()
-        expect(text()).toContain("  │     const answer = 42")
+        expect(text()).toContain("      const answer = 42")
       } finally {
         view.stop()
         clock.mockRestore()

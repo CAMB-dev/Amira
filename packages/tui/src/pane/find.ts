@@ -1,7 +1,7 @@
 import { visibleWidth } from "@amira/tui-kit"
 import type { Block, BlockEnv } from "../blocks.ts"
 import { timestampIn, userBandPaddingIn } from "../format.ts"
-import { ESCAPE, sliceCells } from "../text-selection.ts"
+import { type CopyRow, ESCAPE, sliceCells } from "../text-selection.ts"
 import type { Match, PaneRow } from "../transcript-pane.ts"
 
 interface FindView {
@@ -127,19 +127,9 @@ export class PaneFind {
         // Renderer-owned prefixes, not heuristic copy ranges. Convert display cells to
         // string offsets so wrapped matches still highlight their original columns.
         const rows = block.searchRows(plain, d.lines)
-        const starts = rows.map((row, i) => sliceCells(plain[i]!, 0, row.from).length)
         found = {
           query: q,
-          matches: findIn(
-            block,
-            plain,
-            q,
-            exact,
-            userBandPaddingIn(d.lines),
-            timestampIn(d.lines),
-            starts,
-            rows.map((row) => row.joinBefore),
-          ),
+          matches: findIn(block, plain, q, exact, userBandPaddingIn(d.lines), timestampIn(d.lines), rows),
         }
         this.found.set(d, found)
       }
@@ -198,8 +188,7 @@ function findIn(
   exact: boolean,
   padding: number,
   stamp: ReturnType<typeof timestampIn>,
-  starts: readonly number[],
-  joins: readonly ("" | " " | undefined)[],
+  rows: readonly CopyRow[],
 ): Match[][] {
   let text = ""
   /** The line and column of each character of `text`; -1 for what joins lines. */
@@ -207,14 +196,16 @@ function findIn(
   const colOf: number[] = []
   // Painted breathing room is not text or a line break in the searchable message.
   for (let line = padding; line < plain.length - padding; line++) {
-    // The clock is trailing chrome in display cells; matches keep their string offsets.
-    const raw = stamp?.line === line ? sliceCells(plain[line]!, 0, stamp.to) : plain[line]!
-    const from = starts[line] ?? 0
+    // Renderer bounds and clocks are display cells; highlights retain original string offsets.
+    const row = rows[line]
+    const to = Math.min(row?.to ?? Infinity, stamp?.line === line ? stamp.to : Infinity)
+    const raw = row?.skip ? "" : to === Infinity ? plain[line]! : sliceCells(plain[line]!, 0, to)
+    const from = row?.from ? sliceCells(plain[line]!, 0, row.from).length : 0
     const content = raw.slice(from)
     const start = from + content.length - content.trimStart().length
     const body = raw.slice(start).trimEnd()
     // Prefer the renderer's break boundary; older drawings only know about wide-character wraps.
-    const joint = !text ? "" : !body ? "\n" : (joins[line] ?? (endsWide(text) ? "" : " "))
+    const joint = !text ? "" : !body ? "\n" : (row?.joinBefore ?? (endsWide(text) ? "" : " "))
     if (joint) {
       text += joint
       lineOf.push(-1)

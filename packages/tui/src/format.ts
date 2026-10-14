@@ -22,6 +22,7 @@ import {
 } from "@amira/tui-kit"
 import { localClock } from "./clock.ts"
 import { glyphs } from "./glyphs.ts"
+import { CONTENT_INSET, contentRoom, MARKER_WIDTH, markerPrefix } from "./grid.ts"
 
 /** Arguments that say what a call is about; the first one present leads the summary. */
 const PRIMARY_ARGS = ["path", "file_path", "filePath", "command", "pattern", "url", "query", "prompt", "name"]
@@ -68,17 +69,17 @@ export function messageTimestamp(message: object): number | undefined {
   return typeof at === "number" && Number.isFinite(at) ? at : storedClocks.get(message)
 }
 
-/** Leave two cells between content and the clock, and two at the right edge. */
+/** Leave two cells between content and the clock; align clocks with the shared right edge. */
 export function timestampRoom(width: number, at: number | undefined): number {
   return at !== undefined && Number.isFinite(width) && width >= 16
-    ? width - visibleWidth(localClock(at)) - 4
+    ? width - visibleWidth(localClock(at)) - 2
     : width
 }
 
 interface TimestampDecoration {
   /** Row carrying the clock, after any painted band padding. */
   line: number
-  /** Actual clock text and the cells added by its gap, text and trailing inset. */
+  /** Actual clock text and the cells added by its gap and text. */
   text: string
   width: number
   /** End of the real content in display cells, before the timestamp's gap. */
@@ -109,11 +110,11 @@ export function timestampRow(
   // Inline pending nodes must end at their APC marker so the renderer can resolve them.
   if (timestampRoom(width, at) === width || at === undefined || row.includes("\x1b_")) return row
   const text = localClock(at)
-  const cells = visibleWidth(text) + 2
+  const cells = visibleWidth(text)
   const gap = width - visibleWidth(row) - cells
   if (gap < 2) return row
   record?.({ line: 0, text, width: gap + cells, to: visibleWidth(row.trimEnd()) })
-  return `${row}${" ".repeat(gap)}${theme.muted(text)}  `
+  return `${row}${" ".repeat(gap)}${theme.muted(text)}`
 }
 
 /** Stamp the first content row, retaining the actual decoration for selection/copying. */
@@ -140,13 +141,13 @@ export function userLines(
 ): string[] {
   // A notice (e.g. background sub-agents' results) shows as its short lines, not as typed text.
   if (message.display?.origin && message.display.text.trim())
-    return originLines(theme, message.display.text, Math.max(1, width - 2)).map((row) => `  ${row}`)
+    return originLines(theme, message.display.text, width)
   const text = (message.display?.text.trim() || userText(message)).trim()
   const bg = Number.isFinite(width) ? themeToken(theme, "userBg") : undefined
-  // The band bleeds to the edges; its prompt and content share the transcript's two-cell inset.
-  const inset = visibleWidth(glyphs.user) + 3
-  const room = Math.max(1, width - inset - (bg ? 2 : 0))
-  const firstRoom = Math.max(1, timestampRoom(width, at) - inset - (bg ? 2 : 0))
+  // The band bleeds to the edges; its prompt occupies the marker gutter and its text starts two cells in.
+  const inset = MARKER_WIDTH
+  const room = Math.max(1, width - inset)
+  const firstRoom = Math.max(1, timestampRoom(width, at) - inset)
   let rows = Number.isFinite(width) ? wrapText(text, room, firstRoom) : text.split("\n")
   if (rows.length > maxTextRows) {
     rows = rows.slice(0, maxTextRows)
@@ -155,15 +156,15 @@ export function userLines(
   }
   const lines = rows.map((l, i) => {
     const prompt = theme.accent(i === 0 ? glyphs.user : " ")
-    return `  ${i === 0 && bg && bg(" ") !== " " ? bold(prompt) : prompt} ${l}`
+    return `${markerPrefix(i === 0 && bg && bg(" ") !== " " ? bold(prompt) : prompt)}${l}`
   })
   const note = message.display?.note
   const muted = (bg && themeToken(theme, "surfaceMuted")) || theme.muted
   // The note wraps under its text, past "└ ", rather than being cut at the band's edge.
   if (note) {
-    const noteRows = Number.isFinite(width) ? wrapText(note, Math.max(1, width - 8)) : [note]
+    const noteRows = Number.isFinite(width) ? wrapText(note, Math.max(1, width - 2)) : [note]
     for (const [i, r] of noteRows.entries())
-      lines.push(`    ${i === 0 ? muted(glyphs.result) : " "} ${muted(r)}`)
+      lines.push(`${markerPrefix(i === 0 ? muted(glyphs.result) : "")}${muted(r)}`)
   }
   // Identity surface tokens (plain/custom themes) must not add invisible blank padding.
   if (bg && bg(" ") !== " ") {
@@ -178,10 +179,10 @@ export function userLines(
 /** An echoed command (`› /status`): plain muted text, not a message band for the model. */
 export function commandEchoLines(theme: Theme, line: string, width: number): string[] {
   // Its rows after the first hang under the text, past the prompt symbol, as a message's do.
-  const gutter = visibleWidth(glyphs.user) + 1
-  const room = Math.max(1, width - gutter - 2)
+  const gutter = MARKER_WIDTH
+  const room = Math.max(1, width - gutter)
   return wrapText(line, room).map(
-    (r, i) => `  ${theme.muted(`${i === 0 ? `${glyphs.user} ` : " ".repeat(gutter)}${r}`)}`,
+    (r, i) => `${theme.muted(`${i === 0 ? markerPrefix(glyphs.user) : " ".repeat(gutter)}${r}`)}`,
   )
 }
 
@@ -217,7 +218,7 @@ function endMark(theme: Theme, mark: string): string {
 /** Stored sub-agent notices use the same tree and outcome marks as live rows. */
 function originLines(theme: Theme, text: string, width = Number.POSITIVE_INFINITY): string[] {
   const arm = treeArm(true)
-  const hang = " ".repeat(visibleWidth(arm) + 3)
+  const hang = CONTENT_INSET
   return text
     .trim()
     .split("\n")
@@ -230,9 +231,15 @@ function originLines(theme: Theme, text: string, width = Number.POSITIVE_INFINIT
           : notice?.[2] === "✗"
             ? glyphs.subagentFailed
             : glyphs.subagentAborted
-      const rows = Number.isFinite(width) ? wrapText(body, Math.max(1, width - hang.length)) : [body]
+      const rows = Number.isFinite(width)
+        ? wrapText(
+            body,
+            contentRoom(width),
+            Math.max(1, width - MARKER_WIDTH - (notice ? visibleWidth(mark) + 1 : 0)),
+          )
+        : [body]
       return rows.map((row, i) => {
-        const lead = i === 0 && notice ? `${theme.muted(arm)} ${endMark(theme, mark)} ` : hang
+        const lead = i === 0 && notice ? `${markerPrefix(theme.muted(arm))}${endMark(theme, mark)} ` : hang
         return `${lead}${theme.muted(row)}`
       })
     })
@@ -259,11 +266,11 @@ export function reasoningLines(
     opts.durationMs === undefined
       ? ""
       : ` for ${opts.durationMs < 10_000 ? Math.max(0.1, Math.round(opts.durationMs / 100) / 10) : Math.round(opts.durationMs / 1000)}s`
-  const thinking = themeToken(theme, "thinking") ?? theme.muted
+  const thinking = theme.muted
   const body = text.trim()
   const hint =
     body && !opts.expanded && opts.expandKey ? `  ${theme.muted(`${opts.expandKey} to expand`)}` : ""
-  const head = `  ${thinking(glyphs.thought)} ${thinking(opts.thinking ? "Thinking" : `Thought${time}`)}${hint}`
+  const head = `${markerPrefix(thinking(glyphs.thought))}${thinking(opts.thinking ? "Thinking" : `Thought${time}`)}${hint}`
   const lines = stampRows(
     [truncateToWidth(head, Math.max(1, timestampRoom(width, opts.timestamp)), glyphs.more)],
     theme,
@@ -272,10 +279,10 @@ export function reasoningLines(
   )
   if (!opts.expanded || !body) return lines
   const style = (s: string) => theme.muted(italic(s))
-  const room = Math.max(1, width - 4)
+  const room = contentRoom(width)
   for (const l of body.split("\n")) {
     if (!l.trim()) lines.push("")
-    else for (const r of wrapText(l, room)) lines.push(`    ${style(r)}`)
+    else for (const r of wrapText(l, room)) lines.push(`${CONTENT_INSET}${style(r)}`)
   }
   return lines
 }
@@ -289,8 +296,15 @@ export function userText(message: UserMessage): string {
  * Rows of an assistant reply, rendered at the width less the gutter, as the transcript shows
  * them: indented by the gutter, blank rows left blank.
  */
-export function replyRows(rows: string[]): string[] {
-  return rows.map((r) => (r === "" ? "" : glyphs.assistant + r))
+export function replyRows(rows: string[], markerRows?: ReadonlySet<string>): string[] {
+  return rows.map((r) => {
+    if (r === "") return ""
+    if (markerRows?.has(r)) return r
+    // Code fills bleed through the marker column, while their text keeps the shared inset.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: SGR background opener
+    const background = /^\x1b\[48;[^m]*m/.exec(r)?.[0] ?? ""
+    return background + glyphs.assistant + r
+  })
 }
 
 /** A sub-agent as the live area shows it, from its start until its line is committed. */
@@ -370,18 +384,13 @@ export function compactionNotice(replaced: number, info: CompactionInfo | undefi
  * "│" where that ancestor has more rows after it at its level (else blanks), so nested trees
  * keep their lines. Without `open`, blanks only.
  */
-const treeCells = () => Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
-const treeArm = (last: boolean) => {
-  const arm = last ? glyphs.treeLast : glyphs.treeBranch
-  return arm + " ".repeat(Math.max(0, treeCells() - visibleWidth(arm)))
-}
-const treeRail = (open: boolean) =>
-  open
-    ? glyphs.treePipe + " ".repeat(Math.max(0, treeCells() + 1 - visibleWidth(glyphs.treePipe)))
-    : " ".repeat(treeCells() + 1)
+const treeArm = (last: boolean) =>
+  truncateToWidth(last ? glyphs.treeLast : glyphs.treeBranch, MARKER_WIDTH, "")
+const treeGap = (last: boolean) => " ".repeat(Math.max(0, MARKER_WIDTH - visibleWidth(treeArm(last))))
+const treeRail = (open: boolean) => markerPrefix(open ? glyphs.treePipe : "")
 
 export function treeIndent(depth: number, open: readonly boolean[] = []): string {
-  let s = "  "
+  let s = ""
   for (let level = 1; level < Math.max(1, depth); level++) s += treeRail(open[level] ?? false)
   return s
 }
@@ -439,15 +448,15 @@ export function subagentRows(
         ? `idle ${s} ${compactTokens(sub.tokens)} tok`
         : `${formatElapsed(now - sub.startedAt)} ${s} ${compactTokens(sub.tokens)} tok`
   const mark = sub.idle ? glyphs.subagentDone : sub.startedAt === undefined ? "" : spinner
-  const lead = `${indent}${treeArm(last)} ${mark ? `${mark} ` : ""}`
+  const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark ? `${mark} ` : ""}`
   const rest = ` ${s} ${sub.role} ${s} ${stats}`
   const title = fitTitle(oneLine(sub.title), rest, width - visibleWidth(lead))
-  const head = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark ? `${sub.idle ? theme.success(mark) : theme.accent(mark)} ` : ""}${title}${theme.muted(rest)}`
+  const head = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark ? `${sub.idle ? theme.success(mark) : theme.accent(mark)} ` : ""}${title}${theme.muted(rest)}`
   const rows = [truncateToWidth(head, width, glyphs.more)]
   if (sub.startedAt !== undefined && sub.activity && !sub.idle) {
     const summary = clip(oneLine(sub.activity.summary), ACTIVITY_CHARS)
     const tree = `${indent}${treeRail(!last)}${treeArm(true)}`
-    const tool = `${theme.muted(tree)} ${theme.accent(spinner)} ${theme.fg2(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
+    const tool = `${theme.muted(tree)}${treeGap(true)}${theme.accent(spinner)} ${theme.fg2(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
     rows.push(truncateToWidth(tool, width, glyphs.more))
   }
   return rows
@@ -480,9 +489,9 @@ export function subagentEndLine(
         : theme.muted(glyphs.subagentAborted)
   const s = glyphs.separator
   const stats = `${sub.role} ${s} ${formatDuration(end.durationMs)} ${s} ${compactTokens(end.tokens)} tok`
-  const lead = `${indent}${treeArm(last)} ${mark} `
+  const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark} `
   const title = fitTitle(oneLine(sub.title), ` ${s} ${stats}`, width - visibleWidth(lead))
-  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark} ${title} ${theme.muted(`${s} ${stats}`)}`
+  const line = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark} ${title} ${theme.muted(`${s} ${stats}`)}`
   return truncateToWidth(line, width, glyphs.more)
 }
 
@@ -510,7 +519,7 @@ export function spawnGroupRow(
   ].join(` ${s} `)
   const about = group.status ? oneLine(group.status) : counts
   const mark = a.working || a.queued ? theme.accent(spinner) : theme.success(glyphs.subagentDone)
-  const line = `${theme.muted(`${indent}${treeArm(last)}`)} ${mark} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
+  const line = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
   return truncateToWidth(line, width, glyphs.more)
 }
 

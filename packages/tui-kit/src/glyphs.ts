@@ -3,6 +3,10 @@
  * (together with the theme's color tokens) without touching the components.
  */
 export interface Glyphs {
+  /** Before the focused form field, option or button. */
+  pointer?: string
+  /** Between form hints and descriptions. */
+  separator?: string
   /**
    * List bullets by nesting depth; deeper levels repeat the last one. ▪ is on the list of
    * emoji-capable symbols the terminals' fonts draw themselves, in one cell.
@@ -41,6 +45,8 @@ export interface Glyphs {
 }
 
 export const defaultGlyphs: Glyphs = {
+  pointer: "›",
+  separator: "·",
   bullets: ["•", "◦", "▪"],
   taskOpen: "[ ]",
   taskDone: "[✓]",

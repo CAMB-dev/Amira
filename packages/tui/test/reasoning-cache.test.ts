@@ -50,15 +50,15 @@ test("full-detail caches at another width refresh without invalidating collapsed
   const pane = new TranscriptPane()
   const block = new ReasoningBlock("First", undefined, undefined, true)
   pane.add(block)
-  expect(pane.plain(block, env(40, "full"))).toContain("    First")
+  expect(pane.plain(block, env(40, "full"))).toContain("  First")
   const collapsed = pane.plain(block, env())
   block.append(" second")
   expect(pane.plain(block, env())).toBe(collapsed)
-  expect(pane.plain(block, env(40, "full"))).toContain("    First second")
+  expect(pane.plain(block, env(40, "full"))).toContain("  First second")
   block.expanded = true
-  expect(pane.plain(block, env())).toContain("    First second")
+  expect(pane.plain(block, env())).toContain("  First second")
   block.append(" third")
-  expect(pane.plain(block, env())).toContain("    First second third")
+  expect(pane.plain(block, env())).toContain("  First second third")
 })
 
 test("visible reasoning deltas refresh find and invalidate selections without touching collapsed versions", () => {
@@ -69,7 +69,7 @@ test("visible reasoning deltas refresh find and invalidate selections without to
   pane.render(env(), 6)
   pane.find("needle")
   expect(pane.matchCount).toBe(0)
-  pane.selectText({ block, line: 1, col: 4 }, { block, line: 1, col: Number.POSITIVE_INFINITY })
+  pane.selectText({ block, line: 1, col: 2 }, { block, line: 1, col: Number.POSITIVE_INFINITY })
   expect(pane.selectedText()).toBe("First")
   const revision = block.version
   block.append(" needle")

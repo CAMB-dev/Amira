@@ -1,5 +1,16 @@
 // Owns interactive terminal selection and plain-text output for dumb terminals.
-import { ProcessTerminal, stripAnsi, type Terminal } from "@amira/tui-kit"
+import { modelLabel } from "@amira/api"
+import { ProcessTerminal, stripAnsi, type Terminal, type Theme } from "@amira/tui-kit"
+import { glyphs } from "../glyphs.ts"
+
+/** The brand is interactive accent; a working-directory reference is not. */
+export function interactiveBanner(
+  theme: Theme,
+  model: { provider: string; id: string },
+  cwd: string,
+): string {
+  return `${theme.accent("Amira")} ${theme.muted(`${glyphs.separator} ${modelLabel({ provider: model.provider, model: model.id })} ${glyphs.separator} `)}${theme.path(cwd)}`
+}
 
 /** No escapes, carriage returns or bell: a dumb terminal gets plain text only. */
 const plain = (data: string) => stripAnsi(data).replace(/\r\n?/g, "\n").replaceAll("\x07", "")

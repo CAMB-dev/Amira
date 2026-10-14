@@ -113,7 +113,8 @@ export function createMouse(deps: MouseDeps) {
         lastPress = undefined
         return true
       }
-      const pinned = e.y < 0 && e.y >= -(deps.stickyRows?.() ?? 1) ? deps.stickyPrompt?.() : undefined
+      const stickyRows = deps.stickyRows?.() ?? 0
+      const pinned = e.y >= 0 && e.y < stickyRows ? deps.stickyPrompt?.() : undefined
       if (pinned) {
         armed = false
         lastPress = undefined
@@ -142,6 +143,7 @@ export function createMouse(deps: MouseDeps) {
       if (!pane.dragging) return true
       // Moved off: the next press is no double click.
       if (!near(lastPress)) lastPress = undefined
+      // Keep screen coordinates: the selection view clamps against each frame's current overlay.
       pane.dragTo(e.y, e.x)
       edgeScroll(e.y)
       return true

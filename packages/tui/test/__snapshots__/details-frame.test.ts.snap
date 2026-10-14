@@ -1,13 +1,12 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`width-100 fullscreen details frames: verb groups and sticky prompt while scrolled: verb-grouped tree 1`] = `
-" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124K / 200K
-
-  › Polish the transcript details.                                                         8:09 PM
-    Keep all output reachable.
+"  ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  ·  124K / 200K
 
 
-  Transcript detail 12.
+› Polish the transcript details.                                                             8:09 PM
+  Keep all output reachable.
+
 
   Transcript detail 13.
 
@@ -21,26 +20,26 @@ exports[`width-100 fullscreen details frames: verb groups and sticky prompt whil
 
   Transcript detail 18.
 
-  ├ Read 3 files · Searched 2 patterns  ▸
-  ├ Edited a.ts  +0 / -0
-  └ Ran bun test  ✓ 412 pass (+1 line)
-     412 pass
-     0 fail
+├ Read 3 files · Searched 2 patterns  ▸
+├ Edited a.ts  +0 / -0
+└ Ran bun test  ✓ 412 pass (+1 line)
+  412 pass
+  0 fail
 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ › Message Amira                                                                                  │
-╰────────────────────────────────────────────────────────────────────────────────── mock/m1 · ask ─╯
+│›Message Amira                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                       mock/m1 · ask
  shift+tab mode  │  ctrl+o detail  │  ? keys"
 `;
 
 exports[`width-100 fullscreen details frames: verb groups and sticky prompt while scrolled: sticky while scrolled 1`] = `
-" ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  │  124K / 200K
-
-  › Polish the transcript details.                                                         8:09 PM
-    Keep all output reachable.
+"  ⎇ details  ~/dev/Amira  ·  Transcript polish                                 $0.42  ·  124K / 200K
 
 
-  Transcript detail 11.
+› Polish the transcript details.                                                             8:09 PM
+  Keep all output reachable.
+
 
   Transcript detail 12.
 
@@ -56,12 +55,13 @@ exports[`width-100 fullscreen details frames: verb groups and sticky prompt whil
 
   Transcript detail 18.
 
-  ├ Read 3 files · Searched 2 patterns  ▸
-  ├ Edited a.ts  +0 / -0
-  └ Ran bun test  ✓ 412 pass (+1 line)
+├ Read 3 files · Searched 2 patterns  ▸
+├ Edited a.ts  +0 / -0
+└ Ran bun test  ✓ 412 pass (+1 line)
   ↓ 2 rows below · ctrl+end follows
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ › Message Amira                                                                                  │
-╰────────────────────────────────────────────────────────────────────────────────── mock/m1 · ask ─╯
+│›Message Amira                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                       mock/m1 · ask
  shift+tab mode  │  ctrl+o detail  │  ? keys"
 `;

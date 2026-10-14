@@ -7,11 +7,11 @@ import {
   type Spinner,
   type Theme,
   truncateToWidth,
-  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { userLines, userText } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
+import { CONTENT_INSET, contentRoom } from "../grid.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { TranscriptView } from "../view.ts"
 import type { TurnActivity } from "./activity.ts"
@@ -389,7 +389,7 @@ const PENDING_ROWS = 2
 
 /**
  * The rows of messages waiting above the input box: "steering › …" and "queued › …", each on
- * at most two rows (the second under the text, cut with "…"), at most three of them, then how
+ * at most two rows hanging on the content column (cut with "…"), at most three of them, then how
  * many more wait. They stay a few rows, however long the messages, so the input box keeps its
  * place on the screen.
  */
@@ -399,26 +399,21 @@ export function pendingMessageRows(
   theme: Theme,
 ): string[] {
   const out: string[] = []
+  const room = contentRoom(width)
   for (const { label, text } of items.slice(0, PENDING_SHOWN)) {
-    const head = `${label} ${glyphs.user} `
-    const indent = visibleWidth(head)
     const flat = text.replace(/\s+/g, " ").trim()
-    const rows = wrapText(flat, Math.max(8, width - indent))
+    const rows = wrapText(`${label} ${glyphs.user} ${flat}`, room)
     const shown = rows.slice(0, PENDING_ROWS)
     if (rows.length > PENDING_ROWS) {
       const last = shown.length - 1
-      shown[last] = truncateToWidth(
-        `${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`,
-        Math.max(8, width - indent),
-        glyphs.more,
-      )
+      shown[last] = truncateToWidth(`${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`, room, glyphs.more)
     }
-    shown.forEach((r, i) => {
-      out.push(truncateToWidth(theme.muted(`${i === 0 ? head : " ".repeat(indent)}${r}`), width, glyphs.more))
-    })
+    for (const row of shown)
+      out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(row)}`, width, glyphs.more))
   }
   const more = items.length - PENDING_SHOWN
-  if (more > 0) out.push(theme.muted(`+${more} more waiting`))
+  if (more > 0)
+    out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(`+${more} more waiting`)}`, width, glyphs.more))
   return out
 }
 

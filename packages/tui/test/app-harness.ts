@@ -96,6 +96,7 @@ export interface SetupOptions {
   env?: Record<string, string | undefined>
   keybindings?: Keybindings
   settings?: TuiSettings
+  theme?: InteractiveOptions["theme"]
   themes?: InteractiveOptions["themes"]
   saveTheme?: InteractiveOptions["saveTheme"]
   subscribeThemeSettings?: InteractiveOptions["subscribeThemeSettings"]
@@ -218,6 +219,7 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
     bindTerminal: (terminal) => host.bindTerminal(terminal),
     agent,
     status: host.status,
+    theme: o.theme,
     themes: o.themes,
     saveTheme: o.saveTheme,
     subscribeThemeSettings: o.subscribeThemeSettings,

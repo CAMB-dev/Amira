@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { DEFAULT_THEME_GLYPHS } from "@amira/api"
 import { defaultGlyphs, graphemes, textWidth } from "@amira/tui-kit"
-import { glyphs } from "../src/glyphs.ts"
+import { glyphs, setGlyphs } from "../src/glyphs.ts"
 
 /** Every grapheme of a glyph table, with where it came from. */
 function cells(table: object): [string, string][] {
@@ -9,6 +9,17 @@ function cells(table: object): [string, string][] {
     (Array.isArray(v) ? v : [v]).flatMap((s) => graphemes(s).map((g): [string, string] => [name, g])),
   )
 }
+
+test("legacy API default cursors normalize at the runtime glyph boundary", () => {
+  const before = { ...glyphs }
+  try {
+    setGlyphs(DEFAULT_THEME_GLYPHS)
+    expect(glyphs.choice).toBe("›")
+    expect(glyphs.pointer).toBe("›")
+  } finally {
+    setGlyphs(before)
+  }
+})
 
 test("no glyph is an emoji drawn without asking for it", () => {
   // A non-ASCII character with an emoji form needs VS16 (two cells), unless it is one the

@@ -127,7 +127,7 @@ test("unbound host actions have no hardcoded fallback", () => {
     expect(viewer.handleInput(event)).toBe(false)
   expect(closed).toBe(0)
   expect(viewer.scroll.position.top).toBe(0)
-  expect(stripAnsi(viewer.render(100, ctx).at(-1)!)).toBe("1–7 of 40")
+  expect(stripAnsi(viewer.render(100, ctx).at(-1)!)).toBe("  1–7 of 40")
 })
 
 test("declarative inputs keep q and printable back bindings; a remapped back releases input", () => {
@@ -281,9 +281,9 @@ test("view hints and the key reference show the current host bindings", () => {
   )
   expect(warnings).toEqual([])
   const viewer = new ExtensionViewer(view, {}, { keys })
-  expect(stripAnsi(viewer.render(120, ctx).at(-1)!)).toBe("1–7 of 40 · kj f8 scroll · f6 close")
+  expect(stripAnsi(viewer.render(120, ctx).at(-1)!)).toBe("  1–7 of 40 · kj f8 scroll · f6 close")
   const minimal = new ExtensionViewer({ ...view, hostKeys: "minimal" }, {}, { keys })
-  expect(stripAnsi(minimal.render(120, ctx).at(-1)!)).toBe("f6 close")
+  expect(stripAnsi(minimal.render(120, ctx).at(-1)!)).toBe("  f6 close")
   const reference = new KeyReference(keys, { fullscreen: false, onClose: () => {} })
   const text = reference
     .render(180, { ...ctx, rows: 300 })

@@ -197,7 +197,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
   const top = plan.scroll?.top ?? 0
   const borderFocused = themeToken(theme, "borderFocused") ?? theme.accent
   const dim = themeToken(theme, "dim") ?? theme.border
-  const marker = focused ? theme.accent("❯ ") : "  "
+  const marker = focused ? theme.accent(`${glyphs.pointer} `) : "  "
   let out: string[] = []
   if (from > 0 && ["bar", "progress", "rule", "input", "spacer"].includes(node.type))
     return Array<string>(h).fill(" ".repeat(w))
@@ -277,7 +277,11 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
         const pad = treeIndent(tree, i, w)
         if (row.start >= offset) {
           const selected = state.selected[node.id] === row.item.key
-          const marker = selected ? (focused ? "❯ " : "› ") : focused && out.length === 0 ? "» " : "  "
+          const marker = selected
+            ? `${glyphs.pointer} `
+            : focused && out.length === 0
+              ? `${glyphs.pointer} `
+              : "  "
           const lead = fit(segmentText(row.item.lead ?? [], theme), tree.leadWidth)
           const disclosure = row.item.node
             ? fit(segmentText(row.item.node, theme), 2)
@@ -293,7 +297,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
           out.push(selected ? (theme.selection?.(line) ?? line) : line)
         }
         const prefix = () =>
-          `${focused && out.length === 0 ? "» " : "  "}${" ".repeat(tree.leadWidth)}${treeIndent(tree, i, w, true)}${row.item.rail ? `${glyphs.output} ` : "  "}`
+          `${focused && out.length === 0 ? `${glyphs.pointer} ` : "  "}${" ".repeat(tree.leadWidth)}${treeIndent(tree, i, w, true)}${row.item.rail ? `${glyphs.output} ` : "  "}`
         const start = Math.max(0, offset - row.start - 1)
         const count = Math.min(h - out.length, (row.widget?.height ?? row.detail.length) - start)
         if (count > 0) {
@@ -348,7 +352,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       for (let i = top + Math.max(0, from - 1); i < node.rows.length && out.length < h; i++) {
         const r = node.rows[i]!
         const selected = id !== undefined && state.selected[id] === r.key
-        const lead = id === undefined ? "" : selected ? (focused ? "❯ " : "› ") : "  "
+        const lead = id === undefined ? "" : selected ? `${glyphs.pointer} ` : "  "
         const text =
           lead +
           row(

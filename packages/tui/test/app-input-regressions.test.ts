@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { closeImageApp, inputImage, setup, waitFor } from "./app-harness.ts"
 
@@ -18,7 +19,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         s.terminal.send("first\r")
         await s.shows("First answer")
         await s.idle()
-        await waitFor(() => /^ \/work\/proj +13K \/ 128K$/m.test(s.live()), "known context fill")
+        await waitFor(() => /^ {2}\/work\/proj +13K \/ 128K$/m.test(s.live()), "known context fill")
         s.terminal.send("second\r")
         await s.shows("A long")
         s.terminal.send(key!)
@@ -29,7 +30,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           stopReason: "aborted",
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         })
-        expect(s.live()).toMatch(/^ \/work\/proj +13K \/ 128K$/m)
+        expect(s.live()).toMatch(/^ {2}\/work\/proj +13K \/ 128K$/m)
       } finally {
         await closeImageApp(s)
       }
@@ -49,18 +50,18 @@ for (const mode of ["inline", "fullscreen"] as const) {
     })
     try {
       s.terminal.send("@writer")
-      await waitFor(() => s.live().includes("│ › @writer"), "member address in editor")
+      await waitFor(() => /^│›@writer.*│$/m.test(s.live()), "member address in editor")
       await Bun.sleep(50)
-      expect(frames.some((frame) => frame.includes("❯ writer.ts"))).toBe(false)
-      expect(s.live()).not.toContain("❯ writer.ts")
+      expect(frames.some((frame) => frame.includes("› writer.ts"))).toBe(false)
+      expect(s.live()).not.toContain("› writer.ts")
       // A file mention elsewhere in a message is not an addressed line.
       s.terminal.send("\x03see @writer")
-      await waitFor(() => s.live().includes("❯ writer.ts"), "ordinary file mention")
+      await waitFor(() => s.live().includes("› writer.ts"), "ordinary file mention")
       // Attachments make this a model message, even when its text matches a handler.
       s.terminal.send("\x03\x1bv")
       await s.shows("[image 1: photo.png 68 B]")
       s.terminal.send(" @writer")
-      await waitFor(() => s.live().includes("❯ writer.ts"), "file mention with an attachment")
+      await waitFor(() => s.live().includes("› writer.ts"), "file mention with an attachment")
     } finally {
       await closeImageApp(s)
     }

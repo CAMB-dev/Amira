@@ -1,3 +1,4 @@
+// A/B/D deliberate oracles: shared gutter, complete right-edge clocks and borderless code.
 import { expect, spyOn, test } from "bun:test"
 import type { AssistantMessage, Message, ToolDetailLevel, UserMessage } from "@amira/api"
 import { FakeTerminal, Spinner, visibleWidth } from "@amira/tui-kit"
@@ -133,7 +134,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           .split("\n")
           .find((row) => row.includes(localClock(shownAt)))!
         expect(head).toContain(first === "reasoning" ? "Thinking" : first === "tool" ? "read" : "First text.")
-        expect(visibleWidth(head)).toBe(98)
+        expect(visibleWidth(head)).toBe(100)
         clock.mockReturnValue(shownAt + 180_000)
         if (first === "tool") view.toolEnd("call", { result: { content: [], isError: false }, durationMs: 1 })
         view.replyDelta("Later text.")
@@ -199,8 +200,8 @@ for (const mode of ["inline", "fullscreen"] as const) {
       const rows = text().split("\n")
       const head = rows.find((row) => row.includes("Thinking"))!
       expect(head).toEndWith(localClock(at))
-      expect(visibleWidth(head)).toBe(38)
-      expect(rows).toContain(`    ${"x".repeat(36)}`)
+      expect(visibleWidth(head)).toBe(40)
+      expect(rows).toContain(`  ${"x".repeat(38)}`)
       view.replyDelta("y".repeat(38))
       view.replyEnd([])
       view.turnEnd()
@@ -223,7 +224,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         if (binding.length) expect(text()).toContain(`${label} to expand`)
         else expect(text()).not.toContain("to expand")
         fullDetail()
-        expect(text()).toContain("    Readable thought.")
+        expect(text()).toContain("  Readable thought.")
         expect(text()).not.toContain("to expand")
       } finally {
         view.stop()
@@ -240,7 +241,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       view.render()
       expect(text().includes("ctrl+o to expand")).toBe(mode === "fullscreen")
       fullDetail()
-      expect(text().includes("    Retained thought.")).toBe(mode === "fullscreen")
+      expect(text().includes("  Retained thought.")).toBe(mode === "fullscreen")
     } finally {
       view.stop()
     }
@@ -364,7 +365,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await waitFor(() => app.live().includes(`${binding} to expand`), "bound thinking hint")
       expect(app.live()).not.toContain("A readable thought.")
       app.terminal.send(press)
-      await waitFor(() => app.live().includes("    A readable thought."), "expanded thinking")
+      await waitFor(() => app.live().includes("  A readable thought."), "expanded thinking")
       expect(app.live()).not.toContain("to expand")
       app.terminal.send(press)
       await waitFor(() => app.live().includes(`${binding} to expand`), "thinking hint restored")

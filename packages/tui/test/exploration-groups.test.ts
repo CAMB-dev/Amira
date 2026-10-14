@@ -1,3 +1,4 @@
+// A/C/D style oracles: root markers at 0, content at 2, logical two-cell child rails and muted chrome.
 import { expect, test } from "bun:test"
 import { type Message, type ToolPresenter, textResult } from "@amira/api"
 import { defaultTheme, monoTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
@@ -76,7 +77,7 @@ test("counts include repeat targets, in first-action order, without displaying t
     { verb: "Fetch", target: "https://example.com" },
   ]
   expect(stripAnsi(exploredLine(defaultTheme, actions, 240, { last: true }))).toBe(
-    "  └ Read 3 files · Searched 1 pattern · Globbed 1 pattern · Listed 2 directories · Fetched 1 page  ▸",
+    "└ Read 3 files · Searched 1 pattern · Globbed 1 pattern · Listed 2 directories · Fetched 1 page  ▸",
   )
   for (const [verb, noun] of [
     ["Read", "file"],
@@ -96,12 +97,12 @@ test("folded rows stay count-only and fully muted, including verbs and disclosur
   ]
   const narrow = exploredLine(defaultTheme, actions, 29)
   expect(narrow).toContain(defaultTheme.muted("▸"))
-  expect(stripAnsi(narrow)).toBe("  ├ Read 2 files  ▸")
+  expect(stripAnsi(narrow)).toBe("├ Read 2 files  ▸")
   const wide = exploredLine(defaultTheme, actions, 120)
-  expect(stripAnsi(wide)).toBe("  ├ Read 2 files  ▸")
+  expect(stripAnsi(wide)).toBe("├ Read 2 files  ▸")
   expect(wide).toContain(defaultTheme.muted("Read 2 files"))
   expect(wide).toBe(
-    `  ${defaultTheme.muted("├")} ${defaultTheme.muted("Read 2 files")}  ${defaultTheme.muted("▸")}`,
+    `${defaultTheme.muted("├")} ${defaultTheme.muted("Read 2 files")}  ${defaultTheme.muted("▸")}`,
   )
   expect(wide).not.toContain("b.ts")
   for (const width of [1, 3, 8, 28, 100]) {
@@ -114,7 +115,7 @@ test("mixed verbs retain the counted head and trailing disclosure when paths do 
     ...["a", "b", "c"].map((path) => ({ verb: "Read", target: `${path}/very/long/path.ts` })),
     ...["first", "second"].map((pattern) => ({ verb: "Search", target: `${pattern} very long pattern` })),
   ]
-  expect(stripAnsi(exploredLine(defaultTheme, actions, 50))).toBe("  ├ Read 3 files · Searched 2 patterns  ▸")
+  expect(stripAnsi(exploredLine(defaultTheme, actions, 50))).toBe("├ Read 3 files · Searched 2 patterns  ▸")
 })
 
 test("failed, rejected and interrupted calls never enter a group or disappear in its renderer", () => {
@@ -168,7 +169,7 @@ test("unfolding exposes every original call and its full body, even from collaps
       group.toggleFold(current)
     }
     const rows = plain(group.lines(current))
-    expect(rows[0]).toBe("  ├ read a.ts")
+    expect(rows[0]).toBe("├ read a.ts")
     expect(rows.some((row) => row.includes("Read 2 files") || row.includes("Explored"))).toBe(false)
     expect(rows.filter((row) => /[├└] read a.ts$/.test(row))).toHaveLength(2)
     expect(rows.filter((row) => row.trim().endsWith("three"))).toHaveLength(2)
@@ -240,7 +241,7 @@ test("fold disclosure follows the ASCII theme and measures custom glyph widths",
       { verb: "Read", target: "a.ts" },
       { verb: "Read", target: "a.ts" },
     ]
-    expect(stripAnsi(exploredLine(monoTheme, actions, 100))).toBe("  |- Read 2 files  >")
+    expect(stripAnsi(exploredLine(monoTheme, actions, 100))).toBe("|-Read 2 files  >")
     setGlyphs({ folded: "[+]" })
     const narrow = exploredLine(defaultTheme, actions, 23)
     expect(narrow).toContain(defaultTheme.muted("[+]"))

@@ -1,5 +1,6 @@
 import type { CompactionInfo } from "@amira/api"
 import { reasoningLines } from "../format.ts"
+import { MARKER_WIDTH } from "../grid.ts"
 import { summaryLines } from "../history.ts"
 import type { CopyRow } from "../text-selection.ts"
 import { Block, type BlockEnv } from "./base.ts"
@@ -80,7 +81,7 @@ export class ReasoningBlock extends Block {
 
   override copyRows(plain: readonly string[]): CopyRow[] {
     // The head is chrome; the text copies without its indent.
-    return plain.map((_, i) => (i === 0 ? { from: 0, skip: true } : { from: 4 }))
+    return plain.map((_, i) => (i === 0 ? { from: 0, skip: true } : { from: MARKER_WIDTH }))
   }
 
   override foldable(): boolean {

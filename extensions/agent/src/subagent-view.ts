@@ -93,12 +93,12 @@ function toolLines(name: string, call: ToolCallView, opts: ViewRenderOptions, la
       ? symbols.toolFailed
       : symbols.toolDone
   const result = `${mark} ${rows[0] || "no output"}${rows.length > 1 ? ` (+${plural(rows.length - 1, "line")})` : ""}`
-  const head = `  ${last ? symbols.treeLast : symbols.treeBranch} ${name}${summary ? ` ${summary}` : ""}`
+  const head = `${last ? symbols.treeLast : symbols.treeBranch} ${name}${summary ? ` ${summary}` : ""}`
   if (textCells(head) + 2 + textCells(result) <= opts.width)
     return [{ kind: "text", text: `${head}  ${result}` }]
   return [
     { kind: "text", text: head },
-    { kind: "muted", text: `  ${last ? " " : symbols.treePipe}  ${result}` },
+    { kind: "muted", text: `${last ? " " : symbols.treePipe} ${result}` },
   ]
 }
 
@@ -142,7 +142,7 @@ function transcriptLines(
     kind: "segments",
     parts: [
       { kind: "text", text: indent },
-      { kind: "accent", text: "◆" },
+      { kind: "text", text: "◆" },
       { kind: "text", text: ` ${kid.title} ` },
       { kind: "muted", text: `· ${kid.role} · ${kid.id}` },
       { kind: "text", text: " " },
@@ -190,7 +190,7 @@ function transcriptLines(
           ...(opts.renderRunningTool?.(block.name, { args: block.input, ...started(block.id) }, { last }) ?? [
             {
               kind: "text",
-              text: `  ${last ? symbols.treeLast : symbols.treeBranch} ${block.name}  running`,
+              text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}  running`,
             },
           ]),
         )
@@ -218,7 +218,7 @@ function transcriptLines(
           ...(opts.renderRunningTool?.(block.name, { args: block.args, ...started(block.id) }, { last }) ?? [
             {
               kind: "text",
-              text: `  ${last ? symbols.treeLast : symbols.treeBranch} ${block.name}${summarizeArgs(block.args) ? ` ${summarizeArgs(block.args)}` : ""}  running`,
+              text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}${summarizeArgs(block.args) ? ` ${summarizeArgs(block.args)}` : ""}  running`,
             },
           ]),
         )
@@ -378,7 +378,12 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
     header(data, opts) {
       const info = infoFor(data)
       return info
-        ? [{ kind: "muted", text: clip(`task: ${info.task.replace(/\s+/g, " ").trim()}`, opts.width) }]
+        ? [
+            {
+              kind: "muted",
+              text: `  ${clip(`task: ${info.task.replace(/\s+/g, " ").trim()}`, Math.max(1, opts.width - 2))}`,
+            },
+          ]
         : []
     },
     render(data, opts) {

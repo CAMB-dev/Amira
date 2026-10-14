@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -5,7 +6,7 @@ import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { type ActivePackages, readManifest } from "@amira/packages"
-import { key } from "@amira/tui-kit"
+import { bold, key, stripAnsi } from "@amira/tui-kit"
 import { Dialog } from "../../tui/src/dialog.ts"
 import { plain } from "../../tui-kit/test/context.ts"
 import { createSession } from "../src/session.ts"
@@ -92,7 +93,10 @@ for (const kind of ["relative file", "absolute file", "package", "scoped package
       )
       if (request?.kind !== "confirm") throw new Error("expected confirmation request")
       const dialog = new Dialog(request, (answer) => session!.host.ui.respond(request.requestId, answer))
-      expect(dialog.render(120, plain)[0]).toBe(`┃ ? Continue? (${label})`)
+      const title = `Continue? (${label})`
+      const top = dialog.render(120, plain)[0]!
+      expect(stripAnsi(top)).toBe(`╭ ${title}${"─".repeat(117 - title.length)}╮`)
+      expect(top).toContain(bold(plain.theme.text("Continue?")))
 
       // A display name must never become the cancellation identity.
       session.host.ui.cancelAll(label)

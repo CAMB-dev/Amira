@@ -17,7 +17,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await waitFor(() => app.live().includes("Tool output: summary"), "key restores summary")
       expect(app.live()).toContain("ctrl+o toggles summary/full")
       const commandLevels = () =>
-        [...app.all().matchAll(/› \/verbose\n +└ Tool output: (\w+)/g)].map((match) => match[1])
+        [...app.all().matchAll(/› \/verbose\n└ Tool output: (\w+)/g)].map((match) => match[1])
       for (const level of ["full", "collapsed", "summary"] as const) {
         const before = commandLevels().length
         app.terminal.send("/verbose\r")

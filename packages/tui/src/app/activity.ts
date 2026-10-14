@@ -96,6 +96,7 @@ export interface TurnActivityRenderOptions {
 }
 
 export interface TurnActivity {
+  readonly shimmerVisible: boolean
   readonly working: boolean
   readonly compacting: boolean
   beginSend(): ActivityClock
@@ -118,6 +119,10 @@ export interface TurnActivity {
 
 export function createTurnActivity(): TurnActivity {
   let working = false
+  let shimmerVisible = false
+  const setShimmerVisible = (visible: boolean) => {
+    shimmerVisible = visible
+  }
   let thinking = false
   /** The end of the reasoning streamed in the current reply, whose last line the activity line shows. */
   let reasoning = ""
@@ -146,8 +151,6 @@ export function createTurnActivity(): TurnActivity {
   let stepKind = ""
   let lastRate = 0
   let messageStartedAt = 0
-  let animationGlyph = ""
-  let animationMs = 0
   let previewStartedAt: number | undefined
 
   /** The activity line counts the turn's time and tokens from here. */
@@ -158,10 +161,12 @@ export function createTurnActivity(): TurnActivity {
     stepKind = ""
     lastRate = 0
     responding = false
-    animationGlyph = ""
   }
 
   return {
+    get shimmerVisible() {
+      return shimmerVisible
+    },
     get working() {
       return working
     },
@@ -262,22 +267,17 @@ export function createTurnActivity(): TurnActivity {
       compactStartedAt = Date.now()
       stepStartedAt = compactStartedAt
       stepKind = ""
-      animationGlyph = ""
     },
     endCompaction() {
       compacting = false
     },
     render(width, ctx, options) {
+      shimmerVisible = false
       if (!options.preview) previewStartedAt = undefined
       if (!working && !compacting) {
         if (!options.preview) return []
         if (previewStartedAt === undefined) {
           previewStartedAt = Date.now()
-          animationGlyph = ""
-        }
-        if (animationGlyph !== options.spinner.glyph) {
-          animationGlyph = options.spinner.glyph
-          animationMs = Date.now() - previewStartedAt
         }
         return [
           activityRow(
@@ -289,7 +289,8 @@ export function createTurnActivity(): TurnActivity {
               tokens: 0,
               rate: 0,
               stop: "preview",
-              animationMs,
+              animationMs: Date.now() - previewStartedAt,
+              shimmerVisible: setShimmerVisible,
             },
             width,
             ctx,
@@ -315,11 +316,6 @@ export function createTurnActivity(): TurnActivity {
         stepStartedAt = now
       }
       const turnMs = now - (working ? turnStartedAt : compactStartedAt)
-      // Stream/input redraws can be faster than the spinner: only its ticks move the highlight.
-      if (animationGlyph !== options.spinner.glyph) {
-        animationGlyph = options.spinner.glyph
-        animationMs = turnMs
-      }
       const stepMs = now - stepStartedAt
       const tokens = turnTokens + estimateTokens(streamedChars)
       const rate = streamedChars
@@ -335,7 +331,8 @@ export function createTurnActivity(): TurnActivity {
             tokens,
             rate,
             stop: options.stop ?? "esc stop",
-            animationMs,
+            animationMs: turnMs,
+            shimmerVisible: setShimmerVisible,
           },
           width,
           ctx,

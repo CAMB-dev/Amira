@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { userMessage } from "@amira/ai"
 import type { CommandContext, ViewDefinition } from "@amira/api"
@@ -150,7 +151,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
       )
       await waitFor(() => !s.live().includes("HITROW-39"), "wheel after resize")
       s.terminal.send("\x1b[F?")
-      await waitFor(() => s.live().includes("? Keys"), "covering key reference")
+      await waitFor(() => s.live().includes("Keys"), "covering key reference")
       s.terminal.send(ESC)
       await waitFor(() => s.live().includes("HITROW-39"), "dock restored after overlay")
       wheel(

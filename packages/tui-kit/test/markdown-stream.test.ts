@@ -1,3 +1,4 @@
+// B deliberate oracles: fill-only code uses every cell, including blank surface edges in NO_COLOR.
 import { expect, test } from "bun:test"
 import { stripAnsi } from "../src/ansi.ts"
 import type { RenderContext } from "../src/component.ts"
@@ -72,7 +73,7 @@ test("headings, setext headings and rules", () => {
   expect(md("Some text\n## Next")).toEqual(["Some text", "", "Next"])
   const m = new MarkdownStream()
   m.append("# Title")
-  expect(m.render(20, { ...plain, theme: defaultTheme })[0]).toBe(defaultTheme.heading!("Title"))
+  expect(m.render(20, { ...plain, theme: defaultTheme })[0]).toBe(defaultTheme.heading1!("Title"))
   expect(md("#hashtag")).toEqual(["#hashtag"])
 })
 
@@ -121,30 +122,30 @@ test("blockquotes get a bar per level", () => {
 
 test("code blocks get a frame and a label; their lines hard-wrap and keep their spaces", () => {
   expect(md("```ts\nconst x = 1\n\n  if (x) {}\nabcdefghijklmnopqrst\n```\nafter", 16)).toEqual([
-    `╭─ ts${"─".repeat(10)}╮`,
-    "│ const x = 1  │",
-    `│${" ".repeat(14)}│`,
-    "│   if (x) {}  │",
-    "│ abcdefghijklm│",
-    "│ nopqrst      │",
-    `╰${"─".repeat(14)}╯`,
+    `${" ".repeat(14)}ts`,
+    "const x = 1     ",
+    " ".repeat(16),
+    "  if (x) {}     ",
+    "abcdefghijklmnop",
+    "qrst            ",
+    " ".repeat(16),
     "after",
   ])
-  // Markdown inside is shown as it is; an unclosed block is closed at the end.
+  // Markdown inside stays literal; an unclosed block gets its filled bottom edge.
   expect(md("~~~\n**not bold**\n# no heading")).toEqual([
-    `╭${"─".repeat(38)}╮`,
-    `│ **not bold**${" ".repeat(25)}│`,
-    `│ # no heading${" ".repeat(25)}│`,
-    `╰${"─".repeat(38)}╯`,
+    " ".repeat(40),
+    `**not bold**${" ".repeat(28)}`,
+    `# no heading${" ".repeat(28)}`,
+    " ".repeat(40),
   ])
 })
 
 test("code blocks in list items are indented with the item", () => {
   expect(md("- item\n  ```\n  code\n  ```\n- next")).toEqual([
     "• item",
-    `  ╭${"─".repeat(36)}╮`,
-    `  │ code${" ".repeat(31)}│`,
-    `  ╰${"─".repeat(36)}╯`,
+    " ".repeat(40),
+    `  code${" ".repeat(34)}`,
+    " ".repeat(40),
     "• next",
   ])
 })
@@ -155,13 +156,11 @@ test("keywords, strings, numbers and comments are highlighted in known languages
   const rows = m.render(40, { ...plain, theme: defaultTheme })
   const t = defaultTheme
   expect(rows[1]).toBe(
-    `${t.codeFrame!("│")} ${t.keyword!("def")} f(): ${t.keyword!("return")} ${t.string!("'x'")} ${t.comment!("# note")}${" ".repeat(37 - visibleWidth("def f(): return 'x' # note"))}${t.codeFrame!("│")}`,
+    `${t.keyword!("def")} f(): ${t.keyword!("return")} ${t.string!("'x'")} ${t.comment!("# note")}${" ".repeat(40 - visibleWidth("def f(): return 'x' # note"))}`,
   )
   const unknown = new MarkdownStream()
   unknown.append("```brainfuck\nif return\n```\n")
-  expect(unknown.render(40, { ...plain, theme: defaultTheme })[1]).toBe(
-    `${t.codeFrame!("│")} if return${" ".repeat(28)}${t.codeFrame!("│")}`,
-  )
+  expect(unknown.render(40, { ...plain, theme: defaultTheme })[1]).toBe(`if return${" ".repeat(31)}`)
 })
 
 test("tables are aligned by column, and shown raw when wider than the screen", () => {
@@ -281,17 +280,13 @@ test("each finished line of a code block is committed as soon as it ends", () =>
   const { ctx, committed } = committing()
   const m = new MarkdownStream({ highlight: false })
   m.append("```\nline 1\nline")
-  expect(m.render(40, ctx)).toEqual([`│ line${" ".repeat(33)}│`])
-  expect(committed).toEqual([`╭${"─".repeat(38)}╮`, `│ line 1${" ".repeat(31)}│`])
+  expect(m.render(40, ctx)).toEqual([`line${" ".repeat(36)}`])
+  expect(committed).toEqual([" ".repeat(40), `line 1${" ".repeat(34)}`])
   m.append(" 2\n")
   expect(m.render(40, ctx)).toEqual([])
-  expect(committed).toEqual([
-    `╭${"─".repeat(38)}╮`,
-    `│ line 1${" ".repeat(31)}│`,
-    `│ line 2${" ".repeat(31)}│`,
-  ])
+  expect(committed).toEqual([" ".repeat(40), `line 1${" ".repeat(34)}`, `line 2${" ".repeat(34)}`])
   // Interrupted: the block is closed when the text is taken.
-  expect(m.take(40)).toEqual([`╰${"─".repeat(38)}╯`])
+  expect(m.take(40)).toEqual([" ".repeat(40)])
 })
 
 test("a table is laid out once complete; while open it re-renders live", () => {

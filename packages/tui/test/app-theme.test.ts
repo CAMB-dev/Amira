@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import type { ShimmerEffect, TuiSettings } from "@amira/api"
 import { ThemeRegistry } from "@amira/core"
@@ -10,10 +11,10 @@ const selectedAppearance = (variant: ThemeVariant) =>
 
 test("interactive startup applies palette and depth settings, with mono taking precedence", async () => {
   const cases = [
-    { settings: { theme: "dark", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;120;219;226m› " },
-    { settings: { theme: "light", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;21;124;132m› " },
-    { settings: { theme: "terminal", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[36m› " },
-    { settings: { theme: "light", colorDepth: "truecolor" }, env: { NO_COLOR: "1" }, prompt: "\x1b[1m› " },
+    { settings: { theme: "dark", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;120;219;226m›" },
+    { settings: { theme: "light", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;21;124;132m›" },
+    { settings: { theme: "terminal", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[36m›" },
+    { settings: { theme: "light", colorDepth: "truecolor" }, env: { NO_COLOR: "1" }, prompt: "\x1b[1m›" },
   ] as const
   for (const c of cases) {
     const s = await setup([], c)
@@ -34,7 +35,7 @@ test("registry reload and removal replace full-screen styles, transcript caches 
     settings: { mode: "fullscreen", theme: "custom", colorDepth: "truecolor" },
   })
   try {
-    expect(s.terminal.output).toContain("\x1b[38;2;1;2;3m› ")
+    expect(s.terminal.output).toContain("\x1b[38;2;1;2;3m›")
     s.terminal.send("go\r")
     await s.shows("first item")
     await s.idle()
@@ -47,14 +48,14 @@ test("registry reload and removal replace full-screen styles, transcript caches 
       },
       "extension",
     )
-    await waitFor(() => s.terminal.output.includes("\x1b[38;2;7;8;9m> "), "reloaded editor prompt")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;7;8;9m>"), "reloaded editor prompt")
     expect(s.terminal.output).toContain("\x1b[38;2;10;11;12m")
     expect(s.terminal.output).not.toContain("\x1b[38;2;4;5;6m")
     expect(s.live()).toContain("* first item")
     expect(glyphs.toolFailed).toBe("✗")
     s.terminal.clearWrites()
     remove()
-    await waitFor(() => s.terminal.output.includes("\x1b[38;2;1;2;3m› "), "restored editor prompt")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;1;2;3m›"), "restored editor prompt")
     expect(s.live()).toContain("• first item")
     expect(glyphs.user).toBe("›")
   } finally {
@@ -88,14 +89,14 @@ test("/theme arrows preview immediately, Esc restores without saving, and Enter 
     expect(saved).toEqual([])
     s.terminal.clearWrites()
     s.terminal.send("\x1b")
-    await waitFor(() => s.terminal.output.includes(`${dark}› `), "restored dark prompt")
+    await waitFor(() => s.terminal.output.includes(`${dark}›`), "restored dark prompt")
     expect(saved).toEqual([])
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("arrows preview"), "reopened theme picker")
     s.terminal.send("\x1b[C\r")
     await waitFor(() => saved.length === 1, "applied theme")
     expect(saved).toEqual([{ name: "amira", variant: "light" }])
-    expect(s.terminal.output).toContain(`${light}› `)
+    expect(s.terminal.output).toContain(`${light}›`)
   } finally {
     s.terminal.send("\x1b")
     await Bun.sleep(40)
@@ -122,7 +123,7 @@ test("theme picker lists built-ins first, custom themes next and terminal last",
     const rows = s.live().split("\n")
     const names = rows.flatMap((row) => {
       const name = row.match(
-        /^┃ [❯ ] (?:\d+ )?(amira|amber|burnt|lavender|mono|ascii|custom|terminal)(?=\s|$)/,
+        /^│[› ](?:\d+ )?(amira|amber|burnt|lavender|mono|ascii|custom|terminal)(?=\s|$)/,
       )?.[1]
       return name ? [name] : []
     })
@@ -159,20 +160,23 @@ test("theme and variant preview survive reload and Esc restores both from the cu
     await waitFor(() => s.live().includes("filter"), "filtered theme")
     s.terminal.clearWrites()
     s.terminal.send("\x1b[D")
-    await waitFor(() => s.terminal.output.includes("\x1b[38;2;4;5;6m❯"), "amber dark preview")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;4;5;6m›"), "amber dark preview")
     themes.register({ name: "custom", light: { accent: "#070809" } }, "user")
     s.terminal.clearWrites()
     s.terminal.send("\x1b")
-    await waitFor(
-      () => s.terminal.output.includes("\x1b[38;2;7;8;9m› "),
-      "restored custom light after reload",
-    )
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;7;8;9m›"), "restored custom light after reload")
     expect(saved).toEqual([])
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("arrows preview"), "reopened picker")
     expect(s.terminal.output).toMatch(selectedAppearance("light"))
     s.terminal.send("\t")
-    await waitFor(() => s.live().includes("❯ Shimmer:"), "Tab focuses shimmer")
+    await waitFor(
+      () =>
+        new RegExp(`${String.fromCharCode(27)}\\[1m(?:${String.fromCharCode(27)}\\[[\\d;]*m)*Shimmer:`).test(
+          s.terminal.output,
+        ),
+      "Tab focuses shimmer",
+    )
     expect(s.terminal.output).toMatch(selectedAppearance("light"))
     s.terminal.clearWrites()
     s.terminal.send("\t\x1b[C")
@@ -233,7 +237,7 @@ test("named themes respect forced appearance and fall back to that variant's def
     settings: { theme: "night-only", themeVariant: "light", colorDepth: "truecolor" },
   })
   try {
-    expect(s.terminal.output).toContain("\x1b[38;2;21;124;132m› ")
+    expect(s.terminal.output).toContain("\x1b[38;2;21;124;132m›")
     expect(s.terminal.output).not.toContain("\x1b[38;2;1;2;3m")
   } finally {
     s.terminal.send("\x03\x03")
@@ -254,10 +258,11 @@ test("registry changes replace the active overlay's theme in inline and full-scr
       await s.shows("Keys")
       s.terminal.clearWrites()
       themes.register({ name: "custom", dark: { accent: "#070809" } }, "extension")
-      await waitFor(() => s.terminal.output.includes("\x1b[38;2;7;8;9m?"), "rethemed overlay")
+      // D: reload redraws the title bold in normal text, without an accent-colored ? prefix.
+      await waitFor(() => s.terminal.output.includes("  \x1b[1mKeys\x1b[22m"), "rethemed overlay")
       expect(s.terminal.output).not.toContain("\x1b[38;2;1;2;3m")
       s.terminal.send("\x1b")
-      await waitFor(() => s.terminal.output.includes("\x1b[38;2;7;8;9m› "), "rethemed input after overlay")
+      await waitFor(() => s.terminal.output.includes("\x1b[38;2;7;8;9m›"), "rethemed input after overlay")
     } finally {
       s.terminal.send("\x03\x03")
       await s.exited
@@ -284,9 +289,9 @@ test("picker shows provenance and Esc does not resurrect disposed extension them
     remove()
     s.terminal.clearWrites()
     s.terminal.send("\x1b")
-    await waitFor(() => s.terminal.output.includes("\x1b[38;2;120;219;226m› "), "current-registry fallback")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;120;219;226m›"), "current-registry fallback")
     // Already committed inline scrollback keeps its colors; the live prompt must not resurrect them.
-    expect(s.terminal.output).not.toContain("\x1b[38;2;1;2;3m› ")
+    expect(s.terminal.output).not.toContain("\x1b[38;2;1;2;3m›")
   } finally {
     s.terminal.send("\x03\x03")
     await s.exited
@@ -322,10 +327,10 @@ test("explicit dark selection wins over a forced named-theme light variant", asy
     settings: { theme: "auto", themeVariant: "light", colorDepth: "truecolor" },
   })
   try {
-    expect(s.terminal.output).toContain("\x1b[38;2;21;124;132m› ")
+    expect(s.terminal.output).toContain("\x1b[38;2;21;124;132m›")
     s.terminal.clearWrites()
     s.terminal.send("/theme dark\r")
-    await waitFor(() => s.terminal.output.includes("\x1b[38;2;120;219;226m› "), "explicit dark palette")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;120;219;226m›"), "explicit dark palette")
   } finally {
     s.terminal.send("\x03\x03")
     await s.exited
@@ -353,7 +358,7 @@ test("ASCII glyphs replace input-frame and status corners as well as Markdown sy
   const s = await setup([], { themes, settings: { theme: "plain" } })
   try {
     expect(s.live()).toContain("+---")
-    expect(s.live()).toContain(" shift+tab mode  |  ctrl+o detail  |  ? keys")
+    expect(s.live()).toContain("  shift+tab mode  ·  ctrl+o detail  ·  ? keys")
     expect(s.live()).not.toMatch(/[╭╮╰╯│─]/u)
   } finally {
     s.terminal.send("\x03\x03")
@@ -463,7 +468,13 @@ test("picker cycles every shimmer preset, applies it, and soft explicitly delete
     s.terminal.send("/theme\r")
     await s.shows("arrows preview")
     s.terminal.send("\t")
-    await waitFor(() => s.live().includes("❯ Shimmer:"), "shimmer focus")
+    await waitFor(
+      () =>
+        new RegExp(`${String.fromCharCode(27)}\\[1m(?:${String.fromCharCode(27)}\\[[\\d;]*m)*Shimmer:`).test(
+          s.terminal.output,
+        ),
+      "shimmer focus",
+    )
     for (const preset of ["soft", "sharp", "wide", "bounce", "pulse", "wave", "reveal"]) {
       s.terminal.send("\x1b[C")
       await waitFor(() => s.live().includes(`Shimmer: ${preset}`), `${preset} preview`)
@@ -657,14 +668,14 @@ test("up/down focuses the theme list and leaves both controls unhighlighted", as
     expect(s.live()).toContain("←/→ change")
     s.terminal.send("\t\x1b[B")
     await waitFor(() => s.live().includes("Shimmer: theme (wave)"), "down previews Amber")
-    expect(s.live()).not.toContain("❯ Shimmer:")
-    expect(s.live()).not.toContain("❯ Appearance:")
+    expect(s.live()).not.toContain("│›Shimmer:")
+    expect(s.live()).not.toContain("│›Appearance:")
     // The arrows only change a focused control, so the list's footer leaves them out.
     expect(s.live()).not.toContain("←/→ change")
     s.terminal.send("\x1b[A")
     await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "up returns to Amira")
-    expect(s.live()).not.toContain("❯ Shimmer:")
-    expect(s.live()).not.toContain("❯ Appearance:")
+    expect(s.live()).not.toContain("│›Shimmer:")
+    expect(s.live()).not.toContain("│›Appearance:")
   } finally {
     s.terminal.send("\x1b")
     await Bun.sleep(40)
@@ -697,7 +708,7 @@ test("reloaded theme settings replace palette, appearance and shimmer in the run
   })
   try {
     apply!({ theme: "custom", themeVariant: "light", shimmer: "wave" })
-    await waitFor(() => s.terminal.output.includes("\x1b[38;2;1;2;3m› "), "reloaded light palette")
+    await waitFor(() => s.terminal.output.includes("\x1b[38;2;1;2;3m›"), "reloaded light palette")
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("Shimmer: wave"), "reloaded shimmer selection")
     expect(s.terminal.output).toMatch(selectedAppearance("light"))

@@ -51,7 +51,7 @@ for (const columns of [100, 70]) {
         "Check the changes",
       ])
         expect(output).toContain(text)
-      expect(output).toContain(`     ╭─ ts${"─".repeat(columns - 14)}╮`)
+      expect(output).toContain(`${" ".repeat(columns - 5)}ts`)
       expect(frame.committed.ansi).toContain("48;2;71;20;26m")
       expect(frame.committed.ansi).toContain("48;2;15;58;18m")
     })

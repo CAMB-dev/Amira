@@ -1,3 +1,5 @@
+// Snapshot update: intact typing borders and a separate status row shift the transcript viewport.
+// A/E deliberate snapshot: grid-aligned natural user band and row-preserving sticky overlay.
 import { expect, test } from "bun:test"
 import { textResult } from "@amira/api"
 import { defaultTheme, Editor, FakeTerminal, key, Spinner, surfaceTheme, visibleWidth } from "@amira/tui-kit"
@@ -92,11 +94,11 @@ test(
       view.turnEnd()
       view.render()
       expect(screen.lines[1]).toBe("")
-      expect(screen.lines[2]).toBe(
-        `  › Polish the transcript details.${" ".repeat(64 - visibleWidth(localClock(at)))}${localClock(at)}`,
+      expect(screen.lines[3]).toBe(
+        `› Polish the transcript details.${" ".repeat(68 - visibleWidth(localClock(at)))}${localClock(at)}`,
       )
-      expect(screen.lines[3]).toBe("    Keep all output reachable.")
-      expect(screen.lines[4]).toBe("")
+      expect(screen.lines[4]).toBe("  Keep all output reachable.")
+      expect(screen.lines[5]).toBe("")
       expect(screen.lines.join("\n")).toContain("Read 3 files")
       expect(screen.lines.join("\n")).toContain("Searched 2 patterns")
       expect(screen.lines.join("\n")).not.toContain("Explored")
@@ -105,8 +107,8 @@ test(
       view.handleInput(key("up", { shift: true }))
       view.handleInput(key("up", { shift: true }))
       view.render()
-      expect(screen.lines[2]).toContain("Polish the transcript details.")
-      expect(screen.lines[3]).toContain("Keep all output reachable.")
+      expect(screen.lines[3]).toContain("Polish the transcript details.")
+      expect(screen.lines[4]).toContain("Keep all output reachable.")
       expect(screen.lines.join("\n")).toContain("2 rows below")
       expect(screen.lines.join("\n")).toMatchSnapshot("sticky while scrolled")
     } finally {

@@ -1,3 +1,4 @@
+// A/C/D style oracles: root markers at 0, content at 2, logical two-cell child rails and muted chrome.
 import { expect, test } from "bun:test"
 import type { AskOutcome, AskQuestion, Message, ToolResultMessage } from "@amira/api"
 import { defaultTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
@@ -57,19 +58,19 @@ const full = (c = call, width = 90) =>
 test("full ask transcript at width 90 preserves choice colors and every offered description", () => {
   const rows = full()
   expect(plain(rows)).toEqual([
-    "  └ Asked Which approach? (+1 more)",
-    "     ✓ 2 answers",
-    "     Approach",
-    "     Which approach?",
-    "     [ ] Rewrite  Start over",
-    "     ✓ Patch  Fix it in place",
+    "└ Asked Which approach? (+1 more)",
+    "  ✓ 2 answers",
+    "  Approach",
+    "  Which approach?",
+    "  [ ] Rewrite  Start over",
+    "  ✓ Patch  Fix it in place",
     "",
-    "     Extras",
-    "     What else should I do?",
-    "     ✓ Tests  Add regression coverage",
-    "     [ ] Docs  Update the guide",
-    "     ✓ Changelog  Record the change",
-    '     ✓ (own words) "Keep it small"',
+    "  Extras",
+    "  What else should I do?",
+    "  ✓ Tests  Add regression coverage",
+    "  [ ] Docs  Update the guide",
+    "  ✓ Changelog  Record the change",
+    '  ✓ (own words) "Keep it small"',
   ])
   const chosen = rows.find((row) => stripAnsi(row).includes("✓ Patch"))!
   expect(chosen).toContain(defaultTheme.success("✓ "))
@@ -111,7 +112,7 @@ test("full detail wraps long prose, labels and CJK without raising any line cap"
     expect(rows.length).toBeGreaterThan(12)
   }
   const rows = full(call, 32)
-  expect(plain(rows)).toContain("       Add regression coverage")
+  expect(plain(rows)).toContain("    Add regression coverage")
   expect(rows.find((row) => stripAnsi(row).includes("Add regression"))).toContain(
     defaultTheme.muted("Add regression coverage"),
   )
@@ -143,7 +144,7 @@ test("a 2 MiB own-words answer renders completely at width 10 without overflowin
   }
   expect(withinWidth).toBe(true)
   expect(shown).toBe(ownWords.length)
-  expect(rows.length).toBeGreaterThan(ownWords.length / 3)
+  expect(rows).toHaveLength(Math.ceil((ownWords.length + 2) / 6) + 12)
 })
 
 test("large wrapped choice descriptions also append without overflowing the argument stack", () => {
@@ -164,7 +165,7 @@ test("large wrapped choice descriptions also append without overflowing the argu
   for (const row of rows) for (const char of stripAnsi(row)) if (char === "x") shown++
   expect(shown).toBe(description.length)
   expect(rows.every((row) => visibleWidth(row) <= 12)).toBe(true)
-  expect(rows.find((row) => stripAnsi(row).includes("xxx"))).toContain(defaultTheme.muted("xxx"))
+  expect(rows.find((row) => stripAnsi(row).includes("xxx"))).toBe(`      ${defaultTheme.muted("xxxxxx")}`)
 })
 
 test("multiline choices keep one marker and description with hanging continuation rows", () => {
@@ -188,17 +189,17 @@ test("multiline choices keep one marker and description with hanging continuatio
   for (const width of [20, 90]) {
     const rows = full(c, width)
     const text = plain(rows)
-    const body = text.slice(text.indexOf("     Which?") + 1)
-    expect(body.filter((row) => row.includes("✓"))).toEqual(["     ✓ First"])
-    expect(body.filter((row) => row.includes("[ ]"))).toEqual(["     [ ] Else"])
-    expect(body[1]).toBe(width === 90 ? "       second  One explanation" : "       second")
+    const body = text.slice(text.indexOf("  Which?") + 1)
+    expect(body.filter((row) => row.includes("✓"))).toEqual(["  ✓ First"])
+    expect(body.filter((row) => row.includes("[ ]"))).toEqual(["  [ ] Else"])
+    expect(body[1]).toBe(width === 90 ? "    second  One explanation" : "    second")
     expect(body.filter((row) => row.includes("explanation"))).toHaveLength(1)
     expect(body.map((row) => row.trim()).join(" ")).toContain("One explanation")
     expect(body.filter((row) => row.includes("continued"))).toEqual([
-      width === 90 ? "         continued  Not chosen" : "         continued",
+      width === 90 ? "      continued  Not chosen" : "      continued",
     ])
     expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true)
-    const styledBody = rows.slice(text.indexOf("     Which?") + 1)
+    const styledBody = rows.slice(text.indexOf("  Which?") + 1)
     expect(styledBody[1]).toContain(defaultTheme.text("second"))
     expect(styledBody.find((row) => stripAnsi(row).includes("continued"))!).toContain(
       defaultTheme.muted("continued"),
@@ -210,9 +211,9 @@ test("ASCII glyphs are used for both chosen and hollow markers, including own wo
   setGlyphs(ascii.glyphs)
   try {
     const rows = full()
-    expect(plain(rows)).toContain("      v Patch  Fix it in place")
-    expect(plain(rows)).toContain("      [ ] Rewrite  Start over")
-    expect(plain(rows)).toContain('      v (own words) "Keep it small"')
+    expect(plain(rows)).toContain("  v Patch  Fix it in place")
+    expect(plain(rows)).toContain("  [ ] Rewrite  Start over")
+    expect(plain(rows)).toContain('  v (own words) "Keep it small"')
     expect(rows.every((row) => visibleWidth(row) <= 90)).toBe(true)
     expect(plain(rows).join("\n")).not.toMatch(/[✓└│]/)
   } finally {
@@ -224,9 +225,9 @@ test("declined and unavailable keep the status and show all offered choices with
   for (const outcome of [{ declined: true }, { unavailable: "no UI" }] as const) {
     const c: FinishedCall = { ...call, result: { content: [], details: { questions, outcome } } }
     const rows = plain(full(c))
-    expect(rows).toContain("     [ ] Rewrite  Start over")
-    expect(rows).toContain("     [ ] Patch  Fix it in place")
-    expect(rows).toContain("     [ ] Docs  Update the guide")
+    expect(rows).toContain("  [ ] Rewrite  Start over")
+    expect(rows).toContain("  [ ] Patch  Fix it in place")
+    expect(rows).toContain("  [ ] Docs  Update the guide")
     expect(rows.some((row) => /✓ (Patch|Tests|Changelog)/.test(row))).toBe(false)
     expect(rows[1]).toContain("declined" in outcome ? "declined" : "nobody could answer (no UI)")
     expect(finishedToolLines(defaultTheme, builtinPresenters.ask_user, c, "summary", 90)).toHaveLength(1)
@@ -324,7 +325,7 @@ test("hard-wrapped option words stay searchable with highlights on the original 
         const to = row.indexOf("\x1b[27;24m", from)
         if (!last) expect(from).toBeGreaterThan(row.indexOf(glyphs.treePipe))
         expect(to).toBeGreaterThan(from)
-        expect(visibleWidth(stripAnsi(row.slice(0, from)))).toBe(9)
+        expect(visibleWidth(stripAnsi(row.slice(0, from)))).toBe(6)
         return stripAnsi(row.slice(from, to))
       })
       expect(fragments.join("")).toBe(query)

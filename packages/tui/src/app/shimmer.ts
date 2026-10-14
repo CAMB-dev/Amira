@@ -16,11 +16,18 @@ function falloff(distance: number, half: number, edge: ResolvedShimmer["edge"]):
   return edge === "hard" ? 1 : edge === "linear" ? 1 - x : Math.cos((x * Math.PI) / 2) ** 2
 }
 
+export function hasAnimatedShimmer(ctx: RenderContext): boolean {
+  return (
+    (effects.get(ctx.theme) ?? soft).style !== "off" && ctx.color && !!themeToken(ctx.theme, "shimmer0Fade8")
+  )
+}
+
 /** Sample the prototype's motion in terminal cells, using only prequantized theme styles. */
 export function paintShimmer(label: string, ctx: RenderContext, animationMs: number): string {
   const effect = effects.get(ctx.theme) ?? soft
   if (effect.style === "off" || !ctx.color || !themeToken(ctx.theme, "shimmer0Fade8"))
     return ctx.theme.muted(label)
+  const fades = themeToken(ctx.theme, "shimmer0Fade32") ? 32 : 8
   const cells = visibleWidth(label)
   const phase = (animationMs % effect.period) / effect.period
   const half = effect.width / 2
@@ -49,7 +56,7 @@ export function paintShimmer(label: string, ctx: RenderContext, animationMs: num
             : 0
       }
       if (effect.edge === "hard" && effect.style !== "pulse") intensity = intensity > 0 ? 1 : 0
-      const fade = Math.round(intensity * 8)
+      const fade = Math.round(intensity * fades)
       const index = Math.round(stop * 15)
       cell += visibleWidth(char)
       const style = fade ? themeToken(ctx.theme, `shimmer${index}Fade${fade}`) : undefined

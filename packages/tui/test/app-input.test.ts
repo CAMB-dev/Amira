@@ -1,3 +1,4 @@
+// D deliberate real-input oracle: completion cursors use › consistently.
 import { expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -51,7 +52,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
         { type: "text", text: "describe" },
       ])
       s.terminal.send("@space")
-      await waitFor(() => s.live().includes("❯ space name.png"), "picker file")
+      await waitFor(() => s.live().includes("› space name.png"), "picker file")
       s.terminal.send("\t")
       await waitFor(
         () => s.live().split("╭").at(-1)!.includes("[image 1: space name.png 68 B]"),
@@ -64,7 +65,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
         { type: "image", ...inputImage("space name.png") },
       ])
       s.terminal.send("@code")
-      await waitFor(() => s.live().includes("❯ code.ts"), "text file")
+      await waitFor(() => s.live().includes("› code.ts"), "text file")
       s.terminal.send("\t\r")
       await s.shows("Text received.")
       await s.idle()
