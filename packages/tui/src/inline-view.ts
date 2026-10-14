@@ -14,7 +14,6 @@ import {
   type RenderContext,
   Spinner,
   type Theme,
-  truncateToWidth,
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
@@ -35,6 +34,7 @@ import { CONTENT_INSET, contentRoom } from "./grid.ts"
 import { historyLines } from "./history.ts"
 import { inlineBackgroundRows, inlineDisplayNodes } from "./inline-background.ts"
 import { displayCommit } from "./inline-display.ts"
+import { inlineLiveLayout } from "./inline-live-layout.ts"
 import { ACTIONS, type Action } from "./keybindings.ts"
 import { contentGeometry, marginView } from "./margins.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
@@ -363,18 +363,16 @@ export function createInlineView(host: ViewHost): TranscriptView {
       if ("lines" in block) ctx.commit?.(block.lines)
       else ctx.commit?.(block.redraw(width, ctx), block.redraw)
     }
-    // Live tool rows sit above the dialog (often the call that asked it), with the blank row
-    // before the rest; the dialog fits in what they leave. No reply streams while tools are live.
-    // Many calls at once take at most half the screen, so the input stays where it is.
-    const dialog = pendingDialog?.(width) ?? []
-    const dialogRows = Math.max(1, Math.floor(ctx.rows / 4))
-    if (dialog.length > dialogRows) {
-      dialog.length = dialogRows
-      dialog[dialogRows - 1] = truncateToWidth(`${dialog[dialogRows - 1]} ${glyphs.more}`, width, glyphs.more)
-    }
-    if (dialog.length && transcript.gapBefore("dialog")) dialog.unshift("")
-    const tools = liveToolRows(width, ctx, Math.max(4, Math.floor(ctx.rows / 2)))
-    const budget = ctx.rows - 1 - dialog.length - (tools.length ? tools.length + 1 : 0)
+    // Live tools sit above the bottom area, but cannot displace an interactive dialog's
+    // title, selected option and footer. No reply streams while tools are live.
+    const { dialog, tools, budget } = inlineLiveLayout({
+      rows: ctx.rows,
+      width,
+      dialog: pendingDialog,
+      dialogGap: transcript.gapBefore("dialog"),
+      essentialBottomRows: host.essentialBottomRows?.() ?? 0,
+      tools: (max) => liveToolRows(width, ctx, max),
+    })
     const rest = host.bottom(width, ctx, budget, background)
     const thinking = thought
       ? [

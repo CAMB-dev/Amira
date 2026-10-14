@@ -76,6 +76,8 @@ export class OverlayManager {
   private animationTimer: ReturnType<typeof setInterval> | undefined
   private animationInterval: number | undefined
   private disposed = false
+  /** External requests have no core pending entry; their closed IDs live until disposal. */
+  private readonly settledRequests = new Set<string>()
   private bottomVisible = true
   private commandRowVisible = true
   /**
@@ -423,6 +425,7 @@ export class OverlayManager {
 
   /** The open form was answered, cancelled, or resolved elsewhere: back to the conversation. */
   private closeForm(request: FormRequest | ExtensionSettingsRequest) {
+    if (!this.disposed) this.settledRequests.add(request.requestId)
     const i = this.forms.indexOf(request)
     if (i !== -1) this.forms.splice(i, 1)
     if (!this.form) return
@@ -459,8 +462,15 @@ export class OverlayManager {
 
   onUiRequest(data: EventMap["ui.request"]) {
     const ui = this.deps.ui
-    // Events are queued: a local answer can clear authoritative pending before an update arrives.
-    if (!ui?.pending.some((request) => request.requestId === data.requestId)) return
+    // Unknown IDs can be first external announcements. Settled IDs are stale, even if cloned
+    // or delivered before their initial request/resolved events have reached this frontend.
+    if (
+      !ui ||
+      this.disposed ||
+      this.settledRequests.has(data.requestId) ||
+      ui.requestState(data.requestId) === "settled"
+    )
+      return
     if (data.kind === "form" || data.kind === "extension-settings") {
       if (this.forms.some((request) => request.requestId === data.requestId)) return
       this.forms.push(data)
@@ -480,6 +490,7 @@ export class OverlayManager {
   }
 
   onUiResolved(data: EventMap["ui.resolved"]) {
+    if (!this.disposed) this.settledRequests.add(data.requestId)
     const i = this.dialogs.findIndex((d) => d.request.requestId === data.requestId)
     if (i !== -1) this.dialogs.splice(i, 1)
     const f = this.forms.find((r) => r.requestId === data.requestId)
@@ -532,6 +543,7 @@ export class OverlayManager {
     const i = this.dialogs.indexOf(dialog)
     if (i !== -1) this.dialogs.splice(i, 1)
     const { requestId } = dialog.request
+    if (!this.disposed) this.settledRequests.add(requestId)
     const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
     if (answer === undefined || refused) ui.cancel(requestId)
     // Esc on an approval denies the call and stops the whole turn, as the dialog's keys say.
@@ -556,5 +568,6 @@ export class OverlayManager {
     for (const f of this.forms.splice(0)) this.deps.ui?.cancel(f.requestId)
     this.form?.close()
     this.closeView()
+    this.settledRequests.clear()
   }
 }

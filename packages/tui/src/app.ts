@@ -273,6 +273,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     spinner,
     sessionId: () => agent.sessionId,
     detail: () => detail,
+    essentialBottomRows: () => (overlays.dialogs.length ? 3 : 0),
     bottom: (...args) => {
       const rows = bottomArea.layout(...args)
       overlays.syncAnimation(args[2] > 0)

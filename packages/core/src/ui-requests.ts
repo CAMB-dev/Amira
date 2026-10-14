@@ -93,6 +93,8 @@ export class UiRequests {
   #bus: EventBus
   #sessionId: string
   #pending = new Map<string, Pending>()
+  // Keep only IDs, for this service's lifetime: delayed/cloned events must stay settled.
+  #settled = new Set<string>()
   #sourceLabels = new Map<string, string>()
   #seq = 0
   #settings: ((name: string) => ExtensionSettingsBackend | undefined) | undefined
@@ -155,6 +157,15 @@ export class UiRequests {
   /** Dialogs still waiting, oldest first. */
   get pending(): EventMap["ui.request"][] {
     return [...this.#pending.values()].map((p) => p.request)
+  }
+
+  /**
+   * Registered request lifecycle, even before its queued event reaches a frontend.
+   * Unknown IDs may be requests announced externally, without this service as their owner.
+   */
+  requestState(requestId: string): "pending" | "settled" | "unknown" {
+    if (this.#pending.has(requestId)) return "pending"
+    return this.#settled.has(requestId) ? "settled" : "unknown"
   }
 
   /** Resolves with the answer, or undefined when cancelled, aborted or timed out. */
@@ -444,6 +455,7 @@ export class UiRequests {
   #settle(requestId: string, value: Value | undefined) {
     const p = this.#pending.get(requestId)!
     this.#pending.delete(requestId)
+    this.#settled.add(requestId)
     p.cleanup()
     // Form values and secret answers stay out of events, which frontends and extensions log.
     const r = p.request
