@@ -40,22 +40,30 @@ for (const boundary of ["resume", "startup"] as const) {
       return rename(from, to)
     })
     let resumed: Awaited<ReturnType<typeof session.resume>> | undefined
-    let release: ReturnType<typeof setTimeout> | undefined
+    let acquiring: Promise<NonNullable<typeof resumed>> | undefined
+    const atomicWait = spyOn(Atomics, "wait")
+    const sleepSync = spyOn(Bun, "sleepSync")
     try {
       await session.agent.dispose()
-      const start = performance.now()
-      const callback = new Promise<number>((resolve) =>
-        setTimeout(() => resolve(performance.now() - start), 0),
-      )
-      release = setTimeout(() => {
-        blocked = false
-      }, 100)
-      resumed =
+      let settled = false
+      acquiring = Promise.resolve(
         boundary === "resume"
-          ? await session.resume(stale)
-          : (await createSession({ ...options, store: stale })).agent
-      expect(performance.now() - start).toBeGreaterThanOrEqual(90)
-      expect(await callback).toBeLessThan(20)
+          ? session.resume(stale)
+          : createSession({ ...options, store: stale }).then((next) => next.agent),
+      ).finally(() => {
+        settled = true
+      })
+      // Observe early failures while checking the timer; awaiting acquisition below still throws.
+      void acquiring.catch(() => {})
+      // Keep retirement blocked until an unrelated timer runs. Scheduler latency is
+      // irrelevant: acquisition must yield and cannot complete while the gate is held.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(settled).toBe(false)
+      expect(fs.existsSync(gate)).toBe(true)
+      expect(atomicWait).not.toHaveBeenCalled()
+      expect(sleepSync).not.toHaveBeenCalled()
+      blocked = false
+      resumed = await acquiring
       expect(resumed.messages.map((m) => m.content)).toEqual([
         userMessage("saved").content,
         userMessage("new on disk").content,
@@ -63,8 +71,10 @@ for (const boundary of ["resume", "startup"] as const) {
       expect(mock.requests).toHaveLength(0)
     } finally {
       blocked = false
-      clearTimeout(release)
       hook.mockRestore()
+      atomicWait.mockRestore()
+      sleepSync.mockRestore()
+      resumed ??= await acquiring?.catch(() => undefined)
       await resumed?.dispose()
       await session.agent.dispose()
       // Drive any exact release-requested cleanup before removing this fixture.
@@ -92,7 +102,8 @@ for (const command of ["resume", "clear", "fork"] as const) {
     const rename = fs.renameSync
     const oldGate = `${sessionLockFile(store.file)}.lease-gate`
     let denied = true
-    let release: ReturnType<typeof setTimeout> | undefined
+    const atomicWait = spyOn(Atomics, "wait")
+    const sleepSync = spyOn(Bun, "sleepSync")
     const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
       if (
         denied &&
@@ -100,23 +111,19 @@ for (const command of ["resume", "clear", "fork"] as const) {
         String(from).endsWith(".lease-gate") &&
         String(to).includes(".retired-")
       ) {
-        release ??= setTimeout(() => {
-          denied = false
-        }, 100)
         throw Object.assign(new Error("requested gate reader"), { code: "EPERM" })
       }
       return rename(from, to)
     })
     const create = SessionStore.create
     const acquire = SessionStore.prototype.withClaim
-    let callback: Promise<number> | undefined
+    let callback: Promise<void> | undefined
     const acquisition = spyOn(SessionStore.prototype, "withClaim").mockImplementation(function <T>(
       this: SessionStore,
       construct: () => T,
       opts?: Parameters<SessionStore["withClaim"]>[1],
     ) {
-      const start = performance.now()
-      callback = new Promise<number>((resolve) => setTimeout(() => resolve(performance.now() - start), 0))
+      callback = new Promise<void>((resolve) => setTimeout(resolve, 0))
       return (acquire<T>).call(this, construct, opts)
     })
     let created: ReturnType<typeof spyOn> | undefined
@@ -141,14 +148,18 @@ for (const command of ["resume", "clear", "fork"] as const) {
             ? host.control.newSession!()
             : host.control.fork!()
       switching = pending
-      // Measure warm acquisition, not the synchronous fork's disk/history copy beforehand.
+      void pending.catch(() => {})
+      // The timer must run before gate release, without synchronous acquisition sleeps.
       expect(callback).toBeDefined()
-      expect(await callback).toBeLessThan(20)
+      await callback
+      expect(atomicWait).not.toHaveBeenCalled()
+      expect(sleepSync).not.toHaveBeenCalled()
       expect(host.agent).toBe(old)
       expect(handover).not.toHaveBeenCalled()
       expect(cancel).not.toHaveBeenCalled()
       expect(announcements).toEqual([])
       store.appendDisplay({ type: "display", level: "info", text: "old owner remains usable while waiting" })
+      denied = false
       await pending
       expect(host.agent).not.toBe(old)
       expect(handover).toHaveBeenCalledTimes(1)
@@ -156,8 +167,9 @@ for (const command of ["resume", "clear", "fork"] as const) {
       expect(host.agent.messages).toHaveLength(command === "clear" ? 0 : 1)
     } finally {
       denied = false
-      clearTimeout(release)
       hook.mockRestore()
+      atomicWait.mockRestore()
+      sleepSync.mockRestore()
       created?.mockRestore()
       acquisition.mockRestore()
       handover.mockRestore()

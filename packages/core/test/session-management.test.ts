@@ -243,13 +243,16 @@ test("delete refuses the current session and traversal; removes owned children b
   for (const store of [s, child, grandchild, fork]) writeFileSync(`${store.file}.trace.jsonl`, "trace\n")
   expect(() => deleteSession("/project", s.id, s.id, dir)).toThrow("current")
   expect(() => deleteSession("/project", "../outside", undefined, dir)).toThrow("no session")
-  expect(deleteSession("/project", s.id, fork.id, dir)).toEqual([s.file])
+  // Deletion reports physical paths, which may differ from the store's spelling on Windows.
+  const sessionFile = realpathSync.native(s.file)
+  const forkFiles = [fork, child, grandchild].map((store) => realpathSync.native(store.file))
+  expect(deleteSession("/project", s.id, fork.id, dir)).toEqual([sessionFile])
   expect(existsSync(s.file)).toBe(false)
   expect(existsSync(`${s.file}.trace.jsonl`)).toBe(false)
   expect(existsSync(child.file)).toBe(true)
   expect(existsSync(`${child.file}.trace.jsonl`)).toBe(true)
   expect(existsSync(`${grandchild.file}.trace.jsonl`)).toBe(true)
-  expect(deleteSession("/project", fork.id, undefined, dir)).toEqual([fork.file, child.file, grandchild.file])
+  expect(deleteSession("/project", fork.id, undefined, dir)).toEqual(forkFiles)
   expect(existsSync(child.file)).toBe(false)
   for (const store of [fork, child, grandchild]) expect(existsSync(`${store.file}.trace.jsonl`)).toBe(false)
   expect(listSessions("/project", dir)).toEqual([])
@@ -275,9 +278,50 @@ test("session paths match the store through a symlinked parent without allowing 
     expect(() => deleteSession("/project", s.id, undefined, linkedDir)).toThrow("unsafe session directory")
     expect(existsSync(s.file)).toBe(true)
     expect(existsSync(child.file)).toBe(true)
-    expect(deleteSession("/project", s.id, undefined, dir)).toEqual([s.file, child.file])
+    const files = [s.file, child.file].map((file) => realpathSync.native(file))
+    expect(deleteSession("/project", s.id, undefined, dir)).toEqual(files)
     expect(existsSync(s.file)).toBe(false)
     expect(existsSync(child.file)).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("deletion returns physical paths and names the physical guard through a parent alias", () => {
+  const root = tmp()
+  const actual = path.join(root, "actual")
+  const alias = path.join(root, "alias")
+  mkdirSync(path.join(actual, "sessions"), { recursive: true })
+  symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir")
+  const dir = path.join(alias, "sessions")
+  try {
+    const s = SessionStore.create({ cwd: "/project", dir })
+    s.appendMessage(userMessage("must stay while guarded"))
+    // Use an explicit alias: tmpdir() may already resolve TMPDIR on POSIX.
+    const requestedFile = path.join(dir, path.basename(s.file))
+    const physicalFile = realpathSync.native(requestedFile)
+    expect(requestedFile).not.toBe(physicalFile)
+    const gate = `${requestedFile}.lock.lease-gate`
+    mkdirSync(gate)
+    writeFileSync(path.join(gate, "owner.json"), "unverifiable")
+    const physicalGate = realpathSync.native(gate)
+    const before = readFileSync(requestedFile)
+    let error: unknown
+    try {
+      deleteSession("/project", s.id, undefined, dir)
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(
+      `session stale-write guard is busy or unverifiable: ${physicalGate}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
+    )
+    expect(readFileSync(requestedFile)).toEqual(before)
+    expect(existsSync(gate)).toBe(true)
+    rmSync(gate, { recursive: true })
+    expect(deleteSession("/project", s.id, undefined, dir)).toEqual([physicalFile])
+    expect(existsSync(requestedFile)).toBe(false)
+    expect(existsSync(physicalFile)).toBe(false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

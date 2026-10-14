@@ -363,6 +363,7 @@ for (const state of ["live", "unknown"]) {
       fs.mkdirSync(gate)
       fs.writeFileSync(path.join(gate, "owner.json"), "unverifiable")
     }
+    const physicalGate = fs.realpathSync.native(gate)
     const before = fs.readFileSync(origin.file)
     let error: unknown
     try {
@@ -372,7 +373,7 @@ for (const state of ["live", "unknown"]) {
     }
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toContain("stale-write guard")
-    expect((error as Error).message).toContain(gate)
+    expect((error as Error).message).toContain(physicalGate)
     expect((error as Error).message).not.toContain("currently open")
     expect(fs.readFileSync(origin.file)).toEqual(before)
     expect(fs.existsSync(gate)).toBe(true)
@@ -390,17 +391,22 @@ test("resume and deletion name an unverifiable persistent lease without suggesti
   const contents = `${owner.pid}\n${owner.nonce}\n${JSON.stringify(owner)}\n`
   fs.writeFileSync(lease, contents)
   const before = fs.readFileSync(origin.file)
-  for (const attempt of [() => origin.claim(), () => deleteSession(dir, origin.id, undefined, dir)]) {
+  // Resume names the store's lease namespace; deletion resolves the public physical path.
+  const attempts = [
+    { run: () => origin.claim(), lease },
+    { run: () => deleteSession(dir, origin.id, undefined, dir), lease: fs.realpathSync.native(lease) },
+  ]
+  for (const { run, lease: expectedLease } of attempts) {
     let error: unknown
     try {
-      attempt()
+      run()
     } catch (caught) {
       error = caught
     }
     expect(error).toBeInstanceOf(Error)
     const message = (error as Error).message
     expect(message).toContain("stale-write guard")
-    expect(message).toContain(lease)
+    expect(message).toContain(expectedLease)
     expect(message).toContain("remove this lease file")
     expect(message).toContain("no Amira process is running on any host")
     expect(message).not.toContain(".lease-gate")
