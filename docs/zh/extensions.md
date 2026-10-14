@@ -315,6 +315,8 @@ TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次
 
 通过 `api.registerView()` 注册 `ViewDefinition`，命令用 `ctx.openView?.({ kind, data, state })` 打开它，可选的 `state` 为初始 `Partial<UiState>`。视图返回结构化的 `ViewLine` 对象；前端负责终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。
 
+终端能传递 F6 时，F6 在所有视图与主输入框之间切换焦点，包括默认视图和内联模式中的全屏覆盖层。可配置的 `view.focus` action 默认绑定为 `["f6", "ctrl+tab"]`；终端能传递 Ctrl+Tab 时，它也是别名，但 Windows Terminal 可能截获它，旧式终端可能将其报告为普通 Tab。F6 可避开这些 Ctrl+Tab 问题，但 VS Code 集成终端默认会截获 F6，因为 `terminal.integrated.commandsToSkipShell` 中包含 `workbench.action.focusNextPart`。可在 VS Code 设置的 `terminal.integrated.commandsToSkipShell` 中添加 `"-workbench.action.focusNextPart"`，或将 Amira 的 `view.focus` 重新绑定到终端能传递的按键。单独的 Shift+Tab 不能绑定到 `view.focus`；它保留用于权限模式切换和视图反向导航。默认视图仍可用 Tab，提示继续显示 `tab→input/view`，不显示 F6。设置 `ViewDefinition.needsTab: true` 可保留 Tab/Shift+Tab 用于组件导航或视图快捷键；默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。宿主焦点切换从不占用 Shift+Tab。内置子 agent 视图声明此选项。`/`、`i`、可打印键路由、Esc 和焦点样式见[扩展视图](keybindings.md#扩展视图)。已激活的视图内输入框和输入提示仍接收自身输入。
+
 `title(data, opts)` 返回 `string | ViewLine`，作为第一行。字符串保留默认的 `◆`
 标记；语义化的 `ViewLine` 提供完整标题，前端不会自动添加标记。两种形式都会由前端
 截断到标题的可用宽度。`titleAside(data)` 在其右端追加一段简短文字，如 `2 of 5`，
@@ -360,7 +362,7 @@ D105 增加宿主管理的页面，无需注册另一种视图：调用 `view.pu
 
 临时子 agent **不绕过 `maxConcurrent`**、深度、分组限制或 token/费用预算。当树的并发上限至少为 2 时，普通子 agent 最多占用 `maxConcurrent - 1` 个忙碌位置，为临时子 agent 的首轮或追问保留一个位置。临时工作也可使用其他空闲位置，但不能超过总并发上限或分组上限。`maxConcurrent: 1` 时仍正常排队。spawn 返回后立即读取 `child.state === "queued"`，以显示首轮等待状态。初始 `subagent.start` 事件在 `spawn()` 返回前发出，不会向新订阅者重放。订阅 `child.events` 可接收后续的 `subagent.state` 变化，包括追问排队。空闲子 agent 会释放并发位置。咨询用量（包括失败尝试和重试）以咨询模型的身份保存为发起请求的临时子 agent 的 `side_usage`。
 
-使用 `ctx.openView?.({ kind, data, placement: "dock", maxHeight?: number })` 打开停靠视图；省略 placement 时仍为全屏。高度包含标题、header 和底部按键栏，默认约为终端可用行数的 40%，至少 5 行（输入区域留下不足 5 行时除外）。内联和全屏模式均在保持焦点的输入框正上方显示同一实时区域，使用当前主题和边距。配置的 `scroll.page-up`/`scroll.page-down` 按键滚动停靠视图（默认 PgUp/PgDn）；鼠标滚轮只在指针位于该区域时滚动它；`scroll.bottom` 恢复跟随末尾（默认 End）。内联停靠视图只占用自身有界的行数，保留上方对话的可见内容。文字、方向键、Tab 和 Enter 仍交给主输入框，不激活视图组件或扩展快捷键。停靠视图的 prompt/confirm 会取消，不替换主输入框。**Esc 先关闭停靠视图**，再按一次才取消命令或中断当前轮。覆盖其上的全屏视图和表单保留原有按键优先级。`follow`、用于 Markdown 的 `renderReply` 和 `onClose` 与全屏视图共用。
+使用 `ctx.openView?.({ kind, data, placement: "dock", maxHeight?: number })` 打开停靠视图；省略 placement 时仍为全屏。高度包含标题、header 和底部按键栏，默认约为终端可用行数的 40%，至少 5 行（输入区域留下不足 5 行时除外）。内联和全屏模式均在保持焦点的输入框正上方显示同一实时区域，使用当前主题和边距。配置的 `scroll.page-up`/`scroll.page-down` 按键滚动停靠视图（默认 PgUp/PgDn）；鼠标滚轮只在指针位于该区域时滚动它；`scroll.bottom` 恢复跟随末尾（默认 End）。内联停靠视图只占用自身有界的行数，保留上方对话的可见内容。停靠视图默认聚焦主输入框；有可选择内容时，F6 进入停靠视图（终端能传递 Ctrl+Tab 时，它也是别名）；未声明 `needsTab: true` 时也可用 Tab。停靠视图获得焦点时，组件和扩展快捷键接收相应按键。只读停靠视图不取得焦点，保持原有滚动行为。停靠视图的 prompt/confirm 会取消，不替换主输入框。停靠视图获得焦点时，Esc 返回或关闭视图；主输入框为空时，Esc 将焦点返回有可选择内容的停靠视图，与全屏视图相同。主输入框有文本时，Esc 仍关闭停靠视图并保留草稿。历史搜索优先处理：Esc 先取消搜索并恢复草稿；主输入框为空时，再按 Esc 返回视图或有可选择内容的停靠视图。只读停靠视图仍先关闭，再取消命令或中断当前轮。对话框可见时，只允许在停靠区域上使用滚轮滚动；点击不会聚焦停靠视图或选择内容。覆盖其上的全屏视图和表单保留原有按键优先级。`follow`、用于 Markdown 的 `renderReply` 和 `onClose` 与全屏视图共用。
 
 `ctx.print(text, level?, { details?: string; markdown?: boolean; persist?: boolean })` 和 `api.notify(text, level?, options?)` 输出只供显示的块。text 是标题；details 在 summary 时折叠，在 full 时展开（Ctrl+O）。`markdown: true` 将详情渲染为 Markdown。`persist: true` 保存 `display` 会话条目，恢复时按对话顺序重新显示，但上下文构建会跳过它。标题和详情均不会发给模型，包括会话 fork、子 agent fork 和压缩请求。只有显示条目的会话也会在启动恢复时显示。保留的 `ctx.print` 始终绑定到命令运行时的会话，即使停靠视图因会话切换而关闭，也不会写入另一个会话。全屏模式保留可折叠的块；内联模式在有界的近期记录中保留语义化重绘，Ctrl+O 可原位重绘近期块；较旧的原生终端滚动记录不可修改。打印模式输出标题，RPC 还携带可选的详情字段。
 
@@ -452,13 +454,13 @@ api.registerView(review)
 
 `ViewDefinition.hostKeys?: "full" | "minimal" | "none"` 控制宿主按键栏。默认 `"full"` 显示完整按键栏；`"minimal"` 仅显示 `Esc back` 或 `Esc close`；`"none"` 移除页脚行，但 Esc 仍然有效。所有模式下，输入提问和确认提示仍然可见。
 
-设置 `activate` 的输入框不会自动接管键盘输入：按激活键后才进入输入框。占位文本包含激活提示；也可通过显式 `view.focus(id)` 或 Tab 切换进入。Esc 先退出已激活的输入框，再弹出页面或关闭视图。省略 `activate` 时保留自动聚焦输入框的行为。
+设置 `activate` 的输入框不会自动接管键盘输入：按激活键后才进入输入框。占位文本包含激活提示；也可通过显式 `view.focus(id)` 或在 `needsTab: true` 时用 Tab 切换进入。Esc 先退出已激活的输入框，再弹出页面或关闭视图。省略 `activate` 时保留自动聚焦输入框的行为。
 
 `UiContext` 在 `ViewRenderOptions` 基础上增加宿主持有的 `state: UiState` 和 height；height 为扣除等待提示、宿主按键栏及子页面标题后正文可用的行数，不会为负，并随终端尺寸变化更新。所有映射以稳定、整个视图内唯一的组件 ID 为键：`selected` 保存树或表格的选中项键，`expanded` 保存树中展开项的键数组，`activeTabs` 保存标签页键，`scroll` 保存 `{ top, following }`，`inputValues` 保存输入字符串；可选的 `focused` 保存焦点组件 ID。重绘、同类型视图的数据替换和非活动标签页均保留状态，直到视图关闭。选中项或标签页消失时选择第一个可见项或标签页；焦点无效时选择第一个无需输入激活的可见组件。请将上下文状态视为只读，并保持 `ui` 无副作用：宿主修复选中项、标签页或焦点后可能在同一帧重建内容，确保详情与控件一致；八次尝试后仍不稳定时安全地显示错误。没有 ID 的文本和表格可用滚轮滚动，但键盘焦点和显式状态管理需要稳定的 ID。
 
 `onEvent(event, data, view)` 接收以 `type` 区分的事件：带 `{ id, key }` 的 select/activate、带 `{ id, key, expanded }` 的 toggle、带 `{ id, key }` 的 tab、带 `{ id, value }` 的 submit，以及已声明按键的 `{ key, focused? }`。在 `keys` 中声明快捷键（例如 `keys: [{ key: "x", label: "停止" }]`）；声明式视图通过 `onEvent` 接收它们，不调用旧的 `run` 回调。未声明的按键不产生事件。宿主先更新状态，再调用处理函数，因此 `view.setState(patch)` 可以覆盖默认结果。补丁为浅层替换：提供的顶层映射会替换整个映射，而不是合并其中条目；需要保留其他条目时使用 `{ ...ctx.state.selected, [id]: key }`。`view.focus(id)` 聚焦可见组件。原有 close、requestRender、print、prompt 和 confirm 方法仍可使用。提交输入不会自动清空内容。
 
-Tab/Shift+Tab 在可见的树、带 ID 的表格及文本、标签栏和输入框之间移动焦点。没有可聚焦组件时，它们会通过 onEvent 交给已声明的 tab/shift-tab 快捷键；未声明的键不产生事件。树用上下键选择，右键展开，左键折叠或选择父项，Enter 激活；表格用上下键选择，Enter 激活；标签栏用左右键切换；输入框用 Enter 提交。翻页键及 Home/End 滚动当前可滚动组件，滚轮作用于指针下的组件，不改变焦点或选中项。文本仅在 `follow: true` 或滚到末尾后跟随增长，向上滚动会停止跟随。组件按键优先于声明的快捷键，其余已声明按键交给 onEvent。Esc 先取消当前输入或确认提问，其次退出设置了 `activate` 的输入框，否则弹出页面或关闭根视图；Ctrl+C 始终关闭整个视图。q 关闭视图，但获得焦点的声明式输入框或 prompt 覆盖层会把它当作输入。prompt/confirm 覆盖层暂停组件输入，并独占光标。
+设置 `needsTab: true` 时，Tab/Shift+Tab 在可见的树、带 ID 的表格及文本、标签栏和输入框之间移动焦点。没有可聚焦组件时，它们会通过 onEvent 交给已声明的 tab/shift-tab 快捷键；未声明的键不产生事件。未设置此选项时，Tab 将宿主焦点切换到主输入框。树用上下键选择，右键展开，左键折叠或选择父项，Enter 激活；表格用上下键选择，Enter 激活；标签栏用左右键切换；输入框用 Enter 提交。翻页键及 Home/End 滚动当前可滚动组件，滚轮作用于指针下的组件，不改变焦点或选中项。文本仅在 `follow: true` 或滚到末尾后跟随增长，向上滚动会停止跟随。组件按键优先于声明的快捷键，其余已声明按键交给 onEvent。Esc 先取消当前输入或确认提问，其次退出设置了 `activate` 的输入框，否则弹出页面或关闭根视图；Ctrl+C 始终关闭整个视图。q 关闭视图，但获得焦点的声明式输入框或 prompt 覆盖层会把它当作输入。prompt/confirm 覆盖层暂停组件输入，并独占光标。
 
 输入、数据更新和 requestRender 会触发重绘，不增加组件动画计时器。树在每次准备布局时仅索引展开的行，只绘制视口内的行。纯语义组件仪表盘测试、180×52 和 80×24 快照位于 `packages/tui/test/ui-runtime`；运行 `bun packages/tui/test/ui-runtime/benchmark.ts` 可复现 180×50 下的 500 项嵌套树基准测试，覆盖 80 个组件卡片详情、时间线样式、展开及折叠状态，以及完整的 ExtensionViewer 路径。组件详情仅在所属项展开时测量，只绘制与视口相交的部分。
 

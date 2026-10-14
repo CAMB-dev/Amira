@@ -200,6 +200,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     dialogs: () => overlays.dialogs,
     dock: () => overlays.dock,
     renderDock: (width, ctx, available) => overlays.renderDock(width, ctx, available),
+    focusHint: (theme, width) => overlays.focusHint(theme, width),
     steering: () => outbox.steering,
     queued: () => outbox.queued,
     mode: () => mode,
@@ -240,6 +241,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     working: () => activity.working,
     interrupt: () => outbox.interrupt(),
     quitting: () => quitting,
+    editorEmpty: () => editor.isEmpty,
+    searchActive: () => composer.search.active,
+    searchHint: bottomArea.searchHint,
+    inputFocused: (focused) => {
+      if (!focused) composer.search.cancel()
+      editor.focused = focused
+    },
+    renderInput: bottomArea.overlayInput,
     dockChanged: (open) => {
       if (mode !== "inline") return
       if (open) terminal.enableMode(modes.mouse)
@@ -770,7 +779,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         ? contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings, mode === "fullscreen"))
         : e
     if (dockEvent && overlays.handleDockInput(view.dockInput?.(dockEvent) ?? dockEvent)) return redraw()
-    const dialog = overlays.dialogs[0]
+    // Fullscreen extension views keep pending dialogs behind their visible composer.
+    const dialog = overlays.hasFullscreen ? undefined : overlays.dialogs[0]
     if (!dialog) composer.prepareInput(e)
     if (keys.is(e, "redraw")) {
       // Also over a dialog or the search: they are part of the screen.

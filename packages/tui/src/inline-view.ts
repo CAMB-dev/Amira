@@ -624,6 +624,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     capturing: false,
     start: () => renderer.start(),
     requestRender() {
+      if (fullScreen.isOpen) fullScreen.requestRender()
       const next = host.detail()
       if (hasDisplays && next !== displayDetail) {
         displayDetail = next

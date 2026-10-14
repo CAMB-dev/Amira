@@ -110,6 +110,31 @@ test("keybindings.json replaces an action's keys; an empty list unbinds it", () 
   expect(keys.label("redraw")).toBeUndefined()
 })
 
+test.each(["shift+tab", "Shift+Tab"])("reserved Shift+Tab is rejected for view.focus (%s)", (binding) => {
+  const { keys, warnings } = parseKeybindings({ "view.focus": binding }, "kb.json", defaults)
+  expect(warnings).toEqual([
+    `kb.json: "view.focus": cannot use "${binding}": Shift+Tab is reserved for permission mode and reverse view navigation`,
+  ])
+  expect(keys.label("view.focus")).toBe("f6")
+  expect(keys.is(key("tab", { shift: true }), "view.focus")).toBe(false)
+  expect(keys.is(key("f6"), "view.focus")).toBe(true)
+})
+
+test("reserved Shift+Tab is filtered from a view.focus list without rejecting valid keys", () => {
+  const { keys, warnings } = parseKeybindings(
+    { "view.focus": ["shift+tab", "f7", "ctrl+shift+tab"] },
+    "kb.json",
+    defaults,
+  )
+  expect(warnings).toEqual([
+    'kb.json: "view.focus": cannot use "shift+tab": Shift+Tab is reserved for permission mode and reverse view navigation',
+  ])
+  expect(keys.label("view.focus")).toBe("f7")
+  expect(keys.is(key("tab", { shift: true }), "view.focus")).toBe(false)
+  expect(keys.is(key("f7"), "view.focus")).toBe(true)
+  expect(keys.is(key("tab", { ctrl: true, shift: true }), "view.focus")).toBe(true)
+})
+
 test("paired hints retain rebound and unbound keys in lower case", () => {
   const { keys } = parseKeybindings(
     { "dialog.up": "ctrl+p", "dialog.down": "ctrl+n", "select.prev": [], "select.next": "f6" },

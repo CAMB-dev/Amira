@@ -105,6 +105,26 @@
 | `dialog.prev-question` | `left` | 上一题 |
 | `dialog.next-question` | `right` | 下一题，最多到首个尚未回答的问题 |
 
+## 扩展视图
+
+命令打开的全屏视图使用以下宿主 action，提示行显示当前绑定。空列表取消绑定，没有隐藏的 Esc 或 Ctrl+C 回退绑定，请保留离开视图的按键。
+
+| Action | 默认按键 | 行为 |
+| --- | --- | --- |
+| `view.focus` | `f6`、`ctrl+tab` | 在视图与主输入框之间切换焦点，默认视图也可用；Ctrl+Tab 是终端能传递时可用的别名 |
+| `view.back` | `escape` | 退出已激活的文本框、返回上一页或关闭根页面；取消视图中的输入提示 |
+| `view.close` | `q`、`ctrl+c` | 关闭整个视图，包括嵌套页面 |
+| `view.scroll-up` | `up` | 向上滚动视图文本一行 |
+| `view.scroll-down` | `down` | 向下滚动视图文本一行 |
+
+终端能传递 F6 时，F6（`view.focus`）在所有扩展视图与主输入框之间切换焦点，包括默认视图和内联模式中打开的全屏覆盖层。终端能传递 Ctrl+Tab 时，它也是此 action 的别名。Windows Terminal 可能截获 Ctrl+Tab，旧式终端可能将其报告为普通 Tab。F6 可避开这些 Ctrl+Tab 问题，但 VS Code 集成终端默认会截获 F6，因为 `terminal.integrated.commandsToSkipShell` 中包含 `workbench.action.focusNextPart`。可在 VS Code 设置的 `terminal.integrated.commandsToSkipShell` 中添加 `"-workbench.action.focusNextPart"`，或将 Amira 的 `view.focus` 重新绑定到终端能传递的按键。单独的 Shift+Tab 不能绑定到 `view.focus`；它保留用于权限模式切换和视图反向导航。默认视图仍可用 Tab，提示继续显示 `tab→input/view`，不显示 F6。声明 `ViewDefinition.needsTab: true` 的视图保留 Tab 和 Shift+Tab 用于组件或视图导航；默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。子 agent 查看器使用此选项，所以 Tab/Shift+Tab 仍切换子 agent。宿主焦点切换从不占用 Shift+Tab。
+
+视图获得焦点时，`/` 聚焦主输入框并输入 `/`，开始输入命令；`i` 只聚焦主输入框，不输入 `i`。视图处理的可打印快捷键（如 `m`、`p`、`s`）保持原样；其他未处理的可打印键会聚焦主输入框并输入该字符。已激活的视图内文本框和输入提示仍接收输入，包括 `/` 和 `i`。历史搜索期间，Esc 先取消搜索并恢复草稿；主输入框为空时，再按 Esc 将焦点返回视图或有可选择内容的停靠视图。不在搜索中时，空输入框中的 Esc 立即返回焦点；有文本时，Esc 保持原有行为，焦点切换不会截获它。视图中的 Esc 仍返回或关闭。点击主输入框会聚焦它。扩展视图旁获得焦点的输入框边框使用强调色角色，未获得焦点时使用弱化的边框；声明式视图中的选中行在视图非活动时变暗。
+
+停靠视图默认聚焦主输入框。有可选择内容时，F6 进入停靠视图（终端能传递 Ctrl+Tab 时，它也是别名）；未声明 `needsTab: true` 时也可用 Tab。主输入框为空时，Esc 返回有可选择内容的停靠视图，与全屏视图相同；有文本时，Esc 仍关闭停靠视图并保留草稿。只读停靠视图不取得焦点，保持原有滚动行为，Esc 仍关闭它。对话框可见时，只允许在停靠区域上使用滚轮滚动；点击不会聚焦停靠视图或选择内容。
+
+视图也使用下方共享的 `scroll.*` action，默认是 Shift+↑/↓、PgUp/PgDn 和 Home/End；重新绑定或取消绑定会同时影响对话记录和视图。独立的 `view.scroll-up`/`view.scroll-down` 保留视图中的普通方向键，不改变方向键调取输入历史的行为。要禁用视图中的所有逐行滚动，需同时取消视图和共享的逐行滚动绑定。扩展快捷键优先于滚动；`needsTab: true` 的组件视图用 Tab/Shift+Tab 切换组件，方向键和 Enter 仍导航和激活组件，滚动作用于获得焦点的可滚动区域。获得焦点的文本框接收可打印字符，包括 `q` 及可打印的返回/关闭绑定。Ctrl+C 等不可打印的关闭绑定仍可从文本框或输入提示中关闭视图；确认提示中的可打印键用于回答确认，不关闭视图。
+
 ## 对话记录（全屏模式）
 
 全屏模式由 Amira 保存和滚动对话记录，下面的按键先于输入框处理。Home、End 和普通字符只在输入为空时操作对话记录，否则交给输入框。鼠标滚轮每格滚动三行，拖动选择文本；点击没有其他操作，键盘仍用于输入。选中对话块使用 `select.start`。inline 模式由终端保存滚动历史，首次按查找、翻页或选择按键时会提示这些操作仅用于全屏模式，请使用终端自己的滚动和查找。

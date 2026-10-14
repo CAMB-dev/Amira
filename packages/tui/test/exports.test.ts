@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
 
 test("the public TUI exports stay stable", async () => {
-  const actual = Object.keys(await import("../src/index.ts")).sort()
+  const exports = await import("../src/index.ts")
+  const actual = Object.keys(exports).sort()
   expect(actual).toEqual([
     "ACTIONS",
     "ExtensionSettingsView",
@@ -24,5 +25,12 @@ test("the public TUI exports stay stable", async () => {
     "uiExtensionSettingsBackend",
     "uiFormBackend",
     "userLines",
+  ])
+  expect(Object.keys(exports.ACTIONS).filter((action) => action.startsWith("view."))).toEqual([
+    "view.back",
+    "view.close",
+    "view.focus",
+    "view.scroll-up",
+    "view.scroll-down",
   ])
 })

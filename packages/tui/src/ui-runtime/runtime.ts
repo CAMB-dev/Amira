@@ -94,6 +94,7 @@ export class UiRuntime {
     theme: Theme,
     lines: (ls: ViewLine[], w: number) => string[],
     cursor = true,
+    focused = true,
   ): string[] {
     this.reconciled = false
     const host: WidgetHost = {
@@ -103,7 +104,8 @@ export class UiRuntime {
       },
       theme,
       lines,
-      cursor,
+      cursor: cursor && focused,
+      focused,
       inputs: this.#inputs,
       trees: this.#trees,
       expand: (node) => this.#expand(node),
@@ -167,6 +169,18 @@ export class UiRuntime {
     if (this.state.inputValues[id] !== input.value) this.reconciled = true
     this.state.inputValues[id] = input.value
     return input
+  }
+
+  /** Whether the visible frame contains selectable rows or tabs, rather than only reading/input widgets. */
+  get selectable(): boolean {
+    if (this.#dirty) this.#prepare()
+    return this.#widgets.some((p) =>
+      p.node.type === "tree"
+        ? !!p.tree?.rows.length
+        : p.node.type === "table"
+          ? p.node.rows.length > 0
+          : p.node.type === "tabs" && p.node.tabs.length > 0,
+    )
   }
 
   /** Whether the focused widget is a text input, which owns printable keys such as q. */

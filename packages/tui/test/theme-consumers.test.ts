@@ -93,7 +93,7 @@ test("the editor border follows focus without changing the frame", () => {
   expect(focused.every((line) => visibleWidth(line) === 30)).toBe(true)
   editor.focused = false
   const unfocused = box.render(30, context)
-  expect(unfocused[0]).toBe(theme.border(`╭${"─".repeat(28)}╮`))
+  expect(unfocused[0]).toBe(theme.muted(`╭${"─".repeat(28)}╮`))
   expect(unfocused.map(stripAnsi)).toEqual(focused.map(stripAnsi))
 })
 
@@ -115,7 +115,7 @@ test("input boxes reuse the focused-border theme across renders and boxes", () =
     expect(theme.border).toBe(defaultTheme.border)
     editor.focused = false
     box.render(30, context)
-    expect(seen[3]).toBe(theme)
+    expect(seen[3]!.border).toBe(theme.muted)
     editor.focused = true
     const other = { ...theme, borderFocused: theme.path }
     box.render(30, { ...context, theme: other })

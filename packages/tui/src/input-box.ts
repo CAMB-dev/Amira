@@ -32,6 +32,8 @@ export function inputRows(rows: number): number {
 export class InputBox implements Component {
   /** Total composer rows, including its edges and separate status. */
   maxRows = Number.POSITIVE_INFINITY
+  /** Distinguish the composer from an adjacent extension view using the accent role. */
+  accentFocus = false
   private input: Component
   private box: Box
 
@@ -63,12 +65,15 @@ export class InputBox implements Component {
     const framed = width >= 8 && this.maxRows >= 4
     const chrome = width < 8 ? 0 : (framed ? 2 : 0) + (this.maxRows >= 2 ? 1 : 0)
     this.editor.maxRows = Math.min(inputRows(ctx.rows), Math.max(1, this.maxRows - chrome))
-    const border = this.editor.focused ? themeToken(ctx.theme, "borderFocused") : undefined
-    let theme = ctx.theme
-    if (border) {
-      theme = focusedThemes.get(ctx.theme) ?? { ...ctx.theme, border }
-      focusedThemes.set(ctx.theme, theme)
-    }
+    const border = themeToken(ctx.theme, "borderFocused") ?? ctx.theme.accent
+    let theme: Theme
+    if (this.editor.focused) {
+      if (this.accentFocus) theme = { ...ctx.theme, border: ctx.theme.accent }
+      else {
+        theme = focusedThemes.get(ctx.theme) ?? { ...ctx.theme, border }
+        focusedThemes.set(ctx.theme, theme)
+      }
+    } else theme = { ...ctx.theme, border: ctx.theme.muted }
     const rows = (framed ? this.box : this.input).render(width, { ...ctx, theme })
     if (width < 8 || this.maxRows < 2) return rows
     const { below } = this.editor.hidden

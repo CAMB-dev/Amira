@@ -41,6 +41,7 @@ export interface WidgetHost {
   lines(lines: ViewLine[], width: number): string[]
   input(id: string): LineInput
   cursor: boolean
+  focused: boolean
 }
 
 export const widgetId = (node: UiNode): string | undefined => ("id" in node ? node.id : undefined)
@@ -197,7 +198,10 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
   const top = plan.scroll?.top ?? 0
   const borderFocused = themeToken(theme, "borderFocused") ?? theme.accent
   const dim = themeToken(theme, "dim") ?? theme.border
-  const marker = focused ? theme.accent(`${glyphs.pointer} `) : "  "
+  const focusColor = host.focused ? theme.accent : dim
+  const marker = focused ? focusColor(`${glyphs.pointer} `) : "  "
+  const selection = (line: string) =>
+    host.focused ? (theme.selection?.(line) ?? line) : dim(stripColors(line))
   let out: string[] = []
   if (from > 0 && ["bar", "progress", "rule", "input", "spacer"].includes(node.type))
     return Array<string>(h).fill(" ".repeat(w))
@@ -235,7 +239,13 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       out = plan.children[0] && end > begin ? paint(plan.children[0], host, begin - inset, end - begin) : []
       if (plan.border) {
         const color =
-          node.tone === "focus" ? borderFocused : node.tone === "accent" ? theme.accent : theme.border
+          node.tone === "focus"
+            ? host.focused
+              ? borderFocused
+              : dim
+            : node.tone === "accent"
+              ? theme.accent
+              : theme.border
         const title =
           node.title === undefined
             ? ""
@@ -271,17 +281,14 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
     }
     case "tree": {
       const tree = plan.tree!
+      const focusMarker = host.focused ? `${glyphs.pointer} ` : dim(`${glyphs.pointer} `)
       const offset = top + from
       for (let i = tree.atOffset(offset); i < tree.rows.length && out.length < h; i++) {
         const row = tree.rows[i]!
         const pad = treeIndent(tree, i, w)
         if (row.start >= offset) {
           const selected = state.selected[node.id] === row.item.key
-          const marker = selected
-            ? `${glyphs.pointer} `
-            : focused && out.length === 0
-              ? `${glyphs.pointer} `
-              : "  "
+          const marker = selected ? `${glyphs.pointer} ` : focused && out.length === 0 ? focusMarker : "  "
           const lead = fit(segmentText(row.item.lead ?? [], theme), tree.leadWidth)
           const disclosure = row.item.node
             ? fit(segmentText(row.item.node, theme), 2)
@@ -294,10 +301,10 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
                 : "  "
           const left = marker + lead + pad + disclosure + segmentText(row.item.row, theme)
           const line = sides(left, segmentText(row.item.aside ?? [], theme), w)
-          out.push(selected ? (theme.selection?.(line) ?? line) : line)
+          out.push(selected ? selection(line) : line)
         }
         const prefix = () =>
-          `${focused && out.length === 0 ? `${glyphs.pointer} ` : "  "}${" ".repeat(tree.leadWidth)}${treeIndent(tree, i, w, true)}${row.item.rail ? `${glyphs.output} ` : "  "}`
+          `${focused && out.length === 0 ? focusMarker : "  "}${" ".repeat(tree.leadWidth)}${treeIndent(tree, i, w, true)}${row.item.rail ? `${glyphs.output} ` : "  "}`
         const start = Math.max(0, offset - row.start - 1)
         const count = Math.min(h - out.length, (row.widget?.height ?? row.detail.length) - start)
         if (count > 0) {
@@ -321,9 +328,11 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
         const label = terminalText(t.label)
         const selected = t.key === state.activeTabs[node.id]
         const text = selected
-          ? divided && color
-            ? bold(inverse(theme.accent(label)))
-            : theme.accent(`[${label}]`)
+          ? !host.focused
+            ? dim(divided && color ? label : `[${label}]`)
+            : divided && color
+              ? bold(inverse(theme.accent(label)))
+              : theme.accent(`[${label}]`)
           : theme.muted(label)
         return text + (divided ? "  " : "")
       })
@@ -361,7 +370,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
               return typeof value === "string" ? terminalText(value) : segmentText(value, theme)
             }),
           )
-        out.push(selected ? (theme.selection?.(text) ?? text) : text)
+        out.push(selected ? selection(text) : text)
       }
       break
     }

@@ -1,4 +1,4 @@
-// A bounded extension viewport in the bottom area; it never takes composer focus.
+// A bounded extension viewport in the bottom area; selectable content can take focus.
 import type { KeyHelp } from "@amira/api"
 import { type InputEvent, type RenderContext, themeToken, visibleWidth } from "@amira/tui-kit"
 import type { ExtensionViewer } from "../extension-view.ts"
@@ -17,11 +17,15 @@ export function dockKeyHelp(keys: Keybindings): KeyHelp[] {
   return [
     {
       keys: [keys.label("scroll.page-up"), keys.label("scroll.page-down")].filter(Boolean).join("/"),
-      description: "Scroll the dock; typing and arrows stay in the input",
+      description: "Scroll the dock while the input is focused",
     },
     { keys: keys.label("scroll.bottom") ?? "", description: "Follow new dock output" },
     { keys: "Wheel over dock", description: "Scroll only the dock under the pointer" },
-    { keys: "Esc", description: "Close the dock first; the next Esc cancels or interrupts" },
+    {
+      keys: `Tab${keys.label("view.focus") ? ` (${keys.label("view.focus")} if the view needs Tab)` : ""}`,
+      description: "Focus a selectable dock or return to the input",
+    },
+    { keys: "Esc", description: "Focus a selectable dock when the input is empty; otherwise close it" },
   ].filter((key) => key.keys.length > 0)
 }
 
@@ -35,6 +39,7 @@ export class DockedView {
     readonly viewer: ExtensionViewer,
     private keys: Keybindings,
     maxHeight?: number,
+    private releaseFocus?: () => void,
   ) {
     this.maxHeight = maxHeight
   }
@@ -52,23 +57,38 @@ export class DockedView {
       : rows
   }
 
+  get focusable(): boolean {
+    return this.height > 0 && this.viewer.selectable
+  }
+
+  /** The fitting pass temporarily gives docks zero rows; check only the final allocation. */
+  finishLayout(): boolean {
+    if (this.focusable || !this.viewer.focused) return false
+    this.viewer.focused = false
+    this.releaseFocus?.()
+    return true
+  }
+
   /** Bottom-area frames are positioned from the last content row, inside the outer margins. */
   place(rowsBelow: number, screenRows: number): void {
     this.top = screenRows - rowsBelow - this.height
   }
 
+  contains(e: InputEvent): boolean {
+    return (
+      e.type === "mouse" && e.x >= 0 && e.x < this.width && e.y >= this.top && e.y < this.top + this.height
+    )
+  }
+
   handleInput(e: InputEvent): boolean {
     if (!this.height) return false
     if (e.type === "mouse") {
-      if (
-        e.action !== "wheel" ||
-        e.x < 0 ||
-        e.x >= this.width ||
-        e.y < this.top ||
-        e.y >= this.top + this.height
-      )
-        return false
-      this.viewer.handleDockInput({ ...e, y: e.y - this.top })
+      if (!this.contains(e)) return false
+      if (this.viewer.focused) this.viewer.handleInput({ ...e, y: e.y - this.top })
+      else {
+        if (e.action !== "wheel") return false
+        this.viewer.handleDockInput({ ...e, y: e.y - this.top })
+      }
       return true
     }
     if (

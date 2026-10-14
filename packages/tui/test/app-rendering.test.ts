@@ -927,7 +927,7 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
       "esc=Cancel a command or stop the turn; twice in a row, rewind to an earlier message",
     )
     expect(all()).toContain("?=Every key and what it does")
-    expect(all()).toContain("Esc=Close the dock first; the next Esc cancels or interrupts")
+    expect(all()).toContain("Esc=Focus a selectable dock when the input is empty; otherwise close it")
     if (mode === "fullscreen") expect(all()).toContain("ctrl+f=Find text in the transcript")
     else expect(all()).not.toContain("Find text in the transcript")
     terminal.send("\x03")
