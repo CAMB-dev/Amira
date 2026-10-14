@@ -3,11 +3,12 @@ import * as fs from "node:fs"
 import path from "node:path"
 import { tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
+import { filesystemGatePath } from "./file-lock-fixtures.ts"
 
 const [dir, mode] = process.argv.slice(2)
 if (!dir) throw new Error("missing lease retirement directory")
 const file = path.join(dir, "session.lock")
-const gate = `${file}.lease-gate`
+const gate = filesystemGatePath(file)
 let fd: number | undefined
 let closed = false
 const open = fs.openSync

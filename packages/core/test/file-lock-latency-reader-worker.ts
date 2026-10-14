@@ -3,13 +3,14 @@ import * as fs from "node:fs"
 import path from "node:path"
 import { tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
+import { filesystemGatePath } from "./file-lock-fixtures.ts"
 import { automaticCleanupLatency, inlineCleanupLatency } from "./file-lock-latency-timing.ts"
 import { boundedExit, startGateReader } from "./file-lock-reader-fixture.ts"
 
 const [dir] = process.argv.slice(2)
 if (!dir || process.platform !== "win32") throw new Error("Windows temporary reader required")
 const file = path.join(dir, "reader.lock")
-const gate = `${file}.lease-gate`
+const gate = filesystemGatePath(file)
 const lease = tryFileLock(file, 1, undefined, true)!
 expect(lease).toBeDefined()
 const unlock = takeFilesystemGate(file)!
