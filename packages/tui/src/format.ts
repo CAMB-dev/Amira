@@ -177,7 +177,8 @@ export function userLines(
     lines.push("")
     userBandPadding.set(lines, 1)
   }
-  stampRows(lines, theme, width, at)
+  // Clocks on painted bands are readable secondary text, not dim structural chrome.
+  stampRows(lines, userBandPaddingIn(lines) ? { ...theme, muted } : theme, width, at)
   return bg ? bandRows(lines, width, bg) : lines
 }
 

@@ -1,5 +1,5 @@
 import type { CommandOutputLevel } from "./commands.ts"
-import type { AgentStatusState } from "./themes.ts"
+import type { AgentStatusState, ThemeGlyphs } from "./themes.ts"
 import type { ToolCallView, ToolDetailLevel, ToolLine } from "./tool-renderers.ts"
 import type { ToolResult } from "./tools.ts"
 import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.ts"
@@ -45,6 +45,10 @@ export interface ViewRenderOptions {
   width: number
   /** The current time, in ms since the epoch, for elapsed times; reading it does not schedule redraws. */
   now: number
+  /** Host chrome symbols for decorations; user and model content must remain unchanged. */
+  glyphs?: Readonly<
+    Pick<ThemeGlyphs, "rule" | "separator" | "more" | "treePipe" | "error" | "interrupted" | "statusStopped">
+  >
   /**
    * Requests timed redraws for time-dependent content in this frame, e.g. an elapsed time.
    * Pass a positive finite interval in ms; invalid intervals are ignored and the shortest

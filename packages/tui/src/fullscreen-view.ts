@@ -205,8 +205,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       ? ""
       : truncateToWidth(
           pane.unseen
-            ? theme.accent(`  ↓ new output · ${rowsBelow}${endHint()}`)
-            : theme.muted(`  ↓ ${rowsBelow}${endHint()}`),
+            ? theme.accent(`  ${glyphs.arrowDown} new output ${glyphs.separator} ${rowsBelow}${endHint()}`)
+            : theme.muted(`  ${glyphs.arrowDown} ${rowsBelow}${endHint()}`),
           width,
           glyphs.more,
         )
@@ -234,7 +234,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
 
   const endHint = () => {
     const end = keys.label("scroll.bottom")
-    return end ? ` · ${end} follows` : ""
+    return end ? ` ${glyphs.separator} ${end} follows` : ""
   }
 
   function markToolTrees(): void {

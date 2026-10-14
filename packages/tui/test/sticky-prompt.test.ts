@@ -133,7 +133,7 @@ test("the single sticky row uses the band, accent, first-line ellipsis and origi
   const row = stickyPromptLine(block, banded)
   expect(stripAnsi(row)).toBe(`› First line…${" ".repeat(87 - clockCells)}${clock}`)
   expect(row).toContain(banded.theme.accent("›"))
-  expect(row).toContain(banded.theme.muted(clock))
+  expect(row).toContain(banded.theme.surfaceMuted!(clock))
   expect(row).toContain("\x1b[48;2;")
   expect(visibleWidth(row)).toBe(100)
   const long = userBlock(message("界".repeat(100)))
@@ -404,7 +404,7 @@ test("expanded sticky bands match transcript wrapping, painted padding, marker a
     expect(sticky[0]).toContain("\x1b[48;2;32;32;32m")
     expect(sticky.at(-1)).toContain("\x1b[48;2;32;32;32m")
     expect(sticky[1]).toContain(banded.theme.accent(glyphs.user))
-    expect(sticky[1]).toContain(banded.theme.muted(clock))
+    expect(sticky[1]).toContain(banded.theme.surfaceMuted!(clock))
     expect(sticky.every((row) => visibleWidth(row) === 100)).toBe(true)
     expect(sticky.join("\n")).not.toContain("\x1b[2J")
   }

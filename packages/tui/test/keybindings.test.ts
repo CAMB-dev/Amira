@@ -30,7 +30,13 @@ test("key specs: modifiers, names and single characters", () => {
 })
 
 test("labels share the lower-case formatter with tui-kit", () => {
-  expect(keyLabel).toBe(sharedKeyLabel)
+  for (const specs of Object.values(defaults)) {
+    for (const spec of specs) {
+      const parsed = parseKeySpec(spec)
+      if (typeof parsed === "string") throw new Error(parsed)
+      expect(keyLabel(parsed)).toBe(sharedKeyLabel(parsed))
+    }
+  }
   const label = (s: string) => keyLabel(parseKeySpec(s) as never)
   expect(label("ctrl+q")).toBe("ctrl+q")
   expect(label("alt+enter")).toBe("alt+enter")

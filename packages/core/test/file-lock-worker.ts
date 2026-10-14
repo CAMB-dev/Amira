@@ -2,6 +2,7 @@ import { spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
 import { type FileLock, tryFileLock } from "../src/file-lock.ts"
+import { filesystemGatePath } from "./file-lock-fixtures.ts"
 
 const [file, dir, mode] = process.argv.slice(2)
 if (!file || !dir || !mode) throw new Error("missing file-lock worker arguments")
@@ -22,7 +23,7 @@ const rename = fs.renameSync
 const open = fs.openSync
 const rm = fs.rmSync
 const write = fs.writeFileSync
-const gate = `${file}.lease-gate`
+const gate = filesystemGatePath(file)
 let releaseStarted = false
 const contender = mode.startsWith("session-contend")
 const sharingCode = mode.slice("session-contend-".length)

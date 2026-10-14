@@ -15,16 +15,24 @@ export function contentGeometry(columns: number, rows: number, settings: TuiSett
 }
 
 /** Leave the margins on the terminal's default surface, including committed scrollback. */
-export function insetLines(lines: string[], left: number): string[] {
-  if (!left) return lines
-  const indent = " ".repeat(left)
+export function insetLines(
+  lines: string[],
+  left: number,
+  insets?: readonly (number | undefined)[],
+): string[] {
+  if (!left && !insets) return lines
   // Pending inline images keep their marker at the very end of the line. Their existing
   // prefix also positions the image and indents every fallback row; don't append spaces.
-  return lines.map((line) => (line ? indent + line : line))
+  return lines.map((line, i) => (line ? " ".repeat(insets?.[i] ?? left) + line : line))
 }
 
 /** Move only the outer edge; all inner rendering and width calculations stay content-relative. */
-export function marginView(content: Component, settings: TuiSettings, fullscreen: boolean): Component {
+export function marginView(
+  content: Component,
+  settings: TuiSettings,
+  fullscreen: boolean,
+  rowInsets?: (lines: string[]) => readonly (number | undefined)[] | undefined,
+): Component {
   return {
     render(columns, ctx) {
       const geometry = contentGeometry(columns, ctx.rows, settings, fullscreen)
@@ -35,7 +43,7 @@ export function marginView(content: Component, settings: TuiSettings, fullscreen
           ? {
               commit: ((lines, redraw) =>
                 ctx.commit!(
-                  insetLines(lines, geometry.left),
+                  insetLines(lines, geometry.left, rowInsets?.(lines)),
                   redraw
                     ? (columns, ctx) => {
                         const next = contentGeometry(columns, ctx.rows, settings, fullscreen)
@@ -52,9 +60,14 @@ export function marginView(content: Component, settings: TuiSettings, fullscreen
             }
           : {}),
       }
+      const rendered = content.render(geometry.width, inner)
+      const insets = rowInsets?.(rendered)
       const lines = insetLines(
-        content.render(geometry.width, inner).map((line) => truncateToWidth(line, geometry.width)),
+        rendered.map((line, i) =>
+          truncateToWidth(line, Math.max(1, geometry.width + geometry.left - (insets?.[i] ?? geometry.left))),
+        ),
         geometry.left,
+        insets,
       )
       if (!geometry.rows) return lines
       return [

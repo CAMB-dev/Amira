@@ -84,7 +84,7 @@ for (const name of names) {
   }
 }
 
-test("code language labels use muted instead of the dim structural token", () => {
+test("structural code frames retain their unpainted fallback styling", () => {
   for (const appearance of ["dark", "light"] as const) {
     for (const colorDepth of ["truecolor", "256", "16"] as const) {
       const theme = createTheme({ ...options, theme: appearance, colorDepth })

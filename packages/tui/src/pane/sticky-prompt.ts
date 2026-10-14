@@ -69,6 +69,13 @@ export function stickyPromptLine(block: LinesBlock, env: BlockEnv): string {
   const head = `${theme.accent(glyphs.user)} `
   const bg = themeToken(theme, "userBg")
   const room = Math.max(0, timestampRoom(width, block.timestamp) - visibleWidth(head))
-  const row = timestampRow(head + truncateToWidth(preview, room, glyphs.more), theme, width, block.timestamp)
+  const clockTheme =
+    bg && bg(" ") !== " " ? { ...theme, muted: themeToken(theme, "surfaceMuted") ?? theme.muted } : theme
+  const row = timestampRow(
+    head + truncateToWidth(preview, room, glyphs.more),
+    clockTheme,
+    width,
+    block.timestamp,
+  )
   return bg ? bandRows([row], width, bg)[0]! : truncateToWidth(row, width, glyphs.more)
 }

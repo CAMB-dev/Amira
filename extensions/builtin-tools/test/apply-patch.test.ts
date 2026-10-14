@@ -229,7 +229,7 @@ test("sequential update blocks match earlier results through normalized paths", 
 test("delete through a modeled 8.3 alias retains its planning key for a later add", async () => {
   const dir = await tmp.make()
   const alias = join(dir, "LONGFI~1.TXT")
-  const canonical = join(realpathSync(dir), "Long filename.txt")
+  const canonical = join(realpathSync.native(dir), "Long filename.txt")
   await writeFile(alias, "old\n")
   const native = realpathSync.native
   // Model NTFS's key expansion only: the alias resolves to its long name while it exists,

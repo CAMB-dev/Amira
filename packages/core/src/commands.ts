@@ -270,6 +270,7 @@ export interface CommandRunOptions {
   openRewind?: () => boolean
   /** The frontend's most useful keys, for /help; frontends without keys leave it out. */
   keys?: CommandContext["keys"]
+  glyphs?: CommandContext["glyphs"]
   /** Correlates a send with its command echo; returned cleanup runs if the send fails. */
   onSend?: (text: string, opts?: SendOptions) => (() => void) | undefined
 }
@@ -655,6 +656,7 @@ export class CommandHost {
       ...(opts.openView ? { openView: opts.openView } : {}),
       ...(opts.openRewind ? { openRewind: opts.openRewind } : {}),
       ...(opts.keys ? { keys: opts.keys } : {}),
+      ...(opts.glyphs ? { glyphs: opts.glyphs } : {}),
     }
   }
 }
