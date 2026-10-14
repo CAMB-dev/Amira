@@ -4,6 +4,7 @@ import { type BlockEnv, LinesBlock, ReplyBlock, userBlock } from "../src/blocks.
 import { userBandPaddingIn } from "../src/format.ts"
 import { stickyPromptOverlay } from "../src/pane/sticky-prompt.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
+import { paste, setup, waitFor } from "./app-harness.ts"
 
 const env: BlockEnv = {
   theme: { ...defaultTheme, ...surfaceTheme("dark") },
@@ -93,6 +94,87 @@ test("keyboard code selection reveals the entire frame below the recomputed over
   expect(bottom).toBeGreaterThanOrEqual(top)
   expect(stripAnsi(frame.join("\n"))).toContain("const answer = 42")
 })
+
+const ESC = "\x1b[27u"
+const SELECT = "\x1b[1;5A"
+const SHIFT_DOWN = "\x1b[1;2B"
+
+for (const cols of [50, 80, 120]) {
+  for (const margin of [0, 3]) {
+    for (const mode of ["fullscreen", "inline"] as const) {
+      test(`keyboard reveal ignores uncovered user-band padding: ${mode} ${cols}/${margin}`, async () => {
+        const app = await setup([{ text: "reply tail\n".repeat(50) }], {
+          cols,
+          rows: 32,
+          theme: env.theme,
+          settings: { mode, margin, marginRows: 0 },
+        })
+        const prefix = " ".repeat(cols < 60 ? 0 : margin)
+        try {
+          app.terminal.send(`${paste("One\nTwo\nThree\nFour")}\r`)
+          await app.idle()
+          expect(app.screen.inAltScreen).toBe(mode === "fullscreen")
+          expect(app.terminal.output).toContain("\x1b[48;2;")
+          if (mode === "inline") {
+            // Inline keeps the full prompt in native scrollback; block selection is not supported.
+            app.terminal.clearWrites()
+            app.terminal.send(SELECT)
+            await waitFor(() => app.live().includes("is for full-screen mode"), "inline key hint")
+            app.terminal.send(SELECT)
+            await Bun.sleep(40)
+            for (const word of ["One", "Two", "Three", "Four"])
+              expect(
+                app
+                  .all()
+                  .split("\n")
+                  .filter((row) => row.includes(word)),
+              ).toHaveLength(1)
+            for (const word of ["Two", "Three", "Four"])
+              expect(app.all().split("\n")).toContain(`${prefix}  ${word}`)
+            expect(app.terminal.output).not.toContain("\x1b[7m›")
+            expect(app.live()).not.toMatch(/› message \d+ of/)
+            return
+          }
+
+          // Select the reply, then the prompt: its natural entry includes all four text rows.
+          app.terminal.send(SELECT)
+          await waitFor(() => /› reply \d+ of/.test(app.live()), "selected reply")
+          app.terminal.send(SELECT)
+          await waitFor(() => /› message \d+ of/.test(app.live()), "selected prompt")
+          expect(app.screen.lines[6]).toBe(`${prefix}▌ Four`)
+
+          // One row past natural entry, the capped sticky preview covers every real text row.
+          // Only the actual band's bottom padding remains uncovered at viewport row four.
+          app.terminal.send(ESC + SHIFT_DOWN)
+          await Bun.sleep(40)
+          expect(app.screen.lines[2]).toBe("")
+          expect(app.screen.lines[3]).toStartWith(`${prefix}› One`)
+          expect(app.screen.lines[4]).toBe(`${prefix}  Two`)
+          expect(app.screen.lines[5]).toBe(`${prefix}  Three`)
+          expect(app.screen.lines[6]).toBe("")
+          expect(app.live()).not.toContain("Four")
+
+          app.terminal.send(SELECT)
+          await waitFor(() => /› reply \d+ of/.test(app.live()), "reselected reply")
+          app.terminal.clearWrites()
+          app.terminal.send(SELECT)
+          await waitFor(() => /› message \d+ of/.test(app.live()), "reselected prompt")
+          // A selection status alone is not enough: the real prompt must be exposed and marked.
+          expect(app.screen.lines[6]).toBe(`${prefix}▌ Four`)
+          expect(app.screen.lines[3]).toStartWith(`${prefix}› One`)
+          expect(app.screen.lines[4]).toBe(`${prefix}▌ Two`)
+          expect(app.screen.lines[5]).toBe(`${prefix}▌ Three`)
+          expect(app.terminal.output).toContain("\x1b[7m›")
+          for (const word of ["One", "Two", "Three", "Four"])
+            expect(app.screen.lines.filter((row) => row.includes(word))).toHaveLength(1)
+        } finally {
+          app.terminal.send(`${ESC}${ESC}\x03\x03`)
+          expect(await app.exited).toBe(0)
+        }
+      })
+    }
+  }
+}
 
 for (const banded of [false, true]) {
   for (const text of ["Incoming", "Incoming\nSecond\nThird"]) {

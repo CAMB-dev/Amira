@@ -285,14 +285,16 @@ test("Esc interrupting a running tool marks it interrupted, muted, not failed", 
   const { terminal, live, all, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "hang", args: { command: "sleep 100" } }] },
   ])
+  const started = Promise.withResolvers<void>()
   agent.tools.register(
     defineTool({
       name: "hang",
       ...parallel,
       execute: (_p, ctx) =>
-        new Promise((r) =>
-          ctx.signal.addEventListener("abort", () => r(textResult("Command was aborted.", true))),
-        ),
+        new Promise((r) => {
+          ctx.signal.addEventListener("abort", () => r(textResult("Command was aborted.", true)))
+          started.resolve()
+        }),
     }),
     "test",
   )
@@ -301,6 +303,8 @@ test("Esc interrupting a running tool marks it interrupted, muted, not failed", 
     () => new RegExp(`^${SPINNER} hang sleep 100 +${ELAPSED} {2}${TIMESTAMP}$`, "m").test(live()),
     "running",
   )
+  // The running row is drawn before execute registers its abort listener.
+  await started.promise
   terminal.send("\x1b[27u")
   await shows("⊘ Interrupted")
   await idle()
