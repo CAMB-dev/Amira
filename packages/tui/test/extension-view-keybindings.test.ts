@@ -268,6 +268,7 @@ test("view hints and the key reference show the current host bindings", () => {
   const { keys, warnings } = parseKeybindings(
     {
       "view.back": "f6",
+      "view.focus": [],
       "view.close": "f7",
       "view.scroll-up": "k",
       "view.scroll-down": "j",

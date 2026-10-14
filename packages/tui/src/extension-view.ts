@@ -7,7 +7,6 @@ import type {
   UiState,
   ViewControl,
   ViewDefinition,
-  ViewKey,
   ViewLine,
   ViewRenderOptions,
 } from "@amira/api"
@@ -30,7 +29,7 @@ import {
 import { terminalText } from "./diff-view.ts"
 import { replyRows } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
-import { fitHint, type HintItem } from "./hint.ts"
+import { fitHint } from "./hint.ts"
 import {
   keyLabel as bindingLabel,
   defaultKeybindings,
@@ -50,6 +49,12 @@ import {
 import { UiRuntime } from "./ui-runtime/runtime.ts"
 import { toggleDetail } from "./verbose.ts"
 import { scrollPosition, waitingLine } from "./view-helpers.ts"
+import {
+  viewKeyHints as keyHints,
+  namedViewKeys as NAMED,
+  usableViewKey as usable,
+  viewInputHint,
+} from "./view-keys.ts"
 import { renderViewLines, viewTitle } from "./view-lines.ts"
 
 /** Where the TUI finds the view kinds extensions registered. */
@@ -69,8 +74,10 @@ interface ViewPage {
 }
 
 export interface ExtensionViewerOptions {
-  /** A dock is a read-only viewport; the main composer keeps keyboard focus. */
+  /** A dock initially leaves keyboard focus in the main composer. */
   placement?: "fullscreen" | "dock"
+  /** The host supplies a shared focus hint below the composer. */
+  hostFocus?: boolean
   /** Host navigation and scrolling; extension-defined shortcuts remain the extension's. */
   keys?: Keybindings
   /** Initial root-page widget state, applied before lifecycle hooks and the first render. */
@@ -152,6 +159,8 @@ export function wrapViewLines(lines: readonly ViewLine[], width: number): ViewLi
  */
 export class ExtensionViewer implements Component {
   readonly kind: string
+  /** Host focus does not reset widget selection or page state. */
+  focused: boolean
   #view: ViewDefinition
   #data: unknown
   #opts: ExtensionViewerOptions
@@ -184,6 +193,7 @@ export class ExtensionViewer implements Component {
 
   constructor(view: ViewDefinition, data: unknown, opts: ExtensionViewerOptions = {}) {
     this.kind = view.kind
+    this.focused = opts.placement !== "dock"
     this.#view = view
     this.#data = data
     this.#opts = opts
@@ -262,6 +272,36 @@ export class ExtensionViewer implements Component {
   /** Whether this view uses declarative widgets. */
   get declarative(): boolean {
     return !!this.#ui
+  }
+
+  /** Active view-local editors retain printable keys, including / and i. */
+  get typing(): boolean {
+    return !!(this.#prompt || this.#confirm || this.#ui?.typing)
+  }
+
+  get needsTab(): boolean {
+    return this.#view.needsTab === true
+  }
+
+  get selectable(): boolean {
+    return !!this.#ui?.selectable
+  }
+
+  /** Shared bottom hint, including a host-owned route out even with hidden view chrome. */
+  focusHint(theme: Theme, width: number, inputEmpty = true): string {
+    const toggle = this.needsTab ? (this.#keys.label("view.focus") ?? "") : "tab"
+    if (!this.focused) return viewInputHint(theme, width, toggle, inputEmpty, this.#opts.placement === "dock")
+    return fitHint(
+      [
+        !this.#prompt &&
+          !this.#confirm && {
+            text: this.#keyBar(theme, Math.max(1, width - toggle.length - 11)),
+            priority: 1,
+          },
+        toggle && { text: `${toggle} → input`, priority: 10 },
+      ],
+      width,
+    )
   }
 
   /** Shows other data, e.g. when a command opens the same kind again. */
@@ -564,7 +604,8 @@ export class ExtensionViewer implements Component {
           height,
           ctx.theme,
           (lines, w) => this.#renderLines(lines, w, ctx.theme),
-          this.#opts.placement !== "dock" && !this.#prompt && !this.#confirm,
+          this.focused && !this.#prompt && !this.#confirm,
+          this.focused,
         )
         if (!runtime.reconciled) return frame
       }
@@ -629,6 +670,7 @@ export class ExtensionViewer implements Component {
     return {
       width,
       now,
+      focused: this.focused,
       ...(this.#pages.length > 1 ? { page: { depth: this.#pages.length - 1, data: this.#page.data } } : {}),
       renderTool: (name, call, detail, options) => {
         finished = true
@@ -728,6 +770,13 @@ export class ExtensionViewer implements Component {
   }
 
   get #footerHeight(): number {
+    if (
+      this.#opts.hostFocus &&
+      (this.#opts.placement !== "dock" || this.selectable) &&
+      !this.#prompt &&
+      !this.#confirm
+    )
+      return 0
     return this.#opts.placement === "dock" || this.#prompt || this.#confirm || this.#view.hostKeys !== "none"
       ? 1
       : 0
@@ -766,7 +815,7 @@ export class ExtensionViewer implements Component {
   }
 
   #keyBar(theme: Theme, width: number): string {
-    if (this.#opts.placement === "dock") {
+    if (this.#opts.placement === "dock" && !this.focused) {
       const follow = this.#keys.label("scroll.bottom")
       return theme.muted(
         fitHint(
@@ -790,7 +839,7 @@ export class ExtensionViewer implements Component {
       const room = Math.max(1, width - visibleWidth(label))
       const back = this.#navigationLabel("view.back", true)
       const placeholder = `${bindingLabel({ name: "enter" })} send${back ? ` ${glyphs.separator} ${back} cancel` : ""}`
-      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: true, placeholder })}`
+      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: this.focused, placeholder })}`
     }
     if (this.#view.hostKeys === "minimal")
       return theme.muted(truncateToWidth(this.#backHint(), width, glyphs.more))
@@ -799,10 +848,13 @@ export class ExtensionViewer implements Component {
         fitHint(
           [
             ...keyHints(this.#view.keys ?? []),
-            {
-              text: `${bindingLabel({ name: "tab" })} focus · arrows navigate · ${bindingLabel({ name: "enter" })} open/send`,
-              priority: 2,
-            },
+            ...(this.#opts.hostFocus
+              ? [
+                  this.needsTab && { text: "tab focus", priority: 2 },
+                  { text: "↑↓ navigate", priority: 2 },
+                  { text: "enter open/send", priority: 2 },
+                ]
+              : [{ text: "tab focus · arrows navigate · enter open/send", priority: 2 }]),
             { text: this.#scrollHint(), priority: 1 },
             { text: this.#backHint(), priority: 5 },
           ],
@@ -837,36 +889,6 @@ export class ExtensionViewer implements Component {
       return undefined
     }
   }
-}
-
-const NAMED: ReadonlySet<string> = new Set(["left", "right", "tab", "shift-tab"])
-const ARROWS: ReadonlySet<string> = new Set(["left", "right"])
-
-/** A key a view may handle: one character other than q (the host's), or a named navigation key. */
-function usable(key: string): boolean {
-  return NAMED.has(key) || (key.length === 1 && key !== "q")
-}
-
-/**
- * Footer items for a view's keys: keys sharing a label share an item ("←→ switch",
- * "→ Tab next"), in the order their labels first appear; keys with an empty label are left out.
- */
-function keyHints(keys: readonly ViewKey[]): HintItem[] {
-  const groups = new Map<string, string[]>()
-  for (const k of keys) {
-    const label = oneLine(k.label)
-    if (!label || !usable(k.key)) continue
-    groups.set(label, [...(groups.get(label) ?? []), k.key])
-  }
-  return [...groups].map(([label, names]) => ({
-    text: `${names.map(keyLabel).join(names.every((n) => ARROWS.has(n)) ? "" : " ")} ${label}`,
-    // A view's own letters outlast its navigation keys.
-    priority: names.some((n) => n.length === 1) ? 4 : 2,
-  }))
-}
-
-function keyLabel(key: string): string {
-  return bindingLabel({ name: key === "shift-tab" ? "tab" : terminalText(key), shift: key === "shift-tab" })
 }
 
 function oneLine(s: string): string {

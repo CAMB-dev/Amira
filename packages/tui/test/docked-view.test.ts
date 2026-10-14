@@ -18,7 +18,7 @@ test("dock caps reserve the input, default to forty percent, and respect the fiv
   expect(
     dockKeyHelp(new Keybindings(defaultKeys({ vscode: false }))).find((key) => key.keys === "Esc")
       ?.description,
-  ).toContain("next Esc cancels or interrupts")
+  ).toBe("Focus a selectable dock when the input is empty; otherwise close it")
 })
 
 test("dock key help follows rebound or unbound scroll actions", () => {
