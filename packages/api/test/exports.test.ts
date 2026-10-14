@@ -2,9 +2,13 @@ import { expect, test } from "bun:test"
 import type {
   AgentStatusSource,
   CommandContext,
+  ConversationRuntime,
+  ConversationSpec,
   EventMap,
   ExtensionAPI,
   ExtensionView,
+  OwnedConversation,
+  OwnedConversations,
   PanelRenderOptions,
   PrintOptions,
   ShimmerColors,
@@ -432,4 +436,52 @@ test("panels can reuse the frontend command spinner without requiring it from ot
 test("the canonical theme glyph export includes the layout symbols", async () => {
   const { DEFAULT_THEME_GLYPHS } = await import("../src/index.ts")
   expect(DEFAULT_THEME_GLYPHS).toMatchSnapshot()
+})
+
+test("owned conversation types are public and the extension capability remains optional", async () => {
+  const absent: Pick<ExtensionAPI, "conversations"> = {}
+  const spec: ConversationSpec = {
+    key: "notes/design",
+    name: "Design",
+    cwd: "/workspace",
+    systemPrompt: "Research.",
+    callableTools: ["read", "ask_user"],
+  }
+  const runtime: ConversationRuntime = {
+    askUser: async (_questions, { sessionId, signal }) =>
+      signal.aborted || !sessionId ? undefined : [{ selected: ["A"] }],
+  }
+  const state: ReturnType<OwnedConversation["status"]> = { state: "idle", busy: false }
+  const capabilities: OwnedConversations = {
+    openOrCreate: async (_spec, _runtime) => {
+      throw new Error("fixture does not execute")
+    },
+    open: async (_id, _runtime) => {
+      throw new Error("fixture does not execute")
+    },
+  }
+  const present: Pick<ExtensionAPI, "conversations"> = { conversations: capabilities }
+  expect(absent.conversations).toBeUndefined()
+  expect(present.conversations).toBe(capabilities)
+  expect(await runtime.askUser([], { sessionId: "owned", signal: new AbortController().signal })).toEqual([
+    { selected: ["A"] },
+  ])
+  expect({ spec, state }).toMatchInlineSnapshot(`
+    {
+      "spec": {
+        "callableTools": [
+          "read",
+          "ask_user",
+        ],
+        "cwd": "/workspace",
+        "key": "notes/design",
+        "name": "Design",
+        "systemPrompt": "Research.",
+      },
+      "state": {
+        "busy": false,
+        "state": "idle",
+      },
+    }
+  `)
 })

@@ -7,7 +7,7 @@ import {
   userMessage,
 } from "@amira/ai"
 import { type AnyEvent, type EventMap, modelLabel, type TurnEndReason } from "@amira/api"
-import { type Agent, type CommandHost, newTurnId, toolTraits, UiRequests } from "@amira/core"
+import { type Agent, type CommandHost, newTurnId, UiRequests } from "@amira/core"
 import { safeJson } from "./print.ts"
 import type { COMMAND_PARAMS } from "./rpc-schema.ts"
 import { stdoutWriter } from "./stdout-writer.ts"
@@ -111,12 +111,7 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   const prepareAgent = (a: Agent) => {
     if (!nonInteractive) return
     a.setNonInteractive()
-    a.tools.setDisabled(
-      new Set([
-        ...a.tools.disabled,
-        ...a.tools.list().flatMap(({ tool }) => (toolTraits(tool)?.interactive ? [tool.name] : [])),
-      ]),
-    )
+    a.tools.setPolicy({ nonInteractive: true })
   }
   const replaceAgent = async (next: Agent) => {
     const old = agent

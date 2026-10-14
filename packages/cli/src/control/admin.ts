@@ -71,7 +71,14 @@ export function createAdminControl(ctx: ControlContext): AdminControl {
       // Held like a compaction: a prompt or notice meanwhile would reach the model with the
       // tools half loaded, so it waits for the reload and starts its turn after.
       const a = ctx.agent()
-      return a.hold("reload", () => ctx.session.reload(a))
+      return a.hold("reload", async () => {
+        try {
+          return await ctx.session.reload(a, ctx.applyDisabled)
+        } finally {
+          // Also retain choices if a reload fails before reaching its reconciliation point.
+          ctx.applyDisabled()
+        }
+      })
     },
   }
 }

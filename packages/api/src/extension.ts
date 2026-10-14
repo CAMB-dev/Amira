@@ -1,6 +1,7 @@
 import type { AssistantMessage, Message, Usage } from "@amira/ai"
 import type { BackgroundJobExtension } from "./background-jobs.ts"
 import type { CommandDefinition, InputHandler, PrintOptions, SessionControl } from "./commands.ts"
+import type { OwnedConversations } from "./conversations.ts"
 import type {
   AnyEvent,
   EventEnvelope,
@@ -146,6 +147,8 @@ export interface ExtensionAPI {
   readonly settings: SettingsView
   /** Makes a host-accounted side model call without tools or hosted web search. */
   complete(request: CompleteRequest): Promise<CompleteResult>
+  /** Persisted, independently running conversations bound to this extension's owner/lifetime. */
+  readonly conversations?: OwnedConversations
   /** The current top-level session, when the host has injected session control. */
   session(): SessionControl | undefined
   /** Background jobs started by this extension; host-wide jobs are available only to host code. */

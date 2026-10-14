@@ -33,6 +33,7 @@ test("the public core exports stay stable", async () => {
     "MarkdownRendererRegistry",
     "NON_INTERACTIVE_LINE",
     "NOTICE_RETRY_MS",
+    "OwnedConversationManager",
     "PERMISSION_MODES",
     "PanelRegistry",
     "Permissions",

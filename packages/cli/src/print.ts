@@ -13,7 +13,6 @@ import {
   type MarkdownRendererRegistry,
   parseCommandLine,
   type TurnResult,
-  toolTraits,
   type UiRequests,
 } from "@amira/core"
 import { PrintMarkdown } from "./print-markdown.ts"
@@ -131,12 +130,7 @@ export async function runPrint(
   })
   let jsonFileOpen = jsonFile !== undefined
   agent.setNonInteractive()
-  agent.tools.setDisabled(
-    new Set([
-      ...agent.tools.disabled,
-      ...agent.tools.list().flatMap(({ tool }) => (toolTraits(tool)?.interactive ? [tool.name] : [])),
-    ]),
-  )
+  agent.tools.setPolicy({ nonInteractive: true })
   // Tools that need a UI are not even offered: nobody is there to answer them.
   if (opts.ui) opts.ui.unavailable = "print mode"
   let endedWithNewline = true

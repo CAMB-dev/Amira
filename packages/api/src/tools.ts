@@ -87,6 +87,8 @@ export interface ToolSession {
   readonly depth: number
   /** The deepest a sub-agent may be (D15); spawn fails beyond it. */
   readonly maxDepth: number
+  /** Host-bounded research scope: delegators must refuse shell/worktree preparation before spawning. */
+  readonly restricted?: boolean
   /** The model this session uses right now. */
   readonly model: ModelRef
   /**
@@ -104,8 +106,9 @@ export interface ToolSession {
   groups?(): SpawnGroupInfo[]
   /**
    * Puts questions to whoever answers for this session: the user in a top-level session, the
-   * commander (the parent's model, which may pass them on up) in a sub-agent. The session shows
-   * as blocked meanwhile. Absent when the host cannot ask anyone.
+   * commander (the parent's model, which may pass them on up) in an ordinary sub-agent, or the
+   * owner's callback in an owned conversation and its descendants. The session shows as blocked
+   * meanwhile. Absent when the host cannot ask anyone.
    */
   askUser?(questions: AskQuestion[], signal?: AbortSignal): Promise<AskOutcome>
   /**

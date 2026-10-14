@@ -442,6 +442,43 @@ export default defineExtension((api) => {
 })
 ```
 
+### 扩展拥有的持久会话
+
+`api.conversations?: OwnedConversations` 是可选宿主能力，使用前必须检测。不能用临时子 agent 替代它，却声称历史已保存。与 `/btw` 风格的子 agent 不同，owned conversation 有稳定的 owner/key 身份、独立保存的会话和单写者租约。它属于扩展，不属于当前主会话；主会话的 `/clear`、`/resume`、rewind 和 fork 不会停止它或改变其绑定。关闭视图只隐藏内容。本 API 不提供原生对话记录或输入框焦点切换。
+
+- `openOrCreate(spec, runtime): Promise<OwnedConversation>` 打开所属扩展已保存的 key，或创建新会话。`open(id, runtime)` 只能打开该扩展拥有的会话。另一个宿主或进程持有租约时会得到明确的 **in use** 错误。同一扩展实例重复打开会返回现有句柄。
+- `ConversationSpec` 包含 `key`、`name`、绝对路径 `cwd`、可选的 `model`（`provider/model`）、`systemPrompt` 和必填的 `callableTools: string[]`。宿主保存此规格；重新打开不能悄悄修改它或扩大工具权限。此类历史独立于普通主会话的列表、resume 和 fork 路径。
+- `ConversationRuntime` 包含必填的 `askUser(questions, { sessionId, signal }): Promise<AskAnswer[] | undefined>` 和可选的 `extraTools: ToolDefinition[]`。每次重新打开都要绑定回调与执行函数；它们不序列化。缺少必要工具时拒绝运行。提问直接进入此回调，绝不交给主会话模型回答。回调必须展示真实的人类选择、响应取消，并在返回前保存需要的决策证据。返回 `undefined` 表示取消。
+- 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `send(text, { signal? })` 才启动一轮，在该轮结束时完成；并发 send 会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
+- 保存的 callable allowlist 在审批前限制本地工具执行，并从 provider 请求中排除不允许的托管工具，包括压缩请求。`createGroup(options)` 绑定到此会话。后代只能使用继承权限的交集，不能运行 shell 工具或使用 worktree，不能扩大权限上限。允许工具名意味着信任其实现；这不是扩展代码的沙箱。
+- 句柄提供 `id`、`key`、`name`、`cwd`、绑定的 `data: SessionData`、`history()`（当前完整分支的不可变快照，包含已被压缩替代的消息）、`status()`（state 和 busy）及 `events: AsyncIterable<AnyEvent>`。`OwnedConversation.events` 包含此会话及普通后代的事件，携带各自的 sessionId，不进入主对话总线。临时后代保留私有总线；扩展必须改用它们的 `ChildSession.events`。先订阅，再读取历史和状态快照。事件不重放；用 history 恢复保存的消息，按 session/turn/tool-call id 关联工具行。
+- 绑定的 `SessionData.append(key, data): void` 不提供持久写入确认。磁盘故障通过 `extension.error` 异步报告；`append()` 返回不代表已持久提交。如果决策证据要求持久提交，必须先提交到扩展自行控制的存储，再回答 `askUser` 问题。
+- `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。此 API 不提供删除；卸载或移除包后历史仍保留。
+
+自定义视图可以展示独立会话，而不替换主输入框：
+
+```ts
+api.registerCommand({
+  name: "notes", description: "Open saved notes",
+  async run(_args, ctx) {
+    if (!api.conversations) throw new Error("This host does not support saved extension conversations")
+    const conversation = await api.conversations.openOrCreate({
+      key: "notes", name: "Notes", cwd: api.cwd,
+      systemPrompt: "Research and discuss notes. Ask the human before recording decisions.",
+      callableTools: ["read", "grep", "glob", "ask_user"],
+    }, {
+      // Application-owned callback: render choices in the view and honor signal.
+      askUser: presentQuestionsInView,
+    })
+    ctx.openView?.({ kind: "saved-notes", data: conversation })
+    // The registered view's submit handler calls conversation.send(text).
+    // Its onClose hides the view; it does not stop or release the conversation.
+  },
+})
+```
+
+自行实现 `presentQuestionsInView` 并注册 `saved-notes`；从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能把独立会话的问题放进被遮挡的主会话对话框，也不能在视图无法展示问题时推断用户选择。新增的公共会话接口、`api.conversations` 能力和 `ToolSession.restricted` 要求维护者在发布前提升 `API_VERSION`。此处不修改版本文件；仍须检测能力是否可用。
+
 ### 子 agent 控制
 
 `SessionControl.messageSubagent(id, text)` 向后代子 agent 发送用户消息：运行中会在下一次模型调用前收到，空闲的持久子 agent 会开始新一轮，排队中的子 agent 仅在获得执行名额后收到。消息以用户身份记录在子 agent 的对话及总线事件中，而不是父模型通知。未知、已结束或正在停止的子 agent 返回 false。`pauseSubagent(id)` 在下一次模型调用前暂停，允许当前模型或工具调用完成，不中止工作或丢失结果；`resumeSubagent(id)` 解除暂停。暂停状态通过 `SubagentInfo.status` 和 `subagent.state` 的 paused 表示。已获准执行的暂停子 agent 仍占用树及组的并发名额，不会为其他子 agent 释放名额；暂停时仍可停止。暂停仅适用于运行中的子 agent，不适用于排队或空闲状态；未知、已结束或已处于目标状态时，暂停及恢复返回 false。此暂停独立于扩展的消息队列（包括 swarm 的暂停），恢复一方不会解除另一方。

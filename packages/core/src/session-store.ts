@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 import {
   appendFileSync,
   type BigIntStats,
@@ -25,13 +24,16 @@ import {
   withTransientFileLock,
 } from "./file-lock.ts"
 import type { FileJournalEntry } from "./file-rewind.ts"
-import { amiraPath } from "./home.ts"
+import type { OwnedSessionIdentity } from "./owned-session.ts"
 import {
   type SessionAcquisitionOptions,
   sessionClaimAcquired,
   withSessionClaim,
 } from "./session-acquisition.ts"
 import { canonicalSessionFile } from "./session-path.ts"
+import { sessionsDir } from "./session-project.ts"
+
+export { projectKey, sessionsDir } from "./session-project.ts"
 
 /** Owner-record death permits immediate recovery; legacy leases also need this stale window. */
 export const SESSION_LOCK_STALE_MS = 30_000
@@ -87,6 +89,8 @@ export interface SessionHeader {
   createdAt: string
   /** The session this one was forked from, if any. */
   parent: string | null
+  /** Host-owned policy identity; not resumable or forkable as an ordinary root. */
+  owned?: OwnedSessionIdentity
 }
 
 export type SessionEntryData =
@@ -156,20 +160,6 @@ export interface RestoredSession {
   views: Map<Message, ContextView>
 }
 
-/**
- * Names a working directory in per-project files under the user directory: a hash of its
- * resolved path (case-insensitive on Windows), e.g. for sessions and the prompt history.
- */
-export function projectKey(cwd: string): string {
-  const key = process.platform === "win32" ? path.resolve(cwd).toLowerCase() : path.resolve(cwd)
-  return createHash("sha256").update(key).digest("hex").slice(0, 16)
-}
-
-/** Sessions for a working directory live in `~/.amira/sessions/<project key>/`. */
-export function sessionsDir(cwd: string): string {
-  return amiraPath("sessions", projectKey(cwd))
-}
-
 export function newSessionId(): string {
   return `s_${crypto.randomUUID().slice(0, 8)}`
 }
@@ -205,7 +195,13 @@ export class SessionStore {
     this.#written = written
   }
 
-  static create(opts: { cwd: string; id?: string; parent?: string; dir?: string }): SessionStore {
+  static create(opts: {
+    cwd: string
+    id?: string
+    parent?: string
+    dir?: string
+    owned?: OwnedSessionIdentity
+  }): SessionStore {
     const id = opts.id ?? newSessionId()
     const dir = opts.dir ?? sessionsDir(opts.cwd)
     const header: SessionHeader = {
@@ -215,6 +211,7 @@ export class SessionStore {
       cwd: opts.cwd,
       createdAt: new Date().toISOString(),
       parent: opts.parent ?? null,
+      ...(opts.owned ? { owned: structuredClone(opts.owned) } : {}),
     }
     return new SessionStore(path.join(dir, `${id}.jsonl`), header, false)
   }
@@ -267,6 +264,8 @@ export class SessionStore {
     const key = sessionFileKey(this.file)
     const held = sessionLocks.get(key)
     if (held) {
+      if (this.header.owned !== undefined && !held.owners.has(this))
+        throw new Error("owned conversation is in use by another host")
       sessionClaimAcquired(this)
       // A new claimed view restores under authority before Agent builds model history.
       // An existing view must not merge underneath its still-live Agent's history.
@@ -553,6 +552,8 @@ export class SessionStore {
    * session-wide notes before target and the complete chronological file journal.
    */
   fork(target: string | null = this.#leaf): SessionStore {
+    if (this.header.owned !== undefined)
+      throw new Error("Cannot fork an owned conversation as a main session")
     const branch = this.branch()
     const at = target === null ? -1 : branch.findIndex((e) => e.id === target)
     if (target !== null && at === -1) throw new Error(`unknown entry ${target}`)

@@ -9,7 +9,6 @@ import { createRewindControl } from "./control/rewind.ts"
 import { createSessionsControl } from "./control/sessions.ts"
 import { createToolControl } from "./control/tools.ts"
 import { rememberingControl } from "./remember-choice.ts"
-import { toolsToDisable } from "./session/settings-adapters.ts"
 import type { Session } from "./session.ts"
 
 /** Waiting for a committed handover must yield, and cancellation must detach its listener. */
@@ -73,16 +72,10 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
   const turnedOff = new Set<string>()
   const turnedOn = new Set<string>()
   const applyDisabled = () => {
-    const off = new Set([
-      ...toolsToDisable(
-        shell,
-        opts.disabled ?? [...DEFAULT_DISABLED_TOOLS],
-        tools.list().map(({ tool }) => tool),
-      ),
-      ...turnedOff,
-    ])
+    const off = new Set([...(opts.disabled ?? [...DEFAULT_DISABLED_TOOLS]), ...turnedOff])
     for (const name of turnedOn) off.delete(name)
     tools.setDisabled(off)
+    tools.setPolicy({ shell, enabled: turnedOn })
   }
 
   const agent = () => host.agent

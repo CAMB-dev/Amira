@@ -21,7 +21,6 @@ import {
   type SessionStore,
   ToolRegistry,
   TraceRecorder,
-  toolTraits,
   validateSettings,
 } from "@amira/core"
 import type { ActivePackages } from "@amira/packages"
@@ -35,7 +34,6 @@ import {
   onlyProviderModel,
   resolveModel,
   retryFromSettings,
-  toolsToDisable,
   withPackageSkills,
 } from "./session/settings-adapters.ts"
 import { testAiOptions } from "./test-hooks.ts"
@@ -141,9 +139,10 @@ export interface Session {
    * directories as they are installed now; failures arrive as extension.error. Says what changed.
    * The extensions loaded again get the events that say where `agent` (default: the one this
    * session started with) is, as they had them before: its session.start with the model and
-   * context as they are now, the last workspace.changed and budget.update.
+   * context as they are now, the last workspace.changed and budget.update. The command host's
+   * optional reconcileTools restores live choices before owned execution is enabled again.
    */
-  reload(agent?: Agent): Promise<ReloadReport>
+  reload(agent?: Agent, reconcileTools?: () => void): Promise<ReloadReport>
 }
 
 /** Extensions bundled with Amira and loaded by default (D50). */
@@ -179,6 +178,8 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
  * Extension failures are reported as extension.error events on the agent's bus.
  */
 export async function createSession(opts: SessionOptions): Promise<Session> {
+  if (opts.store?.header.owned !== undefined)
+    throw new Error("An owned conversation cannot become a main session")
   const readPackages = () => (typeof opts.packages === "function" ? opts.packages() : opts.packages)
   let packages = readPackages()
   const concurrency = normalizeConcurrencySettings(opts.settings)
@@ -229,11 +230,38 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
   })
   const tools = new ToolRegistry()
+  const tree = new AgentTree({
+    ai,
+    sections: (cwd) =>
+      defaultSections({
+        cwd,
+        nonInteractive: opts.nonInteractive,
+        project: instructionsSection(loadInstructions(cwd)),
+      }),
+    ...(settings.subagents?.maxDepth !== undefined ? { maxDepth: settings.subagents.maxDepth } : {}),
+    ...(settings.subagents?.maxConcurrent !== undefined
+      ? { maxConcurrent: settings.subagents.maxConcurrent }
+      : {}),
+    ...(settings.budget ? { budget: settings.budget } : {}),
+    ...(compaction ? { compaction } : {}),
+    ...(context ? { context } : {}),
+    ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
+  })
+  // Initializers may open conversations, but cannot execute before tool policy is finalized.
+  let conversationsReady = false
   const host = new ExtensionHost({
     bus,
     interceptors,
     tools,
     ai,
+    conversations: {
+      ai,
+      tools,
+      tree,
+      agent: () => agent,
+      home: amiraHome(),
+      canExecute: () => conversationsReady,
+    },
     settings: extensionSettings(settings),
     settingsLayers: opts.settingsLayers,
     reloadSettings: opts.reloadSettings
@@ -295,66 +323,6 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     const text = `Not loading this project's extension packages (${untrusted.join(", ")}): the project is not trusted. amira ext trust loads them from the next start.`
     bus.emit("extension.notice", { source: "packages", text, level: "warning" }, { sessionId: "host" })
   }
-  await loadExtensions()
-  const noticeThemeSettings = (value: Settings) => {
-    const warn = (text: string) =>
-      bus.emit("extension.notice", { source: "themes", text, level: "warning" }, { sessionId: "host" })
-    const themeName = value.tui?.theme
-    if (
-      themeName &&
-      !["auto", "dark", "light", "terminal"].includes(themeName) &&
-      !host.themes.get(themeName)
-    ) {
-      warn(`Theme "${themeName}" from settings tui.theme was not found; using the default theme.`)
-    }
-    normalizeShimmer(value.tui?.shimmer, (text) => warn(`Settings tui.shimmer: ${text}`))
-  }
-  noticeThemeSettings(settings)
-  const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
-  for (const name of requested) {
-    if (tools.has(name)) continue
-    const error = `${from}: no tool named "${name}"`
-    bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
-  }
-  // Like the other settings warnings, only where the caller reports them (not in print mode).
-  if (opts.warnings) {
-    for (const error of commandAliasWarnings(settings.commandAliases, host.commands)) {
-      bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
-    }
-  }
-  const disabled = new Set(
-    toolsToDisable(
-      opts.shell ?? settings.shell ?? DEFAULT_SHELL,
-      opts.disabledTools ?? [],
-      tools.list().map(({ tool }) => tool),
-    ),
-  )
-  if (opts.nonInteractive) {
-    for (const { tool } of tools.list()) if (toolTraits(tool)?.interactive) disabled.add(tool.name)
-  }
-  tools.setDisabled(disabled)
-  await bus.flush()
-  stopCapture()
-
-  const reloadReplay = createReloadReplay(bus)
-
-  const tree = new AgentTree({
-    ai,
-    sections: (cwd) =>
-      defaultSections({
-        cwd,
-        nonInteractive: opts.nonInteractive,
-        project: instructionsSection(loadInstructions(cwd)),
-      }),
-    ...(settings.subagents?.maxDepth !== undefined ? { maxDepth: settings.subagents.maxDepth } : {}),
-    ...(settings.subagents?.maxConcurrent !== undefined
-      ? { maxConcurrent: settings.subagents.maxConcurrent }
-      : {}),
-    ...(settings.budget ? { budget: settings.budget } : {}),
-    ...(compaction ? { compaction } : {}),
-    ...(context ? { context } : {}),
-    ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
-  })
   const approve = userApprover(host.ui, {
     presenters: host.renderers,
     tree,
@@ -419,6 +387,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     continueAfterAcquisition?: (construct: () => Agent) => Agent,
     options?: { signal?: AbortSignal },
   ) => {
+    if (store?.header.owned !== undefined)
+      throw new Error("An owned conversation cannot become a main session")
     const construct = () => constructAgent(picked, store)
     const acquired = () => {
       options?.signal?.throwIfAborted()
@@ -427,6 +397,49 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     return store ? store.withClaim(acquired, options) : acquired()
   }
   const agent = await newAgent(model, opts.store, undefined, { signal: opts.signal })
+  await loadExtensions()
+  const noticeThemeSettings = (value: Settings) => {
+    const warn = (text: string) =>
+      bus.emit("extension.notice", { source: "themes", text, level: "warning" }, { sessionId: "host" })
+    const themeName = value.tui?.theme
+    if (
+      themeName &&
+      !["auto", "dark", "light", "terminal"].includes(themeName) &&
+      !host.themes.get(themeName)
+    ) {
+      warn(`Theme "${themeName}" from settings tui.theme was not found; using the default theme.`)
+    }
+    normalizeShimmer(value.tui?.shimmer, (text) => warn(`Settings tui.shimmer: ${text}`))
+  }
+  noticeThemeSettings(settings)
+  const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
+  for (const name of requested) {
+    if (tools.has(name)) continue
+    const error = `${from}: no tool named "${name}"`
+    bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+  }
+  // Like the other settings warnings, only where the caller reports them (not in print mode).
+  if (opts.warnings) {
+    for (const error of commandAliasWarnings(settings.commandAliases, host.commands)) {
+      bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+    }
+  }
+  const initializeTools = (value: Settings, current = agent, reconcileTools?: () => void) => {
+    tools.setDisabled(opts.disabledTools ?? [])
+    tools.setPolicy({
+      shell: opts.shell ?? value.shell ?? DEFAULT_SHELL,
+      nonInteractive: opts.nonInteractive === true || current.nonInteractive,
+    })
+    // Live command-host choices take precedence; reconcile before any runtime can execute.
+    reconcileTools?.()
+    conversationsReady = true
+  }
+  initializeTools(settings)
+  await bus.flush()
+  stopCapture()
+
+  const reloadReplay = createReloadReplay(bus)
+
   // A stale or missing catalog is refreshed in the background; startup never waits for it.
   const catalogRefresh =
     catalogOpts && cached?.stale
@@ -450,7 +463,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     tree,
     resume: (store, m, continueAfterAcquisition, options) =>
       newAgent(m ?? agent.model, store, continueAfterAcquisition, options),
-    reload: async (current = agent) => {
+    reload: async (current = agent, reconcileTools) => {
+      conversationsReady = false
       const before = new Set(host.loaded)
       const skillsBefore = new Set(host.skills.list().map((s) => s.name))
       packages = readPackages()
@@ -464,6 +478,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         reloaded?.layers ?? opts.settingsLayers,
       )
       host.unloadAll()
+      await host.drain()
       reloadThemes()
       host.replayOnLoad(reloadReplay(current))
       let failed: string[]
@@ -473,6 +488,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         host.replayOnLoad(undefined)
       }
       noticeThemeSettings(normalized.settings)
+      initializeTools(normalized.settings, current, reconcileTools)
       opts.onSettingsReload?.(normalized.settings)
       const after = new Set(host.loaded)
       const skillsAfter = new Set(host.skills.list().map((s) => s.name))

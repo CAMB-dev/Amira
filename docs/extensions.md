@@ -470,6 +470,43 @@ export default defineExtension((api) => {
 })
 ```
 
+### Extension-owned conversations
+
+`api.conversations?: OwnedConversations` is an optional host capability. Feature-detect it; do not substitute an ephemeral child while promising saved history. Unlike a `/btw`-style child, an owned conversation has a stable owner/key identity, its own saved session and a single-writer lease. It belongs to the extension, not the current main session: `/clear`, `/resume`, rewind and fork do not stop or retarget it. Closing a view only hides it. Native transcript/composer focus switching is not part of this API.
+
+- `openOrCreate(spec, runtime): Promise<OwnedConversation>` opens the owner's saved `key` or creates it. `open(id, runtime)` opens only that owner's conversation. Another host/process holding it gets an **in use** error. Repeated opens in the same owner instance return the live handle.
+- `ConversationSpec` contains `key`, `name`, absolute `cwd`, optional `model` (`provider/model`), `systemPrompt` and required `callableTools: string[]`. The host persists this spec; reopening cannot silently change it or widen its policy. Saved conversations are separate from ordinary main-session listing/resume/fork paths.
+- `ConversationRuntime` contains required `askUser(questions, { sessionId, signal }): Promise<AskAnswer[] | undefined>` and optional `extraTools: ToolDefinition[]`. Rebind callbacks and executors on every reopen; they are never serialized. Missing required tools fail closed. Questions go directly to this callback, never to the main model. Present real human choices, respect cancellation, and save any decision evidence before resolving. Returning `undefined` cancels.
+- Opening and reopening are inert: no model request, pending-turn replay, restarted child or revived question. They remain available during extension initialization, but owned `send()` and `createGroup()` reject until initialization finishes. Start work from a command or a `session.start` handler after initialization; do not await readiness inside the initializer, which would deadlock startup. Only an explicit `send(text, { signal? })` runs a turn. It resolves when that turn ends; concurrent sends are rejected. The configured AI/providers and host limits still apply.
+- The persisted callable allowlist gates local execution before approval and excludes forbidden provider-hosted tools from requests, including compaction. `createGroup(options)` is bound to this conversation. Descendants inherit the intersection, cannot run shell tools or use worktrees, and cannot widen the ceiling. Allowed tool names trust their implementations; this is not a sandbox for extension code.
+- The handle exposes `id`, `key`, `name`, `cwd`, bound `data: SessionData`, `history()` (an immutable snapshot of the full current branch, including compacted-away messages), `status()` (`state` and `busy`) and `events: AsyncIterable<AnyEvent>`. `OwnedConversation.events` includes this conversation and its ordinary descendants, with their own `sessionId`; they do not enter the main transcript bus. Ephemeral descendants retain their private bus: the extension must use their `ChildSession.events` instead. Subscribe before taking history/status snapshots. Events are live, not replayed; recover saved messages from `history()` and correlate rows by session/turn/tool-call id.
+- The bound `SessionData.append(key, data): void` is not a durable-write acknowledgement. Disk failures are reported asynchronously as `extension.error`; returning from `append()` does not confirm a durable commit. If decision evidence requires a durable commit, commit it to extension-controlled storage before answering an `askUser` question.
+- `stop(reason?): Promise<void>` aborts work, pending questions and descendants but retains history; a later explicit send can continue. `release(): Promise<void>` stops and drains work, releases the lease and invalidates the handle, without deleting history. It is idempotent. Owner unload/disable and host exit perform host-managed cleanup; disposal never aborts main work or main children. There is no deletion API here; stored histories remain after unload or package removal.
+
+A custom view can display an owned conversation without replacing the main composer:
+
+```ts
+api.registerCommand({
+  name: "notes", description: "Open saved notes",
+  async run(_args, ctx) {
+    if (!api.conversations) throw new Error("This host does not support saved extension conversations")
+    const conversation = await api.conversations.openOrCreate({
+      key: "notes", name: "Notes", cwd: api.cwd,
+      systemPrompt: "Research and discuss notes. Ask the human before recording decisions.",
+      callableTools: ["read", "grep", "glob", "ask_user"],
+    }, {
+      // Application-owned callback: render choices in the view and honor signal.
+      askUser: presentQuestionsInView,
+    })
+    ctx.openView?.({ kind: "saved-notes", data: conversation })
+    // The registered view's submit handler calls conversation.send(text).
+    // Its onClose hides the view; it does not stop or release the conversation.
+  },
+})
+```
+
+Implement `presentQuestionsInView` and register `saved-notes` separately, read the main session's status from `api.session()`, and read this conversation's transcript/status from its handle. Do not route an owned question through a hidden main-session dialog or infer a choice when your view cannot display it. The new public conversation interfaces, `api.conversations` capability and `ToolSession.restricted` require a maintainer-managed `API_VERSION` bump before release. The version file is not changed here; feature detection is still required.
+
 ### Sub-agent controls
 
 `SessionControl.messageSubagent(id, text)` sends a user-authored message to a descendant: during work it reaches the next model call, an idle persistent child starts another turn, and a queued child receives it only when admitted. Messages appear in the child's transcript and bus events as user messages, not parent-model notices. It returns false for unknown, finished or stopping children. `pauseSubagent(id)` holds before the next model call, allowing current model/tool work to finish without aborting or losing results; `resumeSubagent(id)` releases that hold. Paused children report `paused` through `SubagentInfo.status` and `subagent.state`. An admitted paused child keeps its tree and group admission slot, so pausing does not free concurrency for another child. Stop still works while paused. Pause applies only to a running child (not queued or idle); pause/resume return false when unknown, finished or already in the requested state. This hold is independent of an extension's message queue (including swarm's pause); resuming one does not release the other.
