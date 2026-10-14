@@ -29,6 +29,7 @@ import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { createBottomArea } from "./app/bottom-area.ts"
 import { createCommandRunner } from "./app/command-runner.ts"
 import { createComposer } from "./app/composer.ts"
+import { createHintNote } from "./app/hint-note.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
 import { RewindFlow } from "./app/rewind.ts"
@@ -119,15 +120,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * started, and whether it ended.
    */
   const serverRows = new Map<string, { startedAt: number; ended: boolean }>()
-  /** A short note shown in place of the key hints, such as the new tool output level. */
-  let hintNote: { text: string; until: number } | undefined
-  let hintTimer: ReturnType<typeof setTimeout> | undefined
-  const showNote = (text: string) => {
-    hintNote = { text, until: Date.now() + HINT_NOTE_MS }
-    clearTimeout(hintTimer)
-    hintTimer = setTimeout(() => view.requestRender(), HINT_NOTE_MS + 10)
-    view.requestRender()
-  }
+  const hint = createHintNote(() => view.requestRender())
+  const showNote = hint.show
 
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   /** What Enter does with a message while a turn runs; the queue key does the other. */
@@ -164,12 +158,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     terminal,
     clipboard: opts.clipboard,
     showNote,
-    clearNote: (text) => {
-      if (hintNote?.text !== text) return
-      hintNote = undefined
-      clearTimeout(hintTimer)
-      view.requestRender()
-    },
+    clearNote: hint.clear,
     requestRender: () => view.requestRender(),
     redraw,
     redrawTerminal: () => view.redraw(),
@@ -214,7 +203,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     steering: () => outbox.steering,
     queued: () => outbox.queued,
     mode: () => mode,
-    hintNote: () => hintNote,
+    hintNote: hint.current,
     commandActivity: () => commandRunner,
     canRewind,
     status: opts.status,
@@ -738,7 +727,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     offSwitch?.()
     offCommand?.()
     offThemeCommand?.()
-    clearTimeout(hintTimer)
+    hint.dispose()
     outbox.dispose()
     composer.dispose()
     for (const d of overlays.dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
