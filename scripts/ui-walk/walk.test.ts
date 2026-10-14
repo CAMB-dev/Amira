@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { trackProcessTree } from "../../packages/proc/src/index.ts"
@@ -136,6 +136,145 @@ test.skipIf(ptyUnavailable())(
       for (const root of roots) expect(await stat(root).catch(() => undefined)).toBeUndefined()
       for (const name of names) await expect(address(name)).rejects.toThrow("is not running")
       await rm(dir, { recursive: true, force: true })
+    }
+  },
+  30_000,
+)
+
+test.skipIf(ptyUnavailable())(
+  "opt-in local extensions load in the real host without weakening offline isolation",
+  async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "ui-walk-extension-e2e-"))
+    const source = path.join(directory, "extension")
+    const second = path.join(directory, "second")
+    const names = [`ext-${randomUUID()}`, `ext-${randomUUID()}`]
+    await mkdir(source)
+    await mkdir(second)
+    await writeFile(path.join(source, "label.ts"), 'export const label = "Local extension command loaded"')
+    await writeFile(
+      path.join(source, "index.ts"),
+      `
+      import { defineExtension, textResult } from "@amira/api"
+      import { writeFile } from "node:fs/promises"
+      import path from "node:path"
+      import { label } from "./label.ts"
+      export default defineExtension(async (api) => {
+        let blocked
+        try { await fetch("https://example.com/never-contact") } catch (error) { blocked = String(error) }
+        await writeFile(path.join(api.home, "extension-probe.json"), JSON.stringify({
+          home: api.home, cwd: api.cwd, module: import.meta.url, blocked,
+          envHome: process.env.HOME, envAmira: process.env.AMIRA_HOME,
+        }))
+        await writeFile(new URL("copy-state.txt", import.meta.url), "isolated extension state")
+        api.registerCommand({ name: "local-probe", description: label, run: (_args, ctx) => ctx.print(label) })
+        for (const name of ["walk_probe", "read"]) api.registerTool({
+          name, override: true, description: "Must not execute", parameters: { type: "object" },
+          execute: async () => {
+            await writeFile(path.join(api.home, "executed.txt"), name)
+            return textResult("Unsafe tool executed")
+          },
+        })
+      })
+    `,
+    )
+    await writeFile(
+      path.join(second, "index.ts"),
+      `
+      import { defineExtension } from "@amira/api"
+      export default defineExtension((api) => api.registerCommand({
+        name: "second-probe", description: "Second local extension",
+        run: (_args, ctx) => ctx.print("Second local extension loaded"),
+      }))
+    `,
+    )
+    const scenario = path.join(directory, "scenario.json")
+    await writeFile(
+      scenario,
+      JSON.stringify({
+        name: "extension-e2e",
+        description: "Offline extension smoke test",
+        prompt: "go",
+        routes: {
+          main: [
+            {
+              toolCalls: [
+                { id: "blocked-extension", name: "walk_probe", args: {} },
+                {
+                  id: "canned-read",
+                  name: "read",
+                  args: { path: "not-a-real-file" },
+                  result: { content: [{ type: "text", text: "Safe canned extension read" }] },
+                },
+              ],
+            },
+            { text: "Extension turn complete." },
+          ],
+        },
+      }),
+    )
+    try {
+      // Exercise repeatable CLI parsing, not only StartOptions.
+      const launcher = Bun.spawn(
+        [
+          process.execPath,
+          path.join(import.meta.dir, "walk.ts"),
+          "start",
+          names[0]!,
+          "--extension",
+          source,
+          "--extension",
+          second,
+          "--scenario",
+          scenario,
+          "--idle-timeout",
+          "60000",
+        ],
+        { stdout: "pipe", stderr: "pipe", windowsHide: true },
+      )
+      const [output, diagnostic, code] = await Promise.all([
+        new Response(launcher.stdout).text(),
+        new Response(launcher.stderr).text(),
+        launcher.exited,
+      ])
+      if (code !== 0) throw new Error(`Extension start failed: ${output}${diagnostic}`)
+      const loaded = await address(names[0]!)
+      const neighbor = await start(names[1]!, { cols: 100, rows: 32, idleTimeout: 60_000, args: [] })
+      for (const name of names)
+        await request(name, { command: "wait", text: "ui-walk/main", timeout: 10_000 })
+      const home = path.join(loaded.root, "home/.amira")
+      const probe = JSON.parse(await readFile(path.join(home, "extension-probe.json"), "utf8"))
+      expect(probe.home).toBe(home)
+      expect(probe.envAmira).toBe(home)
+      expect(probe.envHome).toBe(path.join(loaded.root, "home"))
+      expect(probe.cwd).toBe(path.join(loaded.root, "cwd"))
+      expect(probe.module).toContain("local-0/index.ts")
+      expect(probe.blocked).toContain("UI walk blocked outbound request: https://example.com")
+      expect(await stat(path.join(source, "copy-state.txt")).catch(() => undefined)).toBeUndefined()
+      expect(await readFile(path.join(home, "extensions/local-0/copy-state.txt"), "utf8")).toBe(
+        "isolated extension state",
+      )
+      expect(
+        await stat(path.join(neighbor.root, "home/.amira/extension-probe.json")).catch(() => undefined),
+      ).toBeUndefined()
+      expect(
+        await stat(path.join(neighbor.root, "home/.amira/extensions/local-0")).catch(() => undefined),
+      ).toBeUndefined()
+      for (const [command, marker] of [
+        ["local-probe", "Local extension command loaded"],
+        ["second-probe", "Second local extension loaded"],
+      ]) {
+        await request(names[0]!, { command: "keys", keys: [`text:/${command}`, "enter"] })
+        await request(names[0]!, { command: "wait", text: marker, timeout: 10_000 })
+      }
+      await request(names[0]!, { command: "keys", keys: ["text:go", "enter"] })
+      await request(names[0]!, { command: "wait", text: "Extension turn complete.", timeout: 10_000 })
+      expect(await stat(path.join(home, "executed.txt")).catch(() => undefined)).toBeUndefined()
+      const text = await (await request(names[0]!, { command: "text" })).text()
+      expect(text).toContain("tool execution is disabled")
+      expect(text).toContain("Safe canned extension read")
+    } finally {
+      await Promise.all(names.map((name) => request(name, { command: "stop" }).catch(() => undefined)))
+      await rm(directory, { recursive: true, force: true })
     }
   },
   30_000,
