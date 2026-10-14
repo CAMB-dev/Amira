@@ -16,6 +16,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { discardLive, pauseFullScreen, prependLiveBoundary } from "../../tui-kit/src/renderer-controls.ts"
 import {
   commandEchoLines,
   messageTimestamp,
@@ -33,9 +34,9 @@ import { CONTENT_INSET, contentRoom } from "./grid.ts"
 import { historyLines } from "./history.ts"
 import { inlineBackgroundRows, inlineDisplayNodes } from "./inline-background.ts"
 import { displayCommit } from "./inline-display.ts"
+import { inlineInput } from "./inline-input.ts"
 import { inlineLiveLayout } from "./inline-live-layout.ts"
 import { InlineTablePlacement } from "./inline-table-placement.ts"
-import { ACTIONS, type Action } from "./keybindings.ts"
 import { contentGeometry, marginView } from "./margins.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
 import {
@@ -74,14 +75,17 @@ import {
   noticeLines,
   Transcript,
 } from "./transcript.ts"
-import { type CallRef, type TranscriptView, View, type ViewHost } from "./view.ts"
+import {
+  activationBoundary,
+  type CallRef,
+  PendingCommits,
+  type TranscriptView,
+  View,
+  type ViewHost,
+} from "./view.ts"
 
 /** The renderer's shortest time between frames. */
 const FRAME_MS = 16
-
-/** Keys of the full-screen view that do nothing inline; the first press says so. */
-const FULLSCREEN_KEYS = ["find", "scroll.page-up", "scroll.page-down", "select.start"] as const
-const INPUT_ACTIONS = (Object.keys(ACTIONS) as Action[]).filter((a) => ACTIONS[a].scope === "input")
 
 /**
  * The inline view: finished messages and tool calls are committed to the terminal's
@@ -178,14 +182,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     }
   }
 
-  /**
-   * Lines to print above the live region, sent with the next frame: running a command commits
-   * its echo and then each thing it prints, and a redraw for each of those flickered.
-   */
-  const pendingCommits: (
-    | { lines: string[] }
-    | { redraw: (width: number, ctx: RenderContext) => string[] }
-  )[] = []
+  const pendingCommits = new PendingCommits(() => renderer.requestRender())
   /** An answered picker stays live until output follows; a session boundary replaces it. */
   let pendingDialog: ((width: number) => string[]) | undefined
   function flushDialog(): void {
@@ -194,10 +191,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     pendingDialog = undefined
     commit(transcript.block("dialog", draw(Math.max(1, contentWidth()))))
   }
-  const commit = (lines: string[]) => {
-    if (lines.length) pendingCommits.push({ lines })
-    renderer.requestRender()
-  }
+  const commit = pendingCommits.commit
   /**
    * Commits a whole block, spaced by the transcript's rule. Exploring calls held to go as one
    * row go first: what comes after them ends their run.
@@ -363,11 +357,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
   // are finished (MarkdownStream), indented like the committed reply and spaced by the
   // transcript's rule. A dialog gets what the rest leaves, so its title is never cut off the top.
   const root = new View((width, ctx) => {
-    // Lines committed since the last frame go out with this one: one redraw, not one each.
-    for (const block of pendingCommits.splice(0)) {
-      if ("lines" in block) ctx.commit?.(block.lines)
-      else ctx.commit?.(block.redraw(width, ctx), block.redraw)
-    }
+    pendingCommits.flush(width, ctx)
     // Live tools sit above the bottom area, but cannot displace an interactive dialog's
     // title, selected option and footer. No reply streams while tools are live.
     const { dialog, tools, budget } = inlineLiveLayout({
@@ -430,10 +420,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
     // "auto" assumes a re-wrapping terminal, as Windows Terminal, VS Code and most others are.
     reflow: reflow !== "off",
   })
-  // A resize can rewrap native history above the live frame: establish its screen origin again.
-  const offDockResize = terminal.onResize(() => {
-    if (host.dockOpen?.()) renderer.redraw()
-  })
+  let offDockResize: (() => void) | undefined
 
   /**
    * Forms and the sub-agent viewer go on the alternate screen. The inline UI is suspended
@@ -620,8 +607,8 @@ export function createInlineView(host: ViewHost): TranscriptView {
     return true
   }
 
-  /** Whether a key of the full-screen view was pressed here and the note said so. */
-  let fullscreenNoted = false
+  let visible = true
+  let stopped = false
   let overlayMouse = false
   let displayDetail = host.detail()
   let hasDisplays = false
@@ -643,7 +630,31 @@ export function createInlineView(host: ViewHost): TranscriptView {
       return toolCalls.running
     },
     capturing: false,
-    start: () => renderer.start(),
+    start() {
+      stopped = false
+      offDockResize ??= terminal.onResize(() => {
+        if (host.dockOpen?.()) renderer.redraw()
+      })
+      if (visible) renderer.start()
+    },
+    activate(boundary) {
+      prependLiveBoundary(renderer, activationBoundary(boundary, contentWidth(), theme))
+    },
+    setVisible(next) {
+      if (visible === next || stopped) return
+      visible = next
+      if (!visible) renderer.suspend()
+      pauseFullScreen(fullScreen, !visible)
+      if (overlayMouse) {
+        if (visible) terminal.enableMode(modes.mouse)
+        else terminal.disableMode(modes.mouse)
+      }
+      if (visible && !fullScreen.isOpen) {
+        renderer.resume(false)
+        renderer.start()
+      }
+      tickSubagents()
+    },
     requestRender() {
       if (fullScreen.isOpen) fullScreen.requestRender()
       const next = host.detail()
@@ -667,15 +678,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
       renderer.suspend()
       tickSubagents()
       fullScreen.open()
-      if (pointer && !overlayMouse) terminal.enableMode(modes.mouse)
-      if (!pointer && overlayMouse) terminal.disableMode(modes.mouse)
+      if (visible && pointer && !overlayMouse) terminal.enableMode(modes.mouse)
+      if (visible && !pointer && overlayMouse) terminal.disableMode(modes.mouse)
       overlayMouse = pointer
     },
     closeOverlay() {
-      if (overlayMouse) terminal.disableMode(modes.mouse)
+      if (visible && overlayMouse) terminal.disableMode(modes.mouse)
       overlayMouse = false
       fullScreen.close()
-      renderer.resume(historyDirty || host.dockOpen?.())
+      if (visible) renderer.resume(historyDirty || host.dockOpen?.())
       tickSubagents()
       historyDirty = false
     },
@@ -687,7 +698,10 @@ export function createInlineView(host: ViewHost): TranscriptView {
     redrawOverlay: () => fullScreen.redraw(),
     renderOverlay: () => fullScreen.render(),
     stop() {
-      offDockResize()
+      if (stopped) return
+      stopped = true
+      offDockResize?.()
+      offDockResize = undefined
       settleGroups(true)
       subagents.clear()
       resetGroups(spawnGroups)
@@ -697,10 +711,13 @@ export function createInlineView(host: ViewHost): TranscriptView {
       flushDialog()
       flushExplored()
       // What was committed but not drawn yet still belongs in the scrollback.
-      if (pendingCommits.length) renderer.render()
-      renderer.stop({ clear: true })
+      fullScreen.close()
+      if (visible && overlayMouse) terminal.disableMode(modes.mouse)
+      if (visible && pendingCommits.length) renderer.render()
+      if (visible) renderer.stop({ clear: true })
+      else discardLive(renderer)
       // A blank line between the last of the conversation and the shell's prompt.
-      terminal.write("\r\n")
+      if (visible) terminal.write("\r\n")
     },
 
     // A blank line between the command that started Amira and its first line (not between the
@@ -874,24 +891,6 @@ export function createInlineView(host: ViewHost): TranscriptView {
       committedGroups.clear()
       tickSubagents()
     },
-    detailNote(level: ToolDetailLevel) {
-      const cycle = host.keys.label("tool-output")
-      return `Tool output: ${level} (applies to tool results from now on${cycle ? `; ${cycle} toggles summary/full` : ""})`
-    },
-    handleInput(e) {
-      // Find, the page keys and block selection are the full-screen view's: said once, not
-      // ignored without a word.
-      if (fullscreenNoted || e.type !== "key") return false
-      const action = FULLSCREEN_KEYS.find((a) => host.keys.is(e, a))
-      // A key the input has an action for too (bound to both) is the input's.
-      if (!action || INPUT_ACTIONS.some((a) => host.keys.is(e, a))) return false
-      // With text, Ctrl+↑ moves in it as ↑ does.
-      if (action === "select.start" && !host.editorEmpty()) return false
-      fullscreenNoted = true
-      host.showNote(
-        `${host.keys.label(action) ?? "That key"} is for full-screen mode (--fullscreen, or tui.mode "fullscreen"). Inline, the terminal's own scrollback and find work.`,
-      )
-      return true
-    },
+    ...inlineInput(host),
   }
 }

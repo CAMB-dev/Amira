@@ -1,5 +1,6 @@
 import type {
   AnyEvent,
+  AssistantMessage,
   CompactionInfo,
   Message,
   PrintOptions,
@@ -19,6 +20,7 @@ import type {
   Terminal,
   Theme,
 } from "@amira/tui-kit"
+import { truncateToWidth } from "@amira/tui-kit"
 import type { DisplayHistory } from "./display-history.ts"
 import type { SessionBoundary } from "./history.ts"
 import type { Keybindings } from "./keybindings.ts"
@@ -33,6 +35,38 @@ export class View implements Component {
   render(width: number, ctx: RenderContext): string[] {
     return this.draw(width, ctx)
   }
+}
+
+/** Batches inline commits into one frame, retaining semantic rows for renderer redraws. */
+export class PendingCommits {
+  private blocks: ({ lines: string[] } | { redraw: (width: number, ctx: RenderContext) => string[] })[] = []
+
+  constructor(private requestRender: () => void) {}
+
+  get length(): number {
+    return this.blocks.length
+  }
+
+  commit = (lines: string[]): void => {
+    if (lines.length) this.push({ lines })
+    this.requestRender()
+  }
+
+  push(block: { lines: string[] } | { redraw: (width: number, ctx: RenderContext) => string[] }): void {
+    this.blocks.push(block)
+  }
+
+  flush(width: number, ctx: RenderContext): void {
+    for (const block of this.blocks.splice(0)) {
+      if ("lines" in block) ctx.commit?.(block.lines)
+      else ctx.commit?.(block.redraw(width, ctx), block.redraw)
+    }
+  }
+}
+
+/** Focus labels are presentation chrome, never session identifiers. */
+export function activationBoundary(label: string, width: number, theme: Theme): string[] {
+  return [theme.muted(truncateToWidth(label.replace(/\p{Cc}/gu, " "), Math.max(1, width), ""))]
 }
 
 /** How a tool call ended, as the controller hands it over. */
@@ -103,6 +137,10 @@ export interface TranscriptView {
   readonly runningTools: string[]
   /** Draws the first frame, with what was added before it. */
   start(): void
+  /** Stages named destination chrome before start() or a retained setVisible(true), without replay. */
+  activate(boundary: string): void
+  /** Retains the conversation while hidden; only the visible view draws or ticks sub-agents. */
+  setVisible(visible: boolean): void
   requestRender(): void
   /** Replaces render styles and glyphs, invalidates cached rows, and repaints the active screen. */
   setTheme(theme: Theme, glyphs: Glyphs): void
@@ -130,6 +168,8 @@ export interface TranscriptView {
    * the reply goes on, and counts as something the reply showed.
    */
   reasoningDelta(text: string): void
+  /** Repairs an incomplete live reply from its authoritative final content, when editable. */
+  replaceReply?(content: AssistantMessage["content"]): boolean
   /** The reply ended and asked for these tool calls; true when it showed anything. */
   replyEnd(calls: CallRef[]): boolean
   toolStart(id: string, name: string, args: Record<string, unknown>, at: number): void

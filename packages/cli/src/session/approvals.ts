@@ -53,7 +53,7 @@ export function userApprover(ui: UiRequests, opts: ApproverOptions = {}): Approv
         other: true,
         ...(preview ? { preview } : {}),
       },
-      { signal, source: "approval" },
+      { signal, source: "approval", sessionId: request.sessionId },
     )
     if (answer === "always") {
       allowed.add(key)
@@ -112,7 +112,7 @@ export function userAsker(ui: UiRequests, tree?: AgentTree): Asker {
   return async (request, signal) => {
     if (ui.unavailable) return { unavailable: ui.unavailable }
     const source = tree?.subagent(request.sessionId) ? "sub-agent" : undefined
-    const answers = await ui.api(source).ask(request.questions, { signal })
+    const answers = await ui.api(source).ask(request.questions, { signal, sessionId: request.sessionId })
     return answers ? { answers } : { declined: true }
   }
 }

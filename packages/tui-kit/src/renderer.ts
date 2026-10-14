@@ -2,6 +2,7 @@ import { cursor, erase, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
 import type { Glyphs } from "./glyphs.ts"
 import { findImageMarker, imageState, onImageSettled, placeImage, releaseImage } from "./images/placement.ts"
+import { registerLiveControl } from "./renderer-controls.ts"
 import { type Commit, fitScreen, type Line, lineRows, RendererHistory, rowsFor } from "./renderer-history.ts"
 import { defaultTheme, isColorEnabled, stripColors, type Theme } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
@@ -88,6 +89,10 @@ export class LiveRenderer {
       color: opts.color ?? isColorEnabled(),
       rows: terminal.rows,
     }
+    registerLiveControl(this, {
+      discard: () => this.discard(),
+      boundary: (rows) => this.waiting.unshift(this.prepareCommit(rows)),
+    })
   }
 
   start(): void {
@@ -216,6 +221,24 @@ export class LiveRenderer {
     this.terminal.write(out + cursor.show)
     this.prev = undefined
     this.row = 0
+  }
+
+  /** Releases a hidden owner silently, leaving start() ready for a fresh live frame. */
+  private discard(): void {
+    dropImages([...this.held, ...this.waiting].flatMap((block) => block.lines))
+    this.held = []
+    this.waiting = []
+    this.prev = undefined
+    this.row = this.col = this.top = 0
+    this.suspended = false
+    this.stopped = true
+    this.clearScreen = false
+    this.forceFull = false
+    clearTimeout(this.timer)
+    this.timer = undefined
+    this.unwatch()
+    this.offResize?.()
+    this.offResize = undefined
   }
 
   private draw(incoming: Commit<string>[], release = false): void {

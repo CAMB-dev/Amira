@@ -18,8 +18,10 @@ interface SubmissionDeps {
   commandRunner: Pick<CommandRunner, "run">
   outbox: Pick<Outbox, "prepare" | "dispatch">
   view: Pick<TranscriptView, "notice" | "commandEcho" | "requestRender">
+  composerView?: () => SubmissionDeps["view"]
   enterDoes: WhileWorking
   notice?: string
+  focusedSubmit?: (text: string, parts: EditorPart[], display?: string) => boolean
   context: Parameters<CommandHost["runSkill"]>[1]
 }
 
@@ -63,6 +65,10 @@ export function createSubmission(deps: SubmissionDeps) {
   function submit(text: string, parts: EditorPart[] = [text], display?: string, how = enterDoes) {
     const trimmed = text.trim()
     const hasImages = parts.some((p) => typeof p !== "string" && "image" in p)
+    if (!composer.clipboardPending && deps.focusedSubmit?.(text, parts, display)) {
+      view.requestRender()
+      return
+    }
     if (
       composer.clipboardPending ||
       (hasImages &&
@@ -70,7 +76,8 @@ export function createSubmission(deps: SubmissionDeps) {
           (!isNoModel(deps.agent().model) && !deps.agent().model.caps.images)))
     ) {
       editor.setParts(parts)
-      view.notice(
+      const visible = deps.composerView?.() ?? view
+      visible.notice(
         "warning",
         composer.clipboardPending
           ? "Clipboard paste is still loading. Send the message once it finishes."
@@ -78,6 +85,7 @@ export function createSubmission(deps: SubmissionDeps) {
             ? "Images in a message are limited to 5 MB total. Remove an attachment or resize it first."
             : "This model does not support images. Pick an image-capable model with /model or remove the attachments. Your message is still in the input.",
       )
+      visible.requestRender()
       return
     }
     if (!trimmed && !hasImages) return

@@ -22,7 +22,13 @@ export interface RewindFlowDeps {
   commands?: Pick<CommandHost, "control">
   dialogs: Dialog[]
   keys: Keybindings
-  editor: Editor
+  editor: Pick<Editor, "getParts" | "setParts" | "isEmpty">
+  /** Main-local dialogs may be deferred while another conversation owns input. */
+  onMain?: (run: () => boolean) => boolean
+  /** Captures the root session, invalidating continuations after unrelated session replacement. */
+  current?: () => () => boolean
+  /** Identifies switches originating in this control call, including its async continuations. */
+  runOperation?: (current: () => boolean, run: () => Promise<void>) => Promise<void>
   sentParts: ReadonlyMap<string, EditorPart[]>
   working: () => boolean
   compacting: () => boolean
@@ -42,6 +48,13 @@ export class RewindFlow {
    * choice previews file restoration, including the host's coverage and conflicts.
    */
   openRewind(): boolean {
+    const current = this.deps.current?.() ?? (() => true)
+    const run = () => this.showRewind(current)
+    return this.deps.onMain ? this.deps.onMain(run) : run()
+  }
+
+  private showRewind(current: () => boolean): boolean {
+    if (!current()) return false
     const { commands, dialogs, keys, view } = this.deps
     const control = commands?.control
     if (
@@ -85,8 +98,8 @@ export class RewindFlow {
         const fork = answer && typeof answer === "object" && "key" in answer && answer.key === "f"
         const at = label ? labels.indexOf(label) : -1
         if (at !== -1) {
-          if (fork) void this.rewindTo(control, picks[at]!, { fork: true })
-          else this.chooseFileRewind(control, picks[at]!)
+          if (fork) void this.rewindTo(control, picks[at]!, { fork: true }, current)
+          else this.chooseFileRewind(control, picks[at]!, current)
         }
         view.requestRender()
       },
@@ -98,11 +111,19 @@ export class RewindFlow {
     return true
   }
 
-  private chooseFileRewind(control: SessionControl, pick: RewindPick) {
-    const { dialogs, keys, view } = this.deps
+  private chooseFileRewind(control: SessionControl, pick: RewindPick, current: () => boolean) {
+    if (!current()) return
+    const run = () => this.showFileRewind(control, pick, current)
+    if (this.deps.onMain) this.deps.onMain(run)
+    else run()
+  }
+
+  private showFileRewind(control: SessionControl, pick: RewindPick, current: () => boolean): boolean {
+    if (!current()) return false
+    const { view } = this.deps
     if (!control.planRewind) {
-      void this.rewindTo(control, pick, { restoreFiles: false })
-      return
+      void this.rewindTo(control, pick, { restoreFiles: false }, current)
+      return true
     }
     let plan: FileRewindPlan
     try {
@@ -110,8 +131,21 @@ export class RewindFlow {
     } catch (error) {
       view.notice("warning", `Cannot rewind: ${(error as Error).message}`)
       view.requestRender()
-      return
+      return true
     }
+    if (!current()) return false
+    const run = () => this.confirmFileRewind(control, pick, plan, current)
+    return this.deps.onMain ? this.deps.onMain(run) : run()
+  }
+
+  private confirmFileRewind(
+    control: SessionControl,
+    pick: RewindPick,
+    plan: FileRewindPlan,
+    current: () => boolean,
+  ): boolean {
+    if (!current()) return false
+    const { dialogs, keys, view } = this.deps
     if (plan.conflicts.length) view.notice("warning", `File restore conflicts:\n${plan.conflicts.join("\n")}`)
     const restore =
       plan.owner === "core"
@@ -136,7 +170,7 @@ export class RewindFlow {
         if (at !== -1) dialogs.splice(at, 1)
         this.deps.waitingChanged("resolved")
         if (typeof answer === "string")
-          void this.rewindTo(control, pick, { restoreFiles: canRestore && answer === restore, plan })
+          void this.rewindTo(control, pick, { restoreFiles: canRestore && answer === restore, plan }, current)
         view.requestRender()
       },
       keys,
@@ -144,18 +178,41 @@ export class RewindFlow {
     dialogs.unshift(dialog)
     this.deps.waitingChanged("opened")
     view.requestRender()
+    return true
   }
 
-  private async rewindTo(control: SessionControl, pick: RewindPick, mode: RewindMode) {
+  private rewindTo(control: SessionControl, pick: RewindPick, mode: RewindMode, current: () => boolean) {
+    if (!current()) return
+    const run = () => {
+      void this.performRewind(control, pick, mode, current)
+      return true
+    }
+    if (this.deps.onMain) this.deps.onMain(run)
+    else run()
+  }
+
+  private async performRewind(
+    control: SessionControl,
+    pick: RewindPick,
+    mode: RewindMode,
+    current: () => boolean,
+  ) {
+    if (!current()) return
     const text = messageText(pick.m)
     try {
-      if ("fork" in mode) await control.fork!(pick.index)
-      else await control.rewind!(pick.index, { restoreFiles: mode.restoreFiles })
+      const run = () =>
+        "fork" in mode
+          ? control.fork!(pick.index)
+          : control.rewind!(pick.index, { restoreFiles: mode.restoreFiles })
+      if (this.deps.runOperation) await this.deps.runOperation(current, run)
+      else await run()
     } catch (err) {
+      if (!current()) return
       this.deps.view.notice("warning", `Cannot rewind: ${err instanceof Error ? err.message : String(err)}`)
       this.deps.view.requestRender()
       return
     }
+    if (!current()) return
     const back = pick.m.content.some((b) => b.type === "image")
       ? messageParts(pick.m)
       : (this.deps.sentParts.get(userText(pick.m)) ?? [text])

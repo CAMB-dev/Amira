@@ -9,14 +9,17 @@ type ClockTimer = ReturnType<typeof setInterval> | number
 
 export function createActivityShimmer(
   terminal: Terminal,
-  activity: TurnActivity,
+  activity: TurnActivity | (() => TurnActivity),
   themes: RuntimeThemes,
   overlays: OverlayManager,
   requestRender: () => void,
 ) {
   return createShimmerClock({
     terminal,
-    active: () => activity.shimmerVisible && (activity.working || activity.compacting || themes.previewing),
+    active: () => {
+      const current = typeof activity === "function" ? activity() : activity
+      return current.shimmerVisible && (current.working || current.compacting || themes.previewing)
+    },
     covered: () => overlays.hasFullscreen,
     requestRender,
   })

@@ -37,6 +37,7 @@ import {
 } from "@amira/proc"
 import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
+import { ownCommandViews } from "./command-view-context.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { SettingsSources } from "./config/load.ts"
 import type { EventBus } from "./event-bus.ts"
@@ -612,14 +613,8 @@ export class ExtensionHost {
     // The jobs and listeners this extension adds through the API end with it.
     const backgroundJobs = new ExtensionBackgroundJobs(this.backgroundJobs)
     track(() => backgroundJobs.dispose())
-    const withViews = (ctx: CommandContext): CommandContext => {
-      const open = ctx.openView
-      if (!open) return ctx
-      return {
-        ...ctx,
-        openView: (view) => !lifetime.aborted && open(this.views.own(view, lifetime)),
-      }
-    }
+    const withViews = (ctx: CommandContext): CommandContext =>
+      ownCommandViews(ctx, lifetime, (view) => this.views.own(view, lifetime))
     const terminal: TerminalApi = {
       setTitle: (title) => {
         if (!lifetime.aborted) this.#terminal?.setTitle(title)

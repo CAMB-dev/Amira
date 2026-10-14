@@ -181,7 +181,15 @@ export class UiRequests {
     if (this.formMode === "dialogs") {
       const api = this.api(opts.source)
       const signal = timeoutSignal(opts)
-      return runFormDialogs(spec, api, signal ? { signal } : {})
+      return runFormDialogs(
+        spec,
+        {
+          select: (title, options, dialogOpts) =>
+            api.select(title, options, { ...dialogOpts, sessionId: opts.sessionId }),
+          input: (title, dialogOpts) => api.input(title, { ...dialogOpts, sessionId: opts.sessionId }),
+        },
+        signal ? { signal } : {},
+      )
     }
     const form: FormState = { spec, options: {}, running: new Set() }
     return this.#ask({ kind: "form", ...toFormSchema(spec) }, opts, form) as Promise<FormValues | undefined>
@@ -196,12 +204,14 @@ export class UiRequests {
   ) {
     if (opts.signal?.aborted) return Promise.resolve(undefined)
     const requestId = `ui_${++this.#seq}_${crypto.randomUUID().slice(0, 6)}`
+    const sessionId = opts.sessionId ?? this.#sessionId
     const sourceLabel = opts.source ? this.#sourceLabels.get(opts.source) : undefined
     const presentation = live ? selectPresentation(live) : undefined
     const event = {
       ...request,
       ...presentation,
       requestId,
+      sessionId,
       ...(opts.source ? { source: opts.source } : {}),
       ...(sourceLabel !== undefined ? { sourceLabel } : {}),
     } as EventMap["ui.request"]
@@ -239,10 +249,10 @@ export class UiRequests {
             optionStatuses: next.optionStatuses,
             descriptions: next.descriptions,
           }
-          this.#bus.emit("ui.request", pending.request, { sessionId: this.#sessionId })
+          this.#bus.emit("ui.request", pending.request, { sessionId })
         })
       }
-      this.#bus.emit("ui.request", event, { sessionId: this.#sessionId })
+      this.#bus.emit("ui.request", event, { sessionId })
     })
   }
 
@@ -275,7 +285,7 @@ export class UiRequests {
           this.#bus.emit(
             "ui.progress",
             { requestId, action: "save", text: error },
-            { sessionId: this.#sessionId },
+            { sessionId: p.request.sessionId ?? this.#sessionId },
           )
       })
       return undefined
@@ -337,8 +347,9 @@ export class UiRequests {
     values: Record<string, unknown>,
     opts: { signal?: AbortSignal; onProgress?: (text: string) => void } = {},
   ): Promise<FormActionResult> {
-    const form = this.#pending.get(requestId)?.form
-    if (!form) return { message: `no pending form "${requestId}"`, tone: "error" }
+    const pending = this.#pending.get(requestId)
+    if (!pending?.form) return { message: `no pending form "${requestId}"`, tone: "error" }
+    const form = pending.form
     const controller = new AbortController()
     const onAbort = () => controller.abort()
     opts.signal?.addEventListener("abort", onAbort, { once: true })
@@ -352,7 +363,11 @@ export class UiRequests {
         progress: (text) => {
           if (controller.signal.aborted) return
           opts.onProgress?.(text)
-          this.#bus.emit("ui.progress", { requestId, action, text }, { sessionId: this.#sessionId })
+          this.#bus.emit(
+            "ui.progress",
+            { requestId, action, text },
+            { sessionId: pending.request.sessionId ?? this.#sessionId },
+          )
         },
       })
       if (!controller.signal.aborted && result.options) Object.assign(form.options, result.options)
@@ -471,7 +486,7 @@ export class UiRequests {
         cancelled: value === undefined,
         ...(shareable ? { value: value as string | boolean } : {}),
       },
-      { sessionId: this.#sessionId },
+      { sessionId: r.sessionId ?? this.#sessionId },
     )
     p.resolve(value)
   }

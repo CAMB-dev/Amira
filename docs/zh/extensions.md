@@ -444,18 +444,28 @@ export default defineExtension((api) => {
 
 ### 扩展拥有的持久会话
 
-`api.conversations?: OwnedConversations` 是可选宿主能力，使用前必须检测。不能用临时子 agent 替代它，却声称历史已保存。与 `/btw` 风格的子 agent 不同，owned conversation 有稳定的 owner/key 身份、独立保存的会话和单写者租约。它属于扩展，不属于当前主会话；主会话的 `/clear`、`/resume`、rewind 和 fork 不会停止它或改变其绑定。关闭视图只隐藏内容。本 API 不提供原生对话记录或输入框焦点切换。
+`api.conversations?: OwnedConversations` 是可选宿主能力，使用前必须检测。不能用临时子 agent 替代它，却声称历史已保存。与 `/btw` 风格的子 agent 不同，owned conversation 有稳定的 owner/key 身份、独立保存的会话和单写者租约。它属于扩展，不属于当前主会话；主会话的 `/clear`、`/resume`、rewind 和 fork 不会停止它或改变其绑定。关闭视图只隐藏内容。TUI 可将焦点切换到此会话，使用同一原生对话记录和输入框，主会话仍在后台继续运行。
 
 - `openOrCreate(spec, runtime): Promise<OwnedConversation>` 打开所属扩展已保存的 key，或创建新会话。`open(id, runtime)` 只能打开该扩展拥有的会话。另一个宿主或进程持有租约时会得到明确的 **in use** 错误。同一扩展实例重复打开会返回现有句柄。
 - `ConversationSpec` 包含 `key`、`name`、绝对路径 `cwd`、可选的 `model`（`provider/model`）、`systemPrompt` 和必填的 `callableTools: string[]`。宿主保存此规格；重新打开不能悄悄修改它或扩大工具权限。此类历史独立于普通主会话的列表、resume 和 fork 路径。
 - `ConversationRuntime` 包含必填的 `askUser(questions, { sessionId, signal }): Promise<AskAnswer[] | undefined>` 和可选的 `extraTools: ToolDefinition[]`。每次重新打开都要绑定回调与执行函数；它们不序列化。缺少必要工具时拒绝运行。提问直接进入此回调，绝不交给主会话模型回答。回调必须展示真实的人类选择、响应取消，并在返回前保存需要的决策证据。返回 `undefined` 表示取消。
-- 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `send(text, { signal? })` 才启动一轮，在该轮结束时完成；并发 send 会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
+- 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `OwnedConversation.send(text, { images?: ImageBlock[], display?: MessageDisplay, signal? })` 才启动一轮，仅发送图片时文本可为空；在该轮结束时完成，并发 send 会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
 - 保存的 callable allowlist 在审批前限制本地工具执行，并从 provider 请求中排除不允许的托管工具，包括压缩请求。`createGroup(options)` 绑定到此会话。后代只能使用继承权限的交集，不能运行 shell 工具或使用 worktree，不能扩大权限上限。允许工具名意味着信任其实现；这不是扩展代码的沙箱。
 - 句柄提供 `id`、`key`、`name`、`cwd`、绑定的 `data: SessionData`、`history()`（当前完整分支的不可变快照，包含已被压缩替代的消息）、`status()`（state 和 busy）及 `events: AsyncIterable<AnyEvent>`。`OwnedConversation.events` 包含此会话及普通后代的事件，携带各自的 sessionId，不进入主对话总线。临时后代保留私有总线；扩展必须改用它们的 `ChildSession.events`。先订阅，再读取历史和状态快照。事件不重放；用 history 恢复保存的消息，按 session/turn/tool-call id 关联工具行。
 - 绑定的 `SessionData.append(key, data): void` 不提供持久写入确认。磁盘故障通过 `extension.error` 异步报告；`append()` 返回不代表已持久提交。如果决策证据要求持久提交，必须先提交到扩展自行控制的存储，再回答 `askUser` 问题。
 - `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。此 API 不提供删除；卸载或移除包后历史仍保留。
 
-自定义视图可以展示独立会话，而不替换主输入框：
+`CommandContext.focusConversation?(owned: OwnedConversation): boolean` 聚焦独立会话；`unfocusConversation?(): boolean` 返回主会话。使用前检测这两个方法：仅 TUI 的内联和全屏模式提供；无法切换时返回 `false`（聚焦已释放句柄也会失败）。聚焦或返回都不停止工作，也不释放任何会话；释放已聚焦的句柄或卸载所属扩展会返回主会话。渲染器的保留控制属于宿主内部实现，不是公共扩展 API。
+
+焦点提示显示会话名称、主会话的 `working`/`idle` 状态和待回答的主会话问题。主会话的待处理提示在全屏覆盖层内容上方或下方的预留界面区域保持可见。输入框占位文本以 `Message <owned name>` 标明目标会话。F6（配置的 `view.focus` 绑定）返回主会话；已聚焦会话空闲且输入框为空时，Esc 也返回。工作期间，Esc/Ctrl+C 只停止已聚焦会话，不停止主会话。对话框、补全列表和历史搜索保留按键优先级。草稿、提示词历史、图片附件和粘贴内容按会话隔离；`@` 文件补全使用此会话的 `cwd`。每次切换焦点都会保存原会话草稿并恢复目标草稿，但会重置完整的编辑缓冲区：撤销/重做历史、kill ring 和 yank 状态，包括其中保留的图片和粘贴快照。普通 `setParts` 行为不变。斜杠命令和 skill 会被拦截并提示先返回主会话：输入保留，必须在那里显式执行。
+
+切换前会先取消历史搜索，再保存原始草稿。未完成的括号粘贴在输入归属切换时丢弃，剩余字节会被隔离至结束标记到达，包括超时之后。聚焦独立会话期间，主会话的回退请求（包括延迟的双击 Esc 和保留的 `openRewind()` 调用）会等待；焦点提示显示主会话有待处理事项。返回主会话且主会话就绪后才打开选择器，恢复的提示词只进入主会话草稿。
+
+命令、skill 和输入处理器的 `openView()` 能力绑定到创建上下文时的会话。若延迟打开时焦点已在其他会话，或原主会话已被替换，则返回 `false`，不会接管当前对话记录或输入框。切换焦点只暂停待回答问题的编辑器，不会取消请求；返回时会恢复未完成答案、选择和光标位置。回答或取消请求会释放保存的编辑状态。
+
+全屏和内联切换均显示 `— design: <name> —` 或 `— main —`，使用独立会话名称，绝不显示原始 ID。内联切换不会将历史重新打印到终端滚动记录中。隐藏期间暂存的新输出可在返回时显示。全屏模式显示已聚焦会话保存的对话记录。
+
+`UiRequestOptions.sessionId?: string` 将 UI 请求关联到某个会话（默认关联宿主会话），用于展示和按会话取消审批，不改变执行归属或权限。取消审批只停止所关联的会话，绝不停止无关的主会话或已聚焦会话。所有 UI 请求类型在 RPC 实时/重放的 `ui.request` 事件和 `state.uiRequests` 中均保留此关联，包括请求更新；`ui.resolved` 和 `ui.progress` 在事件封装的 `sessionId` 中保留此关联。RPC 顶层的 `state.sessionId` 仍是主会话 ID。后代请求在元数据中保留子会话 ID；原生宿主会将其映射到所属会话以展示和取消审批，包括聚焦前已经等待回答的请求。将 runtime 提供的 `sessionId` 和 `signal` 转发给 `ctx.ui.ask`，让问题显示在对应会话中：
 
 ```ts
 api.registerCommand({
@@ -467,17 +477,14 @@ api.registerCommand({
       systemPrompt: "Research and discuss notes. Ask the human before recording decisions.",
       callableTools: ["read", "grep", "glob", "ask_user"],
     }, {
-      // Application-owned callback: render choices in the view and honor signal.
-      askUser: presentQuestionsInView,
+      askUser: (questions, { sessionId, signal }) => ctx.ui.ask(questions, { sessionId, signal }),
     })
-    ctx.openView?.({ kind: "saved-notes", data: conversation })
-    // The registered view's submit handler calls conversation.send(text).
-    // Its onClose hides the view; it does not stop or release the conversation.
+    if (!ctx.focusConversation?.(conversation)) ctx.print("Native conversation focus is unavailable")
   },
 })
 ```
 
-自行实现 `presentQuestionsInView` 并注册 `saved-notes`；从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能把独立会话的问题放进被遮挡的主会话对话框，也不能在视图无法展示问题时推断用户选择。新增的公共会话接口、`api.conversations` 能力和 `ToolSession.restricted` 要求维护者在发布前提升 `API_VERSION`。此处不修改版本文件；仍须检测能力是否可用。
+自定义视图仍可展示独立会话，而不替换主输入框。从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能省略独立会话问题的 `sessionId`，也不能在无法展示问题时推断用户选择。
 
 ### 子 agent 控制
 

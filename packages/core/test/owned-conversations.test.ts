@@ -2,8 +2,8 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, readdirSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import type { AnyEvent } from "@amira/api"
+import { createAi, createMockDialect, type MessageDisplay, type MockStep, type UserMessage } from "@amira/ai"
+import type { AnyEvent, ImageBlock } from "@amira/api"
 import { type ConversationRuntime, type ConversationSpec, defineTool, textResult } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { OwnedConversationManager } from "../src/owned-conversations.ts"
@@ -84,6 +84,103 @@ test("owner/key creation is durable and reopen is inert outside root enumeration
   expect(next.history().map((message) => message.role)).toEqual(["user", "assistant"])
   expect(f.mock.requests).toHaveLength(1)
   await expect(handle.send("stale")).rejects.toThrow("released")
+})
+
+test("owned sends preserve text and image attachments in events, history and reopened history", async () => {
+  const f = setup([{ text: "image answer" }, { text: "image-only answer" }])
+  const owner = f.manager().forOwner("project")
+  const handle = await owner.openOrCreate(f.spec, f.runtime)
+  const images: ImageBlock[] = [
+    { type: "image", name: "diagram.png", mimeType: "image/png", data: "aW1hZ2U=" },
+  ]
+  const events: AnyEvent[] = []
+  const iterator = handle.events[Symbol.asyncIterator]()
+  const collect = (async () => {
+    for (;;) {
+      const next = await iterator.next()
+      if (next.done) break
+      events.push(next.value)
+    }
+  })()
+  await handle.send("Describe this", { images })
+  await handle.send("", { images, signal: new AbortController().signal })
+  const expected: UserMessage[] = [
+    { role: "user", content: [{ type: "text", text: "Describe this" }, ...images] },
+    { role: "user", content: images },
+  ]
+  expect(handle.history().filter((message) => message.role === "user")).toEqual(expected)
+  expect(f.mock.requests[0]?.messages.at(-1)).toEqual(expected[0])
+  expect(f.mock.requests[1]?.messages.at(-1)).toEqual(expected[1])
+  await handle.release()
+  await collect
+  expect(events.flatMap((event) => (event.type === "turn.start" ? [event.data.prompt] : []))).toEqual(
+    expected,
+  )
+  const reopened = await owner.open(handle.id, f.runtime)
+  expect(reopened.history().filter((message) => message.role === "user")).toEqual(expected)
+  expect(f.main().messages).toEqual([])
+})
+
+test("owned sends preserve message display for text and images without exposing it to the model", async () => {
+  const f = setup([{ text: "paste answer" }, { text: "image answer" }, { text: "image-only answer" }])
+  const owner = f.manager().forOwner("project")
+  const handle = await owner.openOrCreate(f.spec, f.runtime)
+  const images: ImageBlock[] = [
+    { type: "image", name: "diagram.png", mimeType: "image/png", data: "aW1hZ2U=" },
+  ]
+  const pasteDisplay: MessageDisplay = { text: "[Paste #1 +3 lines]", note: "Folded paste" }
+  const imageDisplay: MessageDisplay = { text: "Describe this [Image #1]" }
+  const imageOnlyDisplay: MessageDisplay = { text: "[Image #1]" }
+  const events: AnyEvent[] = []
+  const iterator = handle.events[Symbol.asyncIterator]()
+  const collect = (async () => {
+    for (;;) {
+      const next = await iterator.next()
+      if (next.done) break
+      events.push(next.value)
+    }
+  })()
+  await handle.send("first\nsecond\nthird", { display: pasteDisplay })
+  await handle.send("Describe this", { images, display: imageDisplay })
+  await handle.send("", { images, display: imageOnlyDisplay })
+  const expected: UserMessage[] = [
+    { role: "user", content: [{ type: "text", text: "first\nsecond\nthird" }], display: pasteDisplay },
+    {
+      role: "user",
+      content: [{ type: "text", text: "Describe this" }, ...images],
+      display: imageDisplay,
+    },
+    { role: "user", content: images, display: imageOnlyDisplay },
+  ]
+  expect(handle.history().filter((message) => message.role === "user")).toEqual(expected)
+  expect(f.mock.requests.map((request) => request.messages.at(-1))).toEqual(
+    expected.map(({ display: _, ...message }) => message),
+  )
+  await handle.release()
+  await collect
+  expect(events.flatMap((event) => (event.type === "turn.start" ? [event.data.prompt] : []))).toEqual(
+    expected,
+  )
+  const reopened = await owner.open(handle.id, f.runtime)
+  expect(reopened.history().filter((message) => message.role === "user")).toEqual(expected)
+  expect(f.main().messages).toEqual([])
+})
+
+test("release completes existing and future event iterators for frontend lifecycle cleanup", async () => {
+  const f = setup()
+  const manager = f.manager()
+  const handle = await manager.forOwner("project").openOrCreate(f.spec, f.runtime)
+  const iterators = [handle.events[Symbol.asyncIterator](), handle.events[Symbol.asyncIterator]()]
+  const collectors = iterators.map(async (iterator) => {
+    while (!(await iterator.next()).done) {}
+    return "released"
+  })
+  await manager.releaseOwner("project")
+  expect(await Promise.all(collectors)).toEqual(["released", "released"])
+  for (const iterator of iterators) {
+    expect(await iterator.next()).toEqual({ value: undefined, done: true })
+  }
+  expect(await handle.events[Symbol.asyncIterator]().next()).toEqual({ value: undefined, done: true })
 })
 
 test("two hosts cannot share a writer, and foreign owners or incompatible specs fail closed", async () => {

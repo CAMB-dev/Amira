@@ -13,6 +13,7 @@ import type {
   SkillInfo,
 } from "@amira/api"
 import type { Agent } from "./agent.ts"
+import { bindCommandViewContext } from "./command-view-context.ts"
 import type { EventBus } from "./event-bus.ts"
 import { parseSkillLine, type SkillRegistry } from "./skills.ts"
 import type { UiRequests } from "./ui-requests.ts"
@@ -268,6 +269,10 @@ export interface CommandRunOptions {
   openView?: (view: FrontendView) => boolean
   /** Opens the frontend's rewind picker; frontends without one leave it out. */
   openRewind?: () => boolean
+  /** Focuses an owned conversation's native transcript and composer, where supported. */
+  focusConversation?: CommandContext["focusConversation"]
+  /** Returns to the main transcript and composer, where supported. */
+  unfocusConversation?: CommandContext["unfocusConversation"]
   /** The frontend's most useful keys, for /help; frontends without keys leave it out. */
   keys?: CommandContext["keys"]
   glyphs?: CommandContext["glyphs"]
@@ -323,6 +328,7 @@ type Resolved =
 export class CommandHost {
   #opts: CommandHostOptions
   #agent: Agent
+  #contextGeneration = 0
   #listeners = new Set<(agent: Agent) => void>()
 
   constructor(opts: CommandHostOptions) {
@@ -340,6 +346,7 @@ export class CommandHost {
 
   /** Makes `agent` the active session and tells every listener. */
   switchTo(agent: Agent): void {
+    this.#contextGeneration++
     this.#agent = agent
     for (const fn of this.#listeners) fn(agent)
   }
@@ -628,6 +635,9 @@ export class CommandHost {
   }
 
   #context(opts: CommandRunOptions, print: CommandContext["print"], source?: string): CommandContext {
+    const agent = this.#agent
+    const generation = this.#contextGeneration
+    const currentRoot = () => this.#agent === agent && this.#contextGeneration === generation
     const control = this.#opts.contextControl?.(source) ?? this.#opts.control
     return {
       cwd: this.#agent.cwd,
@@ -653,8 +663,10 @@ export class CommandHost {
       skills: () => this.skills(),
       aliases: () => this.aliases(),
       quit: opts.quit ?? (() => {}),
-      ...(opts.openView ? { openView: opts.openView } : {}),
+      ...(opts.openView ? { openView: bindCommandViewContext(opts.openView, currentRoot) } : {}),
       ...(opts.openRewind ? { openRewind: opts.openRewind } : {}),
+      ...(opts.focusConversation ? { focusConversation: opts.focusConversation } : {}),
+      ...(opts.unfocusConversation ? { unfocusConversation: opts.unfocusConversation } : {}),
       ...(opts.keys ? { keys: opts.keys } : {}),
       ...(opts.glyphs ? { glyphs: opts.glyphs } : {}),
     }

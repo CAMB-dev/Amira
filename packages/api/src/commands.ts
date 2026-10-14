@@ -8,6 +8,7 @@ import type {
   ReasoningEffort,
   Usage,
 } from "@amira/ai"
+import type { OwnedConversation } from "./conversations.ts"
 import type { CompactionUsage } from "./events.ts"
 import type { ExtensionAdmin } from "./extensions-admin.ts"
 import type { FileRewindPlan, RewindOptions } from "./file-rewind.ts"
@@ -164,6 +165,17 @@ export interface CommandContext extends CommandCompleteContext {
    * a turn or while it is already open.
    */
   readonly openRewind?: () => boolean
+  /**
+   * Shows an owned conversation in the native transcript and composer; unset on frontends
+   * without this capability. Returns true when focused, false when it cannot be shown now
+   * or the handle has been released. Does not switch, stop or release the main session.
+   */
+  focusConversation?(conversation: OwnedConversation): boolean
+  /**
+   * Returns to the main transcript and composer without stopping or releasing owned work.
+   * Unset on unsupported frontends; returns false when the frontend cannot return now.
+   */
+  unfocusConversation?(): boolean
 }
 
 /**

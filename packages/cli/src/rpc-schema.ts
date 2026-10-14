@@ -9,6 +9,13 @@ const ref = (name: string): Schema => ({ $ref: `#/$defs/${name}` })
 const oneOf = (...schemas: Schema[]): Schema => ({ oneOf: schemas })
 const strings = (...values: string[]): Schema => ({ enum: values })
 const arrayOf = (items: Schema): Schema => ({ type: "array", items })
+const uiRequestSession = {
+  "sessionId?": {
+    ...str,
+    description: "Display association only; does not grant access to or control over the conversation.",
+  },
+}
+const extensionSettingBase = { key: str, label: str, "description?": str }
 const thinkingLevels = ["low", "medium", "high", "xhigh", "max"]
 const thinkingState = {
   supportsThinking: { ...bool, description: "Whether the current model supports thinking." },
@@ -677,6 +684,7 @@ export function rpcSchema(): Schema {
       UiRequest: oneOf(
         obj({
           kind: strings("select"),
+          ...uiRequestSession,
           title: str,
           options: arrayOf(str),
           "optionLabels?": {
@@ -717,6 +725,7 @@ export function rpcSchema(): Schema {
         }),
         obj({
           kind: strings("confirm"),
+          ...uiRequestSession,
           title: str,
           "message?": str,
           "always?": {
@@ -736,22 +745,24 @@ export function rpcSchema(): Schema {
         }),
         obj({
           kind: strings("input"),
+          ...uiRequestSession,
           title: str,
           "placeholder?": str,
           "initial?": str,
           "secret?": { ...bool, description: "Mask what is typed; never echo or store the answer." },
         }),
         obj(
-          { kind: strings("diff-review"), title: str, diff: str, options: arrayOf(str) },
+          { kind: strings("diff-review"), ...uiRequestSession, title: str, diff: str, options: arrayOf(str) },
           "A unified diff to review; answer with one of the options.",
         ),
         obj(
-          { kind: strings("ask"), title: str, questions: arrayOf(ref("AskQuestion")) },
+          { kind: strings("ask"), ...uiRequestSession, title: str, questions: arrayOf(ref("AskQuestion")) },
           'Questions from the ask_user tool, shown one after another; answer with an array holding one AskAnswer per question, in order. Every question also takes free text ("Other").',
         ),
         obj(
           {
             kind: strings("form"),
+            ...uiRequestSession,
             title: str,
             "description?": str,
             fields: arrayOf(ref("FormField")),
@@ -760,6 +771,45 @@ export function rpcSchema(): Schema {
           },
           "A form; answer with an object of values by field id. Run its action fields with ui.action.",
         ),
+        obj({
+          kind: strings("extension-settings"),
+          ...uiRequestSession,
+          name: str,
+          title: str,
+          fields: arrayOf(ref("ExtensionSettingField")),
+          values: { type: "object", additionalProperties: oneOf(str, num, bool) },
+          "sources?": {
+            type: "object",
+            additionalProperties: strings("user", "project", "project-local", "flags"),
+          },
+          scope: strings("user", "project"),
+        }),
+      ),
+      ExtensionSettingField: oneOf(
+        obj({
+          ...extensionSettingBase,
+          type: strings("number"),
+          default: num,
+          "min?": num,
+          "max?": num,
+          "step?": num,
+        }),
+        obj({ ...extensionSettingBase, type: strings("toggle"), default: bool }),
+        obj({
+          ...extensionSettingBase,
+          type: strings("choice"),
+          default: str,
+          options: arrayOf(oneOf(str, obj({ value: str, "label?": str, "description?": str }))),
+        }),
+        obj({
+          ...extensionSettingBase,
+          type: strings("text"),
+          default: str,
+          "placeholder?": str,
+          "pattern?": str,
+          "maxLength?": num,
+        }),
+        obj({ ...extensionSettingBase, type: strings("colour"), default: str }),
       ),
       AskQuestion: obj({
         question: str,

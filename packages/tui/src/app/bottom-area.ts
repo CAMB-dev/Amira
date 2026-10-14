@@ -62,6 +62,8 @@ export interface BottomAreaDeps {
   dock?: () => DockedView | undefined
   renderDock?: (width: number, ctx: RenderContext, available: number) => string[]
   focusHint?: (theme: Theme, width: number) => string | undefined
+  conversationIndicator?: (width: number) => string | undefined
+  conversationFocused?: () => boolean
   editor: Editor
   keys: Keybindings
   reaches: (spec: KeySpec) => boolean
@@ -94,6 +96,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
    * and the running turn's rate stay out of the border, so each is shown only once.
    */
   const statusItems = (): StatusEntry[] => {
+    // Root model and permission decorations must not masquerade as the owned runtime.
+    if (deps.conversationFocused?.()) return []
     const agent = deps.agent()
     const items = deps.status
       .snapshot()
@@ -160,14 +164,20 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const dialog = deps.dialogs()[0]
     if (!dialog) {
       inputBox.accentFocus = deps.focusHint?.(ctx.theme, width) !== undefined
-      const rows = inputBox.render(width, ctx)
+      const indicator = deps.conversationIndicator?.(width)
+      const rows = [...(indicator ? [ctx.theme.accent(indicator)] : []), ...inputBox.render(width, ctx)]
       composerRows = rows.length
       return rows
     }
     const lines = dialog.render(width, ctx)
     dialogRows = lines.length
     // Status is optional: leave three rows for title, selection and footer first.
-    return [...lines, ...(bottomBudget > 3 ? statusLine(statusItems(), width, ctx) : [])]
+    const indicator = deps.conversationIndicator?.(width)
+    return [
+      ...(indicator ? [ctx.theme.accent(indicator)] : []),
+      ...lines,
+      ...(bottomBudget > 3 ? statusLine(statusItems(), width, ctx) : []),
+    ]
   })
   const bottom = [
     new View((width, ctx) => (deps.mode() === "inline" ? (deps.header?.(width, ctx) ?? []) : [])),
@@ -360,6 +370,14 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       key && { text: `${bold(theme.fg2(key))}${theme.muted(` ${label}`)}`, priority }
     const interruptKey = keys.label("interrupt")
     const working = deps.activity().working
+    if (deps.conversationFocused?.())
+      return [
+        item(keys.label("view.focus"), "main", 6),
+        (working || editor.isEmpty) && item(interruptKey, working ? "stop" : "main", 6),
+        item(keys.label("tool-output"), "detail", 5),
+        item(keys.label("help"), "keys", 5),
+        !editor.isEmpty && item(newlineKey, "newline", 1),
+      ]
     const cancellable = deps.commandActivity().hasCancellable() && !deps.activity().compacting
     const waiting = deps.queued().length > 0 || deps.steering().length > 0
     const stop = cancellable ? "cancel command" : waiting ? "send queued" : "stop"
