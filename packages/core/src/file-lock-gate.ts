@@ -122,6 +122,7 @@ function takeGate(lockPath: string): (() => void) | undefined {
   const owner = leaseOwner()
   const contents = JSON.stringify(owner)
   const staging = mkdtempSync(`${gate}.pending-${process.pid}-`)
+  let published = false
   try {
     writeFileSync(path.join(staging, "owner.json"), contents)
     // Do not let POSIX rename replace a preexisting unknown EMPTY canonical directory.
@@ -133,13 +134,27 @@ function takeGate(lockPath: string): (() => void) | undefined {
     }
     try {
       renameSync(staging, gate)
+      published = true
     } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === "EPERM" || code === "EBUSY" || code === "EACCES") {
+        // Sharing errors also describe publication collisions on Windows. Only a fresh
+        // absence check preserves the error for bounded awaited acquisition; an occupied
+        // or unverifiable canonical path remains contention. A retry starts proof anew.
+        try {
+          lstatSync(gate)
+        } catch (check) {
+          if ((check as NodeJS.ErrnoException).code === "ENOENT") throw error
+        }
+        return undefined
+      }
       if (contended(error)) return undefined
       throw error
     }
   } finally {
     // Private staging is never authority. A crash here leaves only offline-cleanable debris.
-    rmSync(staging, { recursive: true, force: true })
+    // Successful rename moved the whole directory; its old pathname is no longer ours.
+    if (!published) rmSync(staging, { recursive: true, force: true })
   }
   const owned: OwnedGate = {
     gate,

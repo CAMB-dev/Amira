@@ -19,6 +19,16 @@ import { highlight, TranscriptPane } from "../src/transcript-pane.ts"
 /** A block of fixed lines that counts how often it is drawn. */
 class Counted extends Block {
   draws = 0
+  revisions = 0
+  searches = 0
+  override cacheVersion(env: BlockEnv): number | string {
+    this.revisions++
+    return super.cacheVersion(env)
+  }
+  override searchRows(plain: readonly string[], lines: readonly string[]) {
+    this.searches++
+    return super.searchRows(plain, lines)
+  }
   constructor(
     readonly kind: BlockKind,
     private text: string[],
@@ -406,10 +416,12 @@ test("performance: long sessions scroll and stream with per-frame cost bounded b
   // The first frame draws only the last blocks.
   const first = time(() => p.render(e, 40))
   expect(all.reduce((n, b) => n + b.draws, 0)).toBeLessThanOrEqual(3)
+  expect(all.reduce((n, b) => n + b.revisions, 0)).toBeLessThanOrEqual(200)
   // Streaming a reply: one frame per token, nothing else drawn again.
   const reply = new ReplyBlock("", true, false)
   p.add(reply)
   const before = all.reduce((n, b) => n + b.draws, 0)
+  const revisionsBefore = all.reduce((n, b) => n + b.revisions, 0)
   const frames: number[] = []
   for (let i = 0; i < 2000; i++) {
     reply.append(i % 20 === 19 ? "word\n\n" : "word ")
@@ -417,13 +429,19 @@ test("performance: long sessions scroll and stream with per-frame cost bounded b
     frames.push(time(() => p.render(e, 40)))
   }
   expect(all.reduce((n, b) => n + b.draws, 0) - before).toBeLessThanOrEqual(2)
+  // Cached history must not be visited once per token, either.
+  expect(all.reduce((n, b) => n + b.revisions, 0) - revisionsBefore).toBeLessThanOrEqual(200 * frames.length)
   reply.finish()
   // Paging up through a thousand pages and back to the end.
   const paging: number[] = []
+  const pagingRevisions = all.reduce((n, b) => n + b.revisions, 0)
+  const pagingDraws = all.reduce((n, b) => n + b.draws, 0)
   for (let i = 0; i < 1000; i++) {
     p.pageUp()
     paging.push(time(() => p.render(e, 40)))
   }
+  expect(all.reduce((n, b) => n + b.revisions, 0) - pagingRevisions).toBeLessThanOrEqual(200 * paging.length)
+  expect(all.reduce((n, b) => n + b.draws, 0) - pagingDraws).toBeLessThanOrEqual(3 * paging.length)
   const top = time(() => {
     p.toTop()
     p.render(e, 40)
@@ -432,33 +450,52 @@ test("performance: long sessions scroll and stream with per-frame cost bounded b
     p.follow()
     p.render(e, 40)
   })
-  const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
+  const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!
   const sorted = [...frames].sort((a, b) => a - b)
   const stats = {
     firstFrameMs: first.toFixed(2),
-    streamFrameAvgMs: avg(frames).toFixed(3),
+    streamFrameMedianMs: median(frames).toFixed(3),
     streamFrameP99Ms: sorted[Math.floor(sorted.length * 0.99)]!.toFixed(3),
-    pageFrameAvgMs: avg(paging).toFixed(3),
+    pageFrameMedianMs: median(paging).toFixed(3),
     homeMs: top.toFixed(2),
     endMs: end.toFixed(2),
   }
   console.log("transcript pane, 5000 blocks / 200k lines:", stats)
-  // Generous bounds for slow CI machines; a frame is 16 ms.
-  expect(avg(frames)).toBeLessThan(5)
-  expect(avg(paging)).toBeLessThan(5)
-  // Find reads every block once, then works from the cache.
-  const find = time(() => p.find("l39"))
-  expect(p.matchCount).toBe(5000)
-  console.log("find over 200k lines:", `${find.toFixed(1)} ms`)
+  // Warmed medians reject isolated scheduler pauses without relaxing the frame budget.
+  expect(median(frames)).toBeLessThan(5)
+  expect(median(paging)).toBeLessThan(5)
+  // Find reads every block once per new query. Warm the full search, then change the
+  // query each sample so the measurement never substitutes a cache hit for a scan.
+  p.find("l38")
+  expect(all.every((b) => b.draws === 1 && b.searches === 1)).toBe(true)
+  const finds: number[] = []
+  for (const query of ["l39", "l38", "l39"]) {
+    finds.push(time(() => p.find(query)))
+    expect(p.matchCount).toBe(5000)
+  }
+  const find = median(finds)
+  expect(all.every((b) => b.draws === 1 && b.searches === 4)).toBe(true)
+  console.log("find over 200k lines, warmed median:", `${find.toFixed(1)} ms`)
   expect(find).toBeLessThan(3000)
-  // Found again as the transcript grows (as while a reply streams): only the new block is read.
+  // Found again as the transcript grows: no old block is redrawn OR searched again.
+  // Measuring several independent arrivals avoids a single descheduled frame verdict.
   const drawn = all.reduce((n, b) => n + b.draws, 0)
-  p.add(new ReplyBlock("l39 once more", false, false))
-  const again = time(() => p.render(e, 40))
-  expect(p.matchCount).toBe(5001)
+  const arrivals: Counted[] = []
+  const incremental: number[] = []
+  for (let i = 0; i < 7; i++) {
+    const block = new Counted("assistant", ["l39 once more"])
+    arrivals.push(block)
+    p.add(block)
+    incremental.push(time(() => p.render(e, 40)))
+    expect(p.matchCount).toBe(5001 + i)
+    expect(all.every((b) => b.searches === 4)).toBe(true)
+    expect(arrivals.every((b) => b.searches === 1)).toBe(true)
+  }
   expect(all.reduce((n, b) => n + b.draws, 0)).toBe(drawn)
-  console.log("find again after a block came:", `${again.toFixed(1)} ms`)
+  const again = median(incremental)
+  console.log("find again after a block came, median:", `${again.toFixed(1)} ms`)
   expect(again).toBeLessThan(Math.max(50, find / 2))
+  expect(again).toBeLessThan(1000)
 })
 
 test("a streaming reply folded and unfolded lays its image out again", async () => {
