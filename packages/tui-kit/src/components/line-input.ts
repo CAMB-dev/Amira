@@ -94,10 +94,17 @@ export class LineInput {
    * The input as one line of at most `width` cells, with `CURSOR_MARKER` at the caret when
    * focused. An empty input shows the placeholder, muted.
    */
-  render(width: number, theme: Theme, opts: { focused?: boolean; placeholder?: string } = {}): string {
+  render(
+    width: number,
+    theme: Theme,
+    opts: { focused?: boolean; placeholder?: string; more?: string } = {},
+  ): string {
     const caret = opts.focused ? CURSOR_MARKER : ""
     if (!this.g.length) {
-      return caret + (opts.placeholder ? theme.muted(truncateToWidth(opts.placeholder, width - 1, "…")) : "")
+      return (
+        caret +
+        (opts.placeholder ? theme.muted(truncateToWidth(opts.placeholder, width - 1, opts.more ?? "…")) : "")
+      )
     }
     const shown = this.opts.mask ? this.g.map(() => this.opts.mask!) : this.g
     const widths = shown.map((s) => visibleWidth(s))

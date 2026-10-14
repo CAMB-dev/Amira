@@ -126,7 +126,7 @@ const ansiMarkdownTheme = {
   quoteBar: gray,
   listMarker: cyan,
   rule: gray,
-  /** The frame and language label of a code block. */
+  /** Structural code frame; a painted language label uses the readable surfaceMuted role. */
   codeFrame: gray,
   tableBorder: gray,
   tableHeader: bold,
@@ -241,7 +241,7 @@ export interface SurfaceTokens {
   /** Behind the words that changed within a changed line. */
   diffAddedWordBg: StyleFn
   diffRemovedWordBg: StyleFn
-  /** Muted text (line numbers, an echoed command) drawn on one of these backgrounds. */
+  /** Readable secondary labels and hints drawn on one of these backgrounds. */
   surfaceMuted: StyleFn
 }
 
@@ -377,7 +377,7 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     keyword: fg(p.keyword, blue),
     string: fg(p.string, green),
     number: fg(p.number, yellow),
-    comment: fg(p.muted),
+    comment: fg(p.fg2),
     shimmer: fg(shimmer, cyan),
     shimmerEnd: fg(shimmerEnd, blue),
   }

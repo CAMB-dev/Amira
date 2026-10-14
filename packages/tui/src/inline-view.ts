@@ -9,7 +9,6 @@ import {
 import {
   FullScreenRenderer,
   LiveRenderer,
-  MarkdownStream,
   modes,
   type RenderContext,
   Spinner,
@@ -35,6 +34,7 @@ import { historyLines } from "./history.ts"
 import { inlineBackgroundRows, inlineDisplayNodes } from "./inline-background.ts"
 import { displayCommit } from "./inline-display.ts"
 import { inlineLiveLayout } from "./inline-live-layout.ts"
+import { InlineTablePlacement } from "./inline-table-placement.ts"
 import { ACTIONS, type Action } from "./keybindings.ts"
 import { contentGeometry, marginView } from "./margins.ts"
 import { inlineNodes } from "./markdown-nodes.ts"
@@ -102,14 +102,15 @@ export function createInlineView(host: ViewHost): TranscriptView {
     },
   })
   const markerRows = new Set<string>()
-  const streaming = new MarkdownStream({
+  const tablePlacement = new InlineTablePlacement(
+    () => contentGeometry(terminal.columns, terminal.rows, host.settings, false).left,
+  )
+  const streaming = tablePlacement.stream({
     hyperlinks: host.hyperlinks,
     nodes,
     headingMarkers: false,
     markerOutset: 2,
-    onMarkerRow: (row) => {
-      markerRows.add(row)
-    },
+    onMarkerRow: (row) => markerRows.add(row),
   })
   const transcript = new Transcript()
   const toolCalls = new ToolCalls()
@@ -142,7 +143,11 @@ export function createInlineView(host: ViewHost): TranscriptView {
       lines[0] = timestampRow(lines[0]!, t, width, replyAt)
       if (committing) replyStamped = true
     }
-    return lines
+    return tablePlacement.attach(lines, rows, committing)
+  }
+  const continuedReply = (rows: string[], width: number, t: Theme) => {
+    const lines = drawReply(rows, width, t, true)
+    return tablePlacement.prepend(transcript.continue("assistant", lines), lines)
   }
   /** Tool names by call id, for the head of sub-agents that outlive their committed call. */
   const callNames = new Map<string, string>()
@@ -397,6 +402,7 @@ export function createInlineView(host: ViewHost): TranscriptView {
       thinking.length = thoughtBudget
       if (thoughtBudget > 1) thinking[thoughtBudget - 1] = ctx.theme.muted(`  ${glyphs.more}`)
     }
+    tablePlacement.beginFrame()
     streaming.maxRows = Math.max(
       1,
       ctx.rows - rest.length - tools.length - dialog.length - thinking.length - 3,
@@ -405,24 +411,18 @@ export function createInlineView(host: ViewHost): TranscriptView {
     const replyCtx: RenderContext = commit
       ? {
           ...ctx,
-          commit: (rows) => commit(transcript.continue("assistant", drawReply(rows, width, ctx.theme, true))),
+          commit: (rows) => commit(continuedReply(rows, width, ctx.theme)),
         }
       : ctx
     const reply = streaming.render(replyWidth(width), replyCtx)
     const lead = reply.length && transcript.gapBefore("assistant") ? [""] : []
-    const rows = [
-      ...dialog,
-      ...thinking,
-      ...lead,
-      ...drawReply(reply, width, ctx.theme),
-      ...tools,
-      "",
-      ...rest,
-    ]
-    return rows
+    const replyLines = drawReply(reply, width, ctx.theme)
+    const rows = [...dialog, ...thinking, ...lead, ...replyLines, ...tools, "", ...rest]
+    return tablePlacement.prepend(rows, replyLines, dialog.length + thinking.length + lead.length)
   })
   const reflow = host.settings.reflow ?? DEFAULT_TUI_REFLOW
-  const renderer = new LiveRenderer(terminal, marginView(root, host.settings, false), {
+  const margined = marginView(root, host.settings, false, (lines) => tablePlacement.insets(lines))
+  const renderer = new LiveRenderer(terminal, margined, {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     frameIntervalMs: FRAME_MS,
     theme,
@@ -745,8 +745,9 @@ export function createInlineView(host: ViewHost): TranscriptView {
       flushDialog()
       // The rows still live are committed as they are shown; earlier ones already were.
       const early = streaming.committedRows > 0
+      tablePlacement.beginFrame()
       const rows = streaming.take(replyWidth(contentWidth()))
-      if (rows.length) commit(transcript.continue("assistant", drawReply(rows, contentWidth(), theme, true)))
+      if (rows.length) commit(continuedReply(rows, contentWidth(), theme))
       markerRows.clear()
       replyAt = undefined
       transcript.end()

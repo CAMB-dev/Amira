@@ -52,10 +52,11 @@ function badge(info: SubagentInfo, opts: ViewRenderOptions, pad = false): ViewSe
   )
 }
 
-function stats(info: SubagentInfo, now: number): ViewSegment[] {
+function stats(info: SubagentInfo, opts: ViewRenderOptions): ViewSegment[] {
+  const separator = opts.glyphs?.separator ?? symbols.separator
   const timed = info.durationMs !== undefined || info.startedAt !== undefined
-  const when = info.status === "queued" || !timed ? "" : ` · ${elapsed(info, now)}`
-  return [{ kind: "muted", text: `${when} · ${usageText(info)}` }]
+  const when = info.status === "queued" || !timed ? "" : ` ${separator} ${elapsed(info, opts.now)}`
+  return [{ kind: "muted", text: `${when} ${separator} ${usageText(info, separator)}` }]
 }
 
 function blockText(message: Message): string {
@@ -65,7 +66,8 @@ function blockText(message: Message): string {
 }
 
 /** The same argument priorities as the frontend's generic tool summary. */
-function summarizeArgs(args: Record<string, unknown>): string {
+function summarizeArgs(args: Record<string, unknown>, opts: ViewRenderOptions): string {
+  const glyphs = opts.glyphs ?? symbols
   const primary = ["path", "file_path", "filePath", "command", "pattern", "url", "query", "prompt", "name"]
   const scalars = Object.entries(args).filter(
     ([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
@@ -73,14 +75,16 @@ function summarizeArgs(args: Record<string, unknown>): string {
   let lead = scalars.findIndex(([k]) => primary.includes(k))
   if (lead === -1) lead = scalars.findIndex(([, v]) => typeof v === "string")
   const oneLine = (v: unknown) => String(v).replace(/\s+/g, " ").trim()
-  const parts = scalars.flatMap(([k, v], i) => (i === lead ? [] : [`${k}=${clip(oneLine(v), 24)}`]))
+  const parts = scalars.flatMap(([k, v], i) =>
+    i === lead ? [] : [`${k}=${clip(oneLine(v), 24, glyphs.more)}`],
+  )
   if (lead !== -1) parts.unshift(oneLine(scalars[lead]![1]))
-  return clip(parts.join(" · "), 80)
+  return clip(parts.join(` ${glyphs.separator} `), 80, glyphs.more)
 }
 
 function toolLines(name: string, call: ToolCallView, opts: ViewRenderOptions, last: boolean): ViewLine[] {
   if (opts.renderTool) return opts.renderTool(name, call, opts.toolDetail ?? "summary", { last })
-  const summary = summarizeArgs(call.args)
+  const summary = summarizeArgs(call.args, opts)
   const rows = call.text.trim().split("\n")
   const mark = call.rejected
     ? symbols.toolInterrupted
@@ -135,7 +139,7 @@ function transcriptLines(
   const rest = [...kids]
   const state = agentStatusState(info)
   const unstarted = (name: string, args: Record<string, unknown>): ViewLine => {
-    const summary = summarizeArgs(args)
+    const summary = summarizeArgs(args, opts)
     return {
       kind: "segments",
       parts: [
@@ -151,11 +155,17 @@ function transcriptLines(
       { kind: "text", text: indent },
       ...badge(kid, opts, true),
       { kind: "text", text: ` ${kid.title} ` },
-      { kind: "muted", text: `· ${kid.role} · ${kid.id}` },
+      {
+        kind: "muted",
+        text: `${opts.glyphs?.separator ?? symbols.separator} ${kid.role} ${opts.glyphs?.separator ?? symbols.separator} ${kid.id}`,
+      },
       { kind: "text", text: " " },
-      ...stats(kid, opts.now),
+      ...stats(kid, opts),
       { kind: "text", text: " " },
-      { kind: "muted", text: `· ${kid.task.replace(/\s+/g, " ").trim()}` },
+      {
+        kind: "muted",
+        text: `${opts.glyphs?.separator ?? symbols.separator} ${kid.task.replace(/\s+/g, " ").trim()}`,
+      },
     ],
   })
   const blocks = own.flatMap((message) =>
@@ -234,7 +244,7 @@ function transcriptLines(
             ...(opts.renderRunningTool?.(block.name, { args: block.args, ...execution }, { last }) ?? [
               {
                 kind: "text",
-                text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}${summarizeArgs(block.args) ? ` ${summarizeArgs(block.args)}` : ""}  running`,
+                text: `${last ? symbols.treeLast : symbols.treeBranch} ${block.name}${summarizeArgs(block.args, opts) ? ` ${summarizeArgs(block.args, opts)}` : ""}  running`,
               },
             ]),
           )
@@ -253,7 +263,7 @@ function transcriptLines(
       if (block.name === "agent") {
         flush()
         for (const kid of callKids(rest, block))
-          out.push(kidLine(kid, `  ${last ? " " : symbols.treePipe}  `))
+          out.push(kidLine(kid, `  ${last ? " " : (opts.glyphs?.treePipe ?? symbols.treePipe)}  `))
       }
     }
   }
@@ -379,8 +389,11 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
             parts: [
               ...badge(info, opts),
               { kind: "text", text: ` ${info.title}` },
-              ...stats(info, opts.now),
-              { kind: "muted", text: ` · ${info.role} · ${info.id}` },
+              ...stats(info, opts),
+              {
+                kind: "muted",
+                text: ` ${opts.glyphs?.separator ?? symbols.separator} ${info.role} ${opts.glyphs?.separator ?? symbols.separator} ${info.id}`,
+              },
             ],
           }
         : { kind: "warning", text: `No sub-agent ${data.sessionId} in this session.` }
@@ -396,7 +409,7 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
         ? [
             {
               kind: "muted",
-              text: `  ${clip(`task: ${info.task.replace(/\s+/g, " ").trim()}`, Math.max(1, opts.width - 2))}`,
+              text: `  ${clip(`task: ${info.task.replace(/\s+/g, " ").trim()}`, Math.max(1, opts.width - 2), opts.glyphs?.more ?? symbols.more)}`,
             },
           ]
         : []
@@ -421,17 +434,17 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
         if (info.error && state !== "done")
           out.push({
             kind: state === "stopped" ? "warning" : "error",
-            text: `${state === "stopped" ? AGENT_STATUS_BADGES.stopped.symbol : symbols.error} ${info.error}`,
+            text: `${state === "stopped" ? (opts.glyphs?.statusStopped ?? AGENT_STATUS_BADGES.stopped.symbol) : (opts.glyphs?.error ?? symbols.error)} ${info.error}`,
           })
         else if (info.note && state === "stopped")
           out.push({
             kind: "warning",
-            text: `${symbols.interrupted} ${subagentStateText(info)}: ${info.note}`,
+            text: `${opts.glyphs?.interrupted ?? symbols.interrupted} ${subagentStateText(info)}: ${info.note}`,
           })
         else
           out.push({
             kind: state === "stopped" ? "warning" : "muted",
-            text: `── ${subagentStateText(info)} ──`,
+            text: `${(opts.glyphs?.rule ?? symbols.rule).repeat(2)} ${subagentStateText(info)} ${(opts.glyphs?.rule ?? symbols.rule).repeat(2)}`,
           })
       }
       return out

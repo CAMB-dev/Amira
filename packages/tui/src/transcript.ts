@@ -89,7 +89,7 @@ export const INTERRUPTED_NOTICE = "Interrupted"
  */
 export function modelErrorNotice(error: string | undefined): string {
   const said = error?.trim() || "The model request failed"
-  return `${said}\n↑ recalls the prompt · /model switches models`
+  return `${said}\n${glyphs.arrowUp} recalls the prompt ${glyphs.separator} /model switches models`
 }
 
 /**

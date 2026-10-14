@@ -46,6 +46,10 @@ export interface MarkdownStreamOptions {
   onMarkerRow?: (row: string) => void
   /** Host-only code chrome metadata; language labels and surface edges are not searchable text. */
   onCodeRow?: (row: string, kind: "top" | "body" | "bottom", col: number) => void
+  /** Host-only table placement metadata; identity survives live preview copies. */
+  onTableRow?: (row: string, table: object, commit: boolean) => void
+  /** Width remaining after the host's retained table inset. */
+  tableWidth?: (table: object, width: number) => number
   glyphs?: Glyphs
   /** Make links clickable with OSC 8. Defaults to what the terminal is known to support. */
   hyperlinks?: boolean
@@ -187,6 +191,8 @@ export class MarkdownStream implements Component {
   private readonly markerOutset: number
   private readonly onMarkerRow: MarkdownStreamOptions["onMarkerRow"]
   private readonly onCodeRow: MarkdownStreamOptions["onCodeRow"]
+  private readonly onTableRow: MarkdownStreamOptions["onTableRow"]
+  private readonly tableWidth: MarkdownStreamOptions["tableWidth"]
   private readonly nodes: MarkdownNodes | undefined
   private state = newState()
   /** Text not processed yet: complete lines, then the partial line being written. */
@@ -211,6 +217,8 @@ export class MarkdownStream implements Component {
     this.markerOutset = opts.markerOutset ?? 0
     this.onMarkerRow = opts.onMarkerRow
     this.onCodeRow = opts.onCodeRow
+    this.onTableRow = opts.onTableRow
+    this.tableWidth = opts.tableWidth
     const rowsFor = opts.imageRows
     this.nodes =
       opts.nodes ??
@@ -323,6 +331,10 @@ export class MarkdownStream implements Component {
       markerOutset: this.markerOutset,
       ...(this.onMarkerRow ? { markerRow: this.onMarkerRow } : {}),
       ...(this.onCodeRow ? { codeRow: this.onCodeRow } : {}),
+      ...(this.tableWidth ? { tableWidth: this.tableWidth } : {}),
+      ...(this.onTableRow
+        ? { tableRow: (row: string, table: object) => this.onTableRow!(row, table, commit) }
+        : {}),
       ...(this.headingMarkers ? { headingMarker: this.theme.accent } : {}),
       refs: this.state.refs,
     }

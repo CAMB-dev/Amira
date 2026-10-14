@@ -256,7 +256,7 @@ export class ExtensionViewer implements Component {
             text: this.#keyBar(theme, Math.max(1, width - toggle.length - 11)),
             priority: 1,
           },
-        toggle && { text: `${toggle} → input`, priority: 10 },
+        toggle && { text: `${toggle} ${glyphs.arrowRight} input`, priority: 10 },
       ],
       width,
     )
@@ -528,7 +528,7 @@ export class ExtensionViewer implements Component {
       : []
     head.push(...this.#renderLines(extra, width, theme))
     for (const t of this.#opts.waiting?.() ?? []) head.push(waitingLine(theme, t, width))
-    head.push(theme.muted(glyphs.rule.repeat(width)))
+    head.push(theme.dim(glyphs.rule.repeat(width)))
     // A bounded dock keeps a body row and its host controls even with a tall header.
     if (this.#opts.placement === "dock") head.splice(Math.max(0, ctx.rows - 2))
     const state = this.#scrollState()
@@ -638,6 +638,7 @@ export class ExtensionViewer implements Component {
     return {
       width,
       now,
+      glyphs,
       requestRefresh: (intervalMs) => {
         if (Number.isFinite(intervalMs) && intervalMs > 0)
           this.#refreshIntervalMs = Math.min(this.#refreshIntervalMs ?? Infinity, intervalMs)
@@ -827,10 +828,18 @@ export class ExtensionViewer implements Component {
             ...(this.#opts.hostFocus
               ? [
                   this.needsTab && { text: "tab focus", priority: 2 },
-                  { text: "↑↓ navigate", priority: 2 },
+                  {
+                    text: `${[glyphs.arrowUp, glyphs.arrowDown].join(glyphs.arrowUp.length === 1 && glyphs.arrowDown.length === 1 ? "" : "/")} navigate`,
+                    priority: 2,
+                  },
                   { text: "enter open/send", priority: 2 },
                 ]
-              : [{ text: "tab focus · arrows navigate · enter open/send", priority: 2 }]),
+              : [
+                  {
+                    text: `tab focus ${glyphs.separator} arrows navigate ${glyphs.separator} enter open/send`,
+                    priority: 2,
+                  },
+                ]),
             { text: this.#scrollHint(), priority: 1 },
             { text: this.#backHint(), priority: 5 },
           ],

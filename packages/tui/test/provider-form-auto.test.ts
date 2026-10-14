@@ -444,6 +444,30 @@ test.each([false, true])(
   },
 )
 
+test("provider form clears the failed-save summary after correcting Id and fetching models", async () => {
+  const form = setup({ initial: { id: "Bad", keySource: "auth" } })
+  try {
+    form.focus("id")
+    form.view.handleInput(key("s", { ctrl: true }))
+    expect(form.screen()).toContain("before saving.")
+    expect(form.screen()).toContain("use lower-case letters")
+    form.view.handleInput(key("u", { ctrl: true }))
+    form.type("ui-walk-demo")
+    form.focus("apiKey")
+    form.type("fake-secret")
+    form.view.handleInput(key("tab"))
+    await waitFor(() => form.screen().includes("models listed"), "corrected provider models")
+    expect(form.screen()).not.toContain("before saving.")
+    expect(form.screen()).not.toContain("use lower-case letters")
+    form.focus("models")
+    form.view.handleInput(key("space"))
+    form.view.handleInput(key("s", { ctrl: true }))
+    expect(form.saved()).toMatchObject({ id: "ui-walk-demo", models: ["served-model"] })
+  } finally {
+    await form.close()
+  }
+})
+
 test("provider form has one credential label and one concise model metadata line", async () => {
   const form = setup({ initial: { keySource: "auth" } })
   try {

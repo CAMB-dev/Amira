@@ -22,7 +22,7 @@ export function viewKeyHints(keys: readonly ViewKey[]): HintItem[] {
     groups.set(label, [...(groups.get(label) ?? []), k.key])
   }
   return [...groups].map(([label, names]) => ({
-    text: `${names.map(keyLabel).join(names.every((n) => ARROWS.has(n)) ? "" : " ")} ${label}`,
+    text: `${names.map(keyLabel).join(names.every((n) => ARROWS.has(n)) ? (glyphs.arrowLeft.length === 1 && glyphs.arrowRight.length === 1 ? "" : "/") : " ")} ${label}`,
     // A view's own letters outlast its navigation keys.
     priority: names.some((n) => n.length === 1) ? 4 : 2,
   }))
@@ -36,8 +36,11 @@ export function viewInputHint(
   inputEmpty: boolean,
   dock: boolean,
 ): string {
-  const hints = [toggle && `${toggle} → view`, inputEmpty ? "esc → view" : dock && "esc close dock"]
-  return theme.muted(truncateToWidth(hints.filter(Boolean).join(" · "), width, glyphs.more))
+  const hints = [
+    toggle && `${toggle} ${glyphs.arrowRight} view`,
+    inputEmpty ? `esc ${glyphs.arrowRight} view` : dock && "esc close dock",
+  ]
+  return theme.muted(truncateToWidth(hints.filter(Boolean).join(` ${glyphs.separator} `), width, glyphs.more))
 }
 
 function keyLabel(key: string): string {
