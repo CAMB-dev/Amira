@@ -122,34 +122,34 @@ for (const mode of ["inline", "fullscreen"] as const) {
 }
 
 for (const mode of ["inline", "fullscreen"] as const) {
-  test(`Shift+Tab cycles the permission mode, shown in the input's border (${mode})`, async () => {
+  test(`Shift+Tab cycles the permission mode, shown below the input's plain border (${mode})`, async () => {
     const { agent, terminal, live, exited } = await setup([], { cols: 100, settings: { mode } })
     // Model and permission mode share a right-aligned label, including the default auto.
-    await waitFor(() => /^╰─+ m1 · auto ─╯$/m.test(live()), "the status")
+    await waitFor(() => /^╰─{98}╯\n {91}m1 · auto$/m.test(live()), "the status")
     expect(
       live()
         .split("\n")
-        .find((row) => row.startsWith("╰")),
+        .find((row) => /m1 · auto$/.test(row)),
     ).not.toContain(" mode ")
     expect(live()).toContain("shift+tab mode")
     terminal.send("\x1b[Z")
-    await waitFor(() => /^╰─+ m1 · edits ─╯$/m.test(live()), "edits in the border")
+    await waitFor(() => /^╰─{98}╯\n {90}m1 · edits$/m.test(live()), "edits below the border")
     expect(agent.permissions.mode).toBe("edits")
     expect(live()).toContain(
       "Permission mode: edits — changes files without asking; asks before shell commands",
     )
     terminal.send("\x1b[Z")
-    await waitFor(() => /^╰─+ m1 · plan ─╯$/m.test(live()), "plan in the border")
+    await waitFor(() => /^╰─{98}╯\n {91}m1 · plan$/m.test(live()), "plan below the border")
     expect(agent.permissions.mode).toBe("plan")
     terminal.send("\x1b[Z")
     await waitFor(() => live().includes("Permission mode: auto"), "back to auto")
-    await waitFor(() => /^╰─+ m1 · auto ─╯$/m.test(live()), "auto restored in the border")
+    await waitFor(() => /^╰─{98}╯\n {91}m1 · auto$/m.test(live()), "auto restored below the border")
     expect(agent.permissions.mode).toBe("auto")
     // Typed text stays: the key is not the editor's.
     terminal.send("hi")
     terminal.send("\x1b[Z")
-    await waitFor(() => /^╰─+ m1 · edits ─╯$/m.test(live()), "edits again")
-    expect(live()).toContain("› hi")
+    await waitFor(() => /^╰─{98}╯\n {90}m1 · edits$/m.test(live()), "edits again")
+    expect(live()).toContain("│›hi")
     terminal.send("\x03")
     terminal.send("\x03")
     await exited

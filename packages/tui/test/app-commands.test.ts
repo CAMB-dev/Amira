@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { userMessage } from "@amira/ai"
 import type { CommandDefinition } from "@amira/api"
@@ -12,22 +13,22 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   await waitFor(() => live().includes("/status"), "popup")
   const rows = live().split("\n")
   const popupRow = rows.findIndex((l) => l.includes("/clear"))
-  // The editor sits in the input box: "│ › /     │".
-  const editorRow = rows.findIndex((l) => /^│ › \/ *│$/.test(l.trimEnd()))
+  // A: the prompt sits inside the intact frame, with content at cell two.
+  const editorRow = rows.findIndex((l) => /^│›\/ *│$/.test(l.trimEnd()))
   expect(editorRow).toBeGreaterThan(-1)
   expect(popupRow).toBeGreaterThan(editorRow)
-  // The list takes the place of the status bar and the hint, and ends with its own hint.
+  // The list follows the separate status row, replaces the hint, and ends with its own hint.
   expect(rows.filter((l) => l.trim()).at(-1)).toContain("tab complete · enter run · esc close")
   expect(rows.slice(editorRow).join("\n")).not.toContain("mock/m1")
   expect(live()).not.toContain("shift+tab mode")
   // Prefix first: "/he" puts help on top; Tab completes it, Enter runs it.
   terminal.send("he")
-  await waitFor(() => live().includes("❯ /help"), "help selected")
+  await waitFor(() => live().includes("› /help"), "help selected")
   terminal.send("\t")
-  await waitFor(() => live().includes("› /help "), "completed")
+  await waitFor(() => live().includes("│›/help "), "completed")
   terminal.send("\r")
   await shows("HELP TEXT")
-  expect(live()).toContain("› Message Amira")
+  expect(live()).toContain("│›Message Amira")
   terminal.send("\x03")
   await exited
 })
@@ -39,17 +40,20 @@ test("typing a command: the input box stays put and each key draws one frame wit
     onWrite: (screen) => void frames.push([...screen.lines]),
   })
   await waitFor(
-    () => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}\? keys$/m.test(live()),
+    () => /^ {2}shift\+tab mode {2}· {2}ctrl\+o detail {2}· {2}\? keys$/m.test(live()),
     "first frame",
   )
   await Bun.sleep(40)
   const boxTop = (lines: string[]) => lines.findIndex((l) => l.startsWith("╭"))
   const top = boxTop(frames.at(-1)!)
   expect(top).toBeGreaterThan(-1)
-  /** The rows between the box's bottom edge and the popup's hint. */
+  /** The rows between the separate status row and the popup's hint. */
   const list = (lines: string[]) => {
-    const start = lines.findIndex((l) => l.startsWith("╰")) + 1
-    const end = lines.findIndex((l) => l.startsWith("tab complete"))
+    const bottom = lines.findIndex((l) => l.startsWith("╰"))
+    expect(lines[bottom]).toBe(`╰${"─".repeat(58)}╯`)
+    expect(lines[bottom + 1]).toBe(`${" ".repeat(51)}m1 · auto`)
+    const start = bottom + 2
+    const end = lines.findIndex((l) => l.startsWith("  tab complete"))
     return end === -1 ? [] : lines.slice(start, end).map((l) => l.trimEnd())
   }
   const steps: [string, string[]][] = [
@@ -64,13 +68,13 @@ test("typing a command: the input box stays put and each key draws one frame wit
         "  /status                  Show the status",
       ],
     ],
-    ["m", ["❯ /model [provider/model]  Switch the model"]],
-    ["o", ["❯ /model [provider/model]  Switch the model"]],
-    ["d", ["❯ /model [provider/model]  Switch the model"]],
-    ["e", ["❯ /model [provider/model]  Switch the model"]],
-    ["l", ["❯ /model [provider/model]  Switch the model"]],
-    [" ", ["❯ deepseek/deepseek-flash", "  deepseek/deepseek-pro", "  openai/gpt-5"]],
-    ["d", ["❯ deepseek/deepseek-flash", "  deepseek/deepseek-pro"]],
+    ["m", ["› /model [provider/model]  Switch the model"]],
+    ["o", ["› /model [provider/model]  Switch the model"]],
+    ["d", ["› /model [provider/model]  Switch the model"]],
+    ["e", ["› /model [provider/model]  Switch the model"]],
+    ["l", ["› /model [provider/model]  Switch the model"]],
+    [" ", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro", "  openai/gpt-5"]],
+    ["d", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro"]],
   ]
   for (const [k, expected] of steps) {
     const before = frames.length
@@ -105,14 +109,14 @@ test("async argument candidates get a frame to arrive, so the key still draws on
     onWrite: (screen) => void frames.push([...screen.lines]),
   })
   terminal.send("/pick")
-  await waitFor(() => live().includes("❯ /pick"), "popup")
+  await waitFor(() => live().includes("› /pick"), "popup")
   await Bun.sleep(40)
   const before = frames.length
   terminal.send(" ")
   await Bun.sleep(80)
   const drawn = frames.slice(before)
   expect(drawn).toHaveLength(1)
-  expect(drawn[0]!.join("\n")).toContain("❯ alpha")
+  expect(drawn[0]!.join("\n")).toContain("› alpha")
   terminal.send("\x03")
   terminal.send("\x03")
   await exited
@@ -149,13 +153,13 @@ for (const mode of ["fullscreen", "inline"] as const) {
       expect(s.all().match(/› \/swarm goal/g)).toHaveLength(1)
       expect(s.all()).not.toContain(longPrompt)
       // The note of what it loaded hangs under the echo, as the command's own output would.
-      expect(s.all()).toContain("› /swarm goal\n  └ Coordinating workers")
+      expect(s.all()).toContain("› /swarm goal\n└ Coordinating workers")
       expect(s.agent.messages[0]).toEqual(
         userMessage(longPrompt, { text: "/swarm goal", note: "Coordinating workers" }),
       )
       s.terminal.send("\x1b[27u\x1b[27u")
-      await waitFor(() => s.live().includes("? Rewind the conversation"), "rewind picker")
-      expect(s.live()).toContain("❯ 1 /swarm goal")
+      await waitFor(() => s.live().includes("Rewind the conversation"), "rewind picker")
+      expect(s.live()).toContain("│›1 /swarm goal")
       s.terminal.send("\x1b[27u")
       // A later, unrelated message with the same display must not lose its own echo.
       await s.agent.prompt(userMessage("another prompt", { text: "/swarm goal" }))
@@ -270,7 +274,7 @@ test("a command's echo and everything it prints reach the screen in one frame", 
     onWrite: (screen) => void writes.push(screen.lines.join("\n")),
   })
   terminal.send("/chatty")
-  await waitFor(() => live().includes("❯ /chatty"), "popup")
+  await waitFor(() => live().includes("› /chatty"), "popup")
   await Bun.sleep(40)
   const before = writes.length
   terminal.send("\r")
@@ -289,12 +293,12 @@ test("arguments complete after the name, ↑↓ pick one and Enter runs with it"
   terminal.send("/model ")
   await waitFor(() => live().includes("openai/gpt-5"), "model candidates")
   terminal.send("\x1b[B\x1b[B")
-  await waitFor(() => live().includes("❯ openai/gpt-5"), "selection moved")
+  await waitFor(() => live().includes("› openai/gpt-5"), "selection moved")
   terminal.send("\r")
   await shows("Model: openai/gpt-5")
   // Part of a candidate typed: Enter takes the best match.
   terminal.send("/model flash")
-  await waitFor(() => live().includes("❯ deepseek/deepseek-flash"), "filtered")
+  await waitFor(() => live().includes("› deepseek/deepseek-flash"), "filtered")
   terminal.send("\r")
   await shows("Model: deepseek/deepseek-flash")
   expect(log).toEqual(["model openai/gpt-5", "model deepseek/deepseek-flash"])
@@ -306,7 +310,7 @@ test("keys arriving in one chunk are not answered by the popup of the previous f
   const log: string[] = []
   const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
   terminal.send("/model deep")
-  await waitFor(() => live().includes("❯ deepseek/deepseek-flash"), "candidates for deep")
+  await waitFor(() => live().includes("› deepseek/deepseek-flash"), "candidates for deep")
   terminal.send("seek/deepseek-pro\r")
   await shows("Model: deepseek/deepseek-pro")
   expect(log).toEqual(["model deepseek/deepseek-pro"])
@@ -318,11 +322,11 @@ test("a command's picker is a select dialog that filters as you type", async () 
   const log: string[] = []
   const { terminal, live, shows, exited } = await setup([], { commands: testCommands(log) })
   terminal.send("/model")
-  await waitFor(() => live().includes("❯ /model"), "popup")
+  await waitFor(() => live().includes("› /model"), "popup")
   terminal.send("\r")
-  await waitFor(() => live().includes("? Model"), "picker")
+  await waitFor(() => live().includes("Model"), "picker")
   terminal.send("gpt")
-  await waitFor(() => live().includes("filter ❯ gpt") && !live().includes("deepseek-pro"), "filtered")
+  await waitFor(() => live().includes("filter: gpt") && !live().includes("deepseek-pro"), "filtered")
   terminal.send("\r")
   await shows("Model: openai/gpt-5")
   terminal.send("\x03")
@@ -333,10 +337,10 @@ test("Esc closes the popup without leaving the text; Enter then runs what was ty
   const log: string[] = []
   const { terminal, live, all, shows, exited } = await setup([], { commands: testCommands(log) })
   terminal.send("/sta")
-  await waitFor(() => live().includes("❯ /status"), "popup")
+  await waitFor(() => live().includes("› /status"), "popup")
   terminal.send("\x1b[27u")
   await waitFor(() => !live().includes("Show the status"), "closed")
-  expect(live()).toContain("› /sta")
+  expect(live()).toContain("│›/sta")
   terminal.send("tus\r")
   await shows("STATUS OK")
   expect(all()).toContain("› /status")
@@ -384,7 +388,7 @@ test("a command that sends a long prompt shows as typed, with its note, while th
   await s.idle()
   const text = s.all()
   expect(text.match(/› \/review-pr 123/g)).toHaveLength(1)
-  expect(text).toContain("› /review-pr 123\n  └ Loaded skill review-pr (40 lines)")
+  expect(text).toContain("› /review-pr 123\n└ Loaded skill review-pr (40 lines)")
   expect(text).not.toContain("instruction line")
   const sent = s.mock.requests[0]!.messages[0]!
   expect(sent).toEqual({ role: "user", content: [{ type: "text", text: long }] })
@@ -402,13 +406,13 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   expect(live().split("╰")[1]).not.toContain("/help")
   expect(live()).toContain("tab complete · enter run · esc close")
   terminal.send("rev")
-  await waitFor(() => live().includes("❯ $review-pr"), "review-pr selected")
+  await waitFor(() => live().includes("› $review-pr"), "review-pr selected")
   terminal.send("\t")
   await waitFor(() => live().includes("$review-pr [arguments]"), "usage")
   terminal.send("123\r")
   await shows("Reviewing.")
   await idle()
-  expect(all()).toMatch(/› \$review-pr 123 +\d{2}:\d{2}\n {4}└ Loaded skill review-pr \(3 lines\)/)
+  expect(all()).toMatch(/› \$review-pr 123 +\d{2}:\d{2}\n└ Loaded skill review-pr \(3 lines\)/)
   expect(all()).not.toContain("SKILL review-pr BODY")
   expect(mock.requests[0]!.messages[0]).toEqual({
     role: "user",
@@ -482,7 +486,7 @@ test("text that starts with $ but names no skill is sent as a message", async ()
   await idle()
   // "$HOME" lists home-assistant, but only its case-exact start would run it: Enter sends it.
   terminal.send("$HOME")
-  await waitFor(() => live().includes("❯ $home-assistant"), "listed")
+  await waitFor(() => live().includes("› $home-assistant"), "listed")
   terminal.send("\r")
   await shows("Sure.")
   await idle()
@@ -509,19 +513,19 @@ test("the $ list takes its keys from the keybindings like the / list", async () 
   expect(live()).toContain("ctrl+y run · ctrl+g close")
   // A bare "$" marks nothing: the first ↓ marks the first skill.
   terminal.send("\x0e")
-  await waitFor(() => live().includes("❯ $deploy"), "first marked")
+  await waitFor(() => live().includes("› $deploy"), "first marked")
   terminal.send("\x0e")
-  await waitFor(() => live().includes("❯ $review-pr"), "moved down")
+  await waitFor(() => live().includes("› $review-pr"), "moved down")
   terminal.send("\x0e")
-  await waitFor(() => live().includes("❯ $deploy"), "wrapped")
+  await waitFor(() => live().includes("› $deploy"), "wrapped")
   terminal.send("\x07")
   await waitFor(() => !live().includes("Ship it"), "closed")
   terminal.send("d")
-  await waitFor(() => live().includes("❯ $deploy"), "open again")
+  await waitFor(() => live().includes("› $deploy"), "open again")
   terminal.send("\x19")
   await shows("Deployed.")
   await idle()
-  expect(all()).toMatch(/› \$deploy +\d{2}:\d{2}\n {4}└ Loaded skill deploy \(3 lines\)/)
+  expect(all()).toMatch(/› \$deploy +\d{2}:\d{2}\n└ Loaded skill deploy \(3 lines\)/)
   terminal.send("\x03")
   await exited
 })

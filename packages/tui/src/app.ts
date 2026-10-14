@@ -8,7 +8,6 @@ import {
   DEFAULT_TUI_SUBMIT_WHILE_WORKING,
   DEFAULT_TUI_TITLE,
   type EventMap,
-  modelLabel,
   type ToolDetailLevel,
 } from "@amira/api"
 import { type Agent, MODE_SUMMARY, parseCommandLine } from "@amira/core"
@@ -30,9 +29,11 @@ import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { createBottomArea } from "./app/bottom-area.ts"
 import { createCommandRunner } from "./app/command-runner.ts"
 import { createComposer } from "./app/composer.ts"
+import { createHintNote } from "./app/hint-note.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
 import { RewindFlow } from "./app/rewind.ts"
+import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
   FOLD_PASTES,
@@ -43,7 +44,7 @@ import {
   tildePath,
   welcomeCard,
 } from "./app/startup.ts"
-import { interactiveTerminal } from "./app/terminal.ts"
+import { interactiveBanner, interactiveTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { displayHistory, displayOutput } from "./display-history.ts"
@@ -119,15 +120,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
    * started, and whether it ended.
    */
   const serverRows = new Map<string, { startedAt: number; ended: boolean }>()
-  /** A short note shown in place of the key hints, such as the new tool output level. */
-  let hintNote: { text: string; until: number } | undefined
-  let hintTimer: ReturnType<typeof setTimeout> | undefined
-  const showNote = (text: string) => {
-    hintNote = { text, until: Date.now() + HINT_NOTE_MS }
-    clearTimeout(hintTimer)
-    hintTimer = setTimeout(() => view.requestRender(), HINT_NOTE_MS + 10)
-    view.requestRender()
-  }
+  const hint = createHintNote(() => view.requestRender())
+  const showNote = hint.show
 
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   /** What Enter does with a message while a turn runs; the queue key does the other. */
@@ -164,6 +158,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     terminal,
     clipboard: opts.clipboard,
     showNote,
+    clearNote: hint.clear,
     requestRender: () => view.requestRender(),
     redraw,
     redrawTerminal: () => view.redraw(),
@@ -199,6 +194,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     agent: () => agent,
     activity: () => activity,
     themePreview: () => themes.previewing,
+    activityVisible: (visible, ctx) => shimmerClock.visibility(visible, ctx),
     view: () => view,
     noticeStrip: () => noticeStrip,
     dialogs: () => overlays.dialogs,
@@ -207,7 +203,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     steering: () => outbox.steering,
     queued: () => outbox.queued,
     mode: () => mode,
-    hintNote: () => hintNote,
+    hintNote: hint.current,
     commandActivity: () => commandRunner,
     canRewind,
     status: opts.status,
@@ -283,6 +279,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     },
   }
   const view: TranscriptView = mode === "fullscreen" ? createFullscreenView(host) : createInlineView(host)
+  const shimmerClock = createActivityShimmer(terminal, activity, themes, overlays, () => view.requestRender())
   const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
   const outbox = createOutbox({
     agent: () => agent,
@@ -537,6 +534,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
         displayOutput(view, e.data)
         break
     }
+    shimmerClock.sync()
     view.requestRender()
   }
 
@@ -729,12 +727,13 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     offSwitch?.()
     offCommand?.()
     offThemeCommand?.()
-    clearTimeout(hintTimer)
+    hint.dispose()
     outbox.dispose()
     composer.dispose()
     for (const d of overlays.dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
     overlays.waitingChanged("resolved")
     spinner.stop()
+    shimmerClock.dispose()
     noticeStrip.dispose()
     reader.stop()
     view.stop()
@@ -753,6 +752,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     if (e.type === "focus") {
       if (e.focused !== focused) {
         focused = e.focused
+        shimmerClock.focus(focused)
         termStatus.setFocused(focused)
         agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
       }
@@ -763,7 +763,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (!translated) return
       e = translated
     }
-    if (overlays.handleInput(e)) return
+    if (overlays.handleInput(e)) return shimmerClock.sync()
     // Docks use content-relative pointer coordinates, but leave transcript events unchanged.
     const dockEvent =
       e.type === "mouse"
@@ -776,15 +776,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       // Also over a dialog or the search: they are part of the screen.
       return view.redraw()
     }
-    // While a dialog or the history search has the keyboard, the wheel still scrolls the
-    // transcript but clicks do not select in it; a drag started before still ends.
-    if (
-      e.type === "mouse" &&
-      (dialog || composer.search.active) &&
-      e.action !== "wheel" &&
-      e.action !== "release"
-    )
-      return
+    // Text dragging does not capture the keyboard: visible transcript rows remain selectable
+    // while a dialog or history search owns keys. Pane hit-testing excludes the bottom area.
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
     // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
     // Esc with text selected clears it before closing a list or the search, or interrupting.
@@ -870,10 +863,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   opts.onReady?.()
   const reader = new InputReader(terminal, onInput)
   reader.start()
-  view.banner(
-    (theme) =>
-      `${theme.accent("Amira")} ${theme.muted(`· ${modelLabel({ provider: agent.model.provider, model: agent.model.id })} · ${tildePath(agent.cwd, env)}`)}`,
-  )
+  view.banner((theme) => interactiveBanner(theme, agent.model, tildePath(agent.cwd, env)))
   // Where to start: how to find the commands, the files, the skills and the keys.
   const helpKey = keys.label("help")
   const starts = [

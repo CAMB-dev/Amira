@@ -22,6 +22,7 @@ import { TranscriptPane } from "../src/transcript-pane.ts"
 import { renderViewLines } from "../src/view-lines.ts"
 import { setup } from "./app-harness.ts"
 
+// Style oracles follow A/B/C: marker x0, text x2, clocks at the right edge, fill-only code.
 const at = new Date(2026, 9, 10, 20, 9).getTime()
 const clock = localClock(at)
 const clockCells = visibleWidth(clock)
@@ -61,19 +62,19 @@ test("clocks use the local timezone and the injected hour cycle", () => {
     expect(messageTimestamp(message)).toBeUndefined()
 })
 
-test("the user band spans every cell with an inset accent prompt and one first-line clock", () => {
+test("the user band spans every cell with a shared-grid accent prompt and one first-line clock", () => {
   const lines = userLines(banded, user, 40)
   const rows = lines.map(stripAnsi)
   expect(rows).toHaveLength(4)
   expect(userBandPaddingIn(lines)).toBe(1)
   expect(lines[0]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
   expect(lines[3]).toBe(lines[0])
-  expect(rows[1]).toStartWith("  › Hello there.")
-  expect(rows[1]).toEndWith(`${clock}  `)
-  expect(rows[2]?.trimEnd()).toBe("    Next line.")
+  expect(rows[1]).toStartWith("› Hello there.")
+  expect(rows[1]).toEndWith(`${clock}`)
+  expect(rows[2]?.trimEnd()).toBe("  Next line.")
   expect(lines[1]).toContain(banded.accent("›"))
   expect(lines[1]).toContain(banded.muted(clock))
-  expect(timestampIn(lines)).toEqual({ line: 1, text: clock, width: 24, to: 16 })
+  expect(timestampIn(lines)).toEqual({ line: 1, text: clock, width: 26, to: 14 })
   expect(rows.filter((r) => r.includes(clock))).toHaveLength(1)
   for (const line of lines) expect(visibleWidth(line)).toBe(40)
 })
@@ -83,22 +84,22 @@ test("narrow bands omit clocks rather than collide with or lose the prompt text"
   for (const width of [10, 12, 15]) {
     const rows = userLines(banded, message, width).map(stripAnsi)
     expect(rows.join("")).not.toContain(clock)
-    expect(rows.map((r) => r.slice(4).trim()).join("")).toBe("abcdef")
+    expect(rows.map((r) => r.slice(2).trim()).join("")).toBe("abcdef")
     expect(rows.every((r) => visibleWidth(r) === width)).toBe(true)
   }
 })
 
-test("thinking uses its semantic token and only an actionable gray disclosure hint without an implicit clock", () => {
+test("thinking uses muted text and only an actionable gray disclosure hint without an implicit clock", () => {
   const rows = reasoningLines(banded, "A thought.", { durationMs: 65_000, expandKey: "ctrl+o" }, 80)
-  expect(stripAnsi(rows[0]!)).toBe("  ∴ Thought for 65s  ctrl+o to expand")
-  expect(rows[0]).toContain(banded.thinking!("Thought for 65s"))
+  expect(stripAnsi(rows[0]!)).toBe("∴ Thought for 65s  ctrl+o to expand")
+  expect(rows[0]).toContain(banded.muted("Thought for 65s"))
   expect(rows[0]).toContain(banded.muted("ctrl+o to expand"))
   const expanded = reasoningLines(banded, "A thought.", { expanded: true, expandKey: "ctrl+o" }, 80)
   expect(expanded.join("")).not.toContain("to expand")
-  expect(stripAnsi(expanded[1]!)).toBe("    A thought.")
+  expect(stripAnsi(expanded[1]!)).toBe("  A thought.")
   const redacted = reasoningLines(banded, "", { expandKey: "ctrl+o" }, 80)
   expect(redacted.join("")).not.toContain("to expand")
-  expect(reasoningLines(banded, "A thought.", {}, 80).map(stripAnsi)).toEqual(["  ∴ Thought"])
+  expect(reasoningLines(banded, "A thought.", {}, 80).map(stripAnsi)).toEqual(["∴ Thought"])
 })
 
 test("manually folded thinking never advertises a global key that leaves it folded", () => {
@@ -109,9 +110,9 @@ test("manually folded thinking never advertises a global key that leaves it fold
   expect(thought.lines({ ...e, reasoningExpandKey: undefined })[0]).not.toContain("to expand")
   thought.expanded = false
   expect(thought.lines(e)[0]).not.toContain("to expand")
-  expect(thought.lines({ ...e, detail: "full" })).toEqual(["  ∴ Thought"])
+  expect(thought.lines({ ...e, detail: "full" })).toEqual(["∴ Thought"])
   thought.toggleFold(e)
-  expect(thought.lines(e).map(stripAnsi)).toContain("    A thought.")
+  expect(thought.lines(e).map(stripAnsi)).toContain("  A thought.")
   expect(thought.printLines(e)[0]).not.toContain("to expand")
 })
 
@@ -121,13 +122,13 @@ test("live first thinking invalidates full-detail text and retains its clock aft
   const e = { ...env(), detail: "full" as const }
   pane.add(thought)
   thought.append("First")
-  expect(pane.plain(thought, e)).toContain("    First")
+  expect(pane.plain(thought, e)).toContain("  First")
   thought.append(" second")
-  expect(pane.plain(thought, e)).toContain("    First second")
+  expect(pane.plain(thought, e)).toContain("  First second")
   thought.finish(at + 4200)
-  expect(pane.plain(thought, e)[0]).toStartWith("  ∴ Thought for 4.2s")
-  expect(pane.plain(thought, e)[0]).toEndWith(`${clock}  `)
-  expect(thought.printLines(e)[0]).toEndWith(`${clock}  `)
+  expect(pane.plain(thought, e)[0]).toStartWith("∴ Thought for 4.2s")
+  expect(pane.plain(thought, e)[0]).toEndWith(`${clock}`)
+  expect(thought.printLines(e)[0]).toEndWith(`${clock}`)
   const lines = thought.lines(e)
   expect(timestampIn(lines)?.line).toBe(0)
   expect(thought.copyRows(lines.map(stripAnsi))[0]?.skip).toBe(true)
@@ -150,10 +151,10 @@ test("resumed inline and fullscreen transcripts use stored clocks, and never syn
     ]
   }
   for (const [i, rows] of render([user, assistant]).entries()) {
-    expect(rows.filter((r) => r.endsWith(`${clock}  `))).toHaveLength(2)
+    expect(rows.filter((r) => r.endsWith(`${clock}`))).toHaveLength(2)
     const thought = rows.find((r) => r.includes("Thought"))!
-    expect(thought).toStartWith(i === 0 ? "  ∴ Thought" : "  ∴ Thought  ctrl+o to expand")
-    expect(thought).toEndWith(`${clock}  `)
+    expect(thought).toStartWith(i === 0 ? "∴ Thought" : "∴ Thought  ctrl+o to expand")
+    expect(thought).toEndWith(`${clock}`)
     expect(rows.find((r) => r.includes("First paragraph."))).not.toContain(clock)
     expect(rows.some((r) => r.trim() === "Second paragraph.")).toBe(true)
   }
@@ -161,7 +162,7 @@ test("resumed inline and fullscreen transcripts use stored clocks, and never syn
   const { timestamp: _replyTime, ...oldAssistant } = assistant
   for (const [i, rows] of render([oldUser, oldAssistant]).entries()) {
     expect(rows.join("\n")).not.toMatch(/\d{1,2}:\d{2}/)
-    expect(rows).toContain(i === 0 ? "  ∴ Thought" : "  ∴ Thought  ctrl+o to expand")
+    expect(rows).toContain(i === 0 ? "∴ Thought" : "∴ Thought  ctrl+o to expand")
   }
 })
 
@@ -171,7 +172,7 @@ test("the reply clock is on its first line only, and copies of whole rows exclud
   const lines = reply.lines(e)
   const rows = lines.map(stripAnsi)
   expect(rows[0]).toStartWith("  First paragraph.")
-  expect(rows[0]).toEndWith(`${clock}  `)
+  expect(rows[0]).toEndWith(`${clock}`)
   expect(rows.filter((r) => r.includes(clock))).toHaveLength(1)
   expect(reply.printLines(e).map(stripAnsi)).toEqual(rows)
   expect(reply.copyRows(rows, lines)[0]?.exact).toBe("First paragraph.")
@@ -191,22 +192,44 @@ test("timestamp space belongs to just the first rendered row in live, printed an
     const reply = new ReplyBlock(text, streaming, false, at)
     for (const lines of [reply.lines(env(width)), reply.printLines(env(width))]) {
       const rows = lines.map(stripAnsi)
-      expect(rows[0]).toStartWith(`  ${"x".repeat(width - clockCells - 6)}`)
+      expect(rows[0]).toStartWith(`  ${"x".repeat(width - clockCells - 4)}`)
       expect(rows[1]).toBe(`  ${"x".repeat(28)}`)
-      expect(rows).toContain(`  │ ${"z".repeat(25)}│`)
-      expect(rows).toContain(`  │ z${" ".repeat(24)}│`)
+      expect(rows).toContain(`  ${"z".repeat(26)}  `)
+      expect(rows).toContain(" ".repeat(width))
     }
   }
   const resumed = historyLines(plain.theme, [message], { width }).map(stripAnsi)
   expect(resumed[3]).toBe(`  ${"x".repeat(28)}`)
-  expect(resumed).toContain(`  │ ${"z".repeat(25)}│`)
-  expect(resumed).toContain(`  │ z${" ".repeat(24)}│`)
+  expect(resumed).toContain(`  ${"z".repeat(26)}  `)
+  expect(resumed).toContain(" ".repeat(width))
   const userRows = userLines(
     plain.theme,
     { ...user, content: [{ type: "text", text: "x".repeat(69) }] },
     width,
   )
-  expect(userRows[1]).toBe(`    ${"x".repeat(26)}`)
+  expect(userRows[1]).toBe(`  ${"x".repeat(28)}`)
+})
+
+test("fill-only code keeps its top-right language and blank bottom out of copy and search", () => {
+  const reply = new ReplyBlock("```txt\nvalue\n```", false, false)
+  const e = env(30)
+  const lines = reply.lines(e)
+  const rows = lines.map(stripAnsi)
+  expect(rows).toEqual([`${" ".repeat(27)}txt`, `  value${" ".repeat(23)}`, " ".repeat(30)])
+  expect(reply.copyRows(rows, lines)).toEqual([
+    { from: 0, skip: true },
+    { from: 2, to: 7, exact: "value" },
+    { from: 0, skip: true },
+  ])
+  const pane = new TranscriptPane()
+  pane.add(reply)
+  pane.render(e, 3)
+  pane.selectText({ block: reply, line: 0, col: 0 }, { block: reply, line: 2, col: 29 })
+  expect(pane.selectedText()).toBe("value")
+  pane.find("txt")
+  expect(pane.matchCount).toBe(0)
+  pane.find("value")
+  expect(pane.matchCount).toBe(1)
 })
 
 for (const mode of ["inline", "fullscreen"] as const) {
@@ -222,10 +245,17 @@ for (const mode of ["inline", "fullscreen"] as const) {
       app.terminal.send("go\r")
       await app.idle()
       const rows = app.all().split("\n")
-      expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(30 - clockCells - 6)}  ${clock}`)
+      expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(30 - clockCells - 4)}  ${clock}`)
       expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(28)}`)
-      expect(rows).toContain(`  │ ${"z".repeat(25)}│`)
-      expect(rows).toContain(`  │ z${" ".repeat(24)}│`)
+      // VirtualScreen.text trims cell padding; the direct block oracle above keeps exact fills.
+      const codeTop = rows.indexOf(`${" ".repeat(27)}txt`)
+      expect(codeTop).toBeGreaterThanOrEqual(0)
+      expect(rows.slice(codeTop, codeTop + 4)).toEqual([
+        `${" ".repeat(27)}txt`,
+        `  ${"z".repeat(26)}`,
+        "",
+        "",
+      ])
       expect(rows.map((r) => r.trimEnd())).toContain("  abcdefghij │ klmnop")
     } finally {
       app.terminal.send("\x03")
@@ -245,15 +275,15 @@ test("banded real blocks use exactly one transcript gap in inline and fullscreen
   const fullscreen = pane.render(e, 11)
   const expected = [
     " ".repeat(40),
-    `  › Hello there.${" ".repeat(22 - clockCells)}${clock}  `,
-    `    Next line.${" ".repeat(26)}`,
+    `› Hello there.${" ".repeat(26 - clockCells)}${clock}`,
+    `  Next line.${" ".repeat(28)}`,
     " ".repeat(40),
     "",
     "  Done.",
     "",
     " ".repeat(40),
-    `  › Hello there.${" ".repeat(22 - clockCells)}${clock}  `,
-    `    Next line.${" ".repeat(26)}`,
+    `› Hello there.${" ".repeat(26 - clockCells)}${clock}`,
+    `  Next line.${" ".repeat(28)}`,
     " ".repeat(40),
   ]
   for (const rows of [inline, fullscreen]) {
@@ -285,12 +315,7 @@ test("shared user rendering pads live, resumed and semantic view messages after 
     sessionId: () => "s",
     terminal: { columns: e.width },
   })
-  const expected = [
-    " ".repeat(40),
-    `  › /review${" ".repeat(29)}`,
-    `    └ Loaded${" ".repeat(28)}`,
-    " ".repeat(40),
-  ]
+  const expected = [" ".repeat(40), `› /review${" ".repeat(31)}`, `└ Loaded${" ".repeat(32)}`, " ".repeat(40)]
   for (const rows of [
     userLines(banded, message, 40),
     new Transcript().block("user", block.lines(e)),
@@ -313,8 +338,8 @@ test("band padding is skipped by exact copy, text marking, word/line selection a
   const lines = block.lines(e)
   expect(block.copyRows(lines.map(stripAnsi), lines)).toEqual([
     { from: 0, skip: true },
-    { from: 4, to: 16, exact: "Hello there." },
-    { from: 4 },
+    { from: 2, to: 14, exact: "Hello there." },
+    { from: 2 },
     { from: 0, skip: true },
   ])
   expect(block.copyText()).toBe("Hello there.\nNext line.")
@@ -329,12 +354,12 @@ test("band padding is skipped by exact copy, text marking, word/line selection a
     expect(pane.selectLine(line, 8)).toBe(false)
   }
   pane.startDrag(0, 8)
-  pane.dragTo(1, 8)
+  pane.dragTo(1, 6)
   expect(pane.selectedText()).toBe("Hello")
   expect(pane.render(e, 4)[0]).toBe(lines[0])
   pane.endDrag()
   pane.startDrag(3, 8)
-  pane.dragTo(2, 9)
+  pane.dragTo(2, 7)
   expect(pane.selectedText()).toBe("line.")
   expect(pane.render(e, 4)[3]).toBe(lines[3])
   pane.endDrag()
@@ -345,10 +370,10 @@ test("band padding is skipped by exact copy, text marking, word/line selection a
 
 test("band padding is not searchable text or an extra join after wrapped content", () => {
   const pane = new TranscriptPane()
-  const e = { ...env(14), theme: banded }
+  const e = { ...env(12), theme: banded }
   pane.add(userBlock({ role: "user", content: [{ type: "text", text: "hello world" }] }))
   const rows = pane.render(e, 4)
-  expect(rows.map((r) => stripAnsi(r).trimEnd())).toEqual(["", "  › hello", "    world", ""])
+  expect(rows.map((r) => stripAnsi(r).trimEnd())).toEqual(["", "› hello", "  world", ""])
   pane.find("hello world")
   expect(pane.matchCount).toBe(1)
   pane.find("world\n")
@@ -363,14 +388,14 @@ test("copy trimming uses actual decoration, not content that happens to end in a
   for (const timestamp of [undefined, clockAt]) {
     const block = userBlock({ role: "user", content: [{ type: "text", text: "20:19" }] }, timestamp)
     const lines = block.lines(e)
-    expect(block.copyRows(lines.map(stripAnsi), lines)[0]).toEqual({ from: 4 })
+    expect(block.copyRows(lines.map(stripAnsi), lines)[0]).toEqual({ from: 2 })
     const reply = new ReplyBlock("20:19  ", false, false, timestamp)
     const rows = reply.lines(e)
     expect(reply.copyRows(rows.map(stripAnsi), rows)[0]).toEqual({ from: 2 })
   }
   const block = userBlock({ role: "user", content: [{ type: "text", text: "界界 20:19" }] }, clockAt)
   const lines = block.lines({ ...e, width: 40 })
-  expect(block.copyRows(lines.map(stripAnsi), lines)[0]).toEqual({ from: 4, to: 14, exact: "界界 20:19" })
+  expect(block.copyRows(lines.map(stripAnsi), lines)[0]).toEqual({ from: 2, to: 12, exact: "界界 20:19" })
   const reply = new ReplyBlock("界界 20:19", false, false, clockAt)
   const rows = reply.lines({ ...e, width: 40 })
   expect(reply.copyRows(rows.map(stripAnsi), rows)[0]).toEqual({ from: 2, to: 12, exact: "界界 20:19" })
@@ -385,9 +410,9 @@ test("partial selections stop at actual timestamp metadata and respect wide disp
     pane.selectText({ block, line: 1, col: from }, { block, line: 1, col: to })
     return pane.selectedText()
   }
-  expect(select(5, 7)).toBe("界界")
-  expect(select(9, 39)).toBe("20:19")
-  expect(select(33, 39)).toBe("")
+  expect(select(3, 5)).toBe("界界")
+  expect(select(7, 39)).toBe("20:19")
+  expect(select(35, 39)).toBe("")
   expect(select(0, 39)).toBe("界界 20:19")
 })
 
@@ -397,7 +422,7 @@ test("timestamp decoration preserves pending extension markers and oversized ext
   const extension = "x".repeat(100)
   expect(timestampRow(extension, defaultTheme, 80, at)).toBe(extension)
   expect(timestampRoom(80, undefined)).toBe(80)
-  expect(timestampRoom(80, at)).toBe(80 - clockCells - 4)
+  expect(timestampRoom(80, at)).toBe(80 - clockCells - 2)
 })
 
 test("transcript and pane keep one blank between blocks and none between adjacent tool rows", () => {
@@ -422,7 +447,7 @@ test("stored entry clocks attach without changing message objects", () => {
   rememberMessageTime(message, at)
   expect(messageTimestamp(message)).toBe(at)
   expect(Object.keys(message)).toEqual(["role", "content"])
-  expect(userLines(plain.theme, message, 80)[0]).toEndWith(`${clock}  `)
+  expect(userLines(plain.theme, message, 80)[0]).toEndWith(`${clock}`)
 })
 
 test("tool copies follow runtime ASCII arms and blank final continuations", () => {
@@ -432,8 +457,8 @@ test("tool copies follow runtime ASCII arms and blank final continuations", () =
     tool.end = { result: textResult("contents") }
     tool.last = true
     const rows = tool.lines(env()).map(stripAnsi)
-    expect(rows).toEqual(["  `- read a.ts  ✓ contents"])
-    expect(tool.copyRows(rows).map((row) => row.from)).toEqual([5])
+    expect(rows).toEqual(["`-read a.ts  ✓ contents"])
+    expect(tool.copyRows(rows).map((row) => row.from)).toEqual([2])
   } finally {
     setGlyphs()
   }

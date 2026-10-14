@@ -137,7 +137,8 @@ test("public default themes retain ANSI foregrounds without unconditional trueco
     for (const style of Object.values(theme)) expect(style("x")).not.toMatch(/\[(?:38|48);2;/)
   }
   expect(defaultTheme.accent("x")).toBe("\x1b[36mx\x1b[39m")
-  expect(markdownTheme.code("x")).toBe("\x1b[35mx\x1b[39m")
+  // Reference code uses blue, distinct from the interactive cyan accent.
+  expect(markdownTheme.code("x")).toBe("\x1b[34mx\x1b[39m")
   expect(defaultTheme.chipInfo!("x")).toBe(
     "\x1b[38;5;24m▐\x1b[39m\x1b[48;5;24m\x1b[38;5;231mx\x1b[39m\x1b[49m\x1b[38;5;24m▌\x1b[39m",
   )
@@ -184,7 +185,7 @@ test("all semantic palette foregrounds and shimmer stops are exact RGB styles", 
       expect(theme[token]!("x")).toBe(`\x1b[${quantize(p[token], "truecolor", 90)}mx\x1b[39m`)
     }
     expect(theme.heading1!("x")).toBe(
-      `\x1b[1m\x1b[${quantize(p.heading1, "truecolor", 36)}mx\x1b[39m\x1b[22m`,
+      `\x1b[1m\x1b[4m\x1b[${quantize(p.heading1, "truecolor", 36)}mx\x1b[39m\x1b[24m\x1b[22m`,
     )
     expect(theme.heading!("x")).toBe(`\x1b[1m\x1b[${quantize(p.heading, "truecolor", 36)}mx\x1b[39m\x1b[22m`)
     expect(theme.shimmer0!("x")).toBe(theme.shimmer("x"))

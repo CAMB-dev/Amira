@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -56,7 +57,7 @@ test("inline: a blank line sets the conversation apart from the shell, above the
   expect(screen.lines[screen.y]).toBe("")
   expect(screen.lines[screen.y - 1]).toBe("")
   // No band padding: the echo is followed by exactly the two blank shell rows.
-  expect(screen.lines[screen.y - 2]).toBe("  › /quit")
+  expect(screen.lines[screen.y - 2]).toBe("› /quit")
 })
 
 test("inline: Alt+C copies the last reply; a key of the full-screen view says so once", async () => {
@@ -104,10 +105,10 @@ test("a diff review shows the diff above its options", async () => {
     )
   }, "reviewer")
   terminal.send("go\r")
-  await waitFor(() => live().includes("? Merge?"), "review dialog")
+  await waitFor(() => live().includes("Merge?"), "review dialog")
   expect(live()).toContain("1 - old")
   expect(live()).toContain("1 + new")
-  expect(live()).toContain("❯ 1 merge")
+  expect(live()).toContain("│›1 merge")
   terminal.send("2")
   await idle()
   expect(agent.messages.find((m) => m.role === "toolResult")?.content[0]).toEqual({
@@ -157,18 +158,19 @@ test("a diff review taller than the terminal keeps its title, options and keys i
   )
   await host.load(reviewTool(54), "reviewer")
   terminal.send("go\r")
-  await waitFor(() => live().includes("? Merge the worktree?"), "review dialog")
+  await waitFor(() => live().includes("Merge the worktree?"), "review dialog")
   const rows = live().split("\n")
+  expect(live()).toMatch(/… \d+ more lines …/)
   expect(rows.some((l) => /… \d+ more lines …/.test(l))).toBe(true)
   expect(live()).toContain("+ line 1")
   expect(live()).toContain("+ line 54")
-  expect(live()).toContain("❯ 1 merge")
-  expect(live()).toContain("  2 keep")
+  expect(live()).toContain("│›1 merge")
+  expect(live()).toContain("│ 2 keep")
   expect(live()).toContain("↑↓ move · enter choose · esc cancel")
   expect(live()).not.toContain("type to filter")
   // The running call that asked stays in view above it, and the frame fits the screen.
   expect(
-    rows.some((l) => new RegExp(`^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review +\\d+s {2}${localClock(Date.now())}$`).test(l)),
+    rows.some((l) => new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review +\\d+s {2}${localClock(Date.now())}$`).test(l)),
   ).toBe(true)
   expect(rows[0]).not.toContain("line")
   terminal.send("1")
@@ -187,7 +189,7 @@ test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty",
   await idle()
   expect(history.entries.map((e) => e.text)).toEqual(["first message"])
   terminal.send("\x1b[A")
-  await waitFor(() => live().includes("› first message"), "recalled")
+  await waitFor(() => live().includes("│›first message"), "recalled")
   terminal.send("\x1b[B")
   await waitFor(() => live().includes("Message Amira"), "empty again")
   terminal.send("\x1b[A\r")
@@ -215,7 +217,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         content: [{ type: "text", text: "SKILL deploy BODY " }],
       })
       terminal.send("\x1b[A\x1b[A")
-      await waitFor(() => live().includes("› $100 is the price"), "recalled prose")
+      await waitFor(() => live().includes("│›$100 is the price"), "recalled prose")
       terminal.send("\r")
       await shows("Noted.")
       await idle()
@@ -237,7 +239,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     })
     try {
       terminal.send("\x1b[A")
-      await waitFor(() => live().includes("› $removed-skill"), "recalled skill")
+      await waitFor(() => live().includes("│›$removed-skill"), "recalled skill")
       expect(live()).not.toContain("no skill matches")
       terminal.send("\r")
       await Bun.sleep(50)
@@ -270,7 +272,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     const UP = "\x1b[A"
     const DOWN = "\x1b[B"
     const shown = async (text: string, what: string) => {
-      await waitFor(() => live().includes(`› ${text}`), what)
+      await waitFor(() => live().includes(`│›${text}`), what)
       await Bun.sleep(20)
       // No list opened for the recalled text.
       expect(live()).not.toContain("esc close")
@@ -307,11 +309,11 @@ test("Enter runs a recalled command; Ctrl+R still puts a command in the editor w
     commands: testCommands([]),
   })
   terminal.send("\x1b[A\x1b[A")
-  await waitFor(() => live().includes("› /status"), "recalled")
+  await waitFor(() => live().includes("│›/status"), "recalled")
   terminal.send("\r")
   await shows("STATUS OK")
   terminal.send("\x12stat")
-  await waitFor(() => /│ › \/status +│/.test(live()) && live().includes("search history"), "match")
+  await waitFor(() => /│›\/status +│/.test(live()) && live().includes("search history"), "match")
   terminal.send("\r")
   await waitFor(() => !live().includes("search history") && live().includes("esc close"), "the list")
   terminal.send("\x03\x03")
@@ -330,7 +332,7 @@ test("messages queued together are sent as one turn but shown one by one", async
   await shows("queued › two")
   await shows("second answer")
   await idle()
-  expect(all()).toMatch(/› one +\d{2}:\d{2}\n\n\n\n {2}› two +\d{2}:\d{2}/)
+  expect(all()).toMatch(/› one +\d{2}:\d{2}\n\n\n\n› two +\d{2}:\d{2}/)
   expect(all()).not.toContain("  two")
   const prompts = agent.messages.filter((m) => m.role === "user")
   expect(prompts.length).toBe(2)
@@ -348,13 +350,13 @@ test("Ctrl+R searches the history; Enter keeps the match in the editor to send o
   await waitFor(() => live().includes("search history"), "search line")
   expect(live()).toContain("esc cancel")
   terminal.send("deploy")
-  await waitFor(() => live().includes("› deploy to prod"), "newest match")
+  await waitFor(() => live().includes("│›deploy to prod"), "newest match")
   expect(live()).toContain("1 of 2")
   terminal.send("\x12")
-  await waitFor(() => live().includes("› deploy to staging"), "older match")
+  await waitFor(() => live().includes("│›deploy to staging"), "older match")
   terminal.send("\r")
   await waitFor(() => !live().includes("search history"), "search closed")
-  expect(live()).toContain("› deploy to staging")
+  expect(live()).toContain("│›deploy to staging")
   terminal.send("\r")
   await shows("on it")
   await idle()
@@ -368,9 +370,9 @@ test("Esc leaves the history search with the draft back", async () => {
   history.add(["old prompt"])
   const { terminal, live, exited } = await setup([], { promptHistory: history })
   terminal.send("my draft\x12old")
-  await waitFor(() => live().includes("› old prompt"), "match")
+  await waitFor(() => live().includes("│›old prompt"), "match")
   terminal.send("\x1b")
-  await waitFor(() => live().includes("› my draft"), "draft back")
+  await waitFor(() => live().includes("│›my draft"), "draft back")
   expect(live()).not.toContain("search history")
   terminal.send("\x03\x03")
   await exited
@@ -389,7 +391,7 @@ test("Ctrl+L clears the screen and draws the latest transcript and the live regi
   await waitFor(() => !live().includes("GARBAGE"), "redrawn")
   expect(live()).toContain("› hello")
   expect(live()).toContain("the answer")
-  expect(live()).toContain("› draft")
+  expect(live()).toContain("│›draft")
   expect(screen.lines[1]).toContain("Amira")
   terminal.send("\x03\x03")
   await exited
@@ -400,15 +402,15 @@ test("typing @ offers project files; Tab inserts the path and the message keeps 
     files: ["src/app.ts", "src/format.ts", "README.md"],
   })
   terminal.send("look at @form")
-  await waitFor(() => live().includes("❯ src/format.ts"), "file list")
+  await waitFor(() => live().includes("› src/format.ts"), "file list")
   expect(live()).toContain("tab/enter insert")
   // Like the command list, it opens below the input box, in place of the status bar.
   const rows = live().split("\n")
-  expect(rows.findIndex((l) => l.includes("❯ src/format.ts"))).toBeGreaterThan(
+  expect(rows.findIndex((l) => l.includes("› src/format.ts"))).toBeGreaterThan(
     rows.findIndex((l) => l.startsWith("╰")),
   )
   terminal.send("\t")
-  await waitFor(() => live().includes("› look at @src/format.ts"), "inserted")
+  await waitFor(() => live().includes("│›look at @src/format.ts"), "inserted")
   expect(live()).not.toContain("tab/enter insert")
   terminal.send("please\r")
   await shows("read it")
@@ -430,23 +432,24 @@ test("typing @ while the project is still listed shows a status row at once, the
   })
   const { terminal, live, exited } = await setup([], { fileSource, cols: 60 })
   terminal.send("see @app")
+  // A: the indexing notice is content, inset two cells beside the shared marker gutter.
   await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] indexing… 0 files$/m.test(live()), "status row")
   // The input box took every key; the row is where the list goes, below the box.
-  expect(live()).toContain("│ › see @app")
+  expect(live()).toMatch(/^│›see @app.*│$/m)
   const rows = live().split("\n")
   expect(rows.findIndex((l) => l.includes("indexing…"))).toBeGreaterThan(
     rows.findIndex((l) => l.startsWith("╰")),
   )
   emit(Array.from({ length: 12_345 }, (_, i) => `gen/f${i}.ts`).concat("src/app.ts"))
   await waitFor(
-    () => /❯ src\/app\.ts/.test(live()) && live().includes("indexing… 12,346 files"),
+    () => /› src\/app\.ts/.test(live()) && live().includes("indexing… 12,346 files"),
     "first files",
   )
   finish()
   await waitFor(() => !live().includes("indexing…"), "indexed")
-  expect(live()).toMatch(/❯ src\/app\.ts/)
+  expect(live()).toMatch(/› src\/app\.ts/)
   terminal.send("\t")
-  await waitFor(() => live().includes("› see @src/app.ts"), "inserted")
+  await waitFor(() => live().includes("│›see @src/app.ts"), "inserted")
   terminal.send("\x03\x03")
   await exited
 })
@@ -539,13 +542,13 @@ test("a narrow hint drops whole items instead of cutting one", async () => {
   terminal.send("go\r")
   await waitFor(() => agent.status === "working", "working")
   // Stop and the first base key stay whole; the contextual submit and queue keys give way.
-  await waitFor(() => /^ shift\+tab mode {2}│ {2}esc stop$/m.test(live()), "working hint")
+  await waitFor(() => /^ {2}shift\+tab mode {2}· {2}esc stop$/m.test(live()), "working hint")
   expect(live()).not.toContain(" queue")
   expect(live()).not.toContain("enter steer")
   expect(live()).not.toContain("sto…")
   await shows("slow answer")
   await idle()
-  await waitFor(() => /^ shift\+tab mode {2}│ {2}ctrl\+o detail$/m.test(live()), "idle hint")
+  await waitFor(() => /^ {2}shift\+tab mode {2}· {2}ctrl\+o detail$/m.test(live()), "idle hint")
   terminal.send("\x03")
   await exited
 })
@@ -563,17 +566,21 @@ test("keybindings replace the default keys, and the hints name them", async () =
     [{ text: "first", delayMs: 40 }, { text: "later" }],
     { keybindings: keys, cols: 100 },
   )
-  await waitFor(() => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}f1 keys$/m.test(live()), "idle hint")
+  await waitFor(
+    () => /^ {2}shift\+tab mode {2}· {2}ctrl\+o detail {2}· {2}f1 keys$/m.test(live()),
+    "idle hint",
+  )
   terminal.send("go")
   await waitFor(
-    () => /^ shift\+tab mode {2}│ {2}ctrl\+o detail {2}│ {2}f1 keys {2}│ {2}ctrl\+j newline$/m.test(live()),
+    () =>
+      /^ {2}shift\+tab mode {2}· {2}ctrl\+o detail {2}· {2}f1 keys {2}· {2}ctrl\+j newline$/m.test(live()),
     "hint with text",
   )
   terminal.send("\r")
   await waitFor(() => agent.status === "working", "working")
   await waitFor(
     () =>
-      /^ shift\+tab mode {2}│ {2}ctrl\+g stop {2}│ {2}ctrl\+o detail {2}│ {2}f1 keys {2}│ {2}enter steer {2}│ {2}ctrl\+t queue$/m.test(
+      /^ {2}shift\+tab mode {2}· {2}ctrl\+g stop {2}· {2}ctrl\+o detail {2}· {2}f1 keys {2}· {2}enter steer {2}· {2}ctrl\+t queue$/m.test(
         live(),
       ),
     "working hint",
@@ -628,18 +635,18 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   terminal.send("\x12\x1b[A")
   await Bun.sleep(30)
   expect(live()).not.toContain("search history")
-  expect(live()).not.toContain("› old prompt")
+  expect(live()).not.toContain("│›old prompt")
   terminal.send("\x06")
   await waitFor(() => live().includes("search history"), "search line")
   expect(live()).toContain("enter accept · ctrl+r older · ctrl+x cancel")
   terminal.send("\x18")
   await waitFor(() => !live().includes("search history"), "search closed")
   terminal.send("\x10")
-  await waitFor(() => live().includes("› old prompt"), "recalled with Ctrl+P")
+  await waitFor(() => live().includes("│›old prompt"), "recalled with Ctrl+P")
   terminal.send("\x03")
   terminal.send("@src")
   // The directory named as typed first, then its file.
-  await waitFor(() => live().includes("❯ src/\n  src/app.ts"), "file list")
+  await waitFor(() => live().includes("› src/\n  src/app.ts"), "file list")
   expect(live()).toContain("tab/enter insert · ctrl+x close")
   terminal.send("\x18")
   await waitFor(() => !live().includes("src/app.ts"), "file list closed")
@@ -685,7 +692,7 @@ test("without built-ins the TUI leaves terminal title, progress and bell untouch
 test("a hidden foreground question never rings and visibility changes retain paused progress", async () => {
   const s = await setup([], { env: { WT_SESSION: "1" } })
   s.terminal.send("\x1b[I?")
-  await waitFor(() => s.live().includes("? Keys"), "key reference")
+  await waitFor(() => s.live().includes("Keys"), "key reference")
   const answer = s.host.ui.api("test").confirm("Hidden question", "Proceed?")
   await s.bus.flush()
   expect(s.screen.bells).toBe(0)

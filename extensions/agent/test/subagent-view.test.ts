@@ -38,6 +38,8 @@ import { VirtualScreen } from "../../../packages/tui-kit/test/screen.ts"
 import { agentsCommand } from "../src/index.ts"
 import { subagentView } from "../src/subagent-view.ts"
 
+// Exact viewer oracles follow the shared two-cell grid and neutral child references.
+
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
   while (!check()) {
@@ -468,7 +470,7 @@ test("queued, idle, finished, failed and stopped children retain their status, u
   expect(s.definition.titleAside!(s.data)).toBe("1 of 2")
   expect(s.definition.header!(s.data, { width: 80, now: 6500 })[0]).toEqual({
     kind: "muted",
-    text: "task: Task a",
+    text: "  task: Task a",
   })
   s.list[0]!.status = "queued"
   expect(s.render().split("\n")[0]).toContain(" · queued · ")
@@ -633,7 +635,7 @@ for (const { status, text, kind } of statuses) {
     const title = `${theme.accent("◆")} Child a ${theme.muted("·")} ${styledStats}${theme.muted(" · explorer · a")}`
     expect(rows[0]).toBe(title + " ".repeat(120 - stripAnsi(title).length - 7) + theme.muted(" 1 of 2"))
     expect(rows).toContain(
-      `${theme.accent("◆")} Child b ${theme.muted("· explorer · b")} ${styledStats} ${theme.muted("· Task b")}`,
+      `${theme.text("◆")} Child b ${theme.muted("· explorer · b")} ${styledStats} ${theme.muted("· Task b")}`,
     )
     const task = userLines(theme, userMessage("Task a"), 120)
     expect(rows.slice(3, 3 + task.length)).toEqual(task)
@@ -641,7 +643,7 @@ for (const { status, text, kind } of statuses) {
       kind: "segments",
       parts: [
         { kind: "text", text: "" },
-        { kind: "accent", text: "◆" },
+        { kind: "text", text: "◆" },
         { kind: "text", text: " Child b " },
         { kind: "muted", text: "· explorer · b" },
         { kind: "text", text: " " },
@@ -744,24 +746,24 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   const before = s.screen.mainText
   s.terminal.send("/agents view\r")
   await waitFor(() => s.screen.inAltScreen, "the viewer")
-  await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the transcript")
+  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the transcript")
   const lines = s.screen.lines
   expect(lines[0]).toMatch(/^◆ Check explorer · running · \d+s · 1\.5k tok · .+ 1 of 1$/)
-  expect(lines[1]).toBe("task: task for the explorer")
+  expect(lines[1]).toBe("  task: task for the explorer")
   // Shared transcript rendering: one gap, closed tool groups, and inset reply text.
   expect(lines.slice(3, 13)).toEqual([
     "",
-    "  › task for the explorer",
+    "› task for the explorer",
     "",
     "",
-    "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
+    "└ read a.ts  ✓ contents of a.ts (+2 lines)",
     "",
     "  Now waiting.",
     "",
     "  ───",
     "",
   ])
-  expect(lines[13]).toMatch(/^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
+  expect(lines[13]).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/)
   expect(s.view()).not.toContain("└ running")
   expect(s.view()).not.toContain("… working")
   expect(lines.at(-1)).toContain("following")
@@ -778,7 +780,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "the inline UI")
   const main = s.screen.mainText
-  const order = ["› go", "› /agents view", "  └ delegate", "✓ child final answer", "all done"].map((t) =>
+  const order = ["› go", "› /agents view", "└ delegate", "✓ child final answer", "all done"].map((t) =>
     main.indexOf(t),
   )
   expect(order.every((i) => i >= 0)).toBe(true)
@@ -786,8 +788,8 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   expect(main.split("all done").length).toBe(2)
   expect(main).not.toContain("◆ Check explorer running")
   // The live region is back: the editor box and the hint line.
-  expect(s.view()).toContain(" shift+tab mode  │  ctrl+o detail  │  ? keys")
-  expect(s.view()).toContain("│ › Message Amira")
+  expect(s.view()).toContain("  shift+tab mode  ·  ctrl+o detail  ·  ? keys")
+  expect(s.view()).toMatch(/^│›Message Amira +│$/m)
   expect(s.screen.altSwitches).toEqual([true, false])
   s.terminal.send("\x03")
   await s.exited
@@ -803,9 +805,9 @@ test("elapsed time redraws every second while no child event arrives", async () 
   s.terminal.send("go\r")
   await waitFor(s.isWaiting, "the waiting child")
   s.terminal.send("/agents view\r")
-  await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the view")
+  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the view")
   const before = s.screen.lines[0]!
-  const spin = () => s.view().match(/^ {2}([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) wait/m)?.[1]
+  const spin = () => s.view().match(/^([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) wait/m)?.[1]
   const firstFrame = spin()
   await waitFor(() => spin() !== firstFrame, "the overlay spinner frame", 400)
   await waitFor(() => s.screen.lines[0] !== before, "the elapsed tick", 2500)
@@ -830,18 +832,18 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   s.terminal.send("go\r")
   await waitFor(s.isWaiting, "the child to block")
   s.terminal.send("/agents view\r")
-  await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the viewer")
+  await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the viewer")
   // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
   expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
   expect(s.screen.lines.at(-1)).toMatch(/ · esc close$/)
   s.terminal.send("x")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer (explorer s_"), "the question")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Stop Check explorer (explorer s_"), "the question")
   expect(s.screen.lines.at(-1)).toContain("? y stops it · any other key keeps it running")
   s.terminal.send("n")
   await waitFor(() => s.screen.lines.at(-1)!.includes("x stop"), "kept")
   expect(s.control.subagents()[0]?.status).toBe("running")
   s.terminal.send("x")
-  await waitFor(() => s.screen.lines.at(-1)!.startsWith("Stop Check explorer"), "asked again")
+  await waitFor(() => s.screen.lines.at(-1)!.startsWith("  Stop Check explorer"), "asked again")
   s.terminal.send("y")
   s.release()
   await waitFor(() => s.view().includes("✗ stopped by the user"), "stopped")
@@ -884,7 +886,7 @@ test("Ctrl+L and focus reports in the viewer leave the main screen alone", async
   const main = s.screen.mainText
   expect(main.split("› go").length).toBe(2)
   expect(s.screen.scrollback.join("\n")).not.toContain("Message Amira")
-  expect(s.view()).toContain("│ › Message Amira")
+  expect(s.view()).toMatch(/^│›Message Amira +│$/m)
   s.terminal.send("\x03")
   await s.exited
 })
@@ -904,17 +906,14 @@ test("the viewer scrolls, follows the tail again at the end, and redraws on resi
   expect(s.screen.lines.at(-1)).toContain("following")
   s.terminal.send("\x1b[5~") // PgUp
   await waitFor(() => !s.screen.lines.at(-1)!.includes("following"), "scrolled up")
-  expect(s.screen.lines.at(-1)).toMatch(/^\d+–\d+ of 46 · /)
+  expect(s.screen.lines.at(-1)).toMatch(/^ {2}\d+–\d+ of 46 · /)
   expect(s.view()).not.toContain("── done ──")
   s.terminal.send("\x1b[H") // Home
-  await waitFor(
-    () => s.screen.lines[3] === "" && s.screen.lines[4] === "  › task for the explorer",
-    "the top",
-  )
-  expect(s.screen.lines.at(-1)).toMatch(/^1–16 of 46 · /)
+  await waitFor(() => s.screen.lines[3] === "" && s.screen.lines[4] === "› task for the explorer", "the top")
+  expect(s.screen.lines.at(-1)).toMatch(/^ {2}1–16 of 46 · /)
   s.terminal.send("\x1b[B") // ↓
   await waitFor(
-    () => s.screen.lines[3] === "  › task for the explorer" && s.screen.lines[4] === "",
+    () => s.screen.lines[3] === "› task for the explorer" && s.screen.lines[4] === "",
     "one row down",
   )
   s.terminal.send("\x1b[F") // End
@@ -953,7 +952,7 @@ test("←/→ and Tab switch between sub-agents; Ctrl+C closes the viewer instea
   await waitFor(() => s.screen.lines[0]!.startsWith("◆ Check explorer"), "Tab wraps around")
   s.terminal.send("\x03")
   await waitFor(() => !s.screen.inAltScreen, "closed by Ctrl+C")
-  expect(s.view()).toContain(" shift+tab mode  │  ctrl+o detail  │  ? keys")
+  expect(s.view()).toContain("  shift+tab mode  ·  ctrl+o detail  ·  ? keys")
   s.terminal.send("\x03")
   expect(await s.exited).toBe(0)
 })
@@ -979,11 +978,11 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   await Bun.sleep(60)
   expect(s.host.ui.pending).toHaveLength(1)
   s.terminal.send(ESC)
-  await waitFor(() => s.view().includes("? Allow bash? (approval)"), "the inline dialog")
+  await waitFor(() => s.view().includes("Allow bash? (approval)"), "the inline dialog")
   s.terminal.send("\x1b[B\r")
   expect(await answer).toBe(true)
   // Answered: the dialog is gone and leaves no echo.
-  await waitFor(() => !s.view().includes("? Allow bash?"), "the dialog gone")
+  await waitFor(() => !s.view().includes("Allow bash? (approval)"), "the dialog gone")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -998,21 +997,21 @@ test("/agents picks a sub-agent in an inline dialog and opens the live view on i
   s.terminal.send("go\r")
   await s.idle()
   s.terminal.send("/agents\r")
-  await waitFor(() => s.view().includes("? Sub-agents"), "the picker")
+  await waitFor(() => s.view().includes("╭ Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
   expect(s.view()).not.toContain("Open the live view")
-  expect(s.view()).toMatch(/❯ 1 Check explorer · explorer · s_\w+ · done/)
+  expect(s.view()).toMatch(/│›1 Check explorer · explorer · s_\w+ · done/)
   s.terminal.send("1")
   await waitFor(() => s.screen.inAltScreen, "the viewer")
   await waitFor(() => s.view().includes("task: task for the explorer"), "the viewer drawn")
   // p leaves it with a snapshot of the one shown printed into the scrollback.
   s.terminal.send("p")
-  await waitFor(() => s.screen.mainText.includes("  └ read b.ts  ✓ contents"), "the transcript")
+  await waitFor(() => s.screen.mainText.includes("└ read b.ts  ✓ contents"), "the transcript")
   const main = s.screen.mainText
   expect(main).toMatch(/◆ Check explorer · explorer · s_\w+ · done · \d+s/)
   expect(main).toContain("› task for the explorer")
-  expect(main).toContain("  └ read b.ts  ✓ contents of b.ts (+2 lines)")
-  expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("  └ read b.ts"))
+  expect(main).toContain("└ read b.ts  ✓ contents of b.ts (+2 lines)")
+  expect(main.lastIndexOf("b.ts is fine")).toBeGreaterThan(main.indexOf("└ read b.ts"))
   expect(s.screen.inAltScreen).toBe(false)
   s.terminal.send("\x03")
   await s.exited
@@ -1166,8 +1165,8 @@ test("viewer streams partial tool output through the host's running renderer", a
   )
   await s.bus.flush()
   const rows = s.render().split("\n")
-  expect(rows).toContain("    │ one")
-  expect(rows).toContain("    │ two")
-  expect(rows.some((row) => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash build/.test(row))).toBe(true)
+  expect(rows).toContain("│ one")
+  expect(rows).toContain("│ two")
+  expect(rows.some((row) => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] bash build/.test(row))).toBe(true)
   s.host.unload("builtin:agent")
 })

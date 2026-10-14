@@ -1,3 +1,5 @@
+// A/B/D deliberate oracles: shared gutter, complete right-edge clocks and borderless code.
+// A/B deliberate oracles: two-cell content grid, full-width clocks and fill-only code; source semantics retained.
 import { expect, test } from "bun:test"
 import type { EventEnvelope, Message } from "@amira/api"
 import { bold, createTheme, defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
@@ -39,10 +41,9 @@ test("the user's message wraps under its prompt symbol, not to the first column"
     content: [{ type: "text" as const, text: "one two three four five six\nseven" }],
   }
   expect(plain(userLines(defaultTheme, message, 16))).toEqual([
-    "  › one two",
-    "    three four",
-    "    five six",
-    "    seven",
+    "› one two three",
+    "  four five six",
+    "  seven",
   ])
 })
 
@@ -73,14 +74,14 @@ test("the user's message is on a full-width band with painted padding above and 
   expect(userBandPaddingIn(rows)).toBe(1)
   expect(plain(rows)).toEqual([
     " ".repeat(34),
-    `  › 帮我看看这个测试为什么挂了${" ".repeat(4)}`,
+    `› 帮我看看这个测试为什么挂了${" ".repeat(6)}`,
     " ".repeat(34),
   ])
   expect(rows[0]).toBe(`${BAND}${" ".repeat(34)}\x1b[49m`)
   expect(rows[2]).toBe(rows[0])
   // The prompt symbol in the accent color, the text in the normal one.
   expect(rows[1]).toBe(
-    `${BAND}  ${bold(defaultTheme.accent("›"))} 帮我看看这个测试为什么挂了${" ".repeat(4)}\x1b[49m`,
+    `${BAND}${bold(defaultTheme.accent("›"))} 帮我看看这个测试为什么挂了${" ".repeat(6)}\x1b[49m`,
   )
 })
 
@@ -99,11 +100,11 @@ test("wrapped rows, wide characters and the note line stay on the band, which ne
     const text = plain(rows)
       .slice(1, -1)
       .map((r) => r.trimEnd())
-    expect(text[0]).toStartWith("  › ")
+    expect(text[0]).toStartWith("› ")
     expect(text.at(-1)).not.toBe("")
     // The note wraps under "└ " rather than being cut.
-    const note = text.findIndex((r) => r.startsWith("    └ "))
-    const noteText = text.slice(note).map((r) => r.slice(6))
+    const note = text.findIndex((r) => r.startsWith("└ "))
+    const noteText = text.slice(note).map((r) => r.slice(2))
     expect(noteText.join("").replace(/\s+/g, "")).toBe("Loadedskillreview")
     // Every word is there, under the prompt symbol.
     expect(text.slice(0, note).join(" ").replace(/\s+/g, " ")).toContain("and more words here")
@@ -114,7 +115,7 @@ test("wrapped rows, wide characters and the note line stay on the band, which ne
 
 test("without the band token (NO_COLOR, or a theme without it) the message is as before", () => {
   const message = { role: "user" as const, content: [{ type: "text" as const, text: "hi there" }] }
-  expect(userLines(defaultTheme, message, 20)).toEqual([`  ${defaultTheme.accent("›")} hi there`])
+  expect(userLines(defaultTheme, message, 20)).toEqual([`${defaultTheme.accent("›")} hi there`])
   for (const theme of [
     defaultTheme,
     createTheme({ theme: "dark", env: { NO_COLOR: "1" } }),
@@ -123,26 +124,26 @@ test("without the band token (NO_COLOR, or a theme without it) the message is as
   ]) {
     const rows = userLines(theme, message, 20)
     expect(rows).toHaveLength(1)
-    expect(stripAnsi(rows[0]!).trimEnd()).toBe("  › hi there")
+    expect(stripAnsi(rows[0]!).trimEnd()).toBe("› hi there")
     expect(userBandPaddingIn(rows)).toBe(0)
     expect(rows[0]).not.toContain("\x1b[48;")
   }
   // With no width to fill, as for notices waiting to be sent, there is no band either.
   const rows = userLines(banded, message)
-  expect(plain(rows)).toEqual(["  › hi there"])
+  expect(plain(rows)).toEqual(["› hi there"])
   expect(userBandPaddingIn(rows)).toBe(0)
 })
 
 test("a command's echo stays plain and muted even with a banded theme", () => {
   const rows = commandEchoLines(banded, "/status", 20)
-  expect(rows).toEqual([`  ${banded.muted("› /status")}`])
-  expect(commandEchoLines(defaultTheme, "/status", 20)).toEqual([`  ${defaultTheme.muted("› /status")}`])
+  expect(rows).toEqual(["\u001b[90m› /status\u001b[39m"])
+  expect(commandEchoLines(defaultTheme, "/status", 20)).toEqual(["\u001b[90m› /status\u001b[39m"])
   expect(bandRows(["abc"], 2, banded.userBg).map(visibleWidth)).toEqual([2])
 })
 
 test("a wrapped echo uses the whole row and hangs under the command without a band", () => {
   const rows = commandEchoLines(banded, `/model ${"x".repeat(30)}`, 20)
-  expect(rows.map(stripAnsi)).toEqual(["  › /model", `    ${"x".repeat(16)}`, `    ${"x".repeat(14)}`])
+  expect(rows.map(stripAnsi)).toEqual(["› /model", `  ${"x".repeat(18)}`, `  ${"x".repeat(12)}`])
   for (const r of rows) {
     expect(r).not.toContain(BAND)
     expect(visibleWidth(r)).toBeLessThanOrEqual(20)
@@ -152,7 +153,7 @@ test("a wrapped echo uses the whole row and hangs under the command without a ba
 test("with an unknown background, command echoes still use plain muted text", () => {
   const unknown = { ...defaultTheme, ...surfaceTheme(undefined) }
   const rows = commandEchoLines(unknown, "/status", 20)
-  expect(rows).toEqual([`  ${unknown.muted("› /status")}`])
+  expect(rows).toEqual(["\u001b[90m› /status\u001b[39m"])
 })
 
 test("a resumed history starts at a boundary naming the session, then the transcript's blocks and presenters", () => {
@@ -194,12 +195,12 @@ test("a resumed history starts at a boundary naming the session, then the transc
   expect(plain(lines)).toEqual([
     `── resumed s_42 · 2026-09-29 14:05 ${"─".repeat(25)}`,
     "",
-    "  › fix it",
+    "› fix it",
     "",
     "  Looking.",
     "",
-    "  ├ read a.ts  ✓ 2 lines",
-    "  └ grep x  ✗ Invalid regular expression",
+    "├ read a.ts  ✓ 2 lines",
+    "└ grep x  ✗ Invalid regular expression",
     "",
     "  Done.",
   ])
@@ -235,13 +236,13 @@ test("a resumed call rejected at its approval prompt reads as it did live, not a
       (r) => r.trim() && !r.startsWith("──"),
     )
   // Dismissed, the call was interrupted; answered no, it was blocked — both as live showed them.
-  expect(rows(messages("aborted"))).toEqual(["  └ bash npm publish  ⊘ interrupted"])
+  expect(rows(messages("aborted"))).toEqual(["└ bash npm publish  ⊘ interrupted"])
   expect(rows(messages("blocked"))).toEqual([
-    "  └ bash npm publish",
-    "     ⊘ Tool call not approved: the user said no.",
+    "└ bash npm publish",
+    "  ⊘ Tool call not approved: the user said no.",
   ])
   // A session stored before rejections were kept shows the failure as it always did.
-  expect(rows(messages())[0]).toBe("  └ Ran npm publish")
+  expect(rows(messages())[0]).toBe("└ Ran npm publish")
 })
 
 test("a resumed shell command shows as many output lines as tui.shellOutputLines says", () => {
@@ -269,9 +270,9 @@ test("a resumed shell command shows as many output lines as tui.shellOutputLines
       }),
     ).filter((r) => r.trim() && !r.startsWith("──"))
   // The presenter's own default: its last three lines.
-  expect(rows()).toEqual(["  └ Ran ls  ✓ 4 lines", "     … 1 earlier line", "     b", "     c", "     d"])
-  expect(rows(1)).toEqual(["  └ Ran ls  ✓ 4 lines", "     … 3 earlier lines", "     d"])
-  expect(rows(0)).toEqual(["  └ Ran ls  ✓ 4 lines"])
+  expect(rows()).toEqual(["└ Ran ls  ✓ 4 lines", "  … 1 earlier line", "  b", "  c", "  d"])
+  expect(rows(1)).toEqual(["└ Ran ls  ✓ 4 lines", "  … 3 earlier lines", "  d"])
+  expect(rows(0)).toEqual(["└ Ran ls  ✓ 4 lines"])
 })
 
 test("a resumed reply renders as Markdown inside the assistant's gutter", () => {
@@ -295,22 +296,22 @@ test("a resumed reply renders as Markdown inside the assistant's gutter", () => 
   expect(rows.slice(0, 8)).toEqual([
     `── resumed ${"─".repeat(19)}`,
     "",
-    "  › fix it",
+    "› fix it",
     "",
     "  Looking at it:",
     "",
-    "  • one",
+    "• one",
     "",
   ])
   // The code block is framed within the width less the gutter, every row indented.
   const code = rows.slice(8, rows.indexOf("", 8))
-  expect(code[0]).toStartWith("  ╭─ ts")
+  expect(code[0]).toBe(`${" ".repeat(28)}ts`)
   expect(code.some((r) => r.includes("const a = 1"))).toBe(true)
   for (const r of code) {
     expect(r).toStartWith("  ")
     expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
   }
-  expect(rows).toContain("  └ read a.ts  ✓ no output")
+  expect(rows).toContain("└ read a.ts  ✓ no output")
 })
 
 test("a sub-agent's compact end line keeps status and stats, not its result text", () => {
@@ -330,19 +331,19 @@ test("a sub-agent's compact end line keeps status and stats, not its result text
         defaultTheme,
       ),
     )
-  expect(line("done")).toBe("  └ ✓ US market trend · explorer · 41.0s · 12k tok")
-  expect(line("error", "model failed")).toBe("  └ ✗ US market trend · explorer · 41.0s · 12k tok")
-  expect(line("aborted")).toBe("  └ ⊘ US market trend · explorer · 41.0s · 12k tok")
+  expect(line("done")).toBe("└ ✓ US market trend · explorer · 41.0s · 12k tok")
+  expect(line("error", "model failed")).toBe("└ ✗ US market trend · explorer · 41.0s · 12k tok")
+  expect(line("aborted")).toBe("└ ⊘ US market trend · explorer · 41.0s · 12k tok")
 })
 
 test("nested sub-agents keep the tree lines of the levels above them", () => {
   const list = [{ depth: 1 }, { depth: 2 }, { depth: 3 }, { depth: 2 }, { depth: 1 }]
   expect(treeLayout(list).map((r) => `${r.indent}${r.last ? "└" : "├"}`)).toEqual([
-    "  ├",
-    "  │ ├",
-    "  │ │ └",
-    "  │ └",
-    "  └",
+    "├",
+    "│ ├",
+    "│ │ └",
+    "│ └",
+    "└",
   ])
 })
 
@@ -370,7 +371,7 @@ test("a stopped sub-agent's compact end line omits its result note", () => {
       defaultTheme,
     ),
   )
-  expect(line).toBe("  └ ⊘ Scan · explorer · 3.0s · 0 tok")
+  expect(line).toBe("└ ⊘ Scan · explorer · 3.0s · 0 tok")
 })
 
 test("a background sub-agent's notice marks how it ended and wraps under its marker", () => {
@@ -385,11 +386,10 @@ test("a background sub-agent's notice marks how it ended and wraps under its mar
   const rows = userLines(defaultTheme, message, 40)
   const shown = rows.map(stripAnsi)
   expect(shown).toEqual([
-    "  └ ✗ Scan the code · explorer · 3s ·",
-    "      1.2k tok · HTTP 429 rate limited,",
-    "      try again later",
-    "      changes kept: 2 files ·",
-    "      /tmp/x.patch",
+    "└ ✗ Scan the code · explorer · 3s · 1.2k",
+    "  tok · HTTP 429 rate limited, try again",
+    "  later",
+    "  changes kept: 2 files · /tmp/x.patch",
   ])
   expect(shown.join(" ").replace(/\s+/g, " ")).toContain("changes kept: 2 files · /tmp/x.patch")
   expect(rows.every((r) => visibleWidth(r) <= 40)).toBe(true)
@@ -402,28 +402,25 @@ test("a sub-agent's live rows: title, role, time and tokens, then its current to
     subagentRows(sub, 13_500, width, defaultTheme).map(stripAnsi)
   const base = { title: "US market trend", role: "explorer", depth: 1, tokens: 4_100 }
   // Queued: no time yet, and no tool.
-  expect(rows(base)).toEqual(["  └ US market trend · explorer · queued"])
-  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["  └ ⠋ US market trend · explorer · 12s · 4.1k tok"])
+  expect(rows(base)).toEqual(["└ US market trend · explorer · queued"])
+  expect(rows({ ...base, startedAt: 1_000 })).toEqual(["└ ⠋ US market trend · explorer · 12s · 4.1k tok"])
   const busy = { ...base, startedAt: 1_000, activity: { name: "grep", summary: '"LiveRenderer"' } }
-  expect(rows(busy)).toEqual([
-    "  └ ⠋ US market trend · explorer · 12s · 4.1k tok",
-    '    └ ⠋ grep "LiveRenderer"',
-  ])
+  expect(rows(busy)).toEqual(["└ ⠋ US market trend · explorer · 12s · 4.1k tok", '  └ ⠋ grep "LiveRenderer"'])
   // With a row of the same tree after it: "├", and "│" carries the tree past its tool row.
   expect(subagentRows(busy, 13_500, 80, defaultTheme, false).map(stripAnsi)).toEqual([
-    "  ├ ⠋ US market trend · explorer · 12s · 4.1k tok",
-    '  │ └ ⠋ grep "LiveRenderer"',
+    "├ ⠋ US market trend · explorer · 12s · 4.1k tok",
+    '│ └ ⠋ grep "LiveRenderer"',
   ])
   // One level deeper per nesting; a long summary is cut to 40 characters.
   const deep = { ...busy, depth: 2, activity: { name: "read", summary: "x".repeat(60) } }
   expect(rows(deep)).toEqual([
-    "    └ ⠋ US market trend · explorer · 12s · 4.1k tok",
-    `      └ ⠋ read ${"x".repeat(39)}…`,
+    "  └ ⠋ US market trend · explorer · 12s · 4.1k tok",
+    `    └ ⠋ read ${"x".repeat(39)}…`,
   ])
   // Narrow: cut to the width.
   for (const r of rows(deep, 30)) expect(Bun.stringWidth(r)).toBeLessThanOrEqual(30)
   // A persistent one between turns says so, without a clock or a tool.
-  expect(rows({ ...busy, idle: true })).toEqual(["  └ ✓ US market trend · explorer · idle · 4.1k tok"])
+  expect(rows({ ...busy, idle: true })).toEqual(["└ ✓ US market trend · explorer · idle · 4.1k tok"])
 })
 
 test("subagent.state: an idle persistent sub-agent is not active, and working again is", () => {
@@ -468,13 +465,13 @@ test("a resumed message with a display shows it and its note, not its content", 
   expect(lines).toEqual([
     `── resumed ${"─".repeat(49)}`,
     "",
-    "  › /review-pr 123",
-    "    └ Loaded skill review-pr (120 lines)",
+    "› /review-pr 123",
+    "└ Loaded skill review-pr (120 lines)",
     "",
-    "  › /plain",
+    "› /plain",
     "",
     // A blank display falls back to the content.
-    "  › own text",
+    "› own text",
   ])
 })
 
@@ -513,7 +510,7 @@ test("a compaction's summary in a history is one folded line; its reply is left 
     ],
     { width: 60 },
   ).map(stripAnsi)
-  expect(lines.slice(2)).toEqual(["▸ Compacted summary of earlier messages · 2 lines", "", "  › go on"])
+  expect(lines.slice(2)).toEqual(["▸ Compacted summary of earlier messages · 2 lines", "", "› go on"])
   expect(summaryLines(defaultTheme, "Did A.", 60, false).map(stripAnsi)).toEqual([
     "▾ Compacted summary of earlier messages",
     "",

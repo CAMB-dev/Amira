@@ -1,3 +1,4 @@
+// D deliberate oracle: the focus/list cursor is ›; authored widget nesting stays unchanged.
 import { expect, test } from "bun:test"
 import type { UiNode, UiTreeItem, ViewSegment } from "@amira/api"
 import {
@@ -45,7 +46,7 @@ for (const theme of [defaultTheme, monoTheme]) {
       const lines = s.render()
       expect(stripAnsi(lines[0]!)).toBe("  Summary  [Diff]  Logs  Actions".padEnd(60))
       expect(lines[0]).toContain(theme.accent("[Diff]"))
-      expect(stripAnsi(lines[1]!)).toStartWith("❯ Diff body")
+      expect(stripAnsi(lines[1]!)).toStartWith("› Diff body")
       s.runtime.dispose()
     }
   })
@@ -59,7 +60,7 @@ for (const theme of [defaultTheme, monoTheme]) {
     expect(line).toContain(mode === "mono" ? theme.accent("[Diff]") : bold(inverse(theme.accent("Diff"))))
     expect(line).toContain(theme.dim("│"))
     s.runtime.focus("tabs")
-    expect(stripAnsi(s.render()[0]!)).toStartWith("❯ Summary")
+    expect(stripAnsi(s.render()[0]!)).toStartWith("› Summary")
     s.runtime.handleInput(key("right"))
     expect(s.runtime.state.activeTabs.tabs).toBe("Logs")
     expect(stripAnsi(s.render()[1]!)).toContain("Logs body")
@@ -104,7 +105,7 @@ for (const theme of [defaultTheme, monoTheme]) {
         20,
         1,
       )
-      expect(stripAnsi(s.render()[0]!)).toBe(`❯ 界${" ".repeat(spaces)}○ Row`.padEnd(19))
+      expect(stripAnsi(s.render()[0]!)).toBe(`› 界${" ".repeat(spaces)}○ Row`.padEnd(19))
       s.runtime.dispose()
     }
   })
@@ -132,7 +133,7 @@ for (const theme of [defaultTheme, monoTheme]) {
     ]
     const s = setup({ type: "tree", id: "tree", expanded: "all", items }, theme, 40)
     const lines = s.render().map(stripAnsi)
-    expect(lines[0]).toBe("❯ 1234  ▾ Parent".padEnd(40))
+    expect(lines[0]).toBe("› 1234  ▾ Parent".padEnd(40))
     expect(lines[1]).toBe("        │ Parent detail".padEnd(40))
     expect(lines[2]).toBe("        └─▾ Child".padEnd(40))
     expect(lines[3]).toBe("          │ Child detail".padEnd(40))

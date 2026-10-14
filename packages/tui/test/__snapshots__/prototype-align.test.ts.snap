@@ -1,32 +1,32 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`width-100 fullscreen running turn matches the chosen prototype details 1`] = `
-" ⎇ main*  ~/dev/Amira  ·  Status bar layout                                   $0.42  │  124K / 200K
+"  ⎇ main*  ~/dev/Amira  ·  Status bar layout                                   $0.42  ·  124K / 200K
 
 
+› Make the status bar clearer.                                                               8:19 PM
 
-  › Make the status bar clearer.                                                           8:19 PM
 
+∴ Thought for 4.2s                                                                           8:19 PM
 
-  ∴ Thought for 4.2s                                                                       8:19 PM
-
-  # Status bar layout
+  Status bar layout
 
   The header now carries context and cost.
 
-  ├ Read 3 files · Searched 2 patterns  ▸
-  ├ Edited packages/tui/src/status-bar.ts  +12 / -3
-  └ Ran bun test packages/tui  ✓ 412 pass · 3.1s
+├ Read 3 files · Searched 2 patterns  ▸
+├ Edited packages/tui/src/status-bar.ts  +12 / -3
+└ Ran bun test packages/tui  ✓ 412 pass · 3.1s
 
   ───
 
-  ⠋ Running git diff --stat                                                                       4s
-    │ packages/tui/src/status-bar.ts | 15 ++++++++++++---
-    │  1 file changed, 12 insertions(+), 3 deletions(-)
+⠋ Running git diff --stat                                                                         4s
+│ packages/tui/src/status-bar.ts | 15 ++++++++++++---
+│  1 file changed, 12 insertions(+), 3 deletions(-)
 
- ⠋ Responding… 4.1s                                         1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop
+⠋ Responding… 4.1s                                           1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ › Message Amira                                                                                  │
-╰─────────────────────────────────────────────────────────────────── claude-opus-5-5 (high) · ask ─╯
- shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys"
+│›Message Amira                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                        claude-opus-5-5 (high) · ask
+  shift+tab mode  ·  esc stop  ·  ctrl+o detail  ·  ? keys"
 `;

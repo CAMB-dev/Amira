@@ -41,6 +41,9 @@ export interface Env {
    */
   claimsCode?: (lang: string) => boolean
   code?: (block: CodeBlock, rows: string[], col: number) => string[]
+  codeRow?: (row: string, kind: "top" | "body" | "bottom", col: number) => void
+  markerOutset?: number
+  markerRow?: (row: string) => void
   claimsMath?: ((display: boolean) => boolean) | undefined
   math?: ((source: string, rows: string[], col: number) => string[]) | undefined
   inlineMath?: ((source: string, fallback: string) => string) | undefined
@@ -696,15 +699,16 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
   }
   let prefix = carry === undefined ? lr.prefix : lr.rest
   let rest = lr.rest
-  let room = env.width - lr.indent
+  const outset = lr.indent > 0 ? (env.markerOutset ?? 0) : 0
+  let room = env.width + outset - lr.indent
   // Too narrow for the indent (a wide character needs two cells): the text gets the whole row.
   if (room < 2) {
     prefix = ""
     rest = ""
     room = env.width
   }
-  const firstWidth = env.rowWidth?.() ?? env.width
-  let firstRoom = firstWidth - (env.width - room)
+  const firstWidth = (env.rowWidth?.() ?? env.width) + outset
+  let firstRoom = firstWidth - (env.width + outset - room)
   if (firstRoom < 2 && firstWidth !== env.width) {
     prefix = ""
     firstRoom = firstWidth
@@ -712,7 +716,9 @@ export function renderLine(lr: LineRender, line: string, env: Env, carry?: strin
   const layout = wrapCells(cells, room, true, firstRoom)
   const rows = layout.map((r, i) => {
     const head = i === 0 ? prefix : rest
-    return r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
+    const row = r.end > r.start ? head + cellText(cells, runs, r.start, r.end) : head.trimEnd()
+    if (outset) env.markerRow?.(row)
+    return row
   })
   return { rows, cells, runs, layout, carry: carry ?? "", open, mathOpen }
 }

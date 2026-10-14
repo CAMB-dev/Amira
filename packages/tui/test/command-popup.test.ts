@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { CommandCandidate, CommandInfo, SessionControl } from "@amira/api"
@@ -60,13 +61,13 @@ test("opens only for one line starting with a slash", async () => {
   expect(none.popup.handleKey(key("enter"))).toBeUndefined()
   const { popup, lines } = await popupFor("/c")
   expect(popup.open).toBe(true)
-  expect(lines()).toEqual(["❯ /clear                   Start over", "  /compact [instructions]  Summarize"])
+  expect(lines()).toEqual(["› /clear                   Start over", "  /compact [instructions]  Summarize"])
 })
 
 test("↑↓ move the selection, wrapping; Tab completes the name with a space", async () => {
   const { popup, lines } = await popupFor("/c")
   expect(popup.handleKey(key("up"))).toEqual({ type: "handled" })
-  expect(lines()[1]).toStartWith("❯ /compact")
+  expect(lines()[1]).toStartWith("› /compact")
   expect(popup.handleKey(key("tab"))).toEqual({ type: "replace", text: "/compact " })
 })
 
@@ -81,7 +82,7 @@ test("Enter runs the selected command, but a bare slash runs nothing until one i
 
 test("argument candidates: Tab fills them in; Enter keeps typed text unless it is part of one", async () => {
   const partial = await popupFor("/model flash")
-  expect(partial.lines()).toEqual(["❯ deepseek/deepseek-flash"])
+  expect(partial.lines()).toEqual(["› deepseek/deepseek-flash"])
   expect(partial.popup.handleKey(key("tab"))).toEqual({
     type: "replace",
     text: "/model deepseek/deepseek-flash",
@@ -93,7 +94,7 @@ test("argument candidates: Tab fills them in; Enter keeps typed text unless it i
   // A looser fuzzy match only suggests: Enter runs what was typed, which may be a model the
   // list does not know. Tab still takes the suggestion.
   const fuzzy = await popupFor("/model deepseek/flash")
-  expect(fuzzy.lines()).toEqual(["❯ deepseek/deepseek-flash"])
+  expect(fuzzy.lines()).toEqual(["› deepseek/deepseek-flash"])
   expect(fuzzy.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/model deepseek/flash" })
   fuzzy.popup.handleKey(key("down"))
   expect(fuzzy.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/model deepseek/deepseek-flash" })
@@ -130,7 +131,7 @@ test("a late answer for older text is dropped", async () => {
   // "/t": the prefix match, then "compact" fuzzily; nothing of the answer for "/c".
   // Names show the arguments they take.
   expect(popup.render(60, plain)).toEqual([
-    "❯ /tools                   List tools",
+    "› /tools                   List tools",
     "  /compact [instructions]  Summarize",
   ])
 })
@@ -141,12 +142,12 @@ test("while the next answer is on its way the last list stays drawn, but keys wa
   const pending = popup.update("/co")
   // Dropping the list for this frame made the popup and the rows below it flicker on each key.
   expect(popup.visible).toBe(true)
-  expect(lines()).toEqual(["❯ /clear                   Start over", "  /compact [instructions]  Summarize"])
+  expect(lines()).toEqual(["› /clear                   Start over", "  /compact [instructions]  Summarize"])
   expect(popup.open).toBe(false)
   gate.resolve()
   await pending
   expect(popup.open).toBe(true)
-  expect(lines()[0]).toBe("❯ /compact [instructions]  Summarize")
+  expect(lines()[0]).toBe("› /compact [instructions]  Summarize")
   // Text that is no longer a command hides it at once.
   popup.update("hello")
   expect(popup.visible).toBe(false)
@@ -162,7 +163,7 @@ test("long lists scroll with the selection and show where it is", async () => {
   expect(lines()).toHaveLength(9)
   expect(lines().at(-1)).toBe("  1/20")
   for (let i = 0; i < 11; i++) popup.handleKey(key("down"))
-  expect(lines()).toContain("❯ /c10")
+  expect(lines()).toContain("› /c10")
   expect(lines()).not.toContain("  /c0")
   expect(lines().at(-1)).toBe("  11/20")
 })
@@ -199,9 +200,9 @@ test("a command row shows its aliases; typing an alias finds it and Tab complete
   ])
   expect(all.popup.handleKey(key("enter"))).toEqual({ type: "handled" })
   all.popup.handleKey(key("down"))
-  expect(all.lines()[0]).toStartWith("❯ /ds")
+  expect(all.lines()[0]).toStartWith("› /ds")
   const { popup, lines } = await popupFor("/ex", hostSource())
-  expect(lines()).toEqual(["❯ /quit (exit, q)  Leave Amira"])
+  expect(lines()).toEqual(["› /quit (exit, q)  Leave Amira"])
   expect(popup.handleKey(key("tab"))).toEqual({ type: "replace", text: "/quit " })
   expect(popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/quit" })
   // An alias with arguments shows how the command it runs is used.
@@ -210,7 +211,7 @@ test("a command row shows its aliases; typing an alias finds it and Tab complete
 
 test("a settings alias row completes to the alias itself", async () => {
   const { popup, lines } = await popupFor("/d", hostSource())
-  expect(lines()[0]).toStartWith("❯ /ds → /model deepseek/…")
+  expect(lines()[0]).toStartWith("› /ds → /model deepseek/…")
   expect(popup.handleKey(key("tab"))).toEqual({ type: "replace", text: "/ds " })
   expect(popup.handleKey(key("enter"))).toEqual({ type: "run", line: "/ds" })
 })
@@ -277,13 +278,13 @@ test("$ text that names no skill leaves Enter to the editor, even beside a fuzzy
   expect(lone.popup.handleKey(key("enter"))).toBeUndefined()
   // "$hmst" fuzzily matches home-assistant: listed, but Enter sends the text unless picked.
   const fuzzy = await skillPopupFor("$hmst")
-  expect(fuzzy.lines()).toEqual(["❯ $home-assistant  Smart home"])
+  expect(fuzzy.lines()).toEqual(["› $home-assistant  Smart home"])
   expect(fuzzy.popup.handleKey(key("enter"))).toBeUndefined()
   fuzzy.popup.handleKey(key("down"))
   expect(fuzzy.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "$home-assistant" })
   // "$HOME" is listed by its prefix, but the case says it is the variable, not the skill.
   const home = await skillPopupFor("$HOME")
-  expect(home.lines()).toEqual(["❯ $home-assistant  Smart home"])
+  expect(home.lines()).toEqual(["› $home-assistant  Smart home"])
   expect(home.popup.handleKey(key("enter"))).toBeUndefined()
   home.popup.handleKey(key("down"))
   expect(home.popup.handleKey(key("enter"))).toEqual({ type: "run", line: "$home-assistant" })

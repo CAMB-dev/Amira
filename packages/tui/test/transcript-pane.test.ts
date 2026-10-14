@@ -166,10 +166,11 @@ test("the user's band fills the pane at every width, also while selected", () =>
     ...env(width),
     theme: { ...defaultTheme, ...surfaceTheme("light") },
   })
+  // A deliberately reflows at marker x0/text x2, retaining the full-width painted band.
   for (const [width, expected] of [
-    [40, ["", "  › 看看 this test 🧪 please", ""]],
-    [17, ["", "  › 看看 this", "    test 🧪", "    please", ""]],
-    [11, ["", "  › 看看", "    this", "    test", "    🧪", "    pleas", "    e", ""]],
+    [40, ["", "› 看看 this test 🧪 please", ""]],
+    [17, ["", "› 看看 this test", "  🧪 please", ""]],
+    [11, ["", "› 看看 this", "  test 🧪", "  please", ""]],
   ] as const) {
     const rows = p.render(banded(width), 8).filter((r) => r !== "")
     expect(rows.map((r) => stripAnsi(r).trimEnd())).toEqual([...expected])

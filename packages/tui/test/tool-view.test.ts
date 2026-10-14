@@ -1,3 +1,4 @@
+// A deliberate oracles: fixed two-cell marker gutter, hanging output and ASCII arms consuming the gap.
 import { expect, test } from "bun:test"
 import {
   outputPreview,
@@ -15,6 +16,7 @@ import type { BlockEnv } from "../src/blocks/base.ts"
 import { ExploredBlock, ToolBlock } from "../src/blocks/tool.ts"
 import { parseUnifiedDiff, renderToolLines } from "../src/diff-view.ts"
 import { glyphs, setGlyphs } from "../src/glyphs.ts"
+import { markerPrefix } from "../src/grid.ts"
 import {
   explorationOf,
   exploredLines,
@@ -50,12 +52,12 @@ test("built-in heads use bold text verbs while targets keep their semantic token
       const head = finishedToolLines(theme, presenter, call, detail, 100)[0]!
       expect(head).toContain(bold(theme.text(past)))
       expect(head).toContain(style(target))
-      expect(stripAnsi(head)).toStartWith(`  ├ ${past} ${target}`)
+      expect(stripAnsi(head)).toStartWith(`├ ${past} ${target}`)
     }
     const live = runningToolLines(theme, presenter, { name, args, startedAt: 0 }, 0, "⠋", 100)[0]!
     expect(live).toContain(bold(theme.text(running)))
     expect(live).toContain(style(target))
-    expect(stripAnsi(live)).toStartWith(`  ⠋ ${running} ${target}`)
+    expect(stripAnsi(live)).toStartWith(`⠋ ${running} ${target}`)
     const failed = finishedToolLines(
       theme,
       presenter,
@@ -77,11 +79,11 @@ test("bundled web heads use search and fetch verbs while preserving queries and 
     for (const detail of ["collapsed", "summary", "full"] as const) {
       const head = finishedToolLines(theme, presenter, call, detail, 100)[0]!
       expect(head).toContain(bold(theme.text(past)))
-      expect(stripAnsi(head)).toStartWith(`  ├ ${past} ${target}`)
+      expect(stripAnsi(head)).toStartWith(`├ ${past} ${target}`)
     }
     const live = runningToolLines(theme, presenter, { name, args, startedAt: 0 }, 0, "⠋", 100)[0]!
     expect(live).toContain(bold(theme.text(running)))
-    expect(stripAnsi(live)).toStartWith(`  ⠋ ${running} ${target}`)
+    expect(stripAnsi(live)).toStartWith(`⠋ ${running} ${target}`)
   }
 })
 
@@ -90,21 +92,21 @@ test("successful diff results use a slash without a redundant mark; failures and
   for (const result of ["+12 -3", "+12 / -3", "✓ +12 -3"]) {
     const presenter: ToolPresenter = { verbs: { past: "Edited", running: "Editing" }, result: () => result }
     for (const detail of ["collapsed", "summary"] as const) {
-      expect(show(presenter, call, detail, 100)).toEqual(["  ├ Edited a.ts  +12 / -3"])
-      expect(show(presenter, call, detail, 24)).toEqual(["  ├ Edited a.ts", "  │  +12 / -3"])
+      expect(show(presenter, call, detail, 100)).toEqual(["├ Edited a.ts  +12 / -3"])
+      expect(show(presenter, call, detail, 24)).toEqual(["├ Edited a.ts  +12 / -3"])
     }
-    expect(show(presenter, call, "full", 100)).toEqual(["  ├ Edited a.ts", "  │  +12 / -3"])
+    expect(show(presenter, call, "full", 100)).toEqual(["├ Edited a.ts", "│ +12 / -3"])
     expect(show(presenter, { ...call, result: textResult("bad", true) }, "collapsed", 100)).toEqual([
-      `  ├ Edited a.ts  ✗ ${result}`,
+      `├ Edited a.ts  ✗ ${result}`,
     ])
   }
   expect(show({ result: () => "+12 -3 · 2 replacements" }, call)).toEqual([
-    "  ├ edit a.ts  +12 / -3 · 2 replacements",
+    "├ edit a.ts  +12 / -3 · 2 replacements",
   ])
-  expect(show({ result: () => "2 files · +12 -3" }, call)).toEqual(["  ├ edit a.ts  2 files · +12 / -3"])
+  expect(show({ result: () => "2 files · +12 -3" }, call)).toEqual(["├ edit a.ts  2 files · +12 / -3"])
   const command = { name: "bash", args: { command: "git diff --stat" }, result: textResult("ok") }
-  expect(show({ result: () => "412 pass" }, command)).toEqual(["  ├ bash git diff --stat  ✓ 412 pass"])
-  expect(show({ result: () => "+12 -3" }, command)).toEqual(["  ├ bash git diff --stat  ✓ +12 / -3"])
+  expect(show({ result: () => "412 pass" }, command)).toEqual(["├ bash git diff --stat  ✓ 412 pass"])
+  expect(show({ result: () => "+12 -3" }, command)).toEqual(["├ bash git diff --stat  ✓ +12 / -3"])
 })
 
 test("extension and MCP presenters without verbs keep the existing name fallback", () => {
@@ -114,9 +116,9 @@ test("extension and MCP presenters without verbs keep the existing name fallback
     ["mcp__server__tool", "server · tool"],
   ]) {
     const call = { name: name!, args: {}, result: textResult("ok") }
-    expect(show(presenter, call)).toEqual([`  ├ ${label} target  ✓ ok`])
+    expect(show(presenter, call)).toEqual([`${glyphs.treeBranch} ${label} target  ✓ ok`])
     const running = plain(runningToolLines(theme, presenter, { ...call, startedAt: 0 }, 0, "⠋", 100))[0]!
-    expect(running).toStartWith(`  ⠋ ${label} target`)
+    expect(running).toStartWith(`⠋ ${label} target`)
   }
 })
 
@@ -127,40 +129,39 @@ test("compact completions append the whole marked result with two spaces, only w
     result: textResult("412 pass"),
     durationMs: 3100,
   }
-  const compact = "  ├ bash bun test  ✓ 412 pass · 3.1s"
+  const compact = "├ bash bun test  ✓ 412 pass · 3.1s"
   for (const detail of ["summary", "collapsed"] as const) {
     expect(show(undefined, call, detail, visibleWidth(compact))).toEqual([compact])
     expect(show(undefined, call, detail, 80)).toEqual([compact])
     expect(show(undefined, call, detail, visibleWidth(compact) - 1)).toEqual([
-      "  ├ bash bun test",
-      "  │  ✓ 412 pass · 3.1s",
+      "├ bash bun test",
+      "│ ✓ 412 pass · 3.1s",
     ])
   }
-  expect(show(undefined, call, "full", 80)).toEqual(["  ├ bash bun test", "  │  ✓ 412 pass · 3.1s"])
+  expect(show(undefined, call, "full", 80)).toEqual(["├ bash bun test", "│ ✓ 412 pass · 3.1s"])
 })
 
 test("multiline and wrapping results retain continuation rows rather than flattening or clipping", () => {
   const call = { name: "t", args: {}, result: textResult("ok") }
   expect(show({ result: () => "first\n\nlast" }, call, "summary", 80)).toEqual([
-    "  ├ t",
-    "  │  ✓ first",
-    "  │  ",
-    "  │  last",
+    "├ t",
+    "│ ✓ first",
+    "│ ",
+    "│ last",
   ])
   expect(show(undefined, { ...call, result: textResult("blocked\nwhy", true), rejected: "blocked" })).toEqual(
-    ["  ├ t", "  │  ⊘ blocked", "  │  why"],
+    ["├ t", "│ ⊘ blocked", "│ why"],
   )
   expect(show({ result: () => "abcdefghijklmno" }, call, "summary", 12)).toEqual([
-    "  ├ t",
-    "  │  ✓",
-    "  │  abcdefg",
-    "  │  hijklmn",
-    "  │  o",
+    "├ t",
+    "│ ✓",
+    "│ abcdefghij",
+    "│ klmno",
   ])
   expect(show({ result: () => "done", body: () => [{ kind: "code", text: "one\ntwo" }] }, call)).toEqual([
-    "  ├ t  ✓ done",
-    "  │  one",
-    "  │  two",
+    "├ t  ✓ done",
+    "│ one",
+    "│ two",
   ])
 })
 
@@ -178,26 +179,26 @@ test("outcomes remain explicit in NO_COLOR, 16-color and monochrome themes, incl
       for (const theme of themes) {
         const render = (call: FinishedCall) => plain(finishedToolLines(theme, undefined, call, "summary", 80))
         const call = { name: "t", args: {}, result: textResult("ok") }
-        expect(render(call)).toEqual([`  ${glyphs.treeBranch} t  ${glyphs.toolDone} ok`])
+        expect(render(call)).toEqual([`${markerPrefix(glyphs.treeBranch)}t  ${glyphs.toolDone} ok`])
         expect(render({ ...call, result: textResult("bad", true) })).toEqual([
-          `  ${glyphs.treeBranch} t  ${glyphs.toolFailed} bad`,
+          `${markerPrefix(glyphs.treeBranch)}t  ${glyphs.toolFailed} bad`,
         ])
         expect(render({ ...call, rejected: "aborted" })).toEqual([
-          `  ${glyphs.treeBranch} t  ${glyphs.toolInterrupted} interrupted`,
+          `${markerPrefix(glyphs.treeBranch)}t  ${glyphs.toolInterrupted} interrupted`,
         ])
         expect(render({ ...call, rejected: "blocked" })).toEqual([
-          `  ${glyphs.treeBranch} t  ${glyphs.toolBlocked} ok`,
+          `${markerPrefix(glyphs.treeBranch)}t  ${glyphs.toolBlocked} ok`,
         ])
         for (const [rejected, mark] of [
           ["unknownTool", glyphs.toolUnknown],
           ["invalidArgs", glyphs.toolInvalid],
         ] as const) {
           expect(mark).not.toBe(glyphs.toolFailed)
-          expect(render({ ...call, rejected })).toEqual([`  ${glyphs.treeBranch} t  ${mark} ok`])
+          expect(render({ ...call, rejected })).toEqual([`${markerPrefix(glyphs.treeBranch)}t  ${mark} ok`])
         }
         expect(render({ ...call, result: textResult("partial", true), interrupted: true })).toEqual([
-          `  ${glyphs.treeBranch} t  ${glyphs.toolInterrupted} interrupted`,
-          `  ${glyphs.treeBranch.length === 1 ? "│  " : "|   "}partial`,
+          `${markerPrefix(glyphs.treeBranch)}t  ${glyphs.toolInterrupted} interrupted`,
+          `${glyphs.treeBranch.length === 1 ? "│ " : "| "}partial`,
         ])
       }
     }
@@ -215,7 +216,7 @@ test("a presenter that already starts with the current outcome mark does not get
         const mark = isError ? glyphs.toolFailed : glyphs.toolDone
         const call = { name: "t", args: {}, result: textResult("ok", isError) }
         expect(show({ result: () => `${mark} done` }, call)).toEqual([
-          `  ${glyphs.treeBranch} t  ${mark} done`,
+          `${markerPrefix(glyphs.treeBranch)}t  ${mark} done`,
         ])
       }
       const call = {
@@ -225,7 +226,7 @@ test("a presenter that already starts with the current outcome mark does not get
         interrupted: true,
       }
       expect(show({ result: () => `${glyphs.toolInterrupted} interrupted` }, call)).toEqual([
-        `  ${glyphs.treeBranch} t  ${glyphs.toolInterrupted} interrupted`,
+        `${markerPrefix(glyphs.treeBranch)}t  ${glyphs.toolInterrupted} interrupted`,
       ])
     }
   } finally {
@@ -262,17 +263,17 @@ test("sub-agent insertion after the head preserves compact results and every exp
     ]),
   }
   const compact = plain(block.lines(env))
-  expect(compact[0]).toBe("  ├ t  ✓ done")
+  expect(compact[0]).toBe("├ t  ✓ done")
   expect(compact[1]).toContain("child")
   expect(compact).toHaveLength(2)
   block.end = { result: textResult("one\ntwo\nthree") }
   const expanded = plain(block.lines({ ...env, detail: "full" }))
-  expect(expanded[0]).toBe("  ├ t")
+  expect(expanded[0]).toBe("├ t")
   expect(expanded[1]).toContain("child")
-  expect(expanded.slice(2)).toEqual(["  │  ✓ one (+2 lines)", "  │  two", "  │  three"])
+  expect(expanded.slice(2)).toEqual(["│ ✓ one (+2 lines)", "│ two", "│ three"])
   const inline = plain(finishedToolLines(monoTheme, undefined, block.finished(), "full", 80))
-  inline.splice(1, 0, "  │  child")
-  expect(inline).toEqual(["  ├ t", "  │  child", "  │  ✓ one (+2 lines)", "  │  two", "  │  three"])
+  inline.splice(1, 0, "│ child")
+  expect(inline).toEqual(["├ t", "│ child", "│ ✓ one (+2 lines)", "│ two", "│ three"])
 })
 
 test("a tool without a presenter: its main argument, the first result line and how many more", () => {
@@ -283,7 +284,7 @@ test("a tool without a presenter: its main argument, the first result line and h
       result: textResult("a\nb\nc"),
       durationMs: 1500,
     }),
-  ).toEqual(["  ├ mcp_x q · limit=3  ✓ a (+2 lines) · 1.5s"])
+  ).toEqual(["├ mcp_x q · limit=3  ✓ a (+2 lines) · 1.5s"])
 })
 
 test("a large output saved as an artifact: its preview's own lines show as short notes", () => {
@@ -306,11 +307,11 @@ test("a large output saved as an artifact: its preview's own lines show as short
   const saved = `… output saved as a_0123456789 · 3,000 lines · ${text.length.toLocaleString("en-US")} chars`
   const call = { name: "mcp_x", args: {}, result: textResult(preview) }
   const lines = show(undefined, call, "full", 80)
-  expect(lines[1]).toBe("  │  ✓ 3,000 lines · saved as a_0123456789")
+  expect(lines[1]).toBe("│ ✓ 3,000 lines · saved as a_0123456789")
   // The header is the result line's to say; the body starts with the output.
-  expect(lines[2]).toBe("  │  out 1")
-  expect(lines.some((l) => /^ {2}│ {2}… [\d,]+ lines omitted \(\d+–\d+\)$/.test(l))).toBe(true)
-  expect(lines.at(-1)).toBe("  │  out 3000")
+  expect(lines[2]).toBe("│ out 1")
+  expect(lines.some((l) => /^│ … [\d,]+ lines omitted \(\d+–\d+\)$/.test(l))).toBe(true)
+  expect(lines.at(-1)).toBe("│ out 3000")
   // A shell command's preview under its result, in full and in the summary view.
   const shell = {
     name: "bash",
@@ -318,25 +319,25 @@ test("a large output saved as an artifact: its preview's own lines show as short
     result: { ...textResult(`${preview}\n\nExit code: 0`), details: { exitCode: 0, outputLines: 3000 } },
   }
   const full = show(builtinPresenters.bash, shell, "full", 80)
-  expect(full[1]).toStartWith("  │  ✓ 3000 lines")
-  expect(full[2]).toBe(`  │  ${saved}`)
+  expect(full[1]).toStartWith("│ ✓ 3000 lines")
+  expect(full[2]).toBe(`│ ${saved}`)
   expect(full.join("\n")).not.toContain("[Output saved")
-  expect(show(builtinPresenters.bash, shell).at(-1)).toBe("  │  out 3000")
+  expect(show(builtinPresenters.bash, shell).at(-1)).toBe("│ out 3000")
 })
 
 test("a failure shows its output under the result, its start and end when it is long", () => {
   const call = { name: "mcp_x", args: {}, result: textResult(`boom\n${numbered(20)}`, true) }
   const lines = show(undefined, call)
-  expect(lines.slice(0, 1)).toEqual(["  ├ mcp_x  ✗ boom (+20 lines)"])
+  expect(lines.slice(0, 1)).toEqual(["├ mcp_x  ✗ boom (+20 lines)"])
   expect(lines.slice(1)).toEqual([
-    "  │  out 1",
-    "  │  out 2",
-    "  │  out 3",
-    "  │  out 4",
-    "  │  … 13 more lines",
-    "  │  out 18",
-    "  │  out 19",
-    "  │  out 20",
+    "│ out 1",
+    "│ out 2",
+    "│ out 3",
+    "│ out 4",
+    "│ … 13 more lines",
+    "│ out 18",
+    "│ out 19",
+    "│ out 20",
   ])
   // collapsed keeps the result line alone; full shows everything.
   expect(show(undefined, call, "collapsed")).toHaveLength(1)
@@ -350,14 +351,14 @@ test("calls that did not run to completion are muted with their own marker, neve
     result: textResult("Aborted by the user before this tool finished.", true),
     rejected: "aborted",
   })
-  expect(aborted).toEqual(["  ├ bash sleep 9  ⊘ interrupted"])
+  expect(aborted).toEqual(["├ bash sleep 9  ⊘ interrupted"])
   const blocked = show(undefined, {
     name: "edit",
     args: { path: "a" },
     result: textResult("Tool call blocked: read-only mode", true),
     rejected: "blocked",
   })
-  expect(blocked).toEqual(["  ├ edit a  ⊘ Tool call blocked: read-only mode"])
+  expect(blocked).toEqual(["├ edit a  ⊘ Tool call blocked: read-only mode"])
   // A tool that failed because the user interrupted the turn reads as interrupted too.
   const cut = show(undefined, {
     name: "bash",
@@ -365,7 +366,7 @@ test("calls that did not run to completion are muted with their own marker, neve
     result: textResult("Command was aborted.", true),
     interrupted: true,
   })
-  expect(cut).toEqual(["  ├ bash x  ⊘ interrupted", "  │  Command was aborted."])
+  expect(cut).toEqual(["├ bash x  ⊘ interrupted", "│ Command was aborted."])
   // Nothing of it is red.
   const colored = finishedToolLines(
     theme,
@@ -386,21 +387,21 @@ test("a call rejected at its approval prompt reads as interrupted or blocked, wi
     result: textResult("Aborted by the user before this tool ran.", true),
     rejected: "aborted",
   })
-  expect(dismissed).toEqual(["  ├ bash npm publish  ⊘ interrupted"])
+  expect(dismissed).toEqual(["├ bash npm publish  ⊘ interrupted"])
   const saidNo = show(builtinPresenters.bash, {
     name: "bash",
     args: { command: "npm publish" },
     result: textResult("Tool call not approved: the user said no.", true),
     rejected: "blocked",
   })
-  expect(saidNo).toEqual(["  ├ bash npm publish", "  │  ⊘ Tool call not approved: the user said no."])
+  expect(saidNo).toEqual(["├ bash npm publish", "│ ⊘ Tool call not approved: the user said no."])
   // Without the rejection (a session stored before it was kept) the same text is a failure.
   const before = show(builtinPresenters.bash, {
     name: "bash",
     args: { command: "npm publish" },
     result: textResult("Aborted by the user before this tool ran.", true),
   })
-  expect(before[0]).toBe("  ├ Ran npm publish")
+  expect(before[0]).toBe("├ Ran npm publish")
 })
 
 test("an edit shows +added −removed and a compact numbered diff, cut after 20 lines", () => {
@@ -419,7 +420,7 @@ test("an edit shows +added −removed and a compact numbered diff, cut after 20 
       details: { path: "/p/src/a.ts", replacements: 1, added: 1, removed: 1, hunks: [hunk(9, 2)] },
     },
   })
-  expect(small).toEqual(["  ├ Edited src/a.ts  +1 / -1", "  │  9 - line 9", "  │  9 + line 10"])
+  expect(small).toEqual(["├ Edited src/a.ts  +1 / -1", "│ 9 - line 9", "│ 9 + line 10"])
   const big = show(builtinPresenters.edit, {
     name: "edit",
     args: { path: "a.ts", old_string: "x", new_string: "y" },
@@ -430,7 +431,7 @@ test("an edit shows +added −removed and a compact numbered diff, cut after 20 
   })
   expect(big).toHaveLength(1 + 20)
   // The note lines up with the text, past the gutter.
-  expect(big.at(-1)).toBe("  │       … 11 more lines")
+  expect(big.at(-1)).toBe("│      … 11 more lines")
 })
 
 test("a presenter that throws falls back to the generic presentation", () => {
@@ -442,9 +443,7 @@ test("a presenter that throws falls back to the generic presentation", () => {
       throw new Error("bad")
     },
   }
-  expect(show(broken, { name: "t", args: { path: "p" }, result: textResult("ok") })).toEqual([
-    "  ├ t p  ✓ ok",
-  ])
+  expect(show(broken, { name: "t", args: { path: "p" }, result: textResult("ok") })).toEqual(["├ t p  ✓ ok"])
 })
 
 test("finished and running lines fit the width, the running spinner replaces the tree and keeps time on the right", () => {
@@ -467,7 +466,7 @@ test("finished and running lines fit the width, the running spinner replaces the
       40,
     ),
   )
-  expect(running).toEqual([`  ⠋ bash bun test${" ".repeat(20)}12s`, "    │ b", "    │ c", "    │ d"])
+  expect(running).toEqual([`⠋ bash bun test${" ".repeat(22)}12s`, "│ b", "│ c", "│ d"])
   const narrow = runningToolLines(theme, undefined, { name: "bash", args: long, startedAt: 0 }, 0, "⠋", 30)
   expect(narrow.every((l) => visibleWidth(l) <= 30)).toBe(true)
 })
@@ -493,7 +492,7 @@ test("long running commands reserve two cells before elapsed time; long finished
       width,
     )
     expect(finished).toHaveLength(2)
-    expect(finished[1]).toBe("  │  ✓ 22 lines · 17.6s")
+    expect(finished[1]).toBe("│ ✓ 22 lines · 17.6s")
     expect(finished.every((row) => visibleWidth(row) <= width)).toBe(true)
   }
 })
@@ -504,10 +503,7 @@ test("a failed built-in call shows why under its result, whatever its presenter 
     args: { path: "gone.ts" },
     result: textResult("File not found: gone.ts\nDid you mean done.ts?", true),
   })
-  expect(lines).toEqual([
-    "  ├ Read gone.ts  ✗ File not found: gone.ts (+1 line)",
-    "  │  Did you mean done.ts?",
-  ])
+  expect(lines).toEqual(["├ Read gone.ts  ✗ File not found: gone.ts (+1 line)", "│ Did you mean done.ts?"])
 })
 
 test("a long path in the head is cut in its middle, keeping the file name; the working directory goes", () => {
@@ -518,7 +514,7 @@ test("a long path in the head is cut in its middle, keeping the file name; the w
     "summary",
     50,
   )
-  expect(head).toStartWith("  ├ Read packages/")
+  expect(head).toStartWith("├ Read packages/")
   expect(head).toEndWith("/file-name.ts")
   expect(head).toContain("…")
   expect(visibleWidth(head!)).toBeLessThanOrEqual(50)
@@ -545,7 +541,7 @@ test("progress output rewritten with carriage returns shows as the terminal left
       40,
     ),
   )
-  expect(running.slice(1)).toEqual(["    │ 99%", "    │ a   b", "    │ ax"])
+  expect(running.slice(1)).toEqual(["│ 99%", "│ a   b", "│ ax"])
 })
 
 test("on a narrow screen the result and time wrap under the head without exceeding the width", () => {
@@ -557,7 +553,7 @@ test("on a narrow screen the result and time wrap under the head without exceedi
     14,
   )
   expect(lines.every((l) => visibleWidth(l) <= 14)).toBe(true)
-  expect(plain(lines)).toEqual(["  ├ t", "  │  ✓ some", "  │  result", "  │  text ·", "  │  12.0s"])
+  expect(plain(lines)).toEqual(["├ t", "│ ✓ some", "│ result text", "│ · 12.0s"])
 })
 
 test("an MCP tool's head names its server, muted, and a JSON answer is summed up", () => {
@@ -568,14 +564,14 @@ test("an MCP tool's head names its server, muted, and a JSON answer is summed up
     "summary",
     60,
   )
-  expect(plain(lines)).toEqual(["  ├ github · search_issues bug  ✓ 2 items"])
+  expect(plain(lines)).toEqual(["├ github · search_issues bug  ✓ 2 items"])
   expect(lines[0]).toContain(theme.muted("github ·"))
   const wrapped = show(undefined, {
     name: "mcp__x__list",
     args: {},
     result: textResult('{"issues":[1,2,3],"total":3}'),
   })
-  expect(wrapped).toEqual(["  ├ x · list  ✓ 3 items (issues)"])
+  expect(wrapped).toEqual(["├ x · list  ✓ 3 items (issues)"])
 })
 
 test("a call that never ran appends its marked rejection without a trailing blank", () => {
@@ -585,7 +581,7 @@ test("a call that never ran appends its marked rejection without a trailing blan
     result: textResult("Unknown tool", true),
     rejected: "unknownTool",
   })
-  expect(head).toBe("  ├ nope  ⊘ Unknown tool")
+  expect(head).toBe("├ nope  ⊘ Unknown tool")
 })
 
 test("successful exploring calls read as one row: what was done, in order, each call counted", () => {
@@ -596,11 +592,11 @@ test("successful exploring calls read as one row: what was done, in order, each 
     { name: "read", args: { path: "a.ts" } },
   ].map((c) => ({ call: { ...c, result: textResult("x") }, presenter: builtinPresenters[c.name] }))
   expect(plain(exploredLines(theme, calls, false, "summary", 80))).toEqual([
-    "  ├ Read 3 files · Searched 1 pattern  ▸",
+    "├ Read 3 files · Searched 1 pattern  ▸",
   ])
   // Unfolded, each call takes its original place without an extra summary row.
   const open = plain(exploredLines(theme, calls, true, "summary", 80))
-  expect(open[0]).toBe("  ├ Read a.ts")
+  expect(open[0]).toBe("├ Read a.ts")
   expect(open).toHaveLength(4 * 2)
   // A failed one is no exploring: it keeps its own lines.
   const failed = { name: "read", args: { path: "c.ts" }, result: textResult("gone", true) }
@@ -650,7 +646,7 @@ test("a failure whose one line of output is its result line says it once", () =>
   }
   const lines = show(builtinPresenters.bash, call)
   expect(lines.filter((l) => l.includes(text))).toHaveLength(1)
-  expect(lines).toEqual(["  ├ Ran make clean", "  │  ✗ Aborted by the user before this tool ran."])
+  expect(lines).toEqual(["├ Ran make clean", "│ ✗ Aborted by the user before this tool ran."])
 })
 
 test("views can change the last tool flag without leaving cached tree rows stale", () => {
@@ -687,8 +683,8 @@ test("tool trees close their last sibling and continue beside wrapped diffs in U
           expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true)
           if (width < 24) continue
           const shown = plain(rows)
-          expect(shown[0]).toBe(`  ${isLast ? last : branch} edit src/界.ts`)
-          const prefix = branch === "├" ? (isLast ? "     " : "  │  ") : isLast ? "      " : "  |   "
+          expect(shown[0]).toBe(`${markerPrefix(isLast ? last : branch)}edit src/界.ts`)
+          const prefix = branch === "├" ? (isLast ? "  " : "│ ") : isLast ? "  " : "| "
           expect(shown[1]).toBe(`${prefix}✓ updated`)
           expect(shown.slice(2).every((row) => row.startsWith(prefix))).toBe(true)
           expect(shown.length).toBeGreaterThan(3)
@@ -710,8 +706,8 @@ test("tool trees close their last sibling and continue beside wrapped diffs in U
           { last: true },
         ),
       )
-      expect(running[0]).toStartWith("  * bash make")
-      expect(running[1]).toBe(`    ${pipe} output`)
+      expect(running[0]).toStartWith("* bash make")
+      expect(running[1]).toBe(`${pipe} output`)
     }
   } finally {
     setGlyphs(before)

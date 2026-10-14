@@ -1,4 +1,5 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
+import { defaultGlyphs } from "../glyphs.ts"
 import { type InputEvent, isSubmitKey, keyLabel, matchesKey } from "../keys.ts"
 import { bold, inverse, type Theme } from "../style.ts"
 import { graphemes, truncateToWidth, visibleWidth, wrapText } from "../width.ts"
@@ -106,9 +107,9 @@ const SUBMIT = "\0submit"
 const CANCEL = "\0cancel"
 /** List rows shown at once; longer lists scroll with the highlight. */
 const LIST_ROWS = 8
-const INDENT = "   "
-/** Before the focused field, the highlighted option and the focused button: the selection marker everywhere. */
-const POINTER = "❯"
+const INDENT = "  "
+const pointer = (ctx: RenderContext) => ctx.glyphs?.pointer ?? defaultGlyphs.pointer ?? "›"
+const separator = (ctx: RenderContext) => ctx.glyphs?.separator ?? defaultGlyphs.separator ?? "·"
 
 /**
  * A full-screen form: a title, a scrolling body of fields and buttons, and a footer with
@@ -613,7 +614,7 @@ export class Form implements Component {
     const { theme } = ctx
     let active = 0
     const focused = this.focus === f.def.id
-    const mark = focused ? theme.accent(POINTER) : " "
+    const mark = focused ? theme.accent(pointer(ctx)) : " "
     const name = focused ? theme.accent(f.def.label) : f.def.label
     const star = f.def.required ? theme.muted(" *") : ""
     const out: string[] = []
@@ -650,19 +651,17 @@ export class Form implements Component {
         out.push(label())
         const chosen = f.options.find((o) => o.value === f.value)
         const text = chosen ? (chosen.label ?? chosen.value) : String(f.value || "(none)")
-        const desc = chosen?.description ? theme.muted(` · ${chosen.description}`) : ""
+        const desc = chosen?.description ? theme.muted(` ${separator(ctx)} ${chosen.description}`) : ""
         const arrows = focused ? theme.muted(f.open ? " ▴" : " ◂▸") : ""
         out.push(
           truncateToWidth(`${INDENT}${focused ? theme.accent(text) : text}${arrows}${desc}`, width, "…"),
         )
         if (f.open) {
           if (f.filter)
-            out.push(
-              truncateToWidth(`${INDENT}${theme.muted("filter ›")} ${f.filter}${CURSOR_MARKER}`, width),
-            )
+            out.push(truncateToWidth(`${INDENT}${theme.muted("filter:")} ${f.filter}${CURSOR_MARKER}`, width))
           const list = this.filtered(f)
           if (!list.length) out.push(INDENT + theme.muted("no match"))
-          const rows = this.listLines(f, list, width, theme, (o) => o.value === f.value)
+          const rows = this.listLines(f, list, width, ctx, (o) => o.value === f.value)
           active = out.length + Math.max(0, f.highlight - f.top)
           out.push(...rows)
         }
@@ -686,7 +685,7 @@ export class Form implements Component {
           const adds = f.def.allowCustom && typed && !rows.some((r) => r.value === typed)
           out.push(
             truncateToWidth(
-              `${INDENT}${theme.muted("filter ›")} ${f.filter}${CURSOR_MARKER}${adds ? theme.muted(`  ${keyLabel({ name: "enter" })} adds it`) : ""}`,
+              `${INDENT}${theme.muted("filter:")} ${f.filter}${CURSOR_MARKER}${adds ? theme.muted(`  ${keyLabel({ name: "enter" })} adds it`) : ""}`,
               width,
             ),
           )
@@ -694,7 +693,7 @@ export class Form implements Component {
         if (!rows.length) {
           out.push(INDENT + theme.muted(f.filter ? "no match" : "(no options yet)"))
         } else {
-          const list = this.listLines(f, rows, width, theme, (o) => checked.includes(o.value), true)
+          const list = this.listLines(f, rows, width, ctx, (o) => checked.includes(o.value), true)
           active = out.length + (f.highlight - f.top)
           out.push(...list)
         }
@@ -710,7 +709,10 @@ export class Form implements Component {
         if (a.running) {
           out.push(
             truncateToWidth(
-              INDENT + theme.muted(`… ${a.text ?? "working"} · ${keyLabel({ name: "escape" })} stops it`),
+              INDENT +
+                theme.muted(
+                  `… ${a.text ?? "working"} ${separator(ctx)} ${keyLabel({ name: "escape" })} stops it`,
+                ),
               width,
               "…",
             ),
@@ -733,10 +735,11 @@ export class Form implements Component {
     f: FieldState,
     rows: FormChoice[],
     width: number,
-    theme: Theme,
+    ctx: RenderContext,
     on: (o: FormChoice) => boolean,
     boxes = false,
   ): string[] {
+    const { theme } = ctx
     f.highlight = Math.max(0, Math.min(f.highlight, rows.length - 1))
     if (f.highlight < f.top) f.top = f.highlight
     if (f.highlight >= f.top + LIST_ROWS) f.top = f.highlight - LIST_ROWS + 1
@@ -748,7 +751,7 @@ export class Form implements Component {
       const text = `${box}${o.label ?? o.value}`
       const desc = o.description ? theme.muted(`  ${o.description}`) : ""
       return truncateToWidth(
-        `${INDENT}${hl ? theme.accent(`${POINTER} ${text}`) : `  ${text}`}${desc}`,
+        `${INDENT}${hl ? theme.accent(`${pointer(ctx)} ${text}`) : `  ${text}`}${desc}`,
         width,
         "…",
       )
@@ -762,48 +765,55 @@ export class Form implements Component {
     const out = [theme.border((ctx.glyphs?.rule ?? "─").repeat(width))]
     for (const n of this.opts.notice?.() ?? []) out.push(theme.warning(truncateToWidth(n, width, "…")))
     if (this.confirming) {
-      out.push(theme.warning(truncateToWidth("Discard your changes? y discard · n keep editing", width, "…")))
+      out.push(
+        theme.warning(
+          truncateToWidth(`Discard your changes? y discard ${separator(ctx)} n keep editing`, width, "…"),
+        ),
+      )
       return out
     }
     if (this.status)
       out.push(toneStyle(theme, this.status.tone)(truncateToWidth(this.status.text, width, "…")))
     const save = button(this.opts.submitLabel ?? "Save", this.focus === SUBMIT, ctx)
     const cancel = button("Cancel", this.focus === CANCEL, ctx)
-    const mark = (on: boolean) => (on ? theme.accent(POINTER) : " ")
+    const mark = (on: boolean) => (on ? theme.accent(pointer(ctx)) : " ")
     out.push(
       truncateToWidth(
         `${mark(this.focus === SUBMIT)} ${save}  ${mark(this.focus === CANCEL)} ${cancel}`,
         width,
       ),
     )
-    out.push(theme.muted(truncateToWidth(this.hint(), width, "…")))
+    out.push(theme.muted(truncateToWidth(this.hint(ctx), width, "…")))
     return out
   }
 
-  private hint(): string {
+  private hint(ctx: RenderContext): string {
+    const sep = separator(ctx)
     const f = this.field(this.focus)
     const enter = keyLabel({ name: "enter" })
     const esc = keyLabel({ name: "escape" })
     const tab = keyLabel({ name: "tab" })
     const space = keyLabel({ name: "space" })
     const save = keyLabel({ name: "s", ctrl: true })
-    const common = `${tab}/↑↓ move · ${save} save · ${esc} cancel`
-    if (!f) return `${enter} press · ${common}`
+    const common = `${tab}/↑↓ move ${sep} ${save} save ${sep} ${esc} cancel`
+    if (!f) return `${enter} press ${sep} ${common}`
     switch (f.def.type) {
       case "select":
         return f.open
-          ? `↑↓ pick · type to filter · ${enter} choose · ${esc} close`
-          : `${enter} list · ←→ change · ${common}`
+          ? `↑↓ pick ${sep} type to filter ${sep} ${enter} choose ${sep} ${esc} close`
+          : `${enter} list ${sep} ←→ change ${sep} ${common}`
       case "multiselect":
-        return `${space} toggle · type to filter${f.def.allowCustom ? " or add" : ""} · ${keyLabel({ name: "a", ctrl: true })} all · ${common}`
+        return `${space} toggle ${sep} type to filter${f.def.allowCustom ? " or add" : ""} ${sep} ${keyLabel({ name: "a", ctrl: true })} all ${sep} ${common}`
       case "checkbox":
-        return `${space} toggle · ${common}`
+        return `${space} toggle ${sep} ${common}`
       case "textarea":
-        return `${keyLabel({ name: "enter", shift: true })} newline · ${enter} next · ${common}`
+        return `${keyLabel({ name: "enter", shift: true })} newline ${sep} ${enter} next ${sep} ${common}`
       case "action":
-        return f.action?.running ? `${esc} stop · ${tab}/↑↓ move · ${save} save` : `${enter} run · ${common}`
+        return f.action?.running
+          ? `${esc} stop ${sep} ${tab}/↑↓ move ${sep} ${save} save`
+          : `${enter} run ${sep} ${common}`
       default:
-        return `${enter} next · ${common}`
+        return `${enter} next ${sep} ${common}`
     }
   }
 }

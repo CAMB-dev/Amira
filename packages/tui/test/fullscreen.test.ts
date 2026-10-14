@@ -1,3 +1,4 @@
+// A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import {
@@ -55,9 +56,12 @@ const SHIFT_ENTER = "\x1b[13;2u"
 const WHEEL_UP = "\x1b[<64;5;5M"
 /** Full-screen workspace chrome occupies two rows above the unpinned transcript. */
 const PANE_TOP = 2
-/** These fixtures send one-line prompts: their sticky band adds two painted padding rows. */
-const paneTop = (screen: VirtualScreen) =>
-  screen.lines[PANE_TOP]!.startsWith("  › ") ? PANE_TOP + 2 : PANE_TOP
+/** First uncovered row: a one-line sticky overlay covers three band rows, or one compact row. */
+const uncoveredPaneTop = (screen: VirtualScreen) => {
+  if (screen.lines[PANE_TOP]!.startsWith("› ")) return PANE_TOP + 1
+  if (screen.lines[PANE_TOP] === "" && screen.lines[PANE_TOP + 1]!.startsWith("› ")) return PANE_TOP + 3
+  return PANE_TOP
+}
 /** Remove only a padded, valid 12- or 24-hour clock at the end of a row. */
 const withoutClocks = (text: string) =>
   text.replace(/ {2,}(?:(?:[01]\d|2[0-3]):[0-5]\d|(?:[1-9]|1[0-2]):[0-5]\d [AP]M) *$/gm, "")
@@ -208,17 +212,20 @@ test("reads in a row become one Explored row, which unfolds to the calls", async
   terminal.send("go\r")
   await shows("Both read.")
   await idle()
-  expect(withoutClocks(view())).toContain("  └ Read 2 files  ▸\n\n  Both read.")
+  expect(withoutClocks(view())).toContain("└ Read 2 files  ▸\n\n  Both read.")
   expect(view()).not.toContain("Read a.ts")
   // Selected, Enter replaces the folded row with each original call.
   terminal.send(CTRL_UP)
   terminal.send(CTRL_UP)
   await waitFor(() => /tool call \d+ of|Explored \d+ of/.test(view()), "the row selected")
+  terminal.clearWrites()
   terminal.send("\r")
   await waitFor(() => view().includes("├ Read a.ts"), "unfolded")
+  // A: occupied root-marker cells are selected in inverse video; blank gutters get ▌.
+  for (const marker of ["├", "│", "└"]) expect(terminal.output).toContain(`\x1b[7m${marker}`)
   expect(view()).toMatch(
     new RegExp(
-      `▌ ├ Read a\\.ts +${localClock(Date.now())}\\n▌ │ {2}✓ contents of a\\.ts …\\n▌ └ Read b\\.ts\\n▌ {4}✓ contents of b\\.ts …`,
+      `├ Read a\\.ts +${localClock(Date.now())}\\n│ ✓ contents of a\\.ts …\\n└ Read b\\.ts\\n▌ ✓ contents of b\\.ts …`,
     ),
   )
   terminal.send(ESC)
@@ -233,8 +240,9 @@ test("thinking shows folded as how long it took, and unfolds to the text", async
   terminal.send("go\r")
   await shows("It is 42.")
   await idle()
+  // A: the Thought marker occupies column 0, and its text hangs at column 2.
   const thought = view().match(
-    / {2}∴ Thought for (\d+(?:\.\d+)?)s {2}ctrl\+o to expand +\d{1,2}:\d{2}(?: [AP]M)?\n\n {2}It is 42\./,
+    /∴ Thought for (\d+(?:\.\d+)?)s {2}ctrl\+o to expand +\d{1,2}:\d{2}(?: [AP]M)?\n\n {2}It is 42\./,
   )
   expect(thought).not.toBeNull()
   const duration = Number(thought![1])
@@ -265,15 +273,16 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   terminal.send("what is in a.ts?\r")
   await shows("The file has three lines.")
   await idle()
+  // A: banners/replies start at column 2; user/tool markers occupy column 0.
   const conversation = [
-    "Amira · mock/m1 · /work/proj",
-    "@ files · ? keys",
+    "  Amira · mock/m1 · /work/proj",
+    "  @ files · ? keys",
     "",
     "",
-    "  › what is in a.ts?",
+    "› what is in a.ts?",
     "",
     "",
-    "  └ read a.ts  ✓ contents of a.ts (+2 lines)",
+    "└ read a.ts  ✓ contents of a.ts (+2 lines)",
     "",
     "  The file has three lines.",
   ].join("\n")
@@ -284,13 +293,15 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   const clockCells = visibleWidth(clock)
   const clockRows = screen.lines.filter((row) => row.endsWith(clock))
   expect(clockRows).toHaveLength(2)
-  expect(clockRows[0]).toBe(`  › what is in a.ts?${" ".repeat(38 - clockCells)}${clock}`)
-  const toolHead = "  └ read a.ts  ✓ contents of a.ts (+2 lines)"
-  expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(58 - visibleWidth(toolHead) - clockCells)}${clock}`)
-  expect(screen.lines[0]).toMatch(/^ \/work\/proj +0 \/ 128K$/)
+  const userHead = "› what is in a.ts?"
+  expect(clockRows[0]).toBe(`${userHead}${" ".repeat(60 - visibleWidth(userHead) - clockCells)}${clock}`)
+  const toolHead = "└ read a.ts  ✓ contents of a.ts (+2 lines)"
+  expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(60 - visibleWidth(toolHead) - clockCells)}${clock}`)
+  expect(screen.lines[0]).toMatch(/^ {2}\/work\/proj +0 \/ 128K$/)
   expect(screen.lines[1]).toBe("")
-  expect(screen.lines.at(-2)).toMatch(/^╰─+ m1 · auto ─╯$/)
-  expect(screen.lines.at(-1)).toBe(" shift+tab mode  │  ctrl+o detail  │  ? keys")
+  expect(screen.lines.at(-3)).toBe(`╰${"─".repeat(58)}╯`)
+  expect(screen.lines.at(-2)).toBe(`${" ".repeat(51)}m1 · auto`)
+  expect(screen.lines.at(-1)).toBe("  shift+tab mode  ·  ctrl+o detail  ·  ? keys")
   terminal.send("\x03")
   expect(await exited).toBe(0)
   expect(screen.inAltScreen).toBe(false)
@@ -376,29 +387,29 @@ test("parallel tool calls keep their places in call order and finish in place", 
     "test",
   )
   terminal.send("go\r")
-  // The fast one finished below the slow one, which still runs above it.
+  // A: root tool markers now sit at column 0, still finishing in call order below one another.
   await waitFor(
     () =>
       new RegExp(
-        ` {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}\\n {2}└ fast b\\.ts {2}✓ fast result`,
+        `[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}\\n└ fast b\\.ts {2}✓ fast result`,
       ).test(view()),
     "fast done in place",
   )
   // The activity line stays while tools run: its spinner, the tool still running and the time.
   await waitFor(
-    () => /^ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 1 tool running… \d+(?:\.\d+)?s +[^\n]*esc stop$/m.test(view()),
+    () => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] 1 tool running… \d+(?:\.\d+)?s +[^\n]*esc stop$/m.test(view()),
     "activity",
   )
   expect(view()).toContain("esc stop")
   expect(view()).toMatch(
-    new RegExp(` {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}`),
+    new RegExp(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}`),
   )
   release()
   await shows("done")
   await idle()
   expect(view()).toMatch(
     new RegExp(
-      ` {2}├ slow a\\.ts {2}✓ slow result +${localClock(Date.now())}\\n {2}└ fast b\\.ts {2}✓ fast result\\n\\n {2}done`,
+      `├ slow a\\.ts {2}✓ slow result +${localClock(Date.now())}\\n└ fast b\\.ts {2}✓ fast result\\n\\n {2}done`,
     ),
   )
   terminal.send("\x03")
@@ -451,11 +462,11 @@ test("sub-agents stay under their call, also running in the background after the
   terminal.send("go\r")
   await shows("started it")
   await idle()
-  // The turn is over; the sub-agent runs on right under its call, updated in place.
+  // A: the root call is at column 0; child and activity markers nest by two cells each.
   await waitFor(
     () =>
       new RegExp(
-        ` {2}└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \\d+s · 0 tok\\n {7}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs/app\\.log`,
+        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Scan the logs · explorer · \\d+s · 0 tok\\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs/app\\.log`,
       ).test(view()),
     "rows under the call",
   )
@@ -469,7 +480,7 @@ test("sub-agents stay under their call, also running in the background after the
   await waitFor(
     () =>
       new RegExp(
-        ` {2}└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {5}└ ✓ Scan the logs · explorer · \\d+\\.\\ds · 0 tok`,
+        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ ✓ Scan the logs · explorer · \\d+\\.\\ds · 0 tok`,
       ).test(view()),
     "end line under the call",
   )
@@ -525,10 +536,11 @@ test("a compact spawn group is one line under its call, with its owner's status,
   terminal.send("go\r")
   await shows("running it")
   await idle()
+  // A: the compact group's marker is exactly one two-cell level below its root call.
   await waitFor(
     () =>
       new RegExp(
-        ` {2}└ flow {2}✓ Started in the background +${localClock(Date.now())}\\n {5}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0/3 agents`,
+        `└ flow {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · Explore · 0/3 agents`,
       ).test(view()),
     "one line for the group under its call",
   )
@@ -541,7 +553,7 @@ test("a compact spawn group is one line under its call, with its owner's status,
   // Its members never get rows of their own; the group's line stays with its last status.
   await waitFor(
     () =>
-      !/Scan (api|core|tui)/.test(view()) && /^ {5}└ ✓ workflow demo · Verify · 2\/3 agents$/m.test(view()),
+      !/Scan (api|core|tui)/.test(view()) && /^ {2}└ ✓ workflow demo · Verify · 2\/3 agents$/m.test(view()),
     "ended",
   )
   terminal.send("\x03")
@@ -586,7 +598,7 @@ test("the members of a group a command started share one block: a compact group 
   expect(view()).not.toContain("Scan api")
   // Selected, it is named as its head says, not as a tool call.
   terminal.send(CTRL_UP)
-  await waitFor(() => /[›❯] background sub-agents \d+ of \d+/.test(view()), "the group selected")
+  await waitFor(() => /[››] background sub-agents \d+ of \d+/.test(view()), "the group selected")
   terminal.send(ESC)
   await waitFor(() => !/sub-agents \d+ of/.test(view()), "done selecting")
   release()
@@ -621,7 +633,8 @@ test("blocks fold and unfold: a tool call's output, a reply's details; Ctrl+O ap
   await waitFor(() => view().includes("tool call"), "the call selected")
   terminal.send("\r")
   await waitFor(() => view().includes("line 3"), "unfolded")
-  expect(view()).toMatch(/▌ {4}line 2\n▌ {4}line 3/)
+  // A: selecting output replaces its blank marker cell without moving content from column 2.
+  expect(view()).toMatch(/▌ line 2\n▌ line 3/)
   terminal.send(" ")
   await waitFor(() => !view().includes("line 3"), "folded again")
   // Esc stops selecting; Ctrl+O then shows every call in full, folded ones keeping theirs.
@@ -634,7 +647,7 @@ test("blocks fold and unfold: a tool call's output, a reply's details; Ctrl+O ap
   await exited
   // What was folded by hand prints as the inline transcript shows it: nothing is lost.
   expect(screen.mainText).toContain("hidden body")
-  expect(screen.mainText).toContain("     line 3")
+  expect(screen.mainText).toContain("  line 3")
   expect(screen.mainText).not.toContain("▌")
 })
 
@@ -662,7 +675,8 @@ test("keys a block selection does not use reach the input: Ctrl+C interrupts, ty
     "test",
   )
   terminal.send("go\r")
-  await waitFor(() => agent.status !== "idle" && / {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] hold/.test(view()), "the turn running")
+  // A: the running call's spinner uses the shared root marker column.
+  await waitFor(() => agent.status !== "idle" && /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] hold/.test(view()), "the turn running")
   terminal.send(CTRL_UP)
   await waitFor(() => view().includes("tool call"), "selected")
   // Ctrl+C stops the running turn with a block selected.
@@ -674,14 +688,14 @@ test("keys a block selection does not use reach the input: Ctrl+C interrupts, ty
   terminal.send(CTRL_UP)
   await waitFor(() => SELECT_BAR.test(view()), "selected again")
   terminal.send("hello")
-  await shows("› hello")
+  await shows("│›hello")
   expect(view()).not.toMatch(SELECT_BAR)
   // A paste too.
   terminal.send("\x03")
   terminal.send(CTRL_UP)
   await waitFor(() => SELECT_BAR.test(view()), "selected once more")
   terminal.send("\x1b[200~pasted text\x1b[201~")
-  await shows("› pasted text")
+  await shows("│›pasted text")
   // Ctrl+C with a selection and an empty input quits.
   terminal.send("\x03")
   terminal.send(CTRL_UP)
@@ -705,7 +719,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   const row = screen.lines.findIndex((l) => l.includes("└ read a.ts"))
   expect(row).toBeGreaterThanOrEqual(0)
   terminal.send("next question")
-  await shows("› next question")
+  await shows("│›next question")
   terminal.send(click(row))
   terminal.send("\r")
   await shows("second answer")
@@ -717,7 +731,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   terminal.send(click(again))
   terminal.send(click(again - 1))
   terminal.send("x")
-  await shows("› x")
+  await shows("│›x")
   expect(view()).not.toMatch(SELECT_BAR)
   terminal.send(click(again, 2))
   await shows("shift+right-click (or ctrl+v) pastes, shift+drag selects natively.")
@@ -748,10 +762,14 @@ function cellOf(screen: VirtualScreen, text: string): { x: number; y: number } {
 }
 
 test("dragging selects text across blocks, marks it, and copies it without the chrome on release", async () => {
-  const { terminal, screen, view, shows, idle, exited } = await setup([
-    { toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
-    { text: "The file has **three** lines:\n\n```\nfirst\n  second\n```" },
-  ])
+  const { terminal, screen, view, shows, idle, exited } = await setup(
+    [
+      { toolCalls: [{ name: "read", args: { path: "a.ts" } }] },
+      { text: "The file has **three** lines:\n\n```\nfirst\n  second\n```" },
+    ],
+    // The separate status row needs one cell row; keep both selection endpoints uncovered.
+    { rows: 21 },
+  )
   terminal.send("what is in a.ts?\r")
   await shows("second")
   await idle()
@@ -784,7 +802,7 @@ test("dragging selects text across blocks, marks it, and copies it without the c
   expect(clipboard(terminal.output)).toBe(copied)
   // It stays marked; typing still goes to the input.
   terminal.send("x")
-  await shows("› x")
+  await shows("│›x")
   // A click clears it and does nothing else: no block is selected, nothing is copied.
   terminal.clearWrites()
   terminal.send(press(2, 1) + release(2, 1))
@@ -834,13 +852,12 @@ test("a drag held under the transcript scrolls it down, one held on its top row 
   terminal.send(press(end, start.y))
   terminal.send(drag(0, PANE_TOP))
   // Scrolling takes a while: longer than a wait for a frame.
-  await waitFor(() => screen.lines[PANE_TOP] === "Amira · mock/m1 · /work/proj", "the top", 12_000)
+  await waitFor(() => screen.lines[PANE_TOP] === "  Amira · mock/m1 · /work/proj", "the top", 12_000)
   terminal.send(release(0, PANE_TOP))
   await waitFor(() => clipboard(terminal.output) !== undefined, "copied")
   const up = clipboard(terminal.output)!
-  expect(up.startsWith("Amira · mock/m1 · /work/proj\n@ files · ? keys\n\ngo\n\nline 1\n\nline 2\n")).toBe(
-    true,
-  )
+  // E/G: after the overlay leaves, the held edge drag must include the now-visible banner.
+  expect(up).toStartWith("Amira · mock/m1 · /work/proj\n@ files · ? keys\n\ngo\n\nline 1\n\nline 2\n")
   expect(up.endsWith("line 37\n\nline 38")).toBe(true)
   // Down from "line 2" past the bottom of the transcript to its end.
   const top = cellOf(screen, "line 2")
@@ -931,8 +948,9 @@ test("a drag along the top row selects there; it scrolls up once it came back to
   terminal.send("go\r")
   await shows("item 30")
   await idle()
-  const first = paneTop(screen)
-  expect(first).toBe(PANE_TOP + 2)
+  // E: the pane still starts at row 2; its three-row sticky band overlays rows 2–4.
+  const first = uncoveredPaneTop(screen)
+  expect(first).toBe(PANE_TOP + 3)
   const top = screen.lines[first]!
   expect(top).toContain("item")
   terminal.send(press(2, first) + drag(4, first) + drag(6, first))
@@ -941,11 +959,12 @@ test("a drag along the top row selects there; it scrolls up once it came back to
   terminal.send(release(6, first))
   await waitFor(() => clipboard(terminal.output) !== undefined, "copied")
   expect(screen.lines[first]).toBe(top)
-  expect(clipboard(terminal.output)).toBe(top.slice(2, 7))
-  // Started lower, a drag to the top row scrolls.
-  terminal.send(press(2, first + 3) + drag(2, first + 1) + drag(2, first))
+  // A: with content at column 2, the fifth selected cell is a space; copying trims row ends.
+  expect(clipboard(terminal.output)).toBe(top.slice(2, 7).trimEnd())
+  // E: dragging to the fixed pane edge scrolls, not merely to the first uncovered row.
+  terminal.send(press(2, first + 3) + drag(2, first + 1) + drag(2, PANE_TOP))
   await waitFor(() => screen.lines[first] !== top, "scrolled up")
-  terminal.send(release(2, first))
+  terminal.send(release(2, PANE_TOP))
   terminal.send("\x03")
   await exited
 })
@@ -982,7 +1001,7 @@ test("Ctrl+F finds text in the transcript, highlights matches and moves between 
   await waitFor(() => !view().includes("⌕ find"), "closed")
   // Typing goes to the input again.
   terminal.send("x")
-  await shows("› x")
+  await shows("│›x")
   terminal.send("\x03\x03")
   await exited
 })
@@ -1034,7 +1053,7 @@ test("copying the last reply and a selected block goes through OSC 52", async ()
   terminal.send(CTRL_UP)
   await waitFor(() => /message \d+ of/.test(view()), "the user message selected")
   // The selection's bar keeps its essential keys; moving is in the key reference.
-  expect(view()).toMatch(/[›❯] message \d+ of \d+ · (enter fold · )?y copy · esc back$/m)
+  expect(view()).toMatch(/[››] message \d+ of \d+ · (enter fold · )?y copy · esc back$/m)
   expect(view()).not.toContain(" move")
   terminal.send("y")
   await shows("Copied the message")
@@ -1061,7 +1080,8 @@ test("a selected reply opens into its code blocks: each is selected and copied o
   terminal.send(DOWN)
   await shows("code block 2 of 2 in the reply")
   // Only the code block's rows are marked.
-  expect(view()).toMatch(/▌ ╭[^\n]*\n▌ │ echo hi/)
+  // B: selected code has a fill-only label row and content, not border chrome.
+  expect(view()).toContain(`▌ ${" ".repeat(66)}sh\n▌ echo hi\n▌ echo there\n▌`)
   expect(view()).not.toContain("▌ Two snippets")
   terminal.send("c")
   await waitFor(() => terminal.output.includes(b64("echo hi\necho there")), "the second copied")
@@ -1186,8 +1206,8 @@ test("a resize reflows the whole transcript to the new width", async () => {
   const clock = localClock(Date.now())
   const clockCells = visibleWidth(clock)
   const first = clockCells === 5 ? "  word0 word1 word2 word3 word4" : "  word0 word1 word2 word3"
-  expect(replyRows[0]).toBe(`${first}${" ".repeat(38 - visibleWidth(first) - clockCells)}${clock}`)
-  // Only the first row reserves the clock plus four inset cells; continuations use all 38 content cells.
+  expect(replyRows[0]).toBe(`${first}${" ".repeat(40 - visibleWidth(first) - clockCells)}${clock}`)
+  // A: the first row reserves the clock and two-cell gap; continuations use all 38 content cells.
   expect(replyRows.map(withoutClocks)).toEqual(
     clockCells === 5
       ? [
@@ -1236,21 +1256,22 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
     )
   }, "asker")
   terminal.send("go\r")
-  await shows("? Proceed? (asker)")
+  // B/D: the question is the rounded dialog's title, with no question-marker prefix.
+  await shows("╭ Proceed? (asker)")
   // A click on the transcript does not select a block while the dialog has the keyboard.
-  terminal.send(click(screen.lines.findIndex((l) => l.startsWith("  › go"))))
+  terminal.send(click(screen.lines.findIndex((l) => l.startsWith("› go"))))
   await Bun.sleep(30)
   expect(view()).not.toMatch(SELECT_BAR)
   terminal.send("\x1b[B\r")
   await shows("thanks")
   await idle()
-  expect(view()).toContain("  └ ask  ✓ true")
+  expect(view()).toContain("└ ask  ✓ true")
   // A form draws over the transcript on the same alternate screen.
   const form = host.ui.api("x").form(webhookForm)
   await shows("Where to send build results")
   terminal.send("https://ci.example\x13")
   expect(await form).toEqual({ url: "https://ci.example" })
-  await shows("  └ ask  ✓ true")
+  await shows("└ ask  ✓ true")
   // So does the sub-agent viewer.
   terminal.send("/agents view\r")
   await shows("No sub-agents")
@@ -1282,8 +1303,9 @@ test("a resumed session shows its history as blocks, and the printout keeps it",
   ]
   const { terminal, view, shows, screen, exited } = await setup([], { history })
   await shows("── resumed")
+  // A: resumed history uses the same root-marker/content grid as the live transcript.
   const shown =
-    /── resumed s_[^\n]*─\n\n\n {2}› earlier question\n\n\n {2}Earlier answer\.\n\n {2}└ read old\.ts {2}✓ old contents/
+    /── resumed s_[^\n]*─\n\n\n› earlier question\n\n\n {2}Earlier answer\.\n\n└ read old\.ts {2}✓ old contents/
   expect(view()).toMatch(shown)
   terminal.send("\x03")
   await exited
@@ -1309,8 +1331,8 @@ test("a resumed session shows a call rejected at its approval prompt as it was l
     } as Message,
   ]
   const { terminal, view, shows, exited } = await setup([], { history })
-  await shows("  └ read old.ts")
-  expect(view()).toContain("  └ read old.ts  ⊘ interrupted")
+  await shows("└ read old.ts")
+  expect(view()).toContain("└ read old.ts  ⊘ interrupted")
   expect(view()).not.toContain("✗ read old.ts")
   terminal.send("\x03")
   await exited
@@ -1373,6 +1395,8 @@ test("a resumed compaction's summary block says why it happened", async () => {
     history: [...exchange("a"), ...exchange("b"), ...exchange("c")],
     prepare: (agent) => agent.compact(),
   })
+  // The separate composer status row puts this older notice above the initial viewport.
+  terminal.send(PAGE_UP)
   await shows("▸ Compacted (you asked) · summary of earlier messages · 1 line")
   terminal.send("\x03")
   await exited
@@ -1457,10 +1481,11 @@ function expectedImageRows(screen: VirtualScreen, height = 6): number[] {
   let start: number
   let end: number
   if (top >= 0) {
-    start = top + 2
+    // E: images are clipped below the overlay, while their transcript coordinates stay fixed.
+    start = Math.max(uncoveredPaneTop(screen), top + 2)
     end = Math.min(top + 1 + height, paneEnd - 1)
   } else if (bottom >= 0) {
-    start = Math.max(paneTop(screen), bottom - 1 - height)
+    start = Math.max(uncoveredPaneTop(screen), bottom - 1 - height)
     end = bottom - 2
   } else return []
   return Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
@@ -1471,6 +1496,8 @@ test("an image in a reply is drawn in its rows of the transcript, once; exiting 
     env: WT,
     graphics: SIXEL,
     images,
+    // Preserve the image's two visible text neighbors alongside the separate status row.
+    rows: 21,
   })
   terminal.send("go\r")
   await shows("bottom")
@@ -1527,7 +1554,7 @@ test("scrolling moves the image row by row: cropped at either edge, cleared once
     await step(SHIFT_UP)
     const rows = imageRows(screen)
     seen.add(rows.length === 0 ? "off" : rows.length < 6 ? "cropped" : "whole")
-    if (screen.lines[PANE_TOP] === "Amira · mock/m1 · /work/proj") break
+    if (screen.lines[PANE_TOP] === "  Amira · mock/m1 · /work/proj") break
   }
   // Down again, past it: every row it covered is erased.
   for (let n = 0; n < 45 && screen.lines.indexOf("  line 30") === -1; n++) await step(SHIFT_DOWN)
@@ -1603,18 +1630,30 @@ test("a resize fits the image again: fewer rows on a lower screen", async () => 
   await shows("bottom")
   await idle()
   await waitFor(() => imageRows(screen).length === 6, "the image")
-  // 40% of 12 rows is 4. Following the bottom crops its first row behind the fixed header.
+  // The separate status row clips one more of the four fitted image rows.
   resize(60, 12)
   await waitFor(() => screen.images.at(-1)!.cols === 3, "the resized image")
-  expect(screen.images.at(-1)).toMatchObject({ rows: 3, cols: 3, screenRow: PANE_TOP })
+  expect(screen.images.at(-1)).toMatchObject({ rows: 1, cols: 3, screenRow: PANE_TOP + 1 })
   expect(imageRows(screen)).toEqual(expectedImageRows(screen, 4))
-  // One row up reveals the whole fitted image, still inside the transcript.
+  // Constant-height scrolling reveals one image row per step below the compact overlay.
   terminal.send(SHIFT_UP)
-  await waitFor(() => screen.images.at(-1)!.rows === 4, "the image at 4 rows")
+  await waitFor(() => screen.images.at(-1)!.rows === 2, "the image at 2 rows")
+  expect(screen.images.at(-1)).toMatchObject({ rows: 2, cols: 3, screenRow: PANE_TOP + 1 })
+  // Both text neighbors are clipped now, so assert the uncovered image cells directly.
+  expect(imageRows(screen)).toEqual(Array.from({ length: 2 }, (_, row) => PANE_TOP + 1 + row))
+  terminal.send(SHIFT_UP)
+  await waitFor(() => screen.images.at(-1)!.rows === 3, "the image at 3 rows")
+  expect(screen.images.at(-1)).toMatchObject({ rows: 3, cols: 3, screenRow: PANE_TOP + 1 })
+  // Both text neighbors are clipped in this compact frame; assert the uncovered cells directly.
+  expect(imageRows(screen)).toEqual(Array.from({ length: 3 }, (_, row) => PANE_TOP + 1 + row))
+  terminal.send(SHIFT_UP)
+  await shows("3 rows below")
   await Bun.sleep(30)
-  expect(screen.images.at(-1)).toMatchObject({ rows: 4, cols: 3 })
-  expect(imageRows(screen)).toHaveLength(4)
-  expect(imageRows(screen)).toEqual(Array.from({ length: 4 }, (_, row) => PANE_TOP + row))
+  // The fitted image still has four rows, but only three fit below the compact overlay
+  // and above the scroll note now that the composer status consumes its own row.
+  expect(screen.images.at(-1)).toMatchObject({ rows: 3, cols: 3, screenRow: PANE_TOP + 1 })
+  expect(imageRows(screen)).toHaveLength(3)
+  expect(imageRows(screen)).toEqual(Array.from({ length: 3 }, (_, row) => PANE_TOP + 1 + row))
   // Back to the first size: the size drawn before is still there, drawn again at once.
   const drawn = screen.images.length
   resize(60, 24)
@@ -1675,7 +1714,7 @@ test("iTerm2 draws images whole: partly in view, the image is its alt text, to s
     terminal.send(SHIFT_UP)
     await Bun.sleep(25)
     const bottom = screen.lines.indexOf("  bottom")
-    if (bottom >= paneTop(screen) + 2 && bottom < paneTop(screen) + 7) {
+    if (bottom >= uncoveredPaneTop(screen) + 2 && bottom < uncoveredPaneTop(screen) + 7) {
       partial = true
       expect(imageRows(screen)).toEqual([])
       expect(view()).toContain("🖼️ chart (scroll to view)")
@@ -1712,11 +1751,11 @@ test("full screen: a node an extension renders shows as code until its lines com
   )
   terminal.send("go\r")
   await shows("bottom")
-  // Until the rendering is in, the block shows as the code it is.
-  expect(view()).toContain("╭─ wide")
+  // B: pending extension renders use fill-only code, with the language at the shared right edge.
+  expect(view()).toContain(`${" ".repeat(56)}wide\n  anything\n\n\n  bottom`)
   await shows(`  58${"=".repeat(56)}`)
   await idle()
-  expect(view()).not.toContain("╭─ wide")
+  expect(view()).not.toContain(`${" ".repeat(56)}wide`)
   expect(withoutClocks(view())).toContain(`  top\n\n  58${"=".repeat(56)}\n\n  bottom`)
   // A resize reflows it: rendered for the new width, once per width.
   resize(40, 20)
@@ -1751,9 +1790,8 @@ test("full screen: a renderer's image is drawn like a Markdown image; without a 
   none.terminal.send("go\r")
   await none.shows("bottom")
   await none.idle()
-  expect(none.view()).toContain(
-    `  ╭─ chart${"─".repeat(49)}╮\n  │ pie${" ".repeat(52)}│\n  ╰${"─".repeat(56)}╯`,
-  )
+  // B: without an image provider, the original code remains fill-only with a right-edge language label.
+  expect(none.view()).toContain(`${" ".repeat(55)}chart\n  pie\n\n\n  bottom`)
   expect(none.screen.images).toEqual([])
   none.terminal.send("\x03")
   await none.exited

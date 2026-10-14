@@ -1,10 +1,12 @@
 import {
+  bold,
   type Component,
   type InputEvent,
   matchesKey,
   type RenderContext,
   ScrollView,
   type Theme,
+  themeToken,
   truncateToWidth,
   visibleWidth,
   wrapText,
@@ -86,11 +88,11 @@ export class KeyReference implements Component {
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const head = [
-      truncateToWidth(`${theme.accent(glyphs.question)} ${theme.text("Keys")}`, width, glyphs.more),
+      truncateToWidth(`  ${bold(theme.text("Keys"))}`, width, glyphs.more),
       ...wrapText(
         "To change a key, map the action name after its description to keys in keybindings.json, in Amira's home folder (~/.amira unless AMIRA_HOME says otherwise).",
-        width,
-      ).map((l) => theme.muted(l)),
+        Math.max(1, width - 2),
+      ).map((l) => `  ${theme.muted(l)}`),
       theme.muted(glyphs.rule.repeat(width)),
     ]
     this.#scroll.height = Math.max(1, ctx.rows - head.length - 1)
@@ -129,7 +131,9 @@ export class KeyReference implements Component {
     const out: string[] = []
     for (const g of groups) {
       if (out.length) out.push("")
-      out.push(theme.accent(truncateToWidth(g.title, width, glyphs.more)))
+      out.push(
+        `  ${(themeToken(theme, "heading") ?? theme.text)(bold(truncateToWidth(g.title, Math.max(1, width - 2), glyphs.more)))}`,
+      )
       for (const r of g.rows) {
         const keyLines = r.keys ? wrapText(r.keys, keysWidth) : ["not bound"]
         const style = r.keys ? theme.text : theme.muted
@@ -155,6 +159,6 @@ export class KeyReference implements Component {
     const hint = [...where, `↑↓ ${scroll} scroll`, `${keyLabel({ name: "escape" })} close`].join(
       ` ${glyphs.separator} `,
     )
-    return theme.muted(truncateToWidth(hint, width, glyphs.more))
+    return `  ${theme.muted(truncateToWidth(hint, Math.max(1, width - 2), glyphs.more))}`
   }
 }

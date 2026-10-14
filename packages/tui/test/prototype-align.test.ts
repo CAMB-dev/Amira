@@ -1,3 +1,5 @@
+// Snapshot update: intact typing borders and a separate status row shift the transcript viewport.
+// A/B/D deliberate snapshot: shared two-cell marker grid, reading fills, typing frames and consistent · separators.
 import { expect, spyOn, test } from "bun:test"
 import { defineTool, textResult } from "@amira/api"
 import { bold, createTheme, Editor, FakeTerminal, Spinner, stripAnsi, visibleWidth } from "@amira/tui-kit"
@@ -33,7 +35,7 @@ const env: BlockEnv = {
 test("header context uses uppercase units and preserves the million decimal", () => {
   const ctx = { theme, color: true, rows: 24 }
   const row = headerLine({ cwd: "~/dev/Amira", used: 16000, limit: 1000000 }, 100, ctx)
-  expect(stripAnsi(row)).toEndWith("16K / 1.0M ")
+  expect(stripAnsi(row)).toEndWith("16K / 1.0M")
   expect(visibleWidth(row)).toBe(100)
   expect(row).toContain(theme.fg2("16K"))
   expect(row).toContain(theme.muted(" / 1.0M"))
@@ -97,7 +99,7 @@ test(
       { id: "model", text: "claude-opus-5-5 (high) · ask", align: "right", tone: "accent", priority: 40 },
     ])
     const hint = (t: typeof theme) =>
-      " " +
+      "  " +
       [
         [keys.label("permissions.mode"), "mode"],
         [keys.label("interrupt"), "stop"],
@@ -105,7 +107,7 @@ test(
         [keys.label("help"), "keys"],
       ]
         .map(([key, text]) => bold(t.fg2(key!.toLowerCase())) + t.muted(` ${text}`))
-        .join(t.muted(`  ${glyphs.treePipe}  `))
+        .join(t.muted(`  ${glyphs.separator}  `))
     const view = createFullscreenView({
       terminal,
       theme,
@@ -204,15 +206,15 @@ test(
       )
       view.render()
       const frame = screen.lines.join("\n")
-      expect(frame).toContain("  ├ Read 3 files · Searched 2 patterns  ▸")
+      expect(frame).toContain("├ Read 3 files · Searched 2 patterns  ▸")
       expect(frame).toContain("Edited packages/tui/src/status-bar.ts")
       expect(frame).toContain("Ran bun test packages/tui  ✓ 412 pass · 3.1s")
-      expect(frame).toContain("# Status bar layout")
-      expect(frame).toContain("  ⠋ Running git diff --stat")
-      expect(frame).toContain("    │  1 file changed, 12 insertions(+), 3 deletions(-)")
+      expect(frame).toContain("  Status bar layout")
+      expect(frame).toContain("⠋ Running git diff --stat")
+      expect(frame).toContain("│  1 file changed, 12 insertions(+), 3 deletions(-)")
       expect(frame).toMatch(/∴ Thought for 4\.2s +8:19 PM/m)
       expect(frame.split("\n").filter((row) => row.includes("8:19 PM"))).toHaveLength(2)
-      expect(frame).toContain("shift+tab mode  │  esc stop  │  ctrl+o detail  │  ? keys")
+      expect(frame).toContain("shift+tab mode  ·  esc stop  ·  ctrl+o detail  ·  ? keys")
       const rows = screen.lines
       const index = rows.indexOf("  ───")
       expect(rows.slice(index - 1, index + 2)).toEqual(["", "  ───", ""])
@@ -246,12 +248,10 @@ for (const mode of ["fullscreen", "inline"] as const) {
       await s.shows("answer")
       await s.idle()
       expect(s.live()).not.toContain("999 tok/s")
-      expect(
-        s
-          .live()
-          .split("\n")
-          .find((row) => row.startsWith("╰")),
-      ).toContain("m1 · auto")
+      const rows = s.live().split("\n")
+      const border = rows.findIndex((row) => row.startsWith("╰"))
+      expect(rows[border]).toBe(`╰${"─".repeat(118)}╯`)
+      expect(rows[border + 1]).toBe(`${" ".repeat(111)}m1 · auto`)
     } finally {
       await closeImageApp(s)
     }

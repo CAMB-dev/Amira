@@ -1,3 +1,4 @@
+// D deliberate oracle: the focus/list cursor is ›; authored widget nesting stays unchanged.
 import { expect, test } from "bun:test"
 import type { UiContext, UiControl, ViewDefinition } from "@amira/api"
 import { CURSOR_MARKER, key, monoTheme, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"
@@ -64,7 +65,7 @@ for (const legacy of [false, true]) {
       const frame = h.render().map(stripAnsi)
       expect(frame).toHaveLength(context.rows)
       expect(frame.join("\n")).not.toContain("x act")
-      if (mode === "minimal") expect(frame.at(-1)).toBe("esc close")
+      if (mode === "minimal") expect(frame.at(-1)).toBe("  esc close")
       else expect(frame.at(-1)).toBe(legacy ? "Body 5" : "Body 7".padEnd(100))
       if (!legacy) expect(h.ctx.height).toBe(mode === "none" ? 8 : 7)
       else expect(h.viewer.scroll.height).toBe(mode === "none" ? 6 : 5)
@@ -73,7 +74,7 @@ for (const legacy of [false, true]) {
       h.control.pushPage({ title: "Details" })
       const page = h.render().map(stripAnsi)
       expect(page[0]).toContain("Details")
-      if (mode === "minimal") expect(page.at(-1)).toBe("esc back")
+      if (mode === "minimal") expect(page.at(-1)).toBe("  esc back")
       else expect(page.join("\n")).not.toContain("esc")
       h.viewer.handleInput(key("escape"))
       expect(h.closed).toBe(0)

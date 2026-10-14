@@ -1,6 +1,6 @@
 import type { Component, RenderContext } from "../component.ts"
 import { defaultGlyphs } from "../glyphs.ts"
-import { closeStyles, truncateToWidth, visibleWidth } from "../width.ts"
+import { closeStyles, tokenize, truncateToWidth, visibleWidth } from "../width.ts"
 
 export interface BoxOptions {
   /** Short texts drawn into the top and bottom border, against the right corner. */
@@ -10,6 +10,8 @@ export interface BoxOptions {
    * it; it must return exactly `width` cells.
    */
   bottom?: (width: number, ctx: RenderContext) => string
+  /** The child supplies a two-cell gutter; its marker sits inside the intact left side. */
+  markerGutter?: boolean
 }
 
 /** Below this width a border would leave the child almost no room; it is drawn bare instead. */
@@ -29,13 +31,27 @@ export class Box implements Component {
   render(width: number, ctx: RenderContext): string[] {
     if (width < MIN_WIDTH) return this.child.render(width, ctx)
     const border = ctx.theme.border
-    const inner = width - 4
+    const inner = width - (this.opts.markerGutter ? 1 : 4)
     const glyphs = ctx.glyphs ?? defaultGlyphs
     const side = border(glyphs.codeSide)
     const rows = this.child.render(inner, ctx).map((line) => {
       // Closed, so the child's styles cannot reach the padding or the border.
-      const fitted = closeStyles(truncateToWidth(line, inner))
-      return `${side} ${fitted}${" ".repeat(Math.max(0, inner - visibleWidth(fitted)))} ${side}`
+      let column = 0
+      const content = this.opts.markerGutter
+        ? tokenize(line)
+            .filter((token) => {
+              if (token.ansi) return true
+              const keep = column !== 1
+              column += token.width
+              return keep
+            })
+            .map((token) => token.text)
+            .join("")
+        : line
+      const room = inner - (this.opts.markerGutter ? 1 : 0)
+      const fitted = closeStyles(truncateToWidth(content, room))
+      const body = fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted)))
+      return this.opts.markerGutter ? `${side}${body}${side}` : `${side} ${body} ${side}`
     })
     const labels = this.opts.labels?.() ?? {}
     const bottom =

@@ -2,17 +2,17 @@
 
 exports[`restyled viewer frame uses the main transcript renderers and keeps its own chrome 1`] = `
 "◆ Child a · running · 5s · 1.6k tok · $0.0123 · explorer · a              1 of 2
-task: Task a
+  task: Task a
 ────────────────────────────────────────────────────────────────────────────────
-  › Task a
+› Task a
 
-  └ read a.ts  ✓ contents of a.ts (+2 lines)
+└ read a.ts  ✓ contents of a.ts (+2 lines)
 
   Now waiting.
 
   ───
 
-  ⠋ wait                                                                      0s
+⠋ wait                                                                        0s
 
 
 
@@ -20,5 +20,5 @@ task: Task a
 
 
 
-following · ←→ switch · x stop · p print · esc close"
+  following · ←→ switch · x stop · p print · esc close"
 `;

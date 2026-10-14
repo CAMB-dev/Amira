@@ -1,3 +1,4 @@
+// A/B/C/D deliberate snapshot: shared grid, code reading fill, normal titled typing borders, reference roles and › cursors.
 import { expect, test } from "bun:test"
 import { textResult } from "@amira/api"
 import { createTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"

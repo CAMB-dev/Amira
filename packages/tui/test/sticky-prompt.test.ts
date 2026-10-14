@@ -20,7 +20,12 @@ import { createFullscreenView } from "../src/fullscreen-view.ts"
 import { glyphs, setGlyphs } from "../src/glyphs.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
-import { stickyPrompt, stickyPromptLine, stickyPromptLines } from "../src/pane/sticky-prompt.ts"
+import {
+  stickyPrompt,
+  stickyPromptLine,
+  stickyPromptLines,
+  stickyPromptOverlay,
+} from "../src/pane/sticky-prompt.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
 
 const at = new Date(2026, 9, 10, 20, 9).getTime()
@@ -43,7 +48,7 @@ const message = (text: string): UserMessage => {
 }
 const output = (count: number, prefix = "row") =>
   new LinesBlock("assistant", () => Array.from({ length: count }, (_, i) => `  ${prefix} ${i}`))
-const pinned = (pane: TranscriptPane) => stickyPrompt(pane.blocks, pane.layout)
+const pinned = (pane: TranscriptPane) => (pane.padding ? undefined : stickyPrompt(pane.blocks, pane.layout))
 const mouseEvent = (action: MouseInput["action"], y: number, x = 5): MouseInput => ({
   type: "mouse",
   action,
@@ -55,7 +60,7 @@ const mouseEvent = (action: MouseInput["action"], y: number, x = 5): MouseInput 
   shift: false,
 })
 
-test("a prompt pins after output grows, switches to the topmost turn, and leaves when its band is visible", () => {
+test("a prompt pins after output grows, switches to the topmost turn, and enters identically when its band reaches the top", () => {
   const pane = new TranscriptPane()
   const older = userBlock(message("Older prompt\nSecond line"))
   pane.add(older)
@@ -74,11 +79,30 @@ test("a prompt pins after output grows, switches to the topmost turn, and leaves
   expect(pinned(pane)).toBe(older)
   pane.toBlock(older)
   pane.render(env, 5)
-  expect(pinned(pane)).toBeUndefined()
+  expect(pinned(pane)).toBe(older)
   pane.scrollBy(1)
   pane.render(env, 5)
   // The first row has scrolled away even though the second line of the real band remains.
   expect(pinned(pane)).toBe(older)
+})
+
+test("natural entry pins at the real band's top edge without changing any ANSI row", () => {
+  for (const theme of [plain.theme, { ...defaultTheme, ...surfaceTheme("dark") }]) {
+    const frameEnv = { ...env, theme }
+    const pane = new TranscriptPane()
+    const prompt = userBlock(message("One\nTwo\nThree\nFour"))
+    pane.add(prompt)
+    pane.add(output(30))
+    pane.render(frameEnv, 20)
+    pane.toTop()
+    const real = pane.render(frameEnv, 20)
+    expect(pinned(pane)).toBe(prompt)
+    const sticky = stickyPromptLines(prompt, frameEnv, 20)
+    expect(sticky).toEqual(real.slice(0, sticky.length))
+    expect(
+      pane.render(frameEnv, 20, (layout) => stickyPromptOverlay(pane.blocks, layout, frameEnv, 20).lines),
+    ).toEqual(real)
+  }
 })
 
 test("commands, origin notices and session boundaries never become sticky prompts", () => {
@@ -107,7 +131,7 @@ test("the single sticky row uses the band, accent, first-line ellipsis and origi
   const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
   const block = userBlock(message("First line\nHidden second line"))
   const row = stickyPromptLine(block, banded)
-  expect(stripAnsi(row)).toBe(`  › First line…${" ".repeat(83 - clockCells)}${clock}  `)
+  expect(stripAnsi(row)).toBe(`› First line…${" ".repeat(87 - clockCells)}${clock}`)
   expect(row).toContain(banded.theme.accent("›"))
   expect(row).toContain(banded.theme.muted(clock))
   expect(row).toContain("\x1b[48;2;")
@@ -115,7 +139,7 @@ test("the single sticky row uses the band, accent, first-line ellipsis and origi
   const long = userBlock(message("界".repeat(100)))
   const longRow = stripAnsi(stickyPromptLine(long, banded))
   expect(longRow).toContain("…")
-  expect(longRow).toEndWith(`${clock}  `)
+  expect(longRow).toEndWith(`${clock}`)
   expect(visibleWidth(longRow)).toBe(100)
   for (const width of [1, 8, 15, 16, 30]) {
     const narrow = stickyPromptLine(long, { ...banded, width })
@@ -157,7 +181,7 @@ test("the reserved sticky slot never changes scrolling, match counts, selection 
   pane.toBlock(prompt)
   pane.render(env, 6)
   expect(pane.layout[0]).toEqual({ block: prompt, line: 0 })
-  expect(pinned(pane)).toBeUndefined()
+  expect(pinned(pane)).toBe(prompt)
 })
 
 test("clicking the sticky slot jumps to its full message, never starts a drag or copies the preview", () => {
@@ -172,20 +196,21 @@ test("clicking the sticky slot jumps to its full message, never starts a drag or
     paneRows: () => 5,
     paneTop: () => 2,
     stickyPrompt: () => pinned(pane),
+    stickyRows: () => 1,
     requestRender: () => {},
     showNote: () => {},
     terminal,
   })
-  mouse.mouse(mouseEvent("press", 1))
-  mouse.mouse(mouseEvent("release", 1))
+  mouse.mouse(mouseEvent("press", 2))
+  mouse.mouse(mouseEvent("release", 2))
   expect(pane.dragging).toBe(false)
   expect(pane.selectedText()).toBe("")
   expect(terminal.output).not.toContain("\x1b]52;")
   pane.render(env, 5)
   expect(pane.layout[0]).toEqual({ block: prompt, line: 0 })
-  expect(pinned(pane)).toBeUndefined()
+  expect(pinned(pane)).toBe(prompt)
   // The first content row is still at paneTop, not at the sticky slot.
-  mouse.mouse(mouseEvent("press", 2))
+  mouse.mouse(mouseEvent("press", 3, 2))
   mouse.mouse(mouseEvent("drag", 3, 24))
   mouse.mouse(mouseEvent("release", 3, 24))
   expect(pane.selectedText()).toContain("Entire second line")
@@ -193,9 +218,9 @@ test("clicking the sticky slot jumps to its full message, never starts a drag or
   mouse.stopEdgeScroll()
 })
 
-function fullscreen(withHeader = true, height = 12, theme = plain.theme) {
-  const terminal = new FakeTerminal(100, height)
-  const screen = new VirtualScreen(100, height)
+function fullscreen(withHeader = true, height = 12, theme = plain.theme, width = 100, margin = 0) {
+  const terminal = new FakeTerminal(width, height)
+  const screen = new VirtualScreen(width, height)
   const write = terminal.write.bind(terminal)
   terminal.write = (data) => {
     write(data)
@@ -205,7 +230,7 @@ function fullscreen(withHeader = true, height = 12, theme = plain.theme) {
     terminal,
     theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
-    settings: { margin: 0, marginRows: 0 },
+    settings: { margin, marginRows: 0 },
     presenters: undefined,
     hyperlinks: false,
     renders: new ReplyRenderers(undefined),
@@ -223,7 +248,7 @@ function fullscreen(withHeader = true, height = 12, theme = plain.theme) {
   return { view, terminal, screen }
 }
 
-test("fullscreen reserves the header gap, pins directly under the header and keeps mouse/search coordinates", () => {
+test("fullscreen reserves the header gap, overlays below the fixed header gap and keeps mouse/search coordinates", () => {
   const { view, terminal, screen } = fullscreen()
   try {
     view.user(message("Fix the transcript\nKeep every row reachable"))
@@ -231,11 +256,11 @@ test("fullscreen reserves the header gap, pins directly under the header and kee
     view.replyEnd([])
     view.render()
     expect(screen.lines[0]).toBe(" Amira · project")
-    expect(screen.lines[1]).toBe(`  › Fix the transcript…${" ".repeat(75 - clockCells)}${clock}`)
-    const tail = screen.lines.slice(2, 10)
+    expect(screen.lines[2]).toBe(`› Fix the transcript…${" ".repeat(79 - clockCells)}${clock}`)
+    const tail = screen.lines.slice(3, 10)
     view.handleInput(key("up", { shift: true }))
     view.render()
-    expect(screen.lines.slice(3, 10)).toEqual(tail.slice(0, 7))
+    expect(screen.lines.slice(4, 10)).toEqual(tail.slice(0, 6))
     expect(screen.lines[10]).toContain("1 row below")
     view.handleInput(key("f", { ctrl: true }))
     view.handleInput({ type: "paste", text: "Fix the transcript" })
@@ -245,12 +270,14 @@ test("fullscreen reserves the header gap, pins directly under the header and kee
     view.handleInput(key("escape"))
     view.handleInput(key("end"))
     view.render()
-    expect(screen.lines[1]).toContain("Fix the transcript…")
-    view.handleInput(mouseEvent("press", 1))
-    view.handleInput(mouseEvent("release", 1))
+    expect(screen.lines[2]).toContain("Fix the transcript…")
+    view.handleInput(mouseEvent("press", 2))
+    view.handleInput(mouseEvent("release", 2))
     view.render()
     expect(screen.lines[1]).toBe("")
-    expect(screen.lines[2]).toContain("Fix the transcript")
+    // Jumping to the real compact-entry row must not replace it with the preview.
+    expect(screen.lines[2]).toBe(`› Fix the transcript${" ".repeat(80 - clockCells)}${clock}`)
+    expect(screen.lines.filter((row) => row.includes("Fix the transcript"))).toHaveLength(1)
     expect(screen.lines[3]).toContain("Keep every row reachable")
     expect(terminal.output).not.toContain("\x1b]52;")
   } finally {
@@ -267,7 +294,7 @@ test("sticky previews sanitize controls and tabs just like user rows, and honor 
     setGlyphs({ user: ">", more: "." })
     const block = userBlock(message("A\tB\x00\x07\x1b[2J\x1b]0;injected\x07C\rD\nnext"))
     const row = stickyPromptLine(block, env)
-    expect(stripAnsi(row)).toStartWith("  > A   BC.")
+    expect(stripAnsi(row)).toStartWith("> A   BC.")
     expect(row).not.toContain("\t")
     expect(row).not.toContain("\x00")
     expect(row).not.toContain("\x07")
@@ -275,7 +302,7 @@ test("sticky previews sanitize controls and tabs just like user rows, and honor 
     expect(row).not.toContain("injected")
     expect(row).not.toContain("…")
     const long = stickyPromptLine(userBlock(message("long".repeat(30))), { ...env, width: 30 })
-    expect(stripAnsi(long)).toEndWith(`.  ${clock}  `)
+    expect(stripAnsi(long)).toEndWith(`.  ${clock}`)
     expect(visibleWidth(long)).toBe(30)
   } finally {
     setGlyphs(previous)
@@ -309,7 +336,7 @@ test("fullscreen without a header reserves no slot and never draws an offscreen 
     view.replyEnd([])
     view.handleInput(key("home"))
     view.render()
-    expect(screen.lines[0]).toBe(`  › No header${" ".repeat(85 - clockCells)}${clock}`)
+    expect(screen.lines[0]).toBe(`› No header${" ".repeat(89 - clockCells)}${clock}`)
     view.handleInput(key("end"))
     view.render()
     expect(screen.lines.slice(0, 10).filter((row) => row.includes("Result"))).toHaveLength(5)
@@ -323,7 +350,7 @@ test("fullscreen without a header reserves no slot and never draws an offscreen 
   }
 })
 
-test("painted band padding does not pin a duplicate while the real first text row is visible", () => {
+test("painted band pins from its own top padding, not a frame after the first text row", () => {
   const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
   const pane = new TranscriptPane()
   const prompt = userBlock(message("First text\nSecond text"))
@@ -333,11 +360,11 @@ test("painted band padding does not pin a duplicate while the real first text ro
   pane.toBlock(prompt)
   pane.render(banded, 6)
   expect(prompt.promptRow).toBe(1)
-  expect(pinned(pane)).toBeUndefined()
+  expect(pinned(pane)).toBe(prompt)
   pane.scrollBy(1)
   pane.render(banded, 6)
   expect(pane.layout[0]).toEqual({ block: prompt, line: 1 })
-  expect(pinned(pane)).toBeUndefined()
+  expect(pinned(pane)).toBe(prompt)
   pane.scrollBy(1)
   pane.render(banded, 6)
   expect(pane.layout[0]).toEqual({ block: prompt, line: 2 })
@@ -383,7 +410,7 @@ test("expanded sticky bands match transcript wrapping, painted padding, marker a
   }
 })
 
-test("expanded bands cap wrapped text at three rows and use the glyph table ellipsis", () => {
+test("expanded bands cap at three actual text rows without mutating the natural entry", () => {
   const previous = { ...glyphs }
   try {
     setGlyphs({ user: ">", more: "." })
@@ -392,17 +419,17 @@ test("expanded bands cap wrapped text at three rows and use the glyph table elli
       const block = userBlock(message(text))
       const real = block.lines(banded)
       const sticky = stickyPromptLines(block, banded, 12)
-      expect(sticky).toHaveLength(5)
+      expect(sticky).toHaveLength(4)
       expect(sticky.slice(0, 3)).toEqual(real.slice(0, 3))
-      expect(stripAnsi(sticky[3]!).trimEnd()).toEndWith(".")
-      expect(stripAnsi(sticky[3]!)).toStartWith("    ")
+      expect(sticky[3]).toBe(real[3])
+      expect(stripAnsi(sticky[3]!)).toStartWith("  ")
       expect(sticky.every((row) => visibleWidth(row) === 30)).toBe(true)
-      expect(sticky.at(-1)).toBe(sticky[0])
+      expect(sticky).toEqual(real.slice(0, 4))
       expect(stickyPromptLines(block, banded, 11)).toEqual([stickyPromptLine(block, banded)])
     }
     for (const width of [1, 8, 15, 16]) {
       const sticky = stickyPromptLines(userBlock(message("long".repeat(30))), { ...banded, width }, 12)
-      expect(sticky).toHaveLength(5)
+      expect(sticky).toHaveLength(4)
       expect(sticky.every((row) => visibleWidth(row) === width)).toBe(true)
     }
   } finally {
@@ -410,7 +437,8 @@ test("expanded bands cap wrapped text at three rows and use the glyph table elli
   }
 })
 
-test("reserved band rows shrink the actual pane height for pages, wheel, selection and row counts", () => {
+// E intentionally replaces variable pane budgets with a nonselectable constant-height overlay.
+test("overlay keeps page, wheel, find and row-count geometry at the full pane height", () => {
   const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
   const pane = new TranscriptPane()
   const prompt = userBlock(message("First line\nSecond line"))
@@ -418,25 +446,22 @@ test("reserved band rows shrink the actual pane height for pages, wheel, selecti
   pane.add(prompt)
   pane.add(reply)
   const render = () =>
-    pane.render(banded, 20, (layout) => {
-      const block = stickyPrompt(pane.blocks, layout)
-      return block ? stickyPromptLines(block, banded, 20).length - 1 : 0
-    })
-  expect(render()).toHaveLength(17)
-  expect(pane.layout[0]).toEqual({ block: reply, line: 43 })
+    pane.render(banded, 20, (layout) => stickyPromptOverlay(pane.blocks, layout, banded, 20).lines)
+  expect(render()).toHaveLength(20)
+  expect(pane.layout[0]).toEqual({ block: reply, line: 40 })
   pane.pageUp()
   render()
-  expect(pane.layout[0]).toEqual({ block: reply, line: 27 })
-  expect(pane.rowsBelow).toBe(16)
-  pane.selectLine(0, 5)
-  expect(pane.selectedText()).toBe("  needle 27")
+  expect(pane.layout[0]).toEqual({ block: reply, line: 21 })
+  expect(pane.rowsBelow).toBe(19)
+  pane.selectLine(4, 5)
+  expect(pane.selectedText()).toBe("  needle 25")
   pane.pageDown()
   render()
   expect(pane.following).toBe(true)
-  expect(pane.layout[0]).toEqual({ block: reply, line: 43 })
+  expect(pane.layout[0]).toEqual({ block: reply, line: 40 })
   const mouse = createMouse({
     pane,
-    paneRows: () => 17,
+    paneRows: () => 20,
     paneTop: () => 5,
     stickyRows: () => 4,
     stickyPrompt: () => pinned(pane),
@@ -446,14 +471,13 @@ test("reserved band rows shrink the actual pane height for pages, wheel, selecti
   })
   mouse.mouse({ ...mouseEvent("wheel", 2), button: "up" })
   render()
-  expect(pane.layout[0]).toEqual({ block: reply, line: 40 })
+  expect(pane.layout[0]).toEqual({ block: reply, line: 37 })
   expect(pane.rowsBelow).toBe(3)
   pane.find("needle")
   render()
   expect(pane.matchCount).toBe(60)
   pane.clearFind()
-  // Each painted/text row jumps to the real band, and none is selectable chrome.
-  for (const row of [1, 2, 3, 4]) {
+  for (const row of [5, 6, 7, 8]) {
     pane.follow()
     render()
     mouse.mouse(mouseEvent("press", row))
@@ -461,15 +485,16 @@ test("reserved band rows shrink the actual pane height for pages, wheel, selecti
     expect(pane.selectedText()).toBe("")
     expect(pane.dragging).toBe(false)
     expect(render()).toHaveLength(20)
-    expect(pinned(pane)).toBeUndefined()
+    expect(pinned(pane)).toBe(prompt)
     expect(pane.layout[0]).toEqual({ block: prompt, line: 0 })
   }
 })
 
-test("tail reservation rechecks turn boundaries and gives visible real prompts priority", () => {
+test("tail overlay clips older turns without changing follow or scroll anchors", () => {
   const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
   const pane = new TranscriptPane()
-  pane.add(userBlock(message("Older\nTwo\nThree")))
+  const older = userBlock(message("Older\nTwo\nThree"))
+  pane.add(older)
   pane.add(output(20))
   const newer = userBlock(message("Newer"))
   pane.add(newer)
@@ -477,32 +502,33 @@ test("tail reservation rechecks turn boundaries and gives visible real prompts p
   let sticky: LinesBlock | undefined
   const render = () =>
     pane.render(banded, 14, (layout) => {
-      sticky = stickyPrompt(pane.blocks, layout)
-      return sticky ? stickyPromptLines(sticky, banded, 14).length - 1 : 0
+      const overlay = stickyPromptOverlay(pane.blocks, layout, banded, 14)
+      sticky = overlay.block
+      return overlay.lines
     })
-  render()
-  expect(sticky).toBeUndefined()
-  expect(pane.layout.some((row) => row.block === newer && row.line === 1)).toBe(true)
-  // Crossing back into the older turn grows the chrome: do not follow using the old height.
+  expect(render()).toHaveLength(14)
+  expect(sticky).toBe(older)
+  expect(pane.layout[0]).toEqual({ block: pane.blocks[1]!, line: 19 })
   pane.scrollBy(-1)
   render()
   expect(pane.following).toBe(false)
-  expect(sticky?.prompt).toBe("Older\nTwo\nThree")
-  expect(pane.layout[0]).toEqual({ block: pane.blocks[1]!, line: 19 })
-  expect(pane.rowsBelow).toBe(4)
+  expect(sticky).toBe(older)
+  expect(pane.layout[0]).toEqual({ block: pane.blocks[1]!, line: 18 })
+  expect(pane.rowsBelow).toBe(1)
   pane.follow()
   render()
   pane.add(output(20))
-  expect(render()).toHaveLength(12)
+  expect(render()).toHaveLength(14)
   expect(sticky).toBe(newer)
   pane.toBlock(newer)
   expect(render()).toHaveLength(14)
-  expect(sticky).toBeUndefined()
+  expect(sticky).toBe(newer)
+  expect(pane.layout[0]).toEqual({ block: newer, line: 0 })
   pane.follow()
   render()
   pane.scrollBy(-1)
   render()
-  expect(pane.following).toBe(false) // Do not snap back using the unshrunk height.
+  expect(pane.following).toBe(false)
   expect(pane.rowsBelow).toBe(1)
 })
 
@@ -516,15 +542,15 @@ test("fullscreen uses expanded band coordinates, preserves the bottom, and falls
       view.replyEnd([])
       view.render()
       const expanded = height >= 16 // height - header/gap(2) - below(1) - bottom(1) >= 12
-      const top = expanded ? 5 : 2
+      const top = expanded ? 6 : 3
       expect(screen.lines[0]).toBe(" Amira · project")
-      expect(screen.lines[1]).toBe(
-        expanded ? "" : `  › Fix the transcript…${" ".repeat(75 - clockCells)}${clock}`,
+      expect(screen.lines[2]).toBe(
+        expanded ? "" : `› Fix the transcript…${" ".repeat(79 - clockCells)}${clock}`,
       )
       if (expanded) {
-        expect(screen.lines[2]).toContain("› Fix the transcript")
-        expect(screen.lines[3]).toBe("    Keep every row reachable")
-        expect(screen.lines[4]).toBe("")
+        expect(screen.lines[3]).toContain("› Fix the transcript")
+        expect(screen.lines[4]).toBe("  Keep every row reachable")
+        expect(screen.lines[5]).toBe("")
         expect(terminal.output).toContain("\x1b[48;2;32;32;32m")
       }
       expect(screen.lines[height - 1]).toBe("input")
@@ -553,3 +579,55 @@ test("fullscreen uses expanded band coordinates, preserves the bottom, and falls
     expect(screen.mainText.match(/Fix the transcript/g)).toHaveLength(1)
   }
 })
+
+for (const width of [60, 100]) {
+  for (const margin of [0, 3]) {
+    for (const banded of [false, true]) {
+      test(`fullscreen frame regression: width ${width}, margin ${margin}, userBg ${banded}`, () => {
+        const theme = banded ? { ...defaultTheme, ...surfaceTheme("dark") } : plain.theme
+        const { view, screen } = fullscreen(true, 28, theme, width, margin)
+        try {
+          for (const [name, text] of [
+            ["A", "A first\nA second\nA third"],
+            ["B", "B first"],
+            ["C", "C first\nC second\nC third\nC fourth"],
+          ]) {
+            view.user(message(text!))
+            view.replyDelta(Array.from({ length: 12 }, (_, i) => `${name} body ${i}`).join("\n\n"))
+            view.replyEnd([])
+          }
+          view.handleInput(key("home"))
+          view.render()
+          const top = 2
+          const cap = banded ? 5 : 3
+          const prefix = " ".repeat(width >= 66 ? margin : 0)
+          const initial = screen.lines.slice(top, top + cap)
+          const frames: string[][] = [screen.lines.slice()]
+          let previous = frames[0]!
+          for (let offset = 1; offset <= 58; offset++) {
+            view.handleInput(key("down", { shift: true }))
+            view.render()
+            const frame = screen.lines.slice()
+            expect(frame[1]).toBe("") // Header gap never doubles as band padding.
+            expect(frame[27]).toBe(`${prefix}input`)
+            expect(frame.slice(top + cap, 25)).toEqual(previous.slice(top + cap + 1, 26))
+            if (offset <= 5) expect(frame.slice(top, top + cap)).toEqual(initial)
+            for (const name of ["A", "B", "C"]) {
+              expect(frame.filter((row) => row.includes(`${name} first`)).length).toBeLessThanOrEqual(1)
+            }
+            frames.push(frame)
+            previous = frame
+          }
+          // The same actual screen rows, including the exact band padding, return in reverse.
+          for (let offset = frames.length - 2; offset >= 0; offset--) {
+            view.handleInput(key("up", { shift: true }))
+            view.render()
+            expect(screen.lines).toEqual(frames[offset]!)
+          }
+        } finally {
+          view.stop()
+        }
+      })
+    }
+  }
+}

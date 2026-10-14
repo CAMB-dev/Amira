@@ -109,13 +109,15 @@ export class TranscriptPane {
   private frame = 0
   private env: BlockEnv | undefined
   private height = 1
-  /** With variable chrome, only rendering can decide whether an anchor reaches the end. */
-  private dynamicHeight = false
+  /** Nonselectable top rows drawn over the transcript, without changing its height. */
+  private overlayRows = 0
+  /** Re-evaluated at navigation destinations, where a different prompt may be sticky. */
+  private overlay: ((layout: readonly PaneRow[]) => readonly string[]) | undefined
   private readonly textSelection = new PaneTextSelection({
     blocks: this.blocks,
     env: () => this.env,
-    layout: () => this.layout,
-    padding: () => this.padding,
+    layout: () => this.layout.slice(Math.max(0, this.overlayRows - this.padding)),
+    padding: () => Math.max(this.padding, this.overlayRows),
     lines: (block, env) => this.lines(block, env),
     plain: (block, env) => this.plain(block, env),
     gapBefore: (index, env) => this.gapBefore(index, env),
@@ -215,48 +217,39 @@ export class TranscriptPane {
     return d.plain
   }
 
-  /**
-   * The rows of the viewport, `height` of them: blank padding above content shorter than
-   * that, then the blocks in view, the selected one marked and matches of the find bar
-   * highlighted. `reserveTop` budgets nonselectable chrome from the candidate viewport;
-   * the resulting content height is also used by scrolling, selection and image placement.
-   */
-  render(env: BlockEnv, height: number, reserveTop?: (layout: readonly PaneRow[]) => number): string[] {
+  /** Constant-height viewport; optional nonselectable chrome overlays its top rows. */
+  render(
+    env: BlockEnv,
+    height: number,
+    overlay?: (layout: readonly PaneRow[]) => readonly string[],
+  ): string[] {
     this.frame++
     this.env = env
-    const available = Math.max(1, height)
-    this.dynamicHeight = reserveTop !== undefined
-    this.height = available
+    this.height = Math.max(1, height)
+    this.overlay = overlay
     this.finder.refresh(env)
-    const contentHeight = (layout: readonly PaneRow[]) => Math.max(1, available - (reserveTop?.(layout) ?? 0))
     let rows: PaneRow[] | undefined
     if (!this.following) {
       const a = this.anchor
       if (a && a.block.index >= 0) {
-        // One extra row distinguishes an exact fit from content continuing below the view.
-        rows = this.fill(a.block.index, a.offset, available + 1)
-        this.height = contentHeight(rows)
-        if (this.dynamicHeight && rows.length <= this.height) this.follow()
+        // An overlay viewport follows again at an exact tail fit, including after resizing.
+        rows = this.fill(a.block.index, a.offset, this.height + (overlay ? 1 : 0))
+        if (overlay && rows.length <= this.height) this.follow()
         rows = rows.slice(0, this.height)
         this.top = a
       }
       if (!rows || rows.length < this.height) this.follow()
     }
-    if (this.following) {
-      // Try the largest tail first. Re-evaluate chrome as the top crosses a turn boundary;
-      // never pin an older prompt above a newer turn or hide a real visible prompt.
-      for (let tail = available; tail >= 1; tail--) {
-        rows = this.fillTail(tail)
-        this.height = contentHeight(rows)
-        if (rows.length <= this.height) break
-      }
-    }
+    if (this.following) rows = this.fillTail(this.height)
     this.layout = rows!
     this.padding = this.height - this.layout.length
+    const chrome = this.padding ? [] : (overlay?.(this.layout) ?? [])
+    this.overlayRows = Math.min(chrome.length, this.height)
     this.textSelection.update(env)
     const alt = this.placeImages(env)
     const out: string[] = Array(this.padding).fill("")
     for (let i = 0; i < this.layout.length; i++) out.push(this.drawRow(this.layout[i]!, env, alt.get(i)))
+    out.splice(0, this.overlayRows, ...chrome.slice(0, this.overlayRows))
     return out
   }
 
@@ -280,7 +273,7 @@ export class TranscriptPane {
       const first = layout[i]!.line
       const last = layout[j - 1]!.line
       for (const im of images ?? []) {
-        const top = Math.max(im.line, first)
+        const top = Math.max(im.line, first, first + this.overlayRows - this.padding - i)
         const end = Math.min(im.line + im.image.rows, last + 1)
         if (end <= top) continue
         const from = top - im.line
@@ -423,7 +416,7 @@ export class TranscriptPane {
   reveal(block: Block): void {
     const env = this.env
     if (!env || block.index < 0) return
-    if (this.layout.some((r) => r.block === block && r.line >= 0)) return
+    if (this.uncoveredRows().some((r) => r.block === block && r.line >= 0)) return
     this.revealRows(block, 0, this.lines(block, env).length - 1)
   }
 
@@ -431,16 +424,40 @@ export class TranscriptPane {
   private revealRows(block: Block, from: number, to: number): void {
     const env = this.env
     if (!env || block.index < 0) return
-    const rows = this.layout.filter((r) => r.block === block)
+    const visible = this.uncoveredRows()
+    const rows = visible.filter((r) => r.block === block)
     if (rows.some((r) => r.line === from) && rows.some((r) => r.line === to)) return
     const above =
-      !this.layout.length ||
-      this.layout[0]!.block.index > block.index ||
-      (this.layout[0]!.block === block && this.layout[0]!.line > from)
+      !visible.length ||
+      visible[0]!.block.index > block.index ||
+      (visible[0]!.block === block && visible[0]!.line > from)
     const gap = this.gapBefore(block.index, env) ? 1 : 0
     this.following = false
-    if (above || to - from + 1 >= this.height) this.moveTo(block.index, gap + from)
+    if (above || to - from + 1 >= this.height - this.overlayRows) this.moveTo(block.index, gap + from)
     else this.moveTo(block.index, gap + to + 1 - this.height)
+    // Moving to a row can change both the pinned prompt and its push-up clipping.
+    // Recompute at each destination rather than reserving the previous frame's band.
+    for (;;) {
+      const layout = this.following
+        ? this.fillTail(this.height)
+        : this.fill(this.anchor!.block.index, this.anchor!.offset, this.height)
+      const covered =
+        layout.length < this.height ? 0 : Math.min(this.overlay?.(layout).length ?? 0, this.height)
+      const at = layout.findIndex((r) => r.block === block && r.line === from)
+      if (at < 0 || at >= covered) return
+      const first = layout[0]!
+      const offset = first.line + (this.gapBefore(first.block.index, env) ? 1 : 0)
+      this.following = false
+      this.moveTo(first.block.index, offset - (covered - at))
+      const anchor = this.anchor
+      // At the document's start there are no earlier rows to reveal beneath chrome.
+      if (!anchor || (anchor.block === first.block && anchor.offset === offset)) return
+    }
+  }
+
+  /** Actual transcript rows not covered by the last frame's nonselectable chrome. */
+  private uncoveredRows(): PaneRow[] {
+    return this.layout.slice(Math.max(0, this.overlayRows - this.padding))
   }
 
   // --- code blocks of the selected reply
@@ -448,7 +465,12 @@ export class TranscriptPane {
   /** The code blocks of `block` (a reply's) as drawn now; none for other blocks. */
   codeBlocks(block: Block | undefined): CodeFrame[] {
     if (!(block instanceof ReplyBlock) || !this.env) return []
-    return codeFrames(this.plain(block, this.env), this.env.glyphs, glyphs.assistant)
+    return codeFrames(
+      this.plain(block, this.env),
+      this.env.glyphs,
+      glyphs.assistant,
+      this.lines(block, this.env),
+    )
   }
 
   /** The selected code block of the selected reply, if one is. */
@@ -772,7 +794,7 @@ export class TranscriptPane {
     // The rest from here fits: that is the end, which is followed.
     let below = -off
     for (let j = k; j < this.blocks.length && below <= this.height; j++) below += this.rowsOf(j, env)
-    if (!this.dynamicHeight && below <= this.height) this.follow()
+    if (below <= this.height) this.follow()
   }
 
   private reindex(from: number): void {
