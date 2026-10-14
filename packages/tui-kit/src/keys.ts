@@ -1,3 +1,5 @@
+import { chromeGlyphs, type Glyphs } from "./glyphs.ts"
+
 type FunctionKeyNumber =
   | 1
   | 2
@@ -121,18 +123,24 @@ export type InputEvent = KeyEvent | PasteEvent | FocusEvent | MouseInput
 
 const KEY_LABELS: Record<string, string> = {
   escape: "esc",
-  up: "↑",
-  down: "↓",
-  left: "←",
-  right: "→",
   pageup: "pgup",
   pagedown: "pgdn",
 }
 
 /** How a key reads in hints: "ctrl+q", "alt+enter", "esc", "↑", "y". */
-export function keyLabel(spec: { name: string; ctrl?: boolean; alt?: boolean; shift?: boolean }): string {
+export function keyLabel(
+  spec: { name: string; ctrl?: boolean; alt?: boolean; shift?: boolean },
+  glyphs?: Partial<Glyphs>,
+): string {
   const name = spec.name.toLowerCase()
-  const base = KEY_LABELS[name] ?? name
+  const chrome = chromeGlyphs(glyphs)
+  const arrows: Record<string, string> = {
+    up: chrome.arrowUp,
+    down: chrome.arrowDown,
+    left: chrome.arrowLeft,
+    right: chrome.arrowRight,
+  }
+  const base = arrows[name] ?? KEY_LABELS[name] ?? name
   return `${spec.ctrl ? "ctrl+" : ""}${spec.alt ? "alt+" : ""}${spec.shift ? "shift+" : ""}${base}`
 }
 

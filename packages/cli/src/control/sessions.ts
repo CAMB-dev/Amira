@@ -48,11 +48,11 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
     readSession: (id) => {
       // The current session from memory: its file may lag behind (or have stopped saving).
       const live = id === ctx.agent().sessionId ? ctx.agent().session : undefined
-      const file = live?.file ?? findSession(ctx.cwd, id, ctx.directory())
-      if (!file) return undefined
       let store: SessionStore
       let updatedAt: number
       try {
+        const file = live?.file ?? findSession(ctx.cwd, id, ctx.directory())
+        if (!file) return undefined
         store = live ?? SessionStore.open(file)
         updatedAt = live ? Date.now() : statSync(file).mtimeMs
       } catch {
@@ -93,7 +93,7 @@ export function createSessionsControl(ctx: ControlContext): SessionsControl {
     },
     deleteSession: async (id) => {
       ctx.idle("delete a session")
-      const proof = sessionDeletionDirectory(ctx.directory() ?? sessionsDir(ctx.cwd))
+      const proof = sessionDeletionDirectory(ctx.directory() ?? sessionsDir(ctx.cwd), true)
       const files = deleteStoredSession(ctx.cwd, id, ctx.agent().sessionId, ctx.directory())
       if (ctx.trace) {
         const traceProof = sessionTraceCleanupProof(proof, files)

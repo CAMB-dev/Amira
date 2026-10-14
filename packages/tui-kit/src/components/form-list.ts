@@ -1,5 +1,5 @@
 import type { RenderContext } from "../component.ts"
-import { defaultGlyphs } from "../glyphs.ts"
+import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
 import { truncateToWidth, visibleWidth } from "../width.ts"
 import type { FormChoice } from "./form.ts"
 
@@ -39,6 +39,7 @@ export function renderFormList(
   boxes = false,
 ): string[] {
   const { theme } = ctx
+  const chrome = chromeGlyphs(ctx.glyphs)
   const pointer = ctx.glyphs?.pointer ?? defaultGlyphs.pointer ?? "›"
   state.highlight = Math.max(0, Math.min(state.highlight, rows.length - 1))
   if (state.highlight < state.top) state.top = state.highlight
@@ -61,12 +62,12 @@ export function renderFormList(
       : 0
   const out = rows.slice(state.top, state.top + LIST_ROWS).map((o, j) => {
     const hl = state.top + j === state.highlight
-    const box = boxes ? `${on(o) ? "[x]" : "[ ]"} ` : on(o) ? "● " : "  "
+    const box = boxes ? `${on(o) ? "[x]" : "[ ]"} ` : on(o) ? `${chrome.optionSelected} ` : "  "
     const prefix = `${INDENT}${hl ? `${pointer} ` : "  "}${box}`
     const desc = o.description ? theme.muted(`  ${o.description}`) : ""
     if (widths.length) {
       const labelWidth = Math.max(0, width - visibleWidth(prefix) - widths.reduce((n, w) => n + w + gap, 0))
-      const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, "…")
+      const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, chrome.more)
       const label = hl ? theme.accent(prefix + name) : prefix + name
       const detail = columns(o.detail)
       if (!detail.slice(0, widths.length).some(Boolean)) return label
@@ -80,18 +81,20 @@ export function renderFormList(
     }
     if (detailWidth && typeof o.detail === "string" && o.detail) {
       const labelWidth = Math.max(0, width - visibleWidth(prefix) - detailWidth - gap)
-      const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, "…")
-      const detail = truncateToWidth(o.detail, detailWidth, "…")
+      const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, chrome.more)
+      const detail = truncateToWidth(o.detail, detailWidth, chrome.more)
       const padding = Math.max(0, width - visibleWidth(prefix + name + detail))
       return `${hl ? theme.accent(prefix + name) : prefix + name}${" ".repeat(padding)}${theme.muted(detail)}`
     }
     return truncateToWidth(
       `${INDENT}${hl ? theme.accent(`${pointer} ${box}${o.label ?? o.value}`) : `  ${box}${o.label ?? o.value}`}${desc}`,
       width,
-      "…",
+      chrome.more,
     )
   })
   if (rows.length > LIST_ROWS)
-    out.push(truncateToWidth(INDENT + theme.muted(`  ${state.highlight + 1}/${rows.length}`), width, "…"))
+    out.push(
+      truncateToWidth(INDENT + theme.muted(`  ${state.highlight + 1}/${rows.length}`), width, chrome.more),
+    )
   return out
 }

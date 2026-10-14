@@ -30,8 +30,8 @@ import {
 export { formatTokens }
 
 /** `text` on one line, cut to `max` terminal cells. */
-function oneLine(text: string, max: number): string {
-  return clip(text.replace(/\s+/g, " ").trim(), max)
+function oneLine(text: string, max: number, more: string = glyphs.more): string {
+  return clip(text.replace(/\s+/g, " ").trim(), max, more)
 }
 
 /** How long it has run (or ran), e.g. "12s" or "3m 05s"; "queued" before it starts. */
@@ -41,10 +41,10 @@ export function elapsed(info: SubagentInfo, now: number): string {
 }
 
 /** Tokens, and the cost when the model's prices are known. */
-export function usageText(info: SubagentInfo): string {
+export function usageText(info: SubagentInfo, separator: string = glyphs.separator): string {
   const u = info.usage
   const tokens = `${formatTokens(u.input + u.output + u.cacheRead + u.cacheWrite)} tok`
-  return u.cost !== undefined ? `${tokens} · $${u.cost.toFixed(4)}` : tokens
+  return u.cost !== undefined ? `${tokens} ${separator} $${u.cost.toFixed(4)}` : tokens
 }
 
 /** A stable badge for plain text, where there is no host theme or animation context. */
@@ -58,15 +58,20 @@ export function subagentSummary(info: SubagentInfo, now: number, taskChars = 60)
   return `${plainBadge(info)} ${summary(info, now, taskChars)}`
 }
 
-function summary(info: SubagentInfo, now: number, taskChars = 60): string {
-  return `${agentHeading(info, now)} · ${oneLine(info.task, taskChars)}`
+function summary(
+  info: SubagentInfo,
+  now: number,
+  taskChars = 60,
+  chrome: { separator: string; more: string } = glyphs,
+): string {
+  return `${agentHeading(info, now, chrome.separator)} ${chrome.separator} ${oneLine(info.task, taskChars, chrome.more)}`
 }
 
 /** Its title and details, leaving the status to the badge before the title. */
-function agentHeading(info: SubagentInfo, now: number): string {
+function agentHeading(info: SubagentInfo, now: number, separator: string = glyphs.separator): string {
   const known = info.durationMs !== undefined || info.startedAt !== undefined
-  const time = info.status !== "queued" && known ? ` · ${elapsed(info, now)}` : ""
-  return `${info.title} · ${info.role} · ${info.id}${time} · ${usageText(info)}`
+  const time = info.status !== "queued" && known ? ` ${separator} ${elapsed(info, now)}` : ""
+  return `${info.title} ${separator} ${info.role} ${separator} ${info.id}${time} ${separator} ${usageText(info, separator)}`
 }
 
 function blockText(content: Message["content"]): string {
@@ -219,8 +224,14 @@ function defaultView(list: SubagentInfo[]): SubagentInfo | undefined {
   return list.findLast((s) => s.status === "running") ?? list.at(-1)
 }
 
-function label(s: SubagentInfo, i: number, now: number, plain = true): string {
-  return `${i + 1}. ${"  ".repeat(Math.max(0, s.depth - 1))}${plain ? `${plainBadge(s, true)} ` : ""}${summary(s, now)}`
+function label(
+  s: SubagentInfo,
+  i: number,
+  now: number,
+  plain = true,
+  chrome: { separator: string; more: string } = glyphs,
+): string {
+  return `${i + 1}. ${"  ".repeat(Math.max(0, s.depth - 1))}${plain ? `${plainBadge(s, true)} ` : ""}${summary(s, now, 60, chrome)}`
 }
 
 /** Prints a sub-agent's transcript as it is now. */
@@ -496,7 +507,8 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
         return
       }
       // A digit picks the sub-agent of that number; worktrees come after them.
-      const agentRows = list.map((s, i) => label(s, i, now, false))
+      const chrome = () => ctx.glyphs?.() ?? glyphs
+      const agentRows = list.map((s, i) => label(s, i, now, false, chrome()))
       // Two worktrees of the same task and age read the same: their names tell them apart.
       // What matters most comes first: the rest (and the path) wraps under it when narrow.
       const summaries = kept.map((w) => keptHead(w))
@@ -533,7 +545,7 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
           const current = new Map(ctx.session.subagents().map((s) => [s.id, s]))
           const agents = list.map((s) => current.get(s.id) ?? s)
           return {
-            optionLabels: [...agents.map((s, i) => label(s, i, Date.now(), false)), ...keptRows],
+            optionLabels: [...agents.map((s, i) => label(s, i, Date.now(), false, chrome())), ...keptRows],
             optionStatuses: [...agents.map((s) => agentStatusState(s)), ...kept.map(() => undefined)],
             descriptions: [
               ...agentRows.map(() => ""),

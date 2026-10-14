@@ -2,6 +2,7 @@ import {
   Box,
   bold,
   type Component,
+  chromeGlyphs,
   compose,
   type Editor,
   type RenderContext,
@@ -36,6 +37,7 @@ export class InputBox implements Component {
   accentFocus = false
   private input: Component
   private box: Box
+  private arrowUp = chromeGlyphs().arrowUp
 
   constructor(
     private editor: Editor,
@@ -56,12 +58,14 @@ export class InputBox implements Component {
       markerGutter: true,
       labels: () => {
         const { above } = this.editor.hidden
-        return above > 0 ? { top: `↑ ${above} ${above === 1 ? "row" : "rows"}` } : {}
+        return above > 0 ? { top: `${this.arrowUp} ${above} ${above === 1 ? "row" : "rows"}` } : {}
       },
     })
   }
 
   render(width: number, ctx: RenderContext): string[] {
+    const arrows = chromeGlyphs(ctx.glyphs)
+    this.arrowUp = arrows.arrowUp
     const framed = width >= 8 && this.maxRows >= 4
     const chrome = width < 8 ? 0 : (framed ? 2 : 0) + (this.maxRows >= 2 ? 1 : 0)
     this.editor.maxRows = Math.min(inputRows(ctx.rows), Math.max(1, this.maxRows - chrome))
@@ -84,7 +88,7 @@ export class InputBox implements Component {
             align: "right",
             tone: "muted",
             priority: Number.POSITIVE_INFINITY,
-            text: `↓ ${below} ${below === 1 ? "row" : "rows"}`,
+            text: `${arrows.arrowDown} ${below} ${below === 1 ? "row" : "rows"}`,
           },
         ]
       : []

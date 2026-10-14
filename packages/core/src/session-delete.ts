@@ -60,9 +60,17 @@ function rebase(file: string, from: string, to: string): string {
   return within(from, file) ? path.join(to, path.relative(from, file)) : file
 }
 
-/** Capture identities before relocating the directory; never accept linked ancestors. */
-export function sessionDeletionDirectory(dir: string): DirectoryProof {
-  const directory = path.resolve(dir)
+/** Inspect the requested directory before resolving public parent aliases; private walks stay strict. */
+export function sessionDeletionDirectory(dir: string, resolveParentAliases = false): DirectoryProof {
+  let directory = path.resolve(dir)
+  if (resolveParentAliases) {
+    const requested = inspect(directory)
+    if (!requested?.isDirectory() || requested.isSymbolicLink())
+      throw new Error(`unsafe session directory symlink or missing directory: ${directory}`)
+    const physical = realpathSync.native(directory)
+    requireIdentity(physical, requested)
+    directory = physical
+  }
   const ancestors = new Map<string, BigIntStats>()
   for (let part = directory; ; part = path.dirname(part)) {
     const identity = inspect(part)

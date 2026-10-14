@@ -434,7 +434,7 @@ for (const component of ["root", "assets", "files", "nested", "subagents"]) {
   }
 }
 
-test("delete refuses a linked ancestor that redirects the session directory outside its path", () => {
+test("delete refuses a requested session-directory link even through a parent alias", () => {
   const dir = tmp()
   const outside = tmp()
   try {
@@ -443,8 +443,11 @@ test("delete refuses a linked ancestor that redirects the session directory outs
     store.appendMessage(userMessage("outside session"))
     saveAssets(store)
     writeFileSync(`${store.file}.trace.jsonl`, "outside trace")
+    const publicParent = path.join(dir, "public")
+    mkdirSync(publicParent)
+    linkDirectory(sessions, path.join(publicParent, "sessions"))
     const link = path.join(dir, "linked")
-    linkDirectory(outside, link)
+    linkDirectory(publicParent, link)
 
     expect(() => deleteSession(dir, store.id, undefined, path.join(link, "sessions"))).toThrow("unsafe")
     expect(existsSync(store.file)).toBe(true)

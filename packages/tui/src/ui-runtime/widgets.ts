@@ -1,6 +1,7 @@
 import type { UiNode, UiState, ViewLine } from "@amira/api"
 import {
   bold,
+  chromeGlyphs,
   inverse,
   type LineInput,
   stripColors,
@@ -281,6 +282,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
     }
     case "tree": {
       const tree = plan.tree!
+      const chrome = chromeGlyphs(glyphs)
       const focusMarker = host.focused ? `${glyphs.pointer} ` : dim(`${glyphs.pointer} `)
       const offset = top + from
       for (let i = tree.atOffset(offset); i < tree.rows.length && out.length < h; i++) {
@@ -294,8 +296,8 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
             ? fit(segmentText(row.item.node, theme), 2)
             : expandable(row.item)
               ? row.open
-                ? "▾ "
-                : "▸ "
+                ? `${chrome.disclosureOpen} `
+                : `${chrome.disclosureClosed} `
               : row.item.rail
                 ? `${glyphs.output} `
                 : "  "

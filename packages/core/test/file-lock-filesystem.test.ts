@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { isProcessAlive, tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
+import { aliasedDirectory } from "./file-lock-fixtures.ts"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -105,8 +106,9 @@ test("publication refuses an unknown empty gate that appears during private init
 })
 
 test("dead gate recovery retains exactly its nonempty nonce tombstone across 120 later turns", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-filesystem-tombstone-"))
-  dirs.push(dir)
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "amira-filesystem-tombstone-"))
+  dirs.push(root)
+  const dir = aliasedDirectory(root)
   const file = path.join(dir, "session.lock")
   const gate = `${file}.lease-gate`
   const worker = Bun.spawn(

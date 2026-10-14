@@ -32,6 +32,7 @@ test("the public theme exports are part of the stable package surface", async ()
     "blue",
     "bold",
     "chooseImageSupport",
+    "chromeGlyphs",
     "closeStyles",
     "colorSupported",
     "colourSwatch",

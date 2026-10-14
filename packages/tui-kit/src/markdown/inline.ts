@@ -14,6 +14,7 @@ export type MarkdownStyles = Record<MarkdownToken, StyleFn> & {
   codeTicks?: StyleFn
   path?: StyleFn
   codeBg?: StyleFn
+  surfaceMuted?: StyleFn
 }
 
 /** The Markdown tokens of a theme, with `markdownTheme` filling in the ones it lacks. */
@@ -25,6 +26,7 @@ export function markdownStyles(theme: Theme): MarkdownStyles {
   if (theme.command) out.code = theme.command
   if (theme.path) out.path = theme.path
   if (theme.codeBg) out.codeBg = theme.codeBg
+  if (theme.surfaceMuted) out.surfaceMuted = theme.surfaceMuted
   return out
 }
 

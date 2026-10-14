@@ -5,6 +5,7 @@ import {
   backgroundFromEnv,
   backgroundOf,
   type Capabilities,
+  chromeGlyphs,
   createTheme,
   defaultGlyphs,
   isColorEnabled,
@@ -114,7 +115,11 @@ export class RuntimeThemes {
       variant,
       themeVariant,
       theme,
-      markdownGlyphs: { ...defaultGlyphs, ...this.markdownGlyphs(definition) },
+      markdownGlyphs: {
+        ...defaultGlyphs,
+        ...chromeGlyphs(definition?.glyphs),
+        ...this.markdownGlyphs(definition),
+      },
       glyphs: definition?.glyphs ?? {},
     }
   }
@@ -122,9 +127,8 @@ export class RuntimeThemes {
   private markdownGlyphs(definition: ThemeDefinition | undefined): Partial<MarkdownGlyphs> {
     const overrides: Partial<MarkdownGlyphs> = {}
     // Copy only kit keys: the same definition also contains the TUI's formatting symbols.
-    for (const key of Object.keys(defaultGlyphs) as (keyof MarkdownGlyphs)[]) {
-      const value = definition?.glyphs?.[key]
-      if (value !== undefined) Object.assign(overrides, { [key]: value })
+    for (const [key, value] of Object.entries(definition?.glyphs ?? {})) {
+      if (key in defaultGlyphs) Object.assign(overrides, { [key]: value })
     }
     return overrides
   }

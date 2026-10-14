@@ -73,7 +73,7 @@ test("the user band spans every cell with a shared-grid accent prompt and one fi
   expect(rows[1]).toEndWith(`${clock}`)
   expect(rows[2]?.trimEnd()).toBe("  Next line.")
   expect(lines[1]).toContain(banded.accent("›"))
-  expect(lines[1]).toContain(banded.muted(clock))
+  expect(lines[1]).toContain(banded.surfaceMuted(clock))
   expect(timestampIn(lines)).toEqual({ line: 1, text: clock, width: 26, to: 14 })
   expect(rows.filter((r) => r.includes(clock))).toHaveLength(1)
   for (const line of lines) expect(visibleWidth(line)).toBe(40)

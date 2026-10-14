@@ -15,7 +15,7 @@ import type { ProviderAdmin } from "./providers.ts"
 import type { CommandRule, PermissionMode, ShellMode } from "./settings.ts"
 import type { SkillInfo } from "./skills.ts"
 import type { SpawnGroup, SpawnGroupInfo, SpawnGroupOptions, SubagentStatus } from "./subagents.ts"
-import { AGENT_STATUS_BADGES, type AgentStatusState } from "./themes.ts"
+import { AGENT_STATUS_BADGES, type AgentStatusState, type ThemeGlyphs } from "./themes.ts"
 import type { PendingNotice, SessionData, ToolExposure, ToolTraits } from "./tools.ts"
 import type { TraceRecord } from "./trace.ts"
 import type { UiApi } from "./ui.ts"
@@ -148,6 +148,8 @@ export interface CommandContext extends CommandCompleteContext {
    * the frontend has no keys of its own.
    */
   readonly keys?: () => readonly KeyHelp[]
+  /** Current host decorations for dialog labels; absent on non-themed frontends. */
+  readonly glyphs?: () => Readonly<Pick<ThemeGlyphs, "separator" | "more">>
   /**
    * Shows a view fullscreen (default) or docked above the input, on frontends that have them
    * (the TUI does); unset elsewhere. A dock leaves the conversation and input usable.

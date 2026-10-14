@@ -6,6 +6,7 @@ import {
   stageSessionFiles,
   withSessionDeletionDirectory,
 } from "./session-delete.ts"
+import { canonicalSessionFile } from "./session-path.ts"
 import {
   SESSION_LOCK_HEARTBEAT_MS,
   SESSION_LOCK_STALE_MS,
@@ -33,8 +34,8 @@ export interface SessionSummary {
 }
 
 /**
- * Summaries by file, reused while the file's size and mtime stay the same: /resume completes
- * on every keystroke, and parsing every session file each time would stall typing.
+ * Summaries by file, reused while the canonical target, size and mtime stay the same: /resume
+ * completes on every keystroke, and parsing every session file each time would stall typing.
  */
 const summaries = new Map<string, { mtimeMs: number; size: number; summary: SessionSummary }>()
 
@@ -52,7 +53,12 @@ export function listSessions(cwd: string, dir = sessionsDir(cwd)): SessionSummar
     try {
       const { mtimeMs, size } = statSync(file)
       const cached = summaries.get(file)
-      if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
+      if (
+        cached &&
+        cached.mtimeMs === mtimeMs &&
+        cached.size === size &&
+        cached.summary.file === canonicalSessionFile(file)
+      ) {
         out.push(cached.summary)
         continue
       }
@@ -76,7 +82,7 @@ function summarize(file: string, updatedAt: number): SessionSummary {
   const text = shown || (first?.content.find((b) => b.type === "text")?.text ?? "")
   return {
     id: store.id,
-    file,
+    file: store.file,
     cwd: store.header.cwd,
     createdAt: store.header.createdAt,
     updatedAt,
@@ -110,7 +116,7 @@ export function sessionSnippet(
  */
 export function deleteSession(cwd: string, id: string, currentId?: string, dir = sessionsDir(cwd)): string[] {
   if (id === currentId) throw new Error("the current session cannot be deleted")
-  const directory = sessionDeletionDirectory(dir)
+  const directory = sessionDeletionDirectory(dir, true)
   let removed: string[]
   let blockedPath: string | undefined
   try {
@@ -129,7 +135,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
           throw new Error("unsafe session lease path")
         deletionLocks.push(
           takeDeletionLock(file, id, lease, (guard) => {
-            blockedPath = path.join(dir, path.relative(root, guard))
+            blockedPath = path.join(directory.directory, path.relative(root, guard))
           }),
         )
         leases.push({
@@ -139,8 +145,10 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
         })
       }
       try {
-        const file = findSession(cwd, id, root)
-        if (!file) throw new Error(`no session ${id}`)
+        // Keep the requested path for containment: lookup canonicalisation would hide links.
+        const file = path.join(root, `${id}.jsonl`)
+        if (!/^[\w-]+$/.test(id) || !lstatSync(file, { throwIfNoEntry: false }))
+          throw new Error(`no session ${id}`)
         take(file, id)
         const owned = (recording: string, tolerateDamage = false): Set<string> => {
           const out = new Set<string>()
@@ -169,7 +177,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
                 continue
               }
               const child = path.join(path.dirname(name), "subagents", `${e.childSessionId}.jsonl`)
-              if (existsSync(child)) visit(child)
+              if (lstatSync(child, { throwIfNoEntry: false })) visit(child)
             }
           }
           visit(recording)
@@ -187,8 +195,13 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
         for (const name of files) {
           if (name !== file) take(name, path.basename(name, ".jsonl"))
         }
+        // Canonicalise results only after the requested-path containment walk, while the
+        // recordings still exist; never expose private tombstone paths to callers.
+        const removed = [...files].map((name) =>
+          path.join(directory.directory, path.relative(root, canonicalSessionFile(name))),
+        )
         stageSessionFiles(files, stage)
-        return [...files].map((name) => path.join(dir, path.relative(root, name)))
+        return removed
       } finally {
         for (const lock of deletionLocks.reverse()) lock.release()
         // Sharing failures may defer lease cleanup. Detach only our exact lease image before
@@ -212,7 +225,9 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
       throw new SessionWriteGuardError(gate)
     throw error
   }
-  for (const name of removed) summaries.delete(name)
+  const removedPaths = new Set(removed)
+  for (const [requested, cached] of summaries)
+    if (removedPaths.has(cached.summary.file)) summaries.delete(requested)
   return removed
 }
 
@@ -220,7 +235,7 @@ export function deleteSession(cwd: string, id: string, currentId?: string, dir =
 export function findSession(cwd: string, id: string, dir = sessionsDir(cwd)): string | undefined {
   if (!/^[\w-]+$/.test(id)) return undefined
   const file = path.join(dir, `${id}.jsonl`)
-  return existsSync(file) ? file : undefined
+  return existsSync(file) ? canonicalSessionFile(file) : undefined
 }
 
 function takeDeletionLock(

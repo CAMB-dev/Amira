@@ -1,4 +1,5 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
+import { chromeGlyphs } from "../glyphs.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
 import { graphemes, TAB_WIDTH, textWidth, truncateToWidth, visibleWidth } from "../width.ts"
 import {
@@ -417,7 +418,8 @@ export class Editor implements Component {
     this.promptWidth = visibleWidth(prompt)
   }
 
-  render(width: number, { theme }: RenderContext): string[] {
+  render(width: number, { theme, glyphs }: RenderContext): string[] {
+    const more = chromeGlyphs(glyphs).more
     if (width !== this.width) {
       this.width = width
       this.prefixValid = 0
@@ -430,7 +432,7 @@ export class Editor implements Component {
       this.hidden = { above: 0, below: 0 }
       // Cut to the row: a placeholder longer than the box must not wrap or push past its edge.
       const room = Math.max(0, width - this.promptWidth)
-      return [theme.accent(prompt) + caret + theme.muted(truncateToWidth(this.opts.placeholder, room, "…"))]
+      return [theme.accent(prompt) + caret + theme.muted(truncateToWidth(this.opts.placeholder, room, more))]
     }
     const total = this.totalRows()
     const caretRow = this.caretRow()
@@ -451,7 +453,7 @@ export class Editor implements Component {
         body = body.slice(0, at) + caret + body.slice(at)
       }
       if (this.pastes.size) {
-        body = this.pastes.expand(body, (p) => theme.accent(truncateToWidth(p.label, max, "…")))
+        body = this.pastes.expand(body, (p) => theme.accent(truncateToWidth(p.label, max, more)))
       }
       out.push((i === 0 ? theme.accent(prompt) : indent) + body)
     }

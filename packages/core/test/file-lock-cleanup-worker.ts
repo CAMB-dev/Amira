@@ -200,7 +200,13 @@ if (mode === "direct" || mode === "prior-gate") {
   expect(active.size).toBe(0)
   if (mode === "canonical-replacement") expect(fs.existsSync(pending)).toBe(false)
 } else {
-  await Bun.sleep(1250)
+  // Ten 100ms delays exclude time spent inside cleanup (including reentrant I/O).
+  // Await exhaustion itself rather than assuming every platform finishes in 1250ms.
+  const deadline = Date.now() + 2500
+  while (warnings.length === 0) {
+    if (Date.now() > deadline) throw new Error("owned cleanup did not exhaust its retry budget")
+    await Bun.sleep(5)
+  }
   expect(attempts).toBe(11)
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain(target())
