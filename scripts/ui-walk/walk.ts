@@ -5,7 +5,9 @@ import { list, positiveInteger, request, type StartOptions, start } from "./sess
 
 const usage = `Usage: bun scripts/ui-walk/walk.ts <command>
   start <name> [--cols 100 --rows 32] [--theme name] [--scenario file]
-               [--idle-timeout ms] [-- --fullscreen|--inline ...amira args]
+               [--extension local-dir ...] [--idle-timeout ms]
+               [-- --fullscreen|--inline ...amira args]
+  --extension loads trusted local test code only, copied into the temporary home.
   keys <name> <keys...>         enter esc ctrl+o alt+v up tab text:/model paste:...
   resize <name> <cols> <rows>
   wait <name> [--idle ms | --text string] [--timeout ms]
@@ -53,6 +55,7 @@ export async function main(argv: string[]): Promise<void> {
         rows: { type: "string" },
         theme: { type: "string" },
         scenario: { type: "string" },
+        extension: { type: "string", multiple: true },
         "idle-timeout": { type: "string" },
       },
     }).values
@@ -61,6 +64,7 @@ export async function main(argv: string[]): Promise<void> {
       rows: positiveInteger(parsed.rows ?? 32, "rows", 200),
       theme: parsed.theme,
       scenario: parsed.scenario ? path.resolve(parsed.scenario) : undefined,
+      extensions: parsed.extension?.map((directory) => path.resolve(directory)),
       idleTimeout: positiveInteger(parsed["idle-timeout"] ?? 600_000, "idle-timeout"),
       args: amiraArgs(separator < 0 ? [] : args.slice(separator + 1)),
     }

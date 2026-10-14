@@ -2,6 +2,7 @@ import { mkdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { Terminal } from "@xterm/headless"
 import { trackProcessTree } from "../../packages/proc/src/index.ts"
+import { copyExtensions } from "./extensions.ts"
 import { encodeKeys } from "./keys.ts"
 import { removeOwnedRoot, writeOwnedError } from "./ownership.ts"
 import { armParentGuard, type ParentGuard } from "./parent-guard.ts"
@@ -124,6 +125,7 @@ export async function runDaemon(config: SessionConfig): Promise<void> {
 
   try {
     const fixtures = await setupFixtures(amira, cwd, provider, config.theme)
+    const extensions = await copyExtensions(amira, config.extensions)
     const posix = process.platform !== "win32"
     const env = childEnvironment(home, amira, provider.baseUrl.replace(/\/v1\/?$/, ""))
     child = Bun.spawn(
@@ -132,6 +134,8 @@ export async function runDaemon(config: SessionConfig): Promise<void> {
         "--preload",
         path.join(import.meta.dir, "offline.ts"),
         posix ? path.join(import.meta.dir, "child.ts") : path.join(checkout, "packages/cli/src/main.ts"),
+        // Load the fixture last so canned tool overrides remain inert.
+        ...extensions.flatMap((file) => ["--extension", file]),
         ...fixtures.args,
         ...config.args,
       ],
