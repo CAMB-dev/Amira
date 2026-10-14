@@ -25,10 +25,19 @@ for (const boundary of process.platform === "win32" ? ["resume", "startup"] : []
         stderr: "pipe",
       },
     )
+    const stdout = new Response(worker.stdout).text()
+    const stderr = new Response(worker.stderr).text()
     try {
       expect(await boundedExit(worker, "acquisition worker", 5000)).toBe(0)
-      console.log((await new Response(worker.stdout).text()).trim())
-      expect(await new Response(worker.stderr).text()).toBe("")
+      console.log((await stdout).trim())
+      expect(await stderr).toBe("")
+    } catch (error) {
+      if (worker.exitCode === null) worker.kill()
+      await boundedExit(worker, "failed acquisition worker stop")
+      console.error(
+        `Windows ${boundary} worker failed: exitCode=${worker.exitCode}, signalCode=${worker.signalCode}\nstdout:\n${await stdout}\nstderr:\n${await stderr}`,
+      )
+      throw error
     } finally {
       if (worker.exitCode === null) worker.kill()
       await boundedExit(worker, "owned worker stop")
