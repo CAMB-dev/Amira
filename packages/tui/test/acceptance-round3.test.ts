@@ -11,6 +11,56 @@ const commands: CommandDefinition[] = Array.from({ length: 12 }, (_, i) => ({
 for (const mode of ["fullscreen", "inline"] as const) {
   for (const cols of [50, 80, 120]) {
     for (const margin of [0, 3]) {
+      for (const working of [false, true]) {
+        test(`small-height dialog keeps title before optional chrome: ${mode} ${cols}/${margin}, working ${working}`, async () => {
+          const app = await setup(working ? [{ text: "reply".repeat(100), delayMs: 50 }] : [], {
+            cols,
+            rows: working ? 8 : 7,
+            settings: { mode, margin, marginRows: 0 },
+          })
+          try {
+            if (working) {
+              app.terminal.send("go\r")
+              await waitFor(
+                () => app.agent.status === "working" && app.live().includes("stop"),
+                "working turn",
+              )
+            }
+            app.bus.emit(
+              "ui.request",
+              { requestId: "short-model", kind: "select", title: "Model", options: ["first", "second"] },
+              { sessionId: app.agent.sessionId },
+            )
+            await waitFor(() => app.live().includes("enter choose"), "dialog footer")
+            const title = app.screen.lines.findIndex((row) => row.includes("Model"))
+            expect(title).toBeGreaterThanOrEqual(0)
+            expect(app.screen.lines[title + 1]).toMatch(/› ?1 first/)
+            const footer = app.screen.lines.findIndex((row) => row.includes("enter choose"))
+            expect(footer).toBeGreaterThan(title + 1)
+            expect(app.screen.lines[footer]).toContain("esc cancel")
+            app.terminal.send("\x1b[B")
+            await waitFor(() => /› ?2 second/.test(app.live()), "second selected")
+            expect(app.screen.lines[title]).toContain("Model")
+            expect(app.screen.lines[title + 1]).toMatch(/› ?2 second/)
+            expect(app.screen.lines[footer]).toContain("enter choose")
+            if (mode === "fullscreen") {
+              // Three essential rows fit; status and activity must not displace them.
+              expect(footer).toBe(title + 2)
+              if (working) {
+                expect(app.agent.status).toBe("working")
+                expect(app.live()).toContain("m1 · auto")
+                expect(app.live()).not.toContain("stop")
+              } else expect(app.live()).not.toContain("m1 · auto")
+            }
+          } finally {
+            app.agent.abort()
+            await app.idle()
+            app.terminal.send("\x1b[27u\x03\x03")
+            await app.exited
+          }
+        })
+      }
+
       test(`file completion windows selected files below the composer: ${mode} ${cols}/${margin}`, async () => {
         const files = Array.from({ length: 12 }, (_, i) => `file${String(i).padStart(2, "0")}.ts`)
         const app = await setup([], { cols, rows: 12, files, settings: { mode, margin, marginRows: 0 } })
