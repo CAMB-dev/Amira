@@ -1,6 +1,7 @@
 import type { ToolSpec } from "@amira/ai"
-import type { ToolDefinition } from "@amira/api"
+import type { ShellMode, ToolDefinition } from "@amira/api"
 import type { ExtensionDataOwner } from "./extension-data.ts"
+import { toolTraits } from "./tool-traits.ts"
 
 export class ToolConflictError extends Error {}
 
@@ -14,6 +15,11 @@ export class ToolRegistry {
   /** Per name, a stack of registrations; the last one wins. */
   #tools = new Map<string, Registered[]>()
   #disabled = new Set<string>()
+  #policy: { shell: ShellMode; nonInteractive: boolean; enabled: Set<string> } = {
+    shell: "auto",
+    nonInteractive: false,
+    enabled: new Set(),
+  }
   /** Set on a view: the registry it shows part of. */
   #base: ToolRegistry | undefined
   #allow: (name: string) => boolean = () => true
@@ -50,6 +56,32 @@ export class ToolRegistry {
   setDisabled(names: Iterable<string>): void {
     if (this.#base) this.#base.setDisabled(names)
     else this.#disabled = new Set(names)
+  }
+
+  /** Live host restrictions, evaluated on selected definitions rather than global tool names. */
+  setPolicy(policy: { shell?: ShellMode; nonInteractive?: boolean; enabled?: ReadonlySet<string> }): void {
+    if (this.#base) this.#base.setPolicy(policy)
+    else
+      this.#policy = {
+        ...this.#policy,
+        shell: policy.shell ?? this.#policy.shell,
+        nonInteractive: policy.nonInteractive ?? this.#policy.nonInteractive,
+        enabled: policy.enabled === undefined ? this.#policy.enabled : new Set(policy.enabled),
+      }
+  }
+
+  /** Check the captured definition too: private tools and late registrations share this policy. */
+  isEnabled(tool: ToolDefinition): boolean {
+    if (this.#base) return this.#base.isEnabled(tool)
+    if (this.#disabled.has(tool.name)) return false
+    const traits = toolTraits(tool)
+    if (this.#policy.nonInteractive && traits?.interactive) return false
+    if (this.#policy.shell === "auto") return true
+    // Explicit /tools choices authorize the selected global implementation, not a different
+    // private same-name replacement with capabilities the host did not select.
+    if (this.#policy.enabled.has(tool.name) && this.#tools.get(tool.name)?.at(-1)?.tool === tool) return true
+    if (traits?.shell) return traits.shell === this.#policy.shell
+    return tool.shellKind === undefined
   }
 
   get disabled(): ReadonlySet<string> {
@@ -92,10 +124,14 @@ export class ToolRegistry {
 
   /** The selected definition and its host-owned context, captured as one registration. */
   getRegistration(name: string): Registered | undefined {
+    const selected = this.#selected(name)
+    return selected && this.isEnabled(selected.tool) ? selected : undefined
+  }
+
+  #selected(name: string): Registered | undefined {
     const own = this.#own.get(name)
     if (own) return own
-    if (this.#base) return this.#allow(name) ? this.#base.getRegistration(name) : undefined
-    if (this.#disabled.has(name)) return undefined
+    if (this.#base) return this.#allow(name) ? this.#base.#selected(name) : undefined
     return this.#tools.get(name)?.at(-1)
   }
 
@@ -111,18 +147,16 @@ export class ToolRegistry {
 
   /** Tools the model sees on every call. */
   active(): ToolDefinition[] {
-    const disabled = this.disabled
     return this.#current()
       .map((r) => r.tool)
-      .filter((t) => (t.exposure ?? "active") === "active" && !disabled.has(t.name))
+      .filter((t) => (t.exposure ?? "active") === "active" && this.isEnabled(t))
   }
 
   /** Tools the model only sees by name until a session loads them (see tool_search). */
   deferred(): ToolDefinition[] {
-    const disabled = this.disabled
     return this.#current()
       .map((r) => r.tool)
-      .filter((t) => t.exposure === "deferred" && !disabled.has(t.name))
+      .filter((t) => t.exposure === "deferred" && this.isEnabled(t))
   }
 
   specs(): ToolSpec[] {
@@ -131,9 +165,8 @@ export class ToolRegistry {
 
   /** Every usable tool, deferred ones included, with where it came from. Disabled tools are left out. */
   all(): { tool: ToolDefinition; source: string }[] {
-    const disabled = this.disabled
     return this.#current()
-      .filter((r) => !disabled.has(r.tool.name))
+      .filter((r) => this.isEnabled(r.tool))
       .map(({ tool, source }) => ({ tool, source }))
   }
 
@@ -142,7 +175,7 @@ export class ToolRegistry {
     return this.#current().map(({ tool, source }) => ({
       tool,
       source,
-      disabled: this.#disabled.has(tool.name),
+      disabled: !this.isEnabled(tool),
     }))
   }
 

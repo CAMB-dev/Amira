@@ -40,10 +40,12 @@ import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-
 import { CommandRegistry, InputRegistry } from "./commands.ts"
 import type { SettingsSources } from "./config/load.ts"
 import type { EventBus } from "./event-bus.ts"
+import { ExtensionCleanup } from "./extension-cleanup.ts"
 import { extensionDataOwner } from "./extension-data.ts"
 import { ExtensionSettingsRegistry, type ExtensionSettingsRegistryOptions } from "./extension-settings.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
+import { OwnedConversationManager, type OwnedConversationManagerOptions } from "./owned-conversations.ts"
 import { PanelRegistry } from "./panel-registry.ts"
 import { openExtensionPipe } from "./pipes.ts"
 import { ImageProviderRegistry, MarkdownRendererRegistry, ServiceRegistry } from "./render-registry.ts"
@@ -98,6 +100,8 @@ export interface ExtensionHostOptions {
   bus: EventBus
   /** The session's model client, used for host-accounted extension side calls. */
   ai?: Ai
+  /** Optional host-owned persisted conversations; configured only by hosts with an agent tree. */
+  conversations?: OwnedConversationManagerOptions
   /** Merged settings handed to extensions. Default {}. */
   settings?: Settings
   /** Explicit settings values by source layer, matching `settings`. */
@@ -155,6 +159,8 @@ export class ExtensionHost {
   /** Failures of each extension's event handlers, by source and event type. */
   #handlerFailures = new Map<string, number>()
   #agent: (() => Agent) | undefined
+  #conversations: OwnedConversationManager | undefined
+  #cleanup = new ExtensionCleanup((source, message) => void this.#fail(source, message))
   #session: SessionControl | undefined
   #terminal: TerminalApi | undefined
   readonly status: StatusRegistry
@@ -179,6 +185,12 @@ export class ExtensionHost {
 
   constructor(opts: ExtensionHostOptions) {
     this.#opts = opts
+    if (opts.conversations) {
+      this.#conversations = new OwnedConversationManager({
+        ...opts.conversations,
+        agent: () => this.#agent?.() ?? opts.conversations!.agent(),
+      })
+    }
     workspaceFor(opts.bus)
     this.backgroundJobs = opts.backgroundJobs ?? hostBackgroundJobs()
     this.status = opts.status ?? new StatusRegistry()
@@ -314,6 +326,7 @@ export class ExtensionHost {
     } catch (err) {
       unload()
       for (const d of disposers.reverse()) d()
+      await this.drain()
       this.#requestRender()
       return this.#fail(source, err instanceof Error ? err.message : String(err))
     }
@@ -385,6 +398,11 @@ export class ExtensionHost {
     this.#hints.clear()
   }
 
+  /** Waits for host-owned asynchronous cleanup initiated by unload or a failed load. */
+  drain(): Promise<void> {
+    return this.#cleanup.drain()
+  }
+
   /**
    * Runs the extensions' exit handlers (ExtensionAPI.onExit) together and resolves once all
    * finished. After `timeoutMs` their signal aborts, and they get `graceMs` more to stop (e.g.
@@ -399,6 +417,8 @@ export class ExtensionHost {
     await Promise.race([this.#opts.bus.flush(), Bun.sleep(500)])
     if (!handlers.length) {
       this.unloadAll()
+      await this.drain()
+      await this.#conversations?.drain().catch((error) => this.#fail("host", String(error)))
       await this.backgroundJobs.stopAll(() => true, 0)
       return
     }
@@ -422,6 +442,8 @@ export class ExtensionHost {
     } finally {
       clearTimeout(timer)
       this.unloadAll()
+      await this.drain()
+      await this.#conversations?.drain().catch((error) => this.#fail("host", String(error)))
       // An extension may have been unloaded before it could register its own exit handler. The
       // host still owns the process trees, so force any remaining job down before returning.
       await this.backgroundJobs.stopAll(() => true, 0)
@@ -585,6 +607,8 @@ export class ExtensionHost {
       disposers.push(d)
       return d
     }
+    const conversations = this.#conversations?.forOwner(dataOwner.dataDir, lifetime)
+    if (conversations) track(() => this.#cleanup.release(this.#conversations!, dataOwner.dataDir, source))
     // The jobs and listeners this extension adds through the API end with it.
     const backgroundJobs = new ExtensionBackgroundJobs(this.backgroundJobs)
     track(() => backgroundJobs.dispose())
@@ -619,6 +643,7 @@ export class ExtensionHost {
         return dataOwner.dataDir
       },
       backgroundJobs,
+      ...(conversations ? { conversations } : {}),
       terminal,
       reportError: (error) => void this.#fail(source, error),
       notify: (text, level = "info", options) => {

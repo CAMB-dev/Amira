@@ -76,6 +76,7 @@ import type { ContextOptions, ContextView } from "./context.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FileRewind } from "./file-rewind.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
+import { assertOwnedSession } from "./owned-session.ts"
 import { Permissions } from "./permissions/policy.ts"
 import {
   addNonInteractive,
@@ -166,6 +167,7 @@ export class Agent {
   #releaseSessionLease: (() => void) | undefined
 
   constructor(opts: AgentOptions) {
+    assertOwnedSession(opts)
     this.session = opts.session
     this.depth = opts.depth ?? 0
     if (this.session) {
@@ -319,6 +321,7 @@ export class Agent {
         model: () => this.model,
         spawning: tree
           ? {
+              restricted: tree.restricted,
               spawn: (o) => tree.spawn(this, o),
               createGroup: (o) => tree.createGroup(this, o),
               groups: () => tree.groups(),

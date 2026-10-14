@@ -21,6 +21,7 @@ export type {
 export { addUsage, emptyUsage, hasUnpricedSearch, serverToolText } from "./ai.ts"
 export * from "./background-jobs.ts"
 export * from "./commands.ts"
+export * from "./conversations.ts"
 export * from "./events.ts"
 export * from "./extension.ts"
 export * from "./extension-settings.ts"

@@ -79,6 +79,8 @@ export interface AgentOptions {
    * `messages` is given, its current branch is restored.
    */
   session?: SessionStore
+  /** Internal owner-bound acquisition; generic resume never supplies this authority. */
+  ownedConversation?: string
   fileRewind?: FileRewind
   fileRewindSettings?: Settings["fileRewind"]
   compaction?: CompactionOptions

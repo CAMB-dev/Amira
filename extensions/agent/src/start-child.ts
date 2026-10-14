@@ -174,6 +174,9 @@ export async function startChild(
 ): Promise<Job> {
   const role = task.role ? deps.roles().get(task.role) : undefined
   const isolation = task.isolation ?? role?.isolation ?? "none"
+  if (session.restricted && isolation === "worktree") {
+    throw new Error("worktree isolation is unavailable in a restricted conversation")
+  }
   let wt: Worktree | undefined
   let note: string | undefined
   if (isolation === "worktree") {

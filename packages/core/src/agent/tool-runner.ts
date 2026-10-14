@@ -249,6 +249,8 @@ export class ToolRunner {
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
       // (spawning a process can stall for seconds on some Windows machines).
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      if (!this.#deps.tools.isEnabled(tool))
+        return await reject("blocked", `Tool "${call.name}" is disabled by host policy.`, args)
       const started = performance.now()
       let result: ToolResult
       try {

@@ -182,7 +182,7 @@ interface ToolSessionSetup {
   depth: number
   maxDepth: () => number
   model: () => ModelInfo
-  spawning: Pick<ToolSession, "spawn" | "createGroup" | "groups"> | undefined
+  spawning: (Pick<ToolSession, "spawn" | "createGroup" | "groups"> & { restricted: boolean }) | undefined
   expectNotice: ToolSession["expectNotice"]
 }
 

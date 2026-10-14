@@ -424,6 +424,43 @@ export default defineExtension((api) => {
 })
 ```
 
+### 拡張機能が所有する永続的な会話
+
+`api.conversations?: OwnedConversations` は任意のホスト機能です。利用可能か確認してください。保存済みの履歴を約束しながら、一時的な子で代用してはいけません。`/btw` 形式の子と異なり、owned conversation は安定した owner/key、独立した保存セッション、単一ライターのリースを持ちます。現在のメインセッションではなく拡張機能に属し、メインの `/clear`、`/resume`、巻き戻し、フォークでも停止や再バインドされません。ビューを閉じる操作は表示を隠すだけです。ネイティブの会話記録・入力欄のフォーカス切り替えは、この API に含まれません。
+
+- `openOrCreate(spec, runtime): Promise<OwnedConversation>` は所有者の保存済み key を開くか、新しく作成します。`open(id, runtime)` はその拡張機能が所有する会話だけを開きます。別のホストやプロセスがリースを保持していれば、明確な **in use** エラーになります。同じ拡張機能インスタンスからの再オープンは、既存のハンドルを返します。
+- `ConversationSpec` は `key`、`name`、絶対パスの `cwd`、任意の `model`（`provider/model`）、`systemPrompt`、必須の `callableTools: string[]` を含みます。ホストはこの仕様を保存します。再オープンで仕様や権限を暗黙に変更・拡張できません。通常のメインセッションの一覧、resume、fork とは別に保存されます。
+- `ConversationRuntime` は必須の `askUser(questions, { sessionId, signal }): Promise<AskAnswer[] | undefined>` と任意の `extraTools: ToolDefinition[]` を含みます。再オープン時にはコールバックと実行関数を再バインドしてください。これらはシリアライズされません。必要なツールがなければ実行を拒否します。質問はこのコールバックに直接届き、メインのモデルが回答することはありません。人が選べる UI を表示し、キャンセルに対応し、必要な決定の証拠は回答を返す前に保存してください。`undefined` はキャンセルを意味します。
+- 作成や再オープンでは、モデルへのリクエスト、未完了ターンの再実行、子タスクや質問の復元は発生しません。拡張機能の初期化中も会話を開けますが、owned `send()` と `createGroup()` は初期化が完了するまで拒否されます。処理は初期化後のコマンドまたは `session.start` ハンドラーで開始してください。初期化関数内で準備完了を待つと、起動がデッドロックします。明示的な `send(text, { signal? })` だけがターンを開始し、ターンの終了時に完了します。同時の send は拒否されます。設定済みの AI/プロバイダーとホストの制限が引き続き適用されます。
+- 保存した callable allowlist は承認前にローカル実行を制限し、禁止されたホスト型ツールを圧縮も含むプロバイダーのリクエストから除外します。`createGroup(options)` はこの会話に紐づきます。子孫の権限は継承した集合との共通部分に限られ、shell ツールや worktree は使用できません。許可したツール名の実装は信頼する必要があります。拡張機能コードを隔離するサンドボックスではありません。
+- ハンドルには `id`、`key`、`name`、`cwd`、紐づいた `data: SessionData`、`history()`（圧縮で置き換えられたメッセージも含む現在の完全なブランチの不変スナップショット）、`status()`（state と busy）、`events: AsyncIterable<AnyEvent>` があります。`OwnedConversation.events` はこの会話と通常の子孫のイベントを含み、それぞれの sessionId を持ち、メインの会話バスには流れません。一時的な子孫は専用バスを保持するため、拡張機能はその `ChildSession.events` を使用してください。履歴・状態のスナップショットを読む前に購読してください。イベントは再送されません。保存メッセージの復元には history を使い、ツール行は session/turn/tool-call id で対応づけます。
+- 紐づいた `SessionData.append(key, data): void` は永続書き込みの確認を返しません。ディスク障害は `extension.error` として非同期に報告され、`append()` から戻っても永続的なコミットは保証されません。決定の証拠に永続的なコミットが必要な場合は、`askUser` の質問に回答する前に、拡張機能が管理するストレージへコミットしてください。
+- `stop(reason?): Promise<void>` は処理、未回答の質問、子孫を中止し、履歴を残します。その後の明示的な send で継続できます。`release(): Promise<void>` は停止とクリーンアップを待ち、リースを解放してハンドルを無効にします。履歴は削除せず、繰り返し呼び出せます。所有する拡張機能のアンロード・無効化とホスト終了時は、ホストが清掃を管理します。メインやその子を中止することはありません。削除 API はなく、アンロードやパッケージ削除後も履歴は残ります。
+
+カスタムビューで、メインの入力欄を置き換えずに独立した会話を表示できます。
+
+```ts
+api.registerCommand({
+  name: "notes", description: "Open saved notes",
+  async run(_args, ctx) {
+    if (!api.conversations) throw new Error("This host does not support saved extension conversations")
+    const conversation = await api.conversations.openOrCreate({
+      key: "notes", name: "Notes", cwd: api.cwd,
+      systemPrompt: "Research and discuss notes. Ask the human before recording decisions.",
+      callableTools: ["read", "grep", "glob", "ask_user"],
+    }, {
+      // Application-owned callback: render choices in the view and honor signal.
+      askUser: presentQuestionsInView,
+    })
+    ctx.openView?.({ kind: "saved-notes", data: conversation })
+    // The registered view's submit handler calls conversation.send(text).
+    // Its onClose hides the view; it does not stop or release the conversation.
+  },
+})
+```
+
+`presentQuestionsInView` と `saved-notes` の登録は別途実装してください。メインの状態は `api.session()` から、この会話の記録と状態はハンドルから読みます。隠れたメインセッションのダイアログに質問を送ったり、ビューが表示できない場合に回答を推測したりしてはいけません。新しい公開会話インターフェース、`api.conversations` 機能、`ToolSession.restricted` には、リリース前にメンテナーによる `API_VERSION` の更新が必要です。ここではバージョンファイルを変更しません。引き続き利用可能か確認してください。
+
 ### サブエージェントの制御
 
 `SessionControl.messageSubagent(id, text)` は、ユーザーが作成したメッセージを子孫に送ります。作業中なら次のモデル呼び出しに届き、アイドル状態の 永続的な子なら別のターンを開始し、キューに入っている子には実行が許可されたときだけ届きます。メッセージは、親モデルからの通知ではなく、ユーザーメッセージとして子の会話記録とバスのイベントに表示されます。不明な子、終了した子、停止中の子には false を返します。`pauseSubagent(id)` は、次のモデル呼び出しの前で待機させ、現在のモデル・ツールの処理は中止や結果の消失なしに完了させます。`resumeSubagent(id)` はこの待機を解除します。一時停止中の子は、`SubagentInfo.status` と `subagent.state` で `paused` を報告します。実行が許可された一時停止中の子は、ツリーとグループの実行枠を保持するため、一時停止しても別の子が使える並行実行枠は増えません。一時停止中も停止できます。一時停止は実行中の子だけに適用できます（キュー内やアイドル状態には適用できません）。pause/resume は、不明、終了済み、またはすでに要求した状態の場合に false を返します。この待機は、拡張機能のメッセージキュー（swarm の一時停止も含みます）とは独立しており、一方を再開しても他方は解除されません。

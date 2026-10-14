@@ -11,6 +11,17 @@ function setup() {
   return { bus, host }
 }
 
+test("lightweight hosts without conversation dependencies do not expose owned conversations", async () => {
+  const { host } = setup()
+  expect(
+    await host.load((api) => {
+      expect(api.conversations).toBeUndefined()
+    }, "test:lightweight"),
+  ).toBe(true)
+  host.unloadAll()
+  await host.drain()
+})
+
 test("unload hooks run once per instance on reload and exit, before registrations disappear", async () => {
   const { bus, host } = setup()
   const calls: string[] = []
