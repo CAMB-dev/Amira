@@ -22,6 +22,7 @@ import {
   ToolRegistry,
   TraceRecorder,
   toolTraits,
+  validateSettings,
 } from "@amira/core"
 import type { ActivePackages } from "@amira/packages"
 import { UsageError } from "./args.ts"
@@ -180,7 +181,8 @@ async function defaultBuiltins(): Promise<{ source: string; extension: Extension
 export async function createSession(opts: SessionOptions): Promise<Session> {
   const readPackages = () => (typeof opts.packages === "function" ? opts.packages() : opts.packages)
   let packages = readPackages()
-  const settings = withPackageSkills(opts.settings ?? {}, packages)
+  const concurrency = normalizeConcurrencySettings(opts.settings)
+  const settings = withPackageSkills(concurrency.settings, packages)
   const extensionSettings = (value: Settings): Settings => ({
     ...value,
     shell: opts.shell ?? value.shell ?? DEFAULT_SHELL,
@@ -237,7 +239,13 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     reloadSettings: opts.reloadSettings
       ? () => {
           const loaded = opts.reloadSettings!()
-          return { ...loaded, settings: extensionSettings(withPackageSkills(loaded.settings, packages)) }
+          const normalized = normalizeConcurrencySettings(loaded.settings)
+          opts.onSettingsReload?.(normalized.settings)
+          return {
+            ...loaded,
+            settings: extensionSettings(withPackageSkills(normalized.settings, packages)),
+            warnings: [...(loaded.warnings ?? []), ...normalized.warnings],
+          }
         }
       : undefined,
     cwd: opts.cwd,
@@ -257,7 +265,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       { sessionId: "host" },
     )
   }
-  for (const error of opts.warnings ?? []) {
+  for (const error of [...(opts.warnings ?? []), ...concurrency.warnings]) {
     bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
   }
 
@@ -339,11 +347,13 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         project: instructionsSection(loadInstructions(cwd)),
       }),
     ...(settings.subagents?.maxDepth !== undefined ? { maxDepth: settings.subagents.maxDepth } : {}),
-    ...(settings.subagents?.maxConcurrent ? { maxConcurrent: settings.subagents.maxConcurrent } : {}),
+    ...(settings.subagents?.maxConcurrent !== undefined
+      ? { maxConcurrent: settings.subagents.maxConcurrent }
+      : {}),
     ...(settings.budget ? { budget: settings.budget } : {}),
     ...(compaction ? { compaction } : {}),
     ...(context ? { context } : {}),
-    ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
+    ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
   })
   const approve = userApprover(host.ui, {
     presenters: host.renderers,
@@ -399,7 +409,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...(store ? { session: store } : {}),
       ...(compaction ? { compaction } : {}),
       ...(context ? { context } : {}),
-      ...(settings.maxParallelTools ? { maxParallelTools: settings.maxParallelTools } : {}),
+      ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
       ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),
     })
   }
@@ -445,11 +455,12 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       const skillsBefore = new Set(host.skills.list().map((s) => s.name))
       packages = readPackages()
       const reloaded = opts.reloadSettings?.()
-      for (const error of reloaded?.warnings ?? []) {
+      const normalized = normalizeConcurrencySettings(reloaded?.settings ?? opts.settings)
+      for (const error of [...(reloaded?.warnings ?? []), ...normalized.warnings]) {
         bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
       }
       host.setSettings(
-        extensionSettings(withPackageSkills(reloaded?.settings ?? opts.settings ?? {}, packages)),
+        extensionSettings(withPackageSkills(normalized.settings, packages)),
         reloaded?.layers ?? opts.settingsLayers,
       )
       host.unloadAll()
@@ -461,8 +472,8 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       } finally {
         host.replayOnLoad(undefined)
       }
-      noticeThemeSettings(reloaded?.settings ?? opts.settings ?? {})
-      opts.onSettingsReload?.(reloaded?.settings ?? opts.settings ?? {})
+      noticeThemeSettings(normalized.settings)
+      opts.onSettingsReload?.(normalized.settings)
       const after = new Set(host.loaded)
       const skillsAfter = new Set(host.skills.list().map((s) => s.name))
       return {
@@ -474,6 +485,29 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         skillsRemoved: [...skillsBefore].filter((s) => !skillsAfter.has(s)).length,
       }
     },
+  }
+}
+
+/** Direct callers may bypass the file loader; normalize only concurrency, preserving other settings. */
+function normalizeConcurrencySettings(settings: Settings = {}): { settings: Settings; warnings: string[] } {
+  const concurrency = validateSettings(
+    {
+      ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
+      ...(settings.subagents?.maxConcurrent !== undefined
+        ? { subagents: { maxConcurrent: settings.subagents.maxConcurrent } }
+        : {}),
+    },
+    "settings",
+  )
+  return {
+    settings: {
+      ...settings,
+      ...concurrency.settings,
+      ...(settings.subagents
+        ? { subagents: { ...settings.subagents, ...concurrency.settings.subagents } }
+        : {}),
+    },
+    warnings: concurrency.warnings,
   }
 }
 

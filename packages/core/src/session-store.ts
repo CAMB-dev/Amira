@@ -550,23 +550,28 @@ export class SessionStore {
 
   /**
    * Copies the current branch through target, retaining entry ids used by compactions, plus the
-   * session-wide notes (titles, side usage) recorded before target and every file prune.
+   * session-wide notes before target and the complete chronological file journal.
    */
   fork(target: string | null = this.#leaf): SessionStore {
     const branch = this.branch()
     const at = target === null ? -1 : branch.findIndex((e) => e.id === target)
     if (target !== null && at === -1) throw new Error(`unknown entry ${target}`)
+    const ended = new Set(this.#entries.flatMap((e) => (e.type === "file_restore_end" ? [e.restoreId] : [])))
+    if (this.#entries.some((e) => e.type === "file_restore" && !ended.has(e.id)))
+      throw new Error("finish or abandon the interrupted file restore before forking")
     const next = SessionStore.create({ cwd: this.header.cwd, parent: this.id, dir: path.dirname(this.file) })
     const kept = new Set(branch.slice(0, at + 1).map((e) => e.id))
     const end = target === null ? -1 : this.#entries.findIndex((e) => e.id === target)
-    // Session-wide notes sit off every branch, so they come along as before. A prune discards
-    // the file history of the whole session, wherever it happened, so no fork may restore it.
-    const entries = this.#entries.filter(
-      (e, i) =>
-        kept.has(e.id) ||
-        e.type === "file_prune" ||
-        (i <= end && (e.type === "title" || e.type === "side_usage")),
-    )
+    // Physical file versions and gaps survive conversation-only checkouts. Retain their entire
+    // journal, but detach discarded entries so missing parents cannot join the conversation.
+    const entries = this.#entries
+      .filter(
+        (e, i) =>
+          kept.has(e.id) ||
+          e.type.startsWith("file_") ||
+          (i <= end && (e.type === "title" || e.type === "side_usage")),
+      )
+      .map((e) => (kept.has(e.id) ? e : { ...e, parentId: null }))
     next.claim()
     try {
       const text = `${[JSON.stringify(next.header), ...entries.map((e) => JSON.stringify(e))].join("\n")}\n`
@@ -867,6 +872,7 @@ const ENTRY_TYPES = new Set<unknown>([
   "file_mutation",
   "file_mutation_end",
   "file_restore",
+  "file_restore_started",
   "file_restore_progress",
   "file_restore_end",
   "file_prune",

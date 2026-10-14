@@ -95,6 +95,51 @@ test("layers flags over local, project, user settings and defaults", () => {
   expect(loadSettings({ cwd, home, flags: { model: "f/m" } }).settings.model).toBe("f/m")
 })
 
+test.each([0, -1, 1.5, "2", null, false, {}, []].map((value) => [value]))(
+  "invalid concurrency settings %j warn and use their defaults",
+  (value) => {
+    put(userFile(), { maxParallelTools: value, subagents: { maxConcurrent: value, background: false } })
+    const result = loadSettings({ cwd, home })
+    expect(result.settings.maxParallelTools).toBe(8)
+    expect(result.settings.subagents).toEqual({ maxConcurrent: 4, background: false })
+    expect(result.warnings).toEqual([
+      `${userFile()}: "maxParallelTools" must be a whole number of at least 1, got ${JSON.stringify(value)}; using default 8`,
+      `${userFile()}: "subagents.maxConcurrent" must be a whole number of at least 1, got ${JSON.stringify(value)}; using default 4`,
+    ])
+  },
+)
+
+test("invalid higher-precedence concurrency settings reset to defaults instead of lower-layer values", () => {
+  put(userFile(), { maxParallelTools: 3, subagents: { maxConcurrent: 2, background: false } })
+  put(projectFile(), { maxParallelTools: 0, subagents: { maxConcurrent: -1 } })
+  const result = loadSettings({ cwd, home })
+  expect(result.settings.maxParallelTools).toBe(8)
+  expect(result.settings.subagents).toEqual({ maxConcurrent: 4, background: false })
+  expect(result.warnings).toEqual([
+    `${projectFile()}: "maxParallelTools" must be a whole number of at least 1, got 0; using default 8`,
+    `${projectFile()}: "subagents.maxConcurrent" must be a whole number of at least 1, got -1; using default 4`,
+  ])
+  expect(result.layers.maxParallelTools).toEqual([
+    { scope: "user", file: userFile(), value: 3 },
+    { scope: "project", file: projectFile(), value: 8 },
+  ])
+})
+
+test.each([1, 3, 12])("valid concurrency settings %j remain unchanged without warnings", (value) => {
+  const settings = { maxParallelTools: value, subagents: { maxConcurrent: value } }
+  expect(validateSettings(settings, "settings.json")).toEqual({ settings, warnings: [] })
+})
+
+test("omitted concurrency settings stay omitted and other invalid integer settings still fail", () => {
+  expect(validateSettings({ subagents: {} }, "settings.json")).toEqual({
+    settings: { subagents: {} },
+    warnings: [],
+  })
+  expect(() => validateSettings({ subagents: { maxDepth: 0 } }, "settings.json")).toThrow(
+    '"subagents.maxDepth" must be a whole number of at least 1',
+  )
+})
+
 test("provider and model editing choices are validated and merge like other tool settings", () => {
   put(userFile(), { providers: { p: { tools: { edit: "apply_patch" } } } })
   put(projectFile(), { providers: { p: { models: [{ id: "m", tools: { edit: "both" } }] } } })
@@ -423,7 +468,10 @@ test("checks every documented key", () => {
   expect(validateSettings(ok, "f").settings.extensions).toEqual(ok.extensions)
   const bad = (v: unknown) => () => validateSettings(v, "f")
   expect(bad({ model: "gpt" })).toThrow('"model" must be a "provider/model" reference')
-  expect(bad({ maxParallelTools: 0 })).toThrow('"maxParallelTools" must be a whole number of at least 1')
+  expect(validateSettings({ maxParallelTools: 0 }, "f")).toEqual({
+    settings: { maxParallelTools: 8 },
+    warnings: ['f: "maxParallelTools" must be a whole number of at least 1, got 0; using default 8'],
+  })
   expect(bad({ retry: { attempts: 1.5 } })).toThrow('"retry.attempts"')
   expect(bad({ retry: { baseDelayMs: -1 } })).toThrow('"retry.baseDelayMs"')
   expect(validateSettings({ retry: { nativeCompactionTimeoutMs: 0 } }, "f").settings.retry).toEqual({
@@ -659,9 +707,10 @@ test("sub-agent settings: role models, limits, budget and the merge review thres
   expect(() => validateSettings({ agents: { coder: { model: "nope" } } }, "f")).toThrow(
     '"agents.coder.model"',
   )
-  expect(() => validateSettings({ subagents: { maxConcurrent: 0 } }, "f")).toThrow(
-    '"subagents.maxConcurrent"',
-  )
+  expect(validateSettings({ subagents: { maxConcurrent: 0 } }, "f")).toEqual({
+    settings: { subagents: { maxConcurrent: 4 } },
+    warnings: ['f: "subagents.maxConcurrent" must be a whole number of at least 1, got 0; using default 4'],
+  })
   expect(() => validateSettings({ budget: { costUsd: "1" } }, "f")).toThrow('"budget.costUsd"')
 })
 

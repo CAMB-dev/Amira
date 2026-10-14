@@ -16,7 +16,7 @@ Amira reads its settings from JSON files when it starts. Every key is optional; 
 
 Layers apply in this order, each one winning over the ones before: built-in defaults, the user file, the project file, `settings.local.json`, then command-line flags such as `--model` or `--disable-tools`. Objects merge key by key; lists and other values replace what an earlier layer set, so a project's `tools.disabled` replaces the user's list rather than adding to it.
 
-A file that is not valid JSON, or a key with a value of the wrong type, stops Amira with an error naming the file and the key. Unknown keys only produce a warning and are ignored, so a newer settings file still loads. A `$schema` key is allowed. API keys never go in settings files: store them with `/provider` or `amira provider` (they go to `auth.json`) or read them from an environment variable named by `apiKeyEnv`.
+A file that is not valid JSON, or a key with a value of the wrong type, stops Amira with an error naming the file and the key. The exceptions are `maxParallelTools` and `subagents.maxConcurrent`: invalid values warn and use their defaults instead. Unknown keys only produce a warning and are ignored, so a newer settings file still loads. A `$schema` key is allowed. API keys never go in settings files: store them with `/provider` or `amira provider` (they go to `auth.json`) or read them from an environment variable named by `apiKeyEnv`.
 
 ## Saving model and thinking choices
 
@@ -124,7 +124,7 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 | `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "default"` | none | Reasoning effort for main conversation requests on models with `caps.thinking`. Unset or `"default"` leaves effort to the server; it does not turn thinking off. `"default"` overrides earlier top-level layers. A model's `thinking` still overrides this; `--thinking` overrides both for one run. Interactive `/thinking` changes save the model and thinking choice; `/thinking default` saves `"default"`. Sub-agents inherit the parent's selected effort; titles and compaction do not. |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Which shell tools the model gets on Windows: `"auto"` offers both `bash` and `powershell`, `"bash"` or `"powershell"` hides the other one. Elsewhere only `bash` exists. `--shell` wins. |  |
 | `tools.disabled` | `string[]` | `[]` | Tool names to hide from the model. `--disable-tools` replaces the list for one run; `/tools` changes the current session only. |  |
-| `maxParallelTools` | `number` | `8` | Most tool calls running at once. |  |
+| `maxParallelTools` | `number` | `8` | Most tool calls running at once. Use a whole number of at least 1; invalid values warn and use the default, even over a valid value in a lower-precedence file. |  |
 | `backgroundJobs.maxRunning` | `number` | `8` | Background jobs (commands the shell tools start with `background: true`, such as dev servers and watchers) running at once. |  |
 | `backgroundJobs.bufferChars` | `number` | `1000000` | Characters of output each job keeps in memory for reading; at least 1000. |  |
 | `backgroundJobs.maxLogBytes` | `number` | `52428800` (50 MiB) | Bytes of each job's output written to its log file. |  |
@@ -281,7 +281,7 @@ See [Sub-agents](subagents.md) for roles, the agent tree and worktree merges.
 | `agents` | `Record<string, object>` | none | Settings per sub-agent role, by role name. |  |
 | `agents.<role>.model` | `string` | the role file's, else the parent's | The `"provider/model"` the role runs on. A model named in the task wins. |  |
 | `subagents.maxDepth` | `number` | `2` | How deep sub-agents may nest. |  |
-| `subagents.maxConcurrent` | `number` | `4` | Sub-agents running at once in the whole agent tree; the rest wait their turn. |  |
+| `subagents.maxConcurrent` | `number` | `4` | Sub-agents running at once in the whole agent tree; the rest wait their turn. Use a whole number of at least 1; invalid values warn and use the default, even over a valid value in a lower-precedence file. |  |
 | `subagents.background` | `boolean` | `true` | The main session's `agent` tool runs sub-agents in the background unless the call says otherwise; their results come back as a message. |  |
 | `budget.tokens` | `number` | unlimited | Tokens the whole agent tree may use: input, output, and cache reads and writes. |  |
 | `budget.costUsd` | `number` | unlimited | Cost in USD the whole agent tree may spend, where prices are known. |  |

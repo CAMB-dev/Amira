@@ -174,7 +174,7 @@ function takeGate(lockPath: string): (() => void) | undefined {
   records.add(owned)
   pending.set(key, records)
   return () => {
-    if (!pending.get(key)?.has(owned)) return
+    if (!pending.get(owned.key)?.has(owned)) return
     owned.requested = true
     // Nonthrowing finalization preserves a newly returned FileLock even when Windows
     // temporarily prevents moving its gate. An active critical section is never retried.
@@ -197,6 +197,7 @@ interface OwnedGate {
   warned: boolean
   error?: unknown
   timer?: ReturnType<typeof setTimeout>
+  relocation?: { root: string; parent: string; gate: string; cleanup: string }
 }
 
 // One inline attempt, then five unref'ed automatic attempts over 775ms. No cleanup
@@ -227,6 +228,87 @@ export function pendingOwnedGate(gate: string): boolean {
   return false
 }
 
+/** Cleanup status for a captured canonical path, including private retirement debris. */
+export function pendingGateCleanup(canonical: string): boolean {
+  const key = process.platform === "win32" ? canonical.toLowerCase() : canonical
+  return [...(pending.get(key) ?? [])].some((owned) => owned.requested)
+}
+
+/** Rebind exact, released ownership when a verified directory returns from private staging. */
+export function relocateReleasedGateCleanup(from: string, to: string): void {
+  const source = path.resolve(from)
+  const root = path.resolve(to)
+  for (const records of [...pending.values()]) {
+    for (const owned of [...records]) {
+      if (!owned.requested || owned.working) continue
+      const relative = path.relative(source, owned.parent)
+      if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue
+      const parent = path.join(root, relative)
+      const gate = path.join(parent, path.basename(owned.gate))
+      const cleanup = path.join(parent, path.basename(owned.cleanup))
+      records.delete(owned)
+      if (!records.size) pending.delete(owned.key)
+      owned.key = process.platform === "win32" ? gate.toLowerCase() : gate
+      owned.relocation = { root, parent, gate, cleanup }
+      const relocated = pending.get(owned.key) ?? new Set<OwnedGate>()
+      relocated.add(owned)
+      pending.set(owned.key, relocated)
+      // Register retry intent, not authority. A sharing failure must not strand the public
+      // gate at its vanished private address; existing timers/budgets remain unchanged.
+      verifyRelocation(owned)
+    }
+  }
+}
+
+function verifyRelocation(owned: OwnedGate): boolean {
+  const next = owned.relocation
+  if (!next) return true
+  try {
+    let part = next.root
+    for (const component of ["", ...path.relative(next.root, next.parent).split(path.sep).filter(Boolean)]) {
+      part = path.join(part, component)
+      const directory = lstatSync(part)
+      if (!directory.isDirectory() || directory.isSymbolicLink()) {
+        forget(owned)
+        return true
+      }
+    }
+    const target = owned.retired ? next.cleanup : next.gate
+    const identity = lstatSync(target)
+    if (
+      !sameIdentity(statSync(next.parent), owned.parentIdentity) ||
+      !identity.isDirectory() ||
+      identity.isSymbolicLink() ||
+      !sameIdentity(identity, owned.identity)
+    ) {
+      forget(owned)
+      return true
+    }
+    // Canonical authority still requires the original immutable nonce. Retirement already
+    // proved it before the rename; partial removal may legitimately erase owner.json there.
+    if (!owned.retired) {
+      const metadata = path.join(target, "owner.json")
+      const stat = lstatSync(metadata)
+      if (!stat.isFile() || stat.isSymbolicLink() || readFileSync(metadata, "utf8") !== owned.contents) {
+        forget(owned)
+        return true
+      }
+    }
+    owned.parent = next.parent
+    owned.gate = next.gate
+    owned.cleanup = next.cleanup
+    owned.relocation = undefined
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      forget(owned)
+      return true
+    }
+    owned.error = error
+    return false // Unverifiable paths grant no authority; retain a bounded retry of the proof.
+  }
+}
+
 function sameIdentity(a: Stats, b: Stats): boolean {
   return a.dev === b.dev && a.ino === b.ino
 }
@@ -239,6 +321,8 @@ function forget(owned: OwnedGate): void {
 }
 
 function attempt(owned: OwnedGate): boolean {
+  if (!verifyRelocation(owned)) return false
+  if (!pending.get(owned.key)?.has(owned)) return true
   try {
     if (!sameIdentity(statSync(owned.parent), owned.parentIdentity)) {
       forget(owned)

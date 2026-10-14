@@ -483,7 +483,8 @@ export interface SessionControl {
    * runs, for an index that is not a user message, and for a message a compaction has since
    * summarized. Unset where the host keeps no session file.
    * Captured file-tool changes are restored by default; any conflict leaves the conversation
-   * unchanged. Pass restoreFiles: false for conversation only. An extension owner replaces
+   * unchanged. Disabled, unavailable or pruned file history rejects instead of rewinding only
+   * the conversation. Pass restoreFiles: false for conversation only. An extension owner replaces
    * core file restoration. An interrupted restore must finish before changing modes.
    */
   readonly rewind?: (index: number, options?: RewindOptions) => Promise<void>
