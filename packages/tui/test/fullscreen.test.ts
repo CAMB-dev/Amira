@@ -1,5 +1,5 @@
 // A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
-import { expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import {
   type ChildSession,
@@ -32,8 +32,30 @@ import statusExtension from "../../../extensions/status/src/index.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
+import type { Block } from "../src/blocks.ts"
 import { fileList } from "../src/file-index.ts"
 import { localClock } from "../src/format.ts"
+import { TranscriptPane } from "../src/transcript-pane.ts"
+
+// Read clocks from their source blocks, not from wall time after rendering or unfolding.
+let blocks: Block[]
+const add = TranscriptPane.prototype.add
+let added: ReturnType<typeof spyOn<TranscriptPane, "add">>
+beforeEach(() => {
+  blocks = []
+  added = spyOn(TranscriptPane.prototype, "add").mockImplementation(function (this: TranscriptPane, block) {
+    blocks.push(block)
+    add.call(this, block)
+  })
+})
+afterEach(() => added.mockRestore())
+
+function blockClock(kind: Block["kind"]): string {
+  const block = blocks.find((b) => b.kind === kind)
+  if (!block || !("timestamp" in block) || typeof block.timestamp !== "number")
+    throw new Error(`missing ${kind} clock`)
+  return localClock(block.timestamp)
+}
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -225,7 +247,7 @@ test("reads in a row become one Explored row, which unfolds to the calls", async
   for (const marker of ["├", "│", "└"]) expect(terminal.output).toContain(`\x1b[7m${marker}`)
   expect(view()).toMatch(
     new RegExp(
-      `├ Read a\\.ts +${localClock(Date.now())}\\n│ ✓ contents of a\\.ts …\\n└ Read b\\.ts\\n▌ ✓ contents of b\\.ts …`,
+      `├ Read a\\.ts +${blockClock("tool")}\\n│ ✓ contents of a\\.ts …\\n└ Read b\\.ts\\n▌ ✓ contents of b\\.ts …`,
     ),
   )
   terminal.send(ESC)
@@ -289,12 +311,24 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   // Right above the bottom area, which stays at the bottom of the screen.
   expect(withoutClocks(view())).toContain(`${conversation}\n\n╭`)
   // The user and the first assistant output (this tool) carry clocks at the fixed right edge.
-  const clock = localClock(Date.now())
+  // Crossing a minute after rendering must not change the clocks expected from those blocks.
+  const now = Date.now
+  const shifted = spyOn(Date, "now").mockImplementation(() => now() + 60_000)
+  let clock: string
+  try {
+    clock = blockClock("tool")
+    expect(localClock(Date.now())).not.toBe(clock)
+  } finally {
+    shifted.mockRestore()
+  }
   const clockCells = visibleWidth(clock)
-  const clockRows = screen.lines.filter((row) => row.endsWith(clock))
+  const userClock = blockClock("user")
+  const clockRows = screen.lines.filter((row) => row.endsWith(userClock) || row.endsWith(clock))
   expect(clockRows).toHaveLength(2)
   const userHead = "› what is in a.ts?"
-  expect(clockRows[0]).toBe(`${userHead}${" ".repeat(60 - visibleWidth(userHead) - clockCells)}${clock}`)
+  expect(clockRows[0]).toBe(
+    `${userHead}${" ".repeat(60 - visibleWidth(userHead) - visibleWidth(userClock))}${userClock}`,
+  )
   const toolHead = "└ read a.ts  ✓ contents of a.ts (+2 lines)"
   expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(60 - visibleWidth(toolHead) - clockCells)}${clock}`)
   expect(screen.lines[0]).toMatch(/^ {2}\/work\/proj +0 \/ 128K$/)
@@ -387,11 +421,15 @@ test("parallel tool calls keep their places in call order and finish in place", 
     "test",
   )
   terminal.send("go\r")
+  await waitFor(
+    () => blocks.some((b) => b.kind === "tool" && "timestamp" in b && typeof b.timestamp === "number"),
+    "the first tool clock",
+  )
   // A: root tool markers now sit at column 0, still finishing in call order below one another.
   await waitFor(
     () =>
       new RegExp(
-        `[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}\\n└ fast b\\.ts {2}✓ fast result`,
+        `[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${blockClock("tool")}\\n└ fast b\\.ts {2}✓ fast result`,
       ).test(view()),
     "fast done in place",
   )
@@ -401,15 +439,13 @@ test("parallel tool calls keep their places in call order and finish in place", 
     "activity",
   )
   expect(view()).toContain("esc stop")
-  expect(view()).toMatch(
-    new RegExp(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${localClock(Date.now())}`),
-  )
+  expect(view()).toMatch(new RegExp(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow a\\.ts +\\d+(?:\\.\\d+)?s {2}${blockClock("tool")}`))
   release()
   await shows("done")
   await idle()
   expect(view()).toMatch(
     new RegExp(
-      `├ slow a\\.ts {2}✓ slow result +${localClock(Date.now())}\\n└ fast b\\.ts {2}✓ fast result\\n\\n {2}done`,
+      `├ slow a\\.ts {2}✓ slow result +${blockClock("tool")}\\n└ fast b\\.ts {2}✓ fast result\\n\\n {2}done`,
     ),
   )
   terminal.send("\x03")
@@ -466,7 +502,7 @@ test("sub-agents stay under their call, also running in the background after the
   await waitFor(
     () =>
       new RegExp(
-        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Scan the logs · explorer · \\d+s · 0 tok\\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs/app\\.log`,
+        `└ launch {2}✓ Started in the background +${blockClock("tool")}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Scan the logs · explorer · \\d+s · 0 tok\\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs/app\\.log`,
       ).test(view()),
     "rows under the call",
   )
@@ -480,7 +516,7 @@ test("sub-agents stay under their call, also running in the background after the
   await waitFor(
     () =>
       new RegExp(
-        `└ launch {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ ✓ done    Scan the logs · explorer · \\d+\\.\\ds · 0 tok`,
+        `└ launch {2}✓ Started in the background +${blockClock("tool")}\\n {2}└ ✓ done    Scan the logs · explorer · \\d+\\.\\ds · 0 tok`,
       ).test(view()),
     "end line under the call",
   )
@@ -540,7 +576,7 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await waitFor(
     () =>
       new RegExp(
-        `└ flow {2}✓ Started in the background +${localClock(Date.now())}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \\S+ tok · Explore · 0/3 agents`,
+        `└ flow {2}✓ Started in the background +${blockClock("tool")}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \\S+ tok · Explore · 0/3 agents`,
       ).test(view()),
     "one line for the group under its call",
   )
@@ -1213,7 +1249,7 @@ test("a resize reflows the whole transcript to the new width", async () => {
     .filter((l) => l.includes("word"))
   expect(replyRows.length).toBeGreaterThan(3)
   expect(replyRows.every((l) => l.length <= 40)).toBe(true)
-  const clock = localClock(Date.now())
+  const clock = blockClock("assistant")
   const clockCells = visibleWidth(clock)
   const first = clockCells === 5 ? "  word0 word1 word2 word3 word4" : "  word0 word1 word2 word3"
   expect(replyRows[0]).toBe(`${first}${" ".repeat(40 - visibleWidth(first) - clockCells)}${clock}`)

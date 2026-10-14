@@ -43,9 +43,9 @@ function startWorker(mode: string): Bun.Subprocess<"ignore", "ignore", "pipe"> {
   workers.push(worker)
   return worker
 }
-async function waitFor(worker: ReturnType<typeof startWorker>, marker: string) {
+async function waitFor(worker: ReturnType<typeof startWorker>, marker: string, present = true) {
   const deadline = Date.now() + 4000
-  while (!fs.existsSync(path.join(dir, marker))) {
+  while (fs.existsSync(path.join(dir, marker)) !== present) {
     if (worker.exitCode !== null)
       throw new Error(`gate worker exited: ${await new Response(worker.stderr).text()}`)
     if (Date.now() > deadline) throw new Error(`gate worker timed out: ${marker}`)
@@ -151,33 +151,42 @@ test("live gate blocks with an accurate stale-write-guard path and safe manual r
   expect(await new Response(worker.stderr).text()).toBe("")
 }, 8000)
 
-test("cross-process simultaneous dead-gate recoverers grant exactly one lease and preserve its live authority", async () => {
-  await abandonedGate("session-pause-gate-create")
-  fs.rmSync(path.join(dir, "paused"))
-  const disk = fs.readFileSync(origin.file)
-  const contenders = Array.from({ length: 4 }, () => startWorker("session-contend"))
-  await Promise.all(contenders.map((worker) => waitFor(worker, `ready-${worker.pid}`)))
-  fs.writeFileSync(path.join(dir, "contend"), "go")
-  await Promise.all(contenders.map((worker) => waitFor(worker, `result-${worker.pid}`)))
-  const winners = contenders.filter((worker) => {
-    const result = JSON.parse(fs.readFileSync(path.join(dir, `result-${worker.pid}`), "utf8"))
-    if (!result.held) expect(result.error).toMatch(/stale-write guard|open in another Amira process/)
-    return result.held
-  })
-  expect(winners).toHaveLength(1)
-  expect(fs.readFileSync(origin.file)).toEqual(disk)
-  expect(isProcessAlive(winners[0]!.pid)).toBe(true)
-  const contents = fs.readFileSync(sessionLockFile(origin.file), "utf8")
-  expect(Number.parseInt(contents, 10)).toBe(winners[0]!.pid)
-  expect(() => origin.claim()).toThrow("open in another Amira process")
-  expect(fs.readFileSync(sessionLockFile(origin.file), "utf8")).toBe(contents)
-  fs.writeFileSync(path.join(dir, "release"), "go")
-  for (const worker of contenders) {
-    expect(await worker.exited).toBe(0)
-    expect(await new Response(worker.stderr).text()).toBe("")
-  }
-  expect(origin.claim()).toBe(true)
-}, 10000)
+for (const fault of [undefined, "EPERM", "EBUSY", "EACCES"]) {
+  test(`cross-process simultaneous dead-gate recoverers grant exactly one lease and preserve its live authority (${fault ?? "real OS"})`, async () => {
+    await abandonedGate("session-pause-gate-create")
+    fs.rmSync(path.join(dir, "paused"))
+    const disk = fs.readFileSync(origin.file)
+    const mode = fault ? `session-contend-${fault}` : "session-contend"
+    const contenders = Array.from({ length: 4 }, () => startWorker(mode))
+    await Promise.all(contenders.map((worker) => waitFor(worker, `ready-${worker.pid}`)))
+    fs.writeFileSync(path.join(dir, "contend"), "go")
+    await Promise.all(contenders.map((worker) => waitFor(worker, `result-${worker.pid}`)))
+    const winners = contenders.filter((worker) => {
+      const result = JSON.parse(fs.readFileSync(path.join(dir, `result-${worker.pid}`), "utf8"))
+      if (!result.held) expect(result.error).toMatch(/stale-write guard|open in another Amira process/)
+      return result.held
+    })
+    expect(winners).toHaveLength(1)
+    if (fault) expect(fs.readdirSync(dir).some((name) => name.startsWith("sharing-"))).toBe(true)
+    // A result is not a quiescence barrier: losers may still be finalizing their
+    // short-lived gates. Finish them and the winner's gate before probing its lease.
+    for (const worker of contenders.filter((worker) => worker !== winners[0]))
+      expect(await worker.exited).toBe(0)
+    await waitFor(winners[0]!, path.basename(`${sessionLockFile(origin.file)}.lease-gate`), false)
+    expect(fs.readFileSync(origin.file)).toEqual(disk)
+    expect(isProcessAlive(winners[0]!.pid)).toBe(true)
+    const contents = fs.readFileSync(sessionLockFile(origin.file), "utf8")
+    expect(Number.parseInt(contents, 10)).toBe(winners[0]!.pid)
+    expect(() => origin.claim()).toThrow("open in another Amira process")
+    expect(fs.readFileSync(sessionLockFile(origin.file), "utf8")).toBe(contents)
+    fs.writeFileSync(path.join(dir, "release"), "go")
+    for (const worker of contenders) {
+      expect(await worker.exited).toBe(0)
+      expect(await new Response(worker.stderr).text()).toBe("")
+    }
+    expect(origin.claim()).toBe(true)
+  }, 10000)
+}
 
 for (const barrier of ["session-pause-gate-proof", "session-pause-gate-recheck"]) {
   for (const laterWriter of [false, true]) {
