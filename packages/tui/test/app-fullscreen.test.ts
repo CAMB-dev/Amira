@@ -1,5 +1,5 @@
 // A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -157,26 +157,34 @@ test("a diff review taller than the terminal keeps its title, options and keys i
     { rows: 14 },
   )
   await host.load(reviewTool(54), "reviewer")
-  terminal.send("go\r")
-  await waitFor(() => live().includes("Merge the worktree?"), "review dialog")
-  const rows = live().split("\n")
-  expect(live()).toMatch(/… \d+ more lines …/)
-  expect(rows.some((l) => /… \d+ more lines …/.test(l))).toBe(true)
-  expect(live()).toContain("+ line 1")
-  expect(live()).toContain("+ line 54")
-  expect(live()).toContain("│›1 merge")
-  expect(live()).toContain("│ 2 keep")
-  expect(live()).toContain("↑↓ move · enter choose · esc cancel")
-  expect(live()).not.toContain("type to filter")
-  // The running call that asked stays in view above it, and the frame fits the screen.
-  expect(
-    rows.some((l) => new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review +\\d+s {2}${localClock(Date.now())}$`).test(l)),
-  ).toBe(true)
-  expect(rows[0]).not.toContain("line")
-  terminal.send("1")
-  await idle()
-  terminal.send("\x03")
-  await exited
+  const at = Date.now()
+  const clock = spyOn(Date, "now").mockReturnValue(at)
+  try {
+    terminal.send("go\r")
+    await waitFor(() => live().includes("Merge the worktree?"), "review dialog")
+    // The rendered call keeps its clock even if assertions run in the next minute.
+    clock.mockReturnValue(at + 60_000)
+    const rows = live().split("\n")
+    expect(live()).toMatch(/… \d+ more lines …/)
+    expect(rows.some((l) => /… \d+ more lines …/.test(l))).toBe(true)
+    expect(live()).toContain("+ line 1")
+    expect(live()).toContain("+ line 54")
+    expect(live()).toContain("│›1 merge")
+    expect(live()).toContain("│ 2 keep")
+    expect(live()).toContain("↑↓ move · enter choose · esc cancel")
+    expect(live()).not.toContain("type to filter")
+    // The running call that asked stays in view above it, and the frame fits the screen.
+    expect(rows.some((l) => new RegExp(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] review +\\d+s {2}${localClock(at)}$`).test(l))).toBe(
+      true,
+    )
+    expect(rows[0]).not.toContain("line")
+    terminal.send("1")
+    await idle()
+    terminal.send("\x03")
+    await exited
+  } finally {
+    clock.mockRestore()
+  }
 })
 
 test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty", async () => {

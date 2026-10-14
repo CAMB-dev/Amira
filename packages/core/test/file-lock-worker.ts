@@ -24,6 +24,19 @@ const rm = fs.rmSync
 const write = fs.writeFileSync
 const gate = `${file}.lease-gate`
 let releaseStarted = false
+const contender = mode.startsWith("session-contend")
+const sharingCode = mode.slice("session-contend-".length)
+const sharingHook =
+  contender && ["EPERM", "EBUSY", "EACCES"].includes(sharingCode)
+    ? spyOn(fs, "renameSync").mockImplementation((...args) => {
+        if (args[0] === gate && String(args[1]).startsWith(`${gate}.dead-`)) {
+          sharingHook!.mockRestore()
+          mark(`sharing-${process.pid}`)
+          throw Object.assign(new Error(`${sharingCode}: retire dead gate`), { code: sharingCode })
+        }
+        return rename(...args)
+      })
+    : undefined
 const initHook =
   mode === "session-pause-gate-init"
     ? spyOn(fs, "writeFileSync").mockImplementation((...args) => {
@@ -125,20 +138,25 @@ const openHook =
       })
     : undefined
 
-if (mode === "session-contend") {
+if (contender) {
   mark(`ready-${process.pid}`)
   wait("contend")
 }
 let held: FileLock | undefined
 try {
   if (store) {
-    store.claim()
+    if (contender) {
+      await store.withClaim(() => {
+        // Retain the worker's lease beyond the temporary awaited-acquisition ref.
+        store.claim()
+      })
+    } else store.claim()
     held = { release: () => store.release() }
   } else {
     held = tryFileLock(file, 1, undefined, true)
   }
 } catch (error) {
-  if (mode !== "session-contend" && !delayedRecovery) throw error
+  if (!contender && !delayedRecovery) throw error
   fs.writeFileSync(
     path.join(dir, `result-${process.pid}`),
     JSON.stringify({
@@ -155,9 +173,10 @@ initHook?.mockRestore()
 proofHook?.mockRestore()
 recheckHook?.mockRestore()
 recoveryRetireHook?.mockRestore()
+sharingHook?.mockRestore()
 if (!held) throw new Error("file-lock worker was not granted authority")
 if (mode === "crash-lease") process.exit(0)
-if (mode === "session-contend" || delayedRecovery) {
+if (contender || delayedRecovery) {
   fs.writeFileSync(path.join(dir, `result-${process.pid}`), JSON.stringify({ held: true }))
   wait("release")
 } else {
