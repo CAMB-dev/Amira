@@ -516,7 +516,7 @@ api.registerCommand({
 })
 ```
 
-A custom view can still display an owned conversation without replacing the main composer. Read main's status from `api.session()` and this conversation's transcript/status from its handle. Do not omit the owned question's `sessionId` or infer an answer when it cannot be displayed. The conversation interfaces, `api.conversations` and `ToolSession.restricted` arrived in API 0.1.51, and native focus in API 0.1.52; still feature-detect them so older hosts degrade cleanly. `writeRoots`, `descendants` and `runTool` require a supporting host. Require the corresponding host API version before relying on the new policies: optional TypeScript fields are not capability detection, and older hosts may ignore unknown fields when creating a conversation.
+A custom view can still display an owned conversation without replacing the main composer. Read main's status from `api.session()` and this conversation's transcript/status from its handle. Do not omit the owned question's `sessionId` or infer an answer when it cannot be displayed. The conversation interfaces, `api.conversations` and `ToolSession.restricted` arrived in API 0.1.51, and native focus in API 0.1.52; still feature-detect them so older hosts degrade cleanly. `writeRoots`, `descendants` and `runTool` arrived in API 0.1.53. Require that host API version before relying on the new policies: optional TypeScript fields are not capability detection, and older hosts may ignore unknown fields when creating a conversation.
 
 ### Sub-agent controls
 

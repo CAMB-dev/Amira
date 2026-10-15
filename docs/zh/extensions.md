@@ -488,7 +488,7 @@ api.registerCommand({
 })
 ```
 
-自定义视图仍可展示独立会话，而不替换主输入框。从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能省略独立会话问题的 `sessionId`，也不能在无法展示问题时推断用户选择。会话接口、`api.conversations` 和 `ToolSession.restricted` 自 API 0.1.51 起提供，原生聚焦自 API 0.1.52 起提供；仍应先检测能力是否可用，让旧宿主能正常降级。`writeRoots`、`descendants` 和 `runTool` 需要支持它们的宿主。依赖新策略前必须要求相应宿主 API 版本：TypeScript 可选字段不等于能力检测，旧宿主在创建会话时可能忽略未知字段。
+自定义视图仍可展示独立会话，而不替换主输入框。从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能省略独立会话问题的 `sessionId`，也不能在无法展示问题时推断用户选择。会话接口、`api.conversations` 和 `ToolSession.restricted` 自 API 0.1.51 起提供，原生聚焦自 API 0.1.52 起提供；仍应先检测能力是否可用，让旧宿主能正常降级。`writeRoots`、`descendants` 和 `runTool` 自 API 0.1.53 起提供。依赖这些策略前必须要求该宿主 API 版本：TypeScript 可选字段不等于能力检测，旧宿主在创建会话时可能忽略未知字段。
 
 ### 子 agent 控制
 
