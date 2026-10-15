@@ -6,7 +6,19 @@ Amira は、TypeScript と Bun で構築された、端末向けの軽量で拡�
 
 > 開発中です。
 
-## ソースからのインストール
+## インストール
+
+次のいずれかのパッケージマネージャーで、ビルド済みの実行ファイルをインストールしてください（npm/pnpm のランチャーには Node.js 18 以降が必要です。Bun は不要です）。
+
+```sh
+npm i -g amira
+pnpm add -g amira
+bun add -g amira
+```
+
+または、[GitHub Releases](https://github.com/CAMB-dev/Amira/releases) からアーカイブをダウンロードしてください。対応プラットフォーム、チェックサム、署名付きマニフェスト、更新コマンドについては、[インストールと検証](docs/ja/install.md)を参照してください。
+
+### ソースからのインストール
 
 [Bun](https://bun.sh) をインストールし、このリポジトリをチェックアウトしたディレクトリで次のコマンドを実行してください。
 
