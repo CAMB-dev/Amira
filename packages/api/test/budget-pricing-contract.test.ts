@@ -1,7 +1,7 @@
 import { expect, expectTypeOf, test } from "bun:test"
 import { API_VERSION, addUsage, type EventMap, emptyUsage, type Usage } from "../src/index.ts"
 
-test("the public budget.update contract adds optional estimate metadata without an API version bump", () => {
+test("the public budget.update contract carries optional estimate metadata from API 0.1.54", () => {
   expectTypeOf<EventMap["budget.update"]["pricingUnknown"]>().toEqualTypeOf<boolean | undefined>()
   const confirmed = { tokens: 100, costUsd: 1 } satisfies EventMap["budget.update"]
   const estimated = {
@@ -24,7 +24,7 @@ test("the public budget.update contract adds optional estimate metadata without 
         "pricingUnknown": true,
         "tokens": 200,
       },
-      "version": "0.1.53",
+      "version": "0.1.54",
     }
   `)
 })
