@@ -6,6 +6,8 @@ export type BackgroundJobStatus = "starting" | "running" | "exited" | "stopped" 
 export interface BackgroundJobInfo {
   readonly id: string
   readonly command: string
+  /** Absent for ordinary shell jobs; monitors deliver their output as waking notices. */
+  readonly kind?: "job" | "monitor"
   readonly cwd: string
   /** The owning sub-agent. Top-level session jobs have no public owner. */
   readonly owner?: string
@@ -40,12 +42,15 @@ export interface BackgroundJobWaitResult {
 export interface BackgroundJobChange {
   type: "start" | "status" | "output" | "end"
   job: BackgroundJobInfo
+  /** The new chunk on output events, independent of the retained output buffer. */
+  output?: string
 }
 
 /** The process details a session supplies when it starts a background job. */
 export interface BackgroundJobStartOptions {
   /** The command as shown to the user and model. */
   command: string
+  kind?: "job" | "monitor"
   /** The already shell-encoded command; the API does not reinterpret shell syntax. */
   argv: string[]
   cwd: string
@@ -60,6 +65,8 @@ export interface BackgroundJobStartOptions {
   logDir?: string
   maxLogBytes?: number
   meta?: Record<string, unknown>
+  /** Observes this job from its first event, including synchronous startup and the terminal snapshot. */
+  onChange?(change: BackgroundJobChange): void
 }
 
 export interface BackgroundJobWaitOptions {

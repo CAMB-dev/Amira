@@ -22,6 +22,7 @@ import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
 import { jobListPresenter, jobOutputPresenter, jobStopPresenter } from "./jobs-ui.ts"
+import { monitorPresenter } from "./monitor.ts"
 import type { OutputReadParams } from "./output-read.ts"
 import type { ReadParams } from "./read.ts"
 import {
@@ -332,5 +333,6 @@ export const builtinPresenters: Record<string, ToolPresenter<any, any>> = {
   job_output: jobOutputPresenter,
   job_stop: jobStopPresenter,
   job_list: jobListPresenter,
+  monitor: monitorPresenter,
   tool_search: toolSearchPresenter,
 }

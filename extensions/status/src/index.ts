@@ -1,5 +1,12 @@
 import path from "node:path"
-import { defineExtension, formatTokens, hasUnpricedSearch, type StatusTone } from "@amira/api"
+import {
+  defineExtension,
+  formatTokens,
+  hasUnpricedSearch,
+  hostBackgroundJobs,
+  plural,
+  type StatusTone,
+} from "@amira/api"
 
 export { formatTokens }
 
@@ -45,9 +52,10 @@ export function placeLabel(ws: {
  * The default status (drawn in the input box's border): the model, the context use against
  * its window, the cost of the whole agent tree, and the git branch. They keep to the front
  * (negative orders) and to the bar when it narrows (priorities 10 to 40, the model last to
- * go), so other extensions' items follow them and give way first. The activity and running
- * sub-agents are left to the activity line and the transcript; output tokens and the cache
- * hit rate to /status. The commands extension adds a lower-priority live token-speed item.
+ * go), so other extensions' items follow them and give way first. Live background work
+ * has lower-priority counts with idle and paused agents separate; output tokens and the
+ * cache hit rate are left to /status.
+ * The commands extension adds a lower-priority live token-speed item.
  */
 export default defineExtension((api) => {
   let model = ""
@@ -59,6 +67,14 @@ export default defineExtension((api) => {
   /** The agent tree's own total, which also counts calls made outside a turn (approvals). */
   let treeCost: number | undefined
   let place = ""
+  const jobs = hostBackgroundJobs()
+  const offJobs = jobs.subscribe(({ type }) => {
+    if (type !== "output") api.requestRender()
+  })
+  api.onUnload(offJobs)
+  api.on("subagent.start", () => api.requestRender())
+  api.on("subagent.end", () => api.requestRender())
+  api.on("subagent.state", () => api.requestRender())
 
   // Sub-agents share the bus (their events carry parentSessionId). The bar describes the
   // top-level session, except the cost, which is the whole tree's (D37).
@@ -144,6 +160,34 @@ export default defineExtension((api) => {
       if (unpricedSearch) return "cost unknown"
       const total = treeCost ?? cost
       return total === undefined ? "" : `${pricingUnknown ? "~" : ""}${formatCost(total)}`
+    },
+  })
+  api.registerStatusItem({
+    id: "tasks",
+    align: "right",
+    order: -5,
+    priority: 5,
+    tone: "accent",
+    text: () => {
+      const live = jobs.running()
+      const monitors = live.filter((job) => job.kind === "monitor").length
+      const agents = api.session()?.subagents?.() ?? []
+      const running = agents.filter((agent) => agent.status === "running").length
+      const queued = agents.filter((agent) => agent.status === "queued").length
+      const idle = agents.filter((agent) => agent.status === "idle").length
+      const paused = agents.filter((agent) => agent.status === "paused").length
+      const counts = [
+        live.length > monitors ? plural(live.length - monitors, "job") : "",
+        running ? plural(running, "agent") : "",
+        queued ? plural(queued, "queued agent") : "",
+        idle ? plural(idle, "idle agent") : "",
+        paused ? plural(paused, "paused agent") : "",
+        monitors ? plural(monitors, "monitor") : "",
+      ]
+        .filter(Boolean)
+        .join(" | ")
+      const active = live.length + running > 0
+      return counts ? `${active ? "* " : ""}${counts}` : ""
     },
   })
   api.registerStatusItem({

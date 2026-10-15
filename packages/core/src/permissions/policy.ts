@@ -2,6 +2,7 @@ import type { CommandRule, PermissionDecision, PermissionMode, ShellKind, ToolDe
 import { DEFAULT_PERMISSION_MODE, DEFAULT_PERMISSION_RULES } from "@amira/api"
 import type { Approver } from "../agent.ts"
 import { type ExtensionDataOwner, extensionDataContainment } from "../extension-data.ts"
+import { classifyShell } from "../shell-tool.ts"
 import { toolTraits } from "../tool-traits.ts"
 import { type ProtectOptions, protectedWritePath, writtenPaths } from "./protected.ts"
 import { commandName, isWrapper, type ParsedLine, parseBash, parsePowerShell } from "./shell-parse.ts"
@@ -300,7 +301,7 @@ export class Permissions {
     // nothing to check, which counts as a command the rules cannot read.
     const command = typeof args.command === "string" ? args.command : undefined
     if (command === undefined) return this.#shell({ commands: [], complex: "no command text" }, mode, "bash")
-    const kinds = await shellKinds(tool)
+    const kinds = (await classifyShell(tool))?.kinds ?? ["bash", "powershell"]
     return strictest(
       kinds.map((k) => this.#shell(k === "bash" ? parseBash(command) : parsePowerShell(command), mode, k)),
     )
@@ -403,21 +404,4 @@ export class Permissions {
 function ruleReason(rule: PermissionRule): string {
   const why = rule.reason ? `: ${rule.reason}` : ""
   return `${ruleLabel(rule)}${why}`
-}
-
-/**
- * The shells a call may run in: the tool's dynamic answer; without one, the declared shell,
- * except that the built-in bash name (which may fall back to PowerShell on Windows) and an
- * undeclared shell get every reading.
- */
-async function shellKinds(tool: Pick<ToolDefinition, "name" | "traits" | "shellKind">): Promise<ShellKind[]> {
-  if (tool.shellKind) {
-    try {
-      const kind = await tool.shellKind()
-      if (kind === "bash" || kind === "powershell") return [kind]
-    } catch {}
-  }
-  const declared = toolTraits(tool)?.shell
-  if (declared === "powershell" || (declared === "bash" && tool.name !== "bash")) return [declared]
-  return ["bash", "powershell"]
 }

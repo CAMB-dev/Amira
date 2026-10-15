@@ -55,6 +55,16 @@ const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> 
   "packages/api": ["@amira/ai"],
 }
 
+// This is a workspace implementation boundary, not an extension-facing API. The API
+// renderer and agent extension share transcript helpers; other extensions use the
+// public subagentTranscriptText renderer instead of importing helpers from agent.
+const internalApiSubpathConsumers = new Map<string, ReadonlySet<string>>([
+  [
+    "@amira/api/internal/subagent-transcript",
+    new Set(["extensions/agent/src/agents-command.ts", "extensions/agent/src/subagent-view.ts"]),
+  ],
+])
+
 const sourceLineAllowlist = new Map<string, number>()
 
 const hostBackgroundJobsPattern = /\bhostBackgroundJobs\b/
@@ -63,6 +73,8 @@ const hostBackgroundJobsAllowlist = new Set([
   "packages/api/src/process.ts",
   "packages/core/src/extensions.ts",
   "extensions/builtin-tools/src/jobs-ui.ts",
+  // The status extension displays host-wide live task counts, not its own process jobs.
+  "extensions/status/src/index.ts",
 ])
 
 function gitOutput(args: string[]): string | undefined {
@@ -248,8 +260,14 @@ for (const directory of packageDirectoriesInWorkspace) {
 
   for (const file of filesUnder(path.join(directory, "src"))) {
     for (const { specifier, typeOnly } of importSpecifiersIn(readFileSync(file, "utf8"))) {
+      if (
+        specifier.startsWith("@amira/api/internal/") &&
+        !internalApiSubpathConsumers.get(specifier)?.has(relative(file))
+      ) {
+        violations.push(`${relative(file)} imports ${specifier}; this internal API subpath is restricted`)
+      }
       if (specifier.startsWith("@amira/")) {
-        // Public subpaths belong to the same declared workspace dependency.
+        // Approved subpaths belong to the same declared workspace dependency.
         const dependency = specifier.split("/").slice(0, 2).join("/")
         actual.add(dependency)
         if (!typeOnly) runtime.add(dependency)
@@ -257,6 +275,11 @@ for (const directory of packageDirectoriesInWorkspace) {
 
       const target = targetPackage(file, specifier)
       if (!target || target === own) continue
+      if (own.startsWith("extensions/") && target.startsWith("extensions/")) {
+        violations.push(
+          `${relative(file)} imports ${specifier}; extensions must not import other extensions' source`,
+        )
+      }
       const targetName = packageNamesByDirectory.get(target)
       if (!targetName) continue
       // The composition root intentionally bundles extensions by source path; this is the one

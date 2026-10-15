@@ -16,6 +16,7 @@ export interface JobInfo {
   readonly id: string
   /** What it runs, as shown to people and the model. */
   readonly command: string
+  readonly kind?: "job" | "monitor"
   readonly cwd: string
   /**
    * The session that owns it when that is a sub-agent: the job is stopped when the sub-agent
@@ -45,8 +46,11 @@ export interface JobInfo {
 
 export interface StartJobOptions extends JobSpec {
   command: string
+  kind?: "job" | "monitor"
   owner?: string
   meta?: Record<string, unknown>
+  /** Observes this job from start(), before even synchronous process output can arrive. */
+  onChange?(change: JobChange): void
   /** Without a logPath: write the log to a file of its own in this directory. */
   logDir?: string
 }
@@ -82,6 +86,8 @@ export interface WaitResult {
 export interface JobChange {
   type: "start" | "status" | "output" | "end"
   job: JobInfo
+  /** The exact new output chunk, not the bounded retained buffer. */
+  output?: string
 }
 
 /** Too many jobs run already (JobRegistryOptions.maxRunning). */
@@ -131,6 +137,7 @@ interface Job {
   ended: Promise<void>
   end: () => void
   partialTimer?: ReturnType<typeof setTimeout>
+  onChange?: (change: JobChange) => void
 }
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
@@ -179,7 +186,7 @@ export class JobRegistry {
         `${live} background jobs are running, the most allowed (backgroundJobs.maxRunning); stop one first`,
       )
     }
-    const { command, owner, meta, logDir, ...spec } = opts
+    const { command, kind, owner, meta, logDir, onChange, ...spec } = opts
     const id = `job${this.#next++}`
     // Named after the job and the moment, so a later run of Amira in the same session (which
     // counts jobs from 1 again) never writes over an earlier log.
@@ -192,6 +199,7 @@ export class JobRegistry {
       info: {
         id,
         command,
+        ...(kind ? { kind } : {}),
         cwd: spec.cwd,
         ...(owner ? { owner } : {}),
         meta: { ...meta },
@@ -211,6 +219,7 @@ export class JobRegistry {
       waiters: new Set(),
       ended,
       end,
+      ...(onChange ? { onChange } : {}),
     }
     this.#jobs.set(id, job)
     this.#emit("start", job)
@@ -369,9 +378,15 @@ export class JobRegistry {
     return { ...job.info, meta: { ...job.info.meta } }
   }
 
-  #emit(type: JobChange["type"], job: Job) {
-    if (!this.#listeners.size) return
-    const change = { type, job: this.#copy(job) }
+  #emit(type: JobChange["type"], job: Job, output?: string) {
+    if (!this.#listeners.size && !job.onChange) return
+    const change = { type, job: this.#copy(job), ...(output !== undefined ? { output } : {}) }
+    try {
+      job.onChange?.(change)
+    } catch {
+      // A job-local observer has the same isolation as a registry subscriber.
+    }
+    if (type === "end") delete job.onChange
     for (const l of [...this.#listeners]) {
       try {
         l(change)
@@ -392,12 +407,12 @@ export class JobRegistry {
     } else if (e.type === "output") {
       job.buffer += e.data
       info.outputChars += e.data.length
-      // Waits look at the new output before the buffer drops anything: a ready line followed by
-      // a flood of output in the same chunk is still seen.
+      // Waits scan before trimming; stream observers receive the raw chunk separately so
+      // framing never depends on how much output the registry retains for later reads.
       this.#scanAll(job, false)
       this.#trim(job)
       this.#schedulePartial(job)
-      this.#emit("output", job)
+      this.#emit("output", job, e.data)
     } else {
       info.exitCode = e.code
       info.signal = e.signal
@@ -475,8 +490,8 @@ export class JobRegistry {
   }
 
   /**
-   * Forgets the jobs that ended longest ago beyond keepEnded; a job that just ended stays, so
-   * a call waiting on it still finds it.
+   * Forgets jobs that ended longest ago beyond keepEnded. Stream observers already have the
+   * terminal snapshot; asynchronous consumers must not rely on a later get() retaining it.
    */
   #prune() {
     const ended = [...this.#jobs.values()]

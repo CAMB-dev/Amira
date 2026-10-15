@@ -1,5 +1,4 @@
 import { type BashDetails, defineTool, type HostRunResult, hostRunCommand, textResult } from "@amira/api"
-import { statOrNull } from "./files.ts"
 import { startBackground } from "./jobs.ts"
 import {
   findPowerShell,
@@ -9,6 +8,7 @@ import {
   resolvePowerShell,
 } from "./powershell.ts"
 import { resolveShell, type Shell } from "./shell.ts"
+import { resolveExecutionShell, validateShellCommand } from "./shell-execution.ts"
 import {
   NOT_CONTAINED_WARNING,
   OUTPUT_OPEN_NOTE,
@@ -79,14 +79,15 @@ function shellTool(
     // back to PowerShell on Windows.
     shellKind: async () => (await resolve()).kind,
     async execute({ command, timeout, background }, ctx) {
-      if (typeof command !== "string" || command.trim() === "") return textResult("command is required", true)
-      if (command.includes("\0")) return textResult("command must not contain NUL characters", true)
-      if (ctx.signal.aborted) return textResult("Aborted before the command started", true)
-      if (!(await statOrNull(ctx.cwd))?.isDirectory()) {
-        return textResult(`Working directory does not exist: ${ctx.cwd}`, true)
-      }
+      const invalid = await validateShellCommand(command, ctx)
+      if (invalid) return invalid
       const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.floor(timeout ?? DEFAULT_TIMEOUT_MS)))
-      const shell = await resolve()
+      let shell: Shell
+      try {
+        shell = await resolveExecutionShell(resolve, ctx)
+      } catch (error) {
+        return textResult((error as Error).message, true)
+      }
       if (background === true) return startBackground(name, shell, command, ctx)
 
       const started = performance.now()

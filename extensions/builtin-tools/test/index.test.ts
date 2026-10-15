@@ -3,6 +3,39 @@ import "../../../packages/core/src/index.ts"
 import { type ExtensionAPI, hostBackgroundJobs, type ToolDefinition } from "@amira/api"
 import extension from "../src/index.ts"
 
+test("the built-in tools public exports include monitor", async () => {
+  expect(Object.keys(await import("../src/index.ts")).sort()).toMatchInlineSnapshot(`
+    [
+      "applyPatchTool",
+      "askUserPresenter",
+      "askUserTool",
+      "bashTool",
+      "builtinPresenters",
+      "builtinTools",
+      "configureJobs",
+      "default",
+      "editTool",
+      "globTool",
+      "grepTool",
+      "jobListTool",
+      "jobOutputTool",
+      "jobStopTool",
+      "jobView",
+      "jobsCommand",
+      "jobsConfig",
+      "jobsPanel",
+      "monitorTool",
+      "outputReadTool",
+      "powershellTool",
+      "readTool",
+      "registerJobs",
+      "toolSearchExtension",
+      "toolSearchTool",
+      "writeTool",
+    ]
+  `)
+})
+
 test("registers the built-in tools (plus powershell on Windows) with the expected concurrency", async () => {
   const tools: ToolDefinition[] = []
   const renderers: string[] = []
@@ -81,6 +114,7 @@ test("registers the built-in tools (plus powershell on Windows) with the expecte
     job_output: "parallel",
     job_stop: "parallel",
     job_list: "parallel",
+    monitor: "parallel",
   })
   for (const t of tools) {
     expect(t.description.length).toBeGreaterThan(50)

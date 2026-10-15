@@ -230,6 +230,7 @@ export class SessionBackgroundJobHost implements BackgroundJobHost {
     const meta = shell ? { ...options.meta, shellKind: shell } : options.meta
     const raw: StartJobOptions = {
       command: options.command,
+      ...(options.kind ? { kind: options.kind } : {}),
       argv: options.argv,
       cwd: options.cwd,
       ...(options.env ? { env: options.env } : {}),
@@ -240,6 +241,7 @@ export class SessionBackgroundJobHost implements BackgroundJobHost {
       ...(options.maxLogBytes !== undefined ? { maxLogBytes: options.maxLogBytes } : {}),
       ...(scope && scope.depth > 0 ? { owner: scope.sessionId } : {}),
       ...(meta ? { meta } : {}),
+      ...(options.onChange ? { onChange: options.onChange } : {}),
     }
     this.#pendingRoots.push(scope?.rootSessionId)
     try {

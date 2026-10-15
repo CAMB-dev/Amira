@@ -12,6 +12,7 @@ const NAME_FLOOR: Readonly<Record<string, ToolTraits>> = {
   apply_patch: { writesFiles: "paths", editor: "apply_patch" },
   bash: { shell: "bash" },
   powershell: { shell: "powershell" },
+  monitor: { shell: "bash" },
   ask_user: { interactive: true },
 }
 
@@ -25,6 +26,8 @@ export function toolTraits(tool: Pick<ToolDefinition, "name" | "traits">): ToolT
   if (!floor) return tool.traits
   const declared = tool.traits ?? {}
   const out: ToolTraits = { ...declared, ...floor }
+  // Monitor follows the session shell; its name promises shell execution, not one dialect.
+  if (tool.name === "monitor" && declared.shell) out.shell = declared.shell
   // A complete report is the stronger promise only when the tool itself makes it.
   if (floor.writesFiles && (declared.writesFiles === true || declared.writesFiles === "paths")) {
     out.writesFiles = declared.writesFiles

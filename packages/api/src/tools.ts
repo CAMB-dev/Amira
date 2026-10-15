@@ -29,6 +29,8 @@ export interface ToolContext {
   /** Shared mutation boundary for built-in file tools; absent outside an agent. */
   mutateFiles?: MutateFiles
   cwd: string
+  /** Exact runtime shell authorized before interceptors; shell tools must refuse a different dialect. */
+  shellKind?: ShellKind
   toolCallId: string
   signal: AbortSignal
   /** Aborted when a user steering message arrives; waiting tools may return partial output. */
@@ -37,6 +39,8 @@ export interface ToolContext {
   update(partial: ToolResult): void
   /** The calling session's tool state; absent when a tool runs outside an agent (e.g. in tests). */
   session?: ToolSession
+  /** Announces an asynchronous tool notice, including in one-turn sub-agents. */
+  expectNotice?(): PendingNotice
 }
 
 export interface DeferredToolInfo {
@@ -146,7 +150,7 @@ export type ShellKind = "bash" | "powershell"
 /**
  * Static capabilities a tool exposes to the host. Omitted capabilities remain unknown. They are
  * trusted for the tool's own name, but a tool registered under a built-in name (write, edit,
- * apply_patch, bash, powershell, ask_user) keeps the capabilities that name implies whatever it
+ * apply_patch, bash, powershell, monitor, ask_user) keeps the capabilities that name implies whatever it
  * declares here.
  */
 export interface ToolTraits {
@@ -223,8 +227,9 @@ export interface ToolDefinition<P = any> {
   /**
    * For a tool that runs its `command` argument (a string) in a shell: which shell runs it, so
    * the core permission policy reads the command the way that shell will. A tool with this is
-   * checked as a shell tool whatever its name. The static `traits.shell` is used when this
-   * runtime answer is unavailable.
+   * checked as a shell tool whatever its name. The host captures this once per call and passes
+   * it to execute as `ctx.shellKind`. When unavailable, static `traits.shell` is used, except
+   * bash and monitor conservatively check both shell dialects.
    */
   shellKind?(): ShellKind | Promise<ShellKind>
   execute(params: P, ctx: ToolContext): Promise<ToolResult>

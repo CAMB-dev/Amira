@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { SessionHeader } from "../src/index.ts"
+import { type SessionHeader, ToolRegistry } from "../src/index.ts"
 
 test("policy-bearing session header types remain exported with an explicit format discriminator", () => {
   const header: SessionHeader = {
@@ -20,6 +20,28 @@ test("policy-bearing session header types remain exported with an explicit forma
       "type": "session-policy",
       "v": 2,
       "writeRoots": [],
+    }
+  `)
+})
+
+test("tool enablement can check captured capabilities without changing the registration identity", () => {
+  const tools = new ToolRegistry()
+  const tool = {
+    name: "monitor",
+    description: "",
+    parameters: {},
+    traits: { shell: "powershell" as const },
+    execute: async () => ({ content: [] }),
+  }
+  tools.register(tool, "test")
+  tools.setPolicy({ shell: "powershell" })
+  expect({
+    live: tools.isEnabled(tool),
+    captured: tools.isEnabled(tool, { traits: { shell: "bash" } }),
+  }).toMatchInlineSnapshot(`
+    {
+      "captured": false,
+      "live": true,
     }
   `)
 })

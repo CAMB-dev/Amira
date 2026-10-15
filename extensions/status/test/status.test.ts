@@ -325,7 +325,7 @@ test("resets the counters on clear", async () => {
   expect(item(host, "context")).toBeUndefined()
 })
 
-test("the activity, sub-agents, output tokens, cache and speed are not in the status", async () => {
+test("the activity, output tokens, cache and speed are not in the status", async () => {
   const { bus, host, agent } = setup()
   await host.load(statusExtension, "builtin:status")
   bus.emit("status.changed", { status: "working", reason: "retrying (2/3)" }, { sessionId: "s" })

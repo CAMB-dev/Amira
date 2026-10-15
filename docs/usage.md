@@ -210,6 +210,40 @@ The defaults can be changed under `context` in settings:
 
 `saveAbove` is at least 4000 and `previewChars` at least 500 (it is never larger than `saveAbove`); `start` and `target` are shares of the context window between 0 and 1. Set `dedupeReads` or `aging.enabled` to `false` to turn those off.
 
+## Background tasks and monitors
+
+Use `monitor` when the model needs to watch a command's output and react to matching lines without polling. Unlike a normal background shell job, a monitor can wake the model with new output.
+
+| `monitor` parameter | Meaning |
+| --- | --- |
+| `command` | Shell command to run and watch |
+| `filter` | Regular expression matched against each output line, case-insensitively; an invalid regular expression is treated as literal text, also case-insensitively |
+| `timeout_ms` | Lifetime in milliseconds: defaults to 1,800,000 (30 minutes), with a maximum of 7,200,000 (2 hours) |
+| `description` | Optional short description of what the monitor watches |
+
+The tool returns a job ID immediately; the job has `kind: "monitor"`. Matching is per line, not across lines. Matching lines are delivered as automatic notices that wake the model, batched over roughly one second and sent at most once every two seconds. Each notice is capped at about 4 KB; `+N more lines` reports lines omitted from the batch.
+
+Line framing is independent of the retained job-output buffer, including during startup. A line longer than 65,536 characters is omitted in full before filtering, with an explicit warning; a truncated prefix or suffix is never treated as a complete line.
+
+After 200 notification events, a throttle notice says **notifications paused**. The command keeps running, but further matching output no longer wakes the model. Stop it and start a new monitor with a narrower filter if you need more notifications. Command exit or timeout still produces a final notice; a timeout also stops the command. The model can stop a monitor with `job_stop` using its job ID, just like a shell job, and inspect it with `job_list` and `job_output`.
+
+Natural monitor exits and timeouts finishing close together are combined per owner over roughly 100 ms, so a burst starts one follow-up turn. Outstanding notice reservations remain held until delivery, including in print mode and across handovers. Watched or requested-stop final notices do not wake an idle model.
+
+Monitors follow the same ownership and cleanup rules as other background jobs: the main session can see jobs in its tree, while a sub-agent sees only its own. A sub-agent's monitors stop when that sub-agent ends; top-level monitors survive `/clear`, `/resume` and `/fork` and follow the replacement session. Amira stops all remaining monitors on exit. Notices belong to the owning conversation, not an unrelated session.
+
+### Listing, viewing and stopping tasks
+
+`/tasks` is the unified entry point for sub-agents, background shell jobs and monitors. Use the IDs shown in its list:
+
+| Command | Purpose |
+| --- | --- |
+| `/tasks` or `/tasks list` | List all task kinds |
+| `/tasks view <id>` | Open a task's live transcript or output |
+| `/tasks stop <id>` | Stop the specified task |
+| `/tasks stop all` | Stop all live tasks, including queued, idle and paused sub-agents |
+
+The existing `/jobs` and `/agents` commands remain available for their respective jobs and sub-agents. The task panel includes all three kinds, rather than only shell jobs. It shows each sub-agent's state and separates running, queued, idle and paused counts; idle and paused sub-agents remain available to view or stop by ID. When a live view is unavailable, `/tasks view <id>` prints the sub-agent's transcript, including tool calls and result previews. Status counts distinguish agents, shell jobs and monitors, label queued, idle and paused agents separately, use an ASCII running indicator only when work is running, and hide zero counts.
+
 ## Print mode
 
 ```sh
@@ -228,6 +262,8 @@ JSON print output omits empty `ui.render` events and includes a tool-call name o
 A quoted slash command such as `amira -p "/status"` runs the command instead of sending a model prompt. Skills can also run this way when available. Commands requiring a picker cannot obtain interactive answers; supply explicit arguments where supported.
 
 Print mode waits for top-level background shell jobs started during the run, up to `backgroundJobs.printWaitMs` (30 seconds by default), and delivers their end notices to the model for a follow-up turn. It also waits for background sub-agents and the follow-up turns their results start. If the job wait expires, Amira prints a note and stops those jobs on exit. Configured budgets still apply. Failed result-delivery turns can be retried up to three times after 10, 30 and 90 seconds. Ctrl+C aborts and stops waiting; a second Ctrl+C forces exit. The exit codes are 0 for completion, 1 for errors and 130 for an aborted turn.
+
+In `-p` mode, an active monitor holds an `expectNotice` reservation: the run stays alive to receive matching-line notices and their follow-up turns until the monitor is stopped, exits or times out. It is not cut short by the ordinary shell-job `backgroundJobs.printWaitMs` wait. Stop a monitor when it is no longer needed; the configured budgets and Ctrl+C behavior still apply.
 
 ## RPC automation
 
