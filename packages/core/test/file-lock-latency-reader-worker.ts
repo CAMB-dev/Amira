@@ -58,13 +58,9 @@ spyOn(fs, "renameSync").mockImplementation((...args) => {
   }
   return rename(...args)
 })
-const { reader, ready, go } = startGateReader(metadata, dir)
+const { reader, go, stderr, waitUntilReady } = startGateReader(metadata, dir)
 try {
-  const deadline = Date.now() + 3000
-  while (!fs.existsSync(ready)) {
-    if (reader.exitCode !== null || Date.now() > deadline) throw new Error("reader readiness failed")
-    await Bun.sleep(2)
-  }
+  await waitUntilReady()
   inlineTiming.measure("release", () => lease.release())
   expect(fs.readFileSync(file, "utf8")).toContain(String(process.pid))
   const before = performance.now()
@@ -88,7 +84,7 @@ try {
   expect(warnings).toEqual([])
   await boundedExit(reader, "reader")
   expect(reader.exitCode).toBe(0)
-  expect(await new Response(reader.stderr).text()).toBe("")
+  expect(await stderr).toBe("")
   await Bun.sleep(300)
   await Promise.all(callbacks)
   await timing.waitForSamples()

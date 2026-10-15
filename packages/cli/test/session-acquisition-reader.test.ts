@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { boundedExit } from "../../core/test/file-lock-reader-fixture.ts"
+import { boundedExit, READER_READY_TIMEOUT_MS } from "../../core/test/file-lock-reader-fixture.ts"
 
 for (const boundary of process.platform === "win32" ? ["resume", "startup"] : []) {
   test(`Windows reader: awaited CLI ${boundary} survives disposal without blocking timers`, async () => {
@@ -28,7 +28,7 @@ for (const boundary of process.platform === "win32" ? ["resume", "startup"] : []
     const stdout = new Response(worker.stdout).text()
     const stderr = new Response(worker.stderr).text()
     try {
-      expect(await boundedExit(worker, "acquisition worker", 5000)).toBe(0)
+      expect(await boundedExit(worker, "acquisition worker", READER_READY_TIMEOUT_MS + 5000)).toBe(0)
       console.log((await stdout).trim())
       expect(await stderr).toBe("")
     } catch (error) {
@@ -43,5 +43,6 @@ for (const boundary of process.platform === "win32" ? ["resume", "startup"] : []
       await boundedExit(worker, "owned worker stop")
       fs.rmSync(dir, { recursive: true, force: true })
     }
-  }, 7000)
+    // 15s reader startup plus the original 7s operation/cleanup watchdog.
+  }, 22000)
 }

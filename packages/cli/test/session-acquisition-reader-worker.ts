@@ -25,7 +25,7 @@ expect(unlock).toBeDefined()
 const metadata = path.join(gate, "owner.json")
 const contents = fs.readFileSync(metadata, "utf8")
 expect(JSON.parse(contents).pid).toBe(process.pid)
-const { reader, ready, go } = startGateReader(metadata, dir)
+const { reader, go, stderr, waitUntilReady } = startGateReader(metadata, dir)
 const waits = spyOn(Atomics, "wait")
 let resumed: Agent | undefined
 let pending: Agent | Promise<Agent> | undefined
@@ -46,11 +46,7 @@ const acquisition = spyOn(SessionStore.prototype, "withClaim").mockImplementatio
 })
 try {
   // PowerShell startup is OUTSIDE the measured warm acquisition interval.
-  const deadline = performance.now() + 3000
-  while (!fs.existsSync(ready)) {
-    if (reader.exitCode !== null || performance.now() > deadline) throw new Error("reader readiness failed")
-    await Bun.sleep(2)
-  }
+  await waitUntilReady()
   await session.agent.dispose()
   expect(fs.readFileSync(file, "utf8").split("\n")[0]).toBe(String(process.pid))
   fs.writeFileSync(go, "go")
@@ -70,7 +66,7 @@ try {
   expect(elapsed).toBeLessThan(2000)
   console.log(`Windows ${boundary}: acquisition ${elapsed.toFixed(2)}ms, zero-delay ${zero.toFixed(2)}ms`)
   expect(await boundedExit(reader, "reader")).toBe(0)
-  expect(await new Response(reader.stderr).text()).toBe("")
+  expect(await stderr).toBe("")
   expect(resumed.messages).toEqual([userMessage("saved"), userMessage("current disk history")])
   expect(mock.requests).toHaveLength(0)
   expect(waits).not.toHaveBeenCalled()
