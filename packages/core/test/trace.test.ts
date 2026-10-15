@@ -466,13 +466,23 @@ test("never writes ephemeral or still-lazy sessions, then flushes when the store
 })
 
 test("flushes by the one-second timer without a session end or explicit recorder drain", async () => {
-  const { start, emit, bus, file } = setup()
-  start()
-  emit("status.changed", 2, { status: "working" })
-  await bus.flush()
-  // The extra scheduling margin is for CI filesystem latency, not a longer recorder interval.
-  await Bun.sleep(1250)
-  expect(readFileSync(`${file}.trace.jsonl`, "utf8").trim().split("\n")).toHaveLength(2)
+  const { start, emit, bus, file, recorder } = setup()
+  const flushed = Promise.withResolvers<void>()
+  const original = recorder.flush.bind(recorder)
+  const flush = spyOn(recorder, "flush").mockImplementation(async () => {
+    await original()
+    flushed.resolve()
+  })
+  try {
+    start()
+    emit("status.changed", 2, { status: "working" })
+    await bus.flush()
+    // Observe the timer's real write completing, not an assumed filesystem latency.
+    await flushed.promise
+    expect(readFileSync(`${file}.trace.jsonl`, "utf8").trim().split("\n")).toHaveLength(2)
+  } finally {
+    flush.mockRestore()
+  }
 }, 5000)
 
 test("writer errors are isolated and reported only once per session", async () => {
