@@ -396,11 +396,21 @@ test("an unclosed inline dollar does not swallow the following lines", () => {
 
 test("long lines with many unmatched delimiters are scanned in linear time", () => {
   const { nodes } = renderer()
+  // Compare scaling rather than wall-clock time, which slow CI runners exceed: quadrupling the
+  // input costs about 4x when linear and about 16x when quadratic. Best of three damps noise.
+  const time = (text: string) => {
+    let best = Number.POSITIVE_INFINITY
+    for (let i = 0; i < 3; i++) {
+      const start = performance.now()
+      mathSources(text)
+      renderMarkdown(text, 80, defaultTheme, { nodes })
+      best = Math.min(best, performance.now() - start)
+    }
+    return best
+  }
   for (const unit of ["$a ", "(a ", "$a\\", "\\"]) {
-    const text = unit.repeat(40000)
-    const start = performance.now()
-    mathSources(text)
-    renderMarkdown(text, 80, defaultTheme, { nodes })
-    expect(performance.now() - start).toBeLessThan(2000)
+    const small = time(unit.repeat(10000))
+    const large = time(unit.repeat(40000))
+    expect(large).toBeLessThan(Math.max(small * 8, 50))
   }
 })
