@@ -312,6 +312,14 @@ export interface SessionInfo {
   thinkingLevel?: ReasoningEffort
   /** The reasoning effort sent to the current model; absent when unset or the model does not think. */
   thinking?: ReasoningEffort
+  /** Requested preference, availability on this model/provider, and the last response's reported speed. */
+  fastMode?: {
+    requested: boolean
+    applied: boolean
+    used?: string
+    pricingUnknown?: boolean
+    unavailableReason?: string
+  }
   contextWindow: number
   /** Where `contextWindow` came from; "default" means it is a guess. Unset without a model. */
   contextWindowSource?: ContextWindowSource
@@ -473,6 +481,8 @@ export interface SessionControl {
    * Retained on non-thinking models for a later thinking model. Throws while the session is busy.
    */
   setThinking(level: ReasoningEffort | undefined): void
+  /** Prefer fast mode on supported models for subsequent requests, including during a turn. */
+  setFastMode(enabled: boolean): void
   /** Starts over with an empty conversation in a new session. */
   newSession(options?: { signal?: AbortSignal }): Promise<void>
   /** Stored sessions of this directory, most recent first. */

@@ -143,6 +143,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
       handover = session.host.backgroundJobs.handoverRoot(old.sessionId, rootSessionId)
       const next = other ?? construct()
       old.thinking.carryTo(next.thinking)
+      next.fastMode = old.fastMode
       old.handoverBackgroundNotices(next)
       // Commit is synchronous with acquisition and notice handover. Later selections must wait
       // for this disposal, and neither they nor the original caller can cancel this winner.

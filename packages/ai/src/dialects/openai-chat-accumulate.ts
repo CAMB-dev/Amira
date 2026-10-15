@@ -32,7 +32,14 @@ export class ChatAccumulator {
   }
 
   *apply(chunk: any): Generator<StreamEvent> {
-    if (chunk.usage) this.message.usage = mapUsage(chunk.usage)
+    if (typeof chunk.service_tier === "string") {
+      this.message.usage ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, outputReported: false }
+      this.message.usage.serviceTier = chunk.service_tier
+    }
+    if (chunk.usage) {
+      this.message.usage = { ...this.message.usage, ...mapUsage(chunk.usage) }
+      delete this.message.usage.outputReported
+    }
     const choice = chunk.choices?.[0]
     if (!choice) return
     const delta = choice.delta ?? {}

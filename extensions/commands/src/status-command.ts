@@ -62,7 +62,8 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
       const compaction = compacted.length ? compacted.reduce((n, c) => n + (c.usage.cost ?? 0), 0) : undefined
       const priced = rows.filter((r) => r.cost !== undefined)
       const replies = priced.length ? priced.reduce((n, r) => n + (r.cost ?? 0), 0) : undefined
-      const side = (ctx.session.sideRequests?.() ?? []).reduce((n, c) => n + (c.usage.cost ?? 0), 0)
+      const sideRequests = ctx.session.sideRequests?.() ?? []
+      const side = sideRequests.reduce((n, c) => n + (c.usage.cost ?? 0), 0)
       const own =
         replies !== undefined || compaction !== undefined || side
           ? (replies ?? 0) + (compaction ?? 0) + side
@@ -72,16 +73,28 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
       const withSubs = subs.length
         ? (own ?? 0) + subs.reduce((n, s) => n + (s.usage.cost ?? 0), 0)
         : undefined
-      const ofWhich = compaction !== undefined ? `; of which compaction ${formatCost(compaction)}` : ""
+      const ownPricingUnknown =
+        rows.some((r) => r.usage.pricingUnknown) ||
+        [...compactions, ...sideRequests].some((c) => c.usage.pricingUnknown)
+      const treePricingUnknown = ownPricingUnknown || subagents.some((s) => s.usage.pricingUnknown)
+      const costLabel = (amount: number, pricingUnknown: boolean) =>
+        `${formatCost(amount)}${pricingUnknown ? " (standard-rate estimate)" : ""}`
+      const ofWhich =
+        compaction !== undefined
+          ? `; of which compaction ${costLabel(
+              compaction,
+              compactions.some((c) => !!c.usage.pricingUnknown),
+            )}`
+          : ""
       const unpricedSearch =
         messages.some(hasUnpricedSearch) ||
         [...compactions, ...subagents].some((c) => hasUnpricedSearch({ content: [], usage: c.usage }))
       const cost = unpricedSearch
         ? "unknown (search cost unavailable)"
         : withSubs !== undefined
-          ? `${formatCost(withSubs)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${formatCost(own)}` : ""}${ofWhich}`
+          ? `${costLabel(withSubs, treePricingUnknown)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${costLabel(own, ownPricingUnknown)}` : ""}${ofWhich}`
           : own !== undefined
-            ? `${formatCost(own)} (this session; no sub-agents)${ofWhich}`
+            ? `${costLabel(own, ownPricingUnknown)} (this session; no sub-agents)${ofWhich}`
             : "unknown"
       const usage = rows.reduce(
         (t, r) => ({

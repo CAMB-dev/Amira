@@ -50,6 +50,7 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
     keys: [
       "model",
       "thinking",
+      "fastMode",
       "shell",
       "tools",
       "maxParallelTools",
@@ -164,6 +165,12 @@ export const annotations: Record<string, Annotation> = {
     en: 'Reasoning effort for main conversation requests on models with `caps.thinking`. Unset or `"default"` leaves effort to the server; it does not turn thinking off. `"default"` overrides earlier top-level layers. A model\'s `thinking` still overrides this; `--thinking` overrides both for one run. Interactive `/thinking` changes save the model and thinking choice; `/thinking default` saves `"default"`. Sub-agents inherit the parent\'s selected effort; titles and compaction do not.',
     zh: '对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置或设为 `"default"` 时沿用服务端默认强度，不会关闭思考。`"default"` 覆盖之前各层的顶层设置。模型的 `thinking` 仍优先于此项，`--thinking` 在单次运行中优先于两者。交互式 `/thinking` 的更改会保存模型和思考设置；`/thinking default` 保存 `"default"`。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。',
     ja: '`caps.thinking` を持つモデルで、メインの会話リクエストに使う推論の強度です。未設定または `"default"` では強度をサーバーに任せます。思考を無効にするものではありません。`"default"` は、それより前のトップレベルの設定レイヤーを上書きします。モデルごとの `thinking` は引き続きこの設定より優先され、`--thinking` は 1 回の実行に限って両方を上書きします。対話中の `/thinking` による変更はモデルと思考設定を保存し、`/thinking default` は `"default"` を保存します。サブエージェントは親が選択した強度を引き継ぎますが、タイトル生成と圧縮には引き継がれません。',
+  },
+  fastMode: {
+    default: none,
+    en: "Request fast/priority serving on supported models and endpoints; off when unset. Interactive `/fast` changes are remembered; unsupported models retain the preference without sending it. Sub-agents inherit it. Changing speed may invalidate the prompt cache. Unknown premium prices use a clearly marked standard-rate estimate.",
+    zh: "在支持的模型和端点上请求快速/优先服务；未设置时关闭。交互式 `/fast` 更改会保存；不支持的模型保留偏好但不发送该参数。子 agent 会继承此设置。切换速度可能使提示缓存失效。溢价未知时使用明确标注的标准价格估算。",
+    ja: "対応するモデルとエンドポイントで高速/優先処理を要求します。未設定時は無効です。対話中の `/fast` による変更は保存され、非対応モデルでは送信せずに設定を保持します。サブエージェントも引き継ぎます。速度を変更するとプロンプトキャッシュが無効になる場合があります。追加料金が不明な場合は、標準料金による見積もりと明記します。",
   },
   shell: {
     default: documentedDefault("shell"),
@@ -419,6 +426,70 @@ export const annotations: Record<string, Annotation> = {
     en: "USD per hosted web search. Catalogs list no search fees, so without it a reply that searched shows its cost as unknown.",
     zh: "每次托管网页搜索的价格（美元）。模型目录不提供搜索费用，不设置时，搜索过的回复费用显示为未知。",
     ja: "ホスト型 Web 検索 1 回あたりの料金（USD）です。カタログには検索料金がないため、未設定の場合、検索した返信の料金は不明と表示されます。",
+  },
+  "providers.<id>.models[].cost.fast.input": {
+    default: { en: "catalog", zh: "取模型目录", ja: "カタログの値" },
+    en: "USD per million fast input tokens; `input` and `output` are required when `cost.fast` is set. Used only for reported fast/priority usage. Optional: without verified premium rates, costs use standard-rate estimates and warn that premium pricing is unknown.",
+    zh: "快速模式每百万输入 token 的价格（美元）；设置 `cost.fast` 时 `input` 和 `output` 必填。仅用于响应确认的快速/优先用量。此项可选：没有经核实的溢价费率时，按标准价格估算，并提示溢价未知。",
+    ja: "高速入力 100 万トークンあたりの料金（USD）。`cost.fast` を指定する場合、`input` と `output` は必須です。報告された高速/優先処理の使用量だけに適用します。省略可能で、確認済みの追加料金がなければ標準料金で見積もり、追加料金が不明であることを表示します。",
+  },
+  "providers.<id>.models[].cost.fast.output": {
+    default: { en: "catalog", zh: "取模型目录", ja: "カタログの値" },
+    en: "USD per million fast output tokens.",
+    zh: "快速模式每百万输出 token 的价格（美元）。",
+    ja: "高速出力 100 万トークンあたりの料金（USD）です。",
+  },
+  "providers.<id>.models[].cost.fast.cacheRead": {
+    default: { en: "input cache multiplier", zh: "输入缓存倍率", ja: "入力キャッシュ倍率" },
+    en: "USD per million fast cache-read tokens; otherwise the standard cache/input ratio applies to the fast input price.",
+    zh: "快速模式每百万缓存读取 token 的价格（美元）；否则将标准缓存与输入价格之比应用于快速输入价格。",
+    ja: "高速キャッシュ読み取り 100 万トークンあたりの料金（USD）。未指定時は標準のキャッシュ対入力料金比率を高速入力料金に適用します。",
+  },
+  "providers.<id>.models[].cost.fast.cacheWrite": {
+    default: { en: "input cache multiplier", zh: "输入缓存倍率", ja: "入力キャッシュ倍率" },
+    en: "USD per million fast cache-write tokens; otherwise the standard cache/input ratio applies to the fast input price.",
+    zh: "快速模式每百万缓存写入 token 的价格（美元）；否则将标准缓存与输入价格之比应用于快速输入价格。",
+    ja: "高速キャッシュ書き込み 100 万トークンあたりの料金（USD）。未指定時は標準のキャッシュ対入力料金比率を高速入力料金に適用します。",
+  },
+  "providers.<id>.models[].cost.fast.maxInputTokens": {
+    default: {
+      en: "no limit, unless the preset sets one",
+      zh: "不限，除非预设指定上限",
+      ja: "プリセットで指定しない限り無制限",
+    },
+    en: "Largest prompt token count covered by these premium rates. Beyond it, mark premium pricing as unknown and use a standard-rate estimate instead of treating short-context rates as exact.",
+    zh: "这些溢价费率适用的提示 token 数上限。超过时标记溢价未知，并按标准价格估算，不将短上下文费率视为精确费用。",
+    ja: "この追加料金が適用されるプロンプトの最大トークン数です。超えた場合は追加料金を不明とし、短いコンテキスト向けの料金を正確な金額として扱わず、標準料金で見積もります。",
+  },
+  "providers.<id>.models[].fast": {
+    default: { en: "endpoint/model preset", zh: "端点/模型预设", ja: "エンドポイント/モデルのプリセット" },
+    en: 'Fast-serving request configuration; `false` disables the preset. Use `{ "kind": "anthropic-speed" }` for Claude speed, or `{ "kind": "service-tier", "value": "priority" }` for a compatible service tier. Set only for endpoints/models that support it; see [Fast mode](#fast-mode).',
+    zh: '快速服务请求配置；`false` 禁用预设。Claude 速度参数使用 `{ "kind": "anthropic-speed" }`，兼容服务档位使用 `{ "kind": "service-tier", "value": "priority" }`。仅为支持的端点/模型设置；见[快速模式](#快速模式)。',
+    ja: '高速処理のリクエスト設定です。`false` でプリセットを無効にします。Claude の速度指定には `{ "kind": "anthropic-speed" }`、互換サービス層には `{ "kind": "service-tier", "value": "priority" }` を使います。対応するエンドポイント/モデルだけに設定してください。[高速モード](#高速モード)を参照してください。',
+  },
+  "providers.<id>.models[].fast.kind": {
+    default: none,
+    en: '`"anthropic-speed"` sends Claude `speed: "fast"`; `"service-tier"` sends the configured `service_tier` value. Required when `fast` is an object.',
+    zh: '`"anthropic-speed"` 发送 Claude 的 `speed: "fast"`；`"service-tier"` 发送配置的 `service_tier` 值。`fast` 为对象时必填。',
+    ja: '`"anthropic-speed"` は Claude の `speed: "fast"` を送信し、`"service-tier"` は設定した `service_tier` の値を送信します。`fast` がオブジェクトの場合は必須です。',
+  },
+  "providers.<id>.models[].fast.value": {
+    default: none,
+    en: 'Requested service tier, usually `"priority"`; required only for `"service-tier"`. Actual usage comes from the response, not this value.',
+    zh: '请求的服务档位，通常为 `"priority"`；仅 `"service-tier"` 必填。实际用量以响应为准，不根据此值推断。',
+    ja: '要求するサービス層で、通常は `"priority"` です。`"service-tier"` の場合のみ必須です。実際の使用量はこの値ではなく、レスポンスに基づきます。',
+  },
+  "providers.<id>.models[].fast.textOnly": {
+    default: "`false`",
+    en: "Apply the service tier only to text-only requests; omit it when images are present. Used for xAI priority.",
+    zh: "仅对纯文本请求应用该服务档位；含图片时不发送。用于 xAI 优先处理。",
+    ja: "テキストのみのリクエストにサービス層を適用し、画像が含まれる場合は送信しません。xAI の優先処理で使用します。",
+  },
+  "providers.<id>.models[].fast.responseHeader": {
+    default: none,
+    en: 'HTTP response header reporting the tier actually served, such as Google `"x-gemini-service-tier"`; otherwise read the response body.',
+    zh: '报告实际服务档位的 HTTP 响应头，例如 Google 的 `"x-gemini-service-tier"`；否则读取响应体。',
+    ja: '実際に使用されたサービス層を報告する HTTP レスポンスヘッダーです。Google では `"x-gemini-service-tier"` を指定します。未指定時はレスポンス本文を読み取ります。',
   },
   "providers.<id>.models[].caps.tools": {
     default: documentedDefault("providers.<id>.models[].caps.tools"),

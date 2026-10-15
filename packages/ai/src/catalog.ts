@@ -1,10 +1,12 @@
-import type { ModelCaps, ModelInfo } from "./types.ts"
+import { builtinFastCost, builtinFastOption } from "./fast-mode.ts"
+import type { FastOption, ModelCaps, ModelInfo } from "./types.ts"
 
 /** What the catalog knows about one model; every field is optional. */
 export interface CatalogModel {
   contextWindow?: number
   maxOutput?: number
   caps?: Partial<ModelCaps>
+  fast?: FastOption | false
   cost?: NonNullable<ModelInfo["cost"]>
 }
 
@@ -63,7 +65,23 @@ export function createCatalog(data: unknown): ModelCatalog {
       const models = providers[provider]?.models
       if (!isObject(models)) return undefined
       const key = `${provider}\n${modelId}`
-      if (!mapped.has(key)) mapped.set(key, toCatalogModel(lookup(models, modelId)))
+      if (!mapped.has(key)) {
+        const raw = lookup(models, modelId)
+        let model = toCatalogModel(raw)
+        if (isObject(raw)) {
+          const preset = builtinFastOption(provider, modelId)
+          const taggedPriority =
+            provider === "deepinfra" &&
+            (raw.tags?.includes("priority") || raw.service_tiers?.includes("priority"))
+          if ((preset || taggedPriority) && model?.fast === undefined) {
+            model ??= {}
+            model.fast = preset ?? { kind: "service-tier", value: "priority" }
+          }
+          const fast = builtinFastCost(provider, modelId)
+          if (fast && model?.cost && !model.cost.fast) model.cost = { ...model.cost, fast }
+        }
+        mapped.set(key, model)
+      }
       return mapped.get(key)
     },
     list(provider) {
@@ -91,6 +109,9 @@ function lookup(models: Raw, modelId: string): unknown {
 export function toCatalogModel(raw: unknown): CatalogModel | undefined {
   if (!isObject(raw)) return undefined
   const out: CatalogModel = {}
+  if (raw.fast === false) out.fast = false
+  else if (raw.fast?.kind === "anthropic-speed") out.fast = { kind: "anthropic-speed" }
+  else if (raw.fast?.kind === "service-tier" && typeof raw.fast.value === "string") out.fast = { ...raw.fast }
   if (positive(raw.limit?.context)) out.contextWindow = raw.limit.context
   if (positive(raw.limit?.output)) out.maxOutput = raw.limit.output
   const caps: Partial<ModelCaps> = {}
@@ -105,6 +126,12 @@ export function toCatalogModel(raw: unknown): CatalogModel | undefined {
     out.cost = { input: c.input, output: c.output }
     if (price(c.cache_read)) out.cost.cacheRead = c.cache_read
     if (price(c.cache_write)) out.cost.cacheWrite = c.cache_write
+    if (price(c.fast?.input) && price(c.fast?.output)) {
+      out.cost.fast = { input: c.fast.input, output: c.fast.output }
+      if (price(c.fast.cache_read)) out.cost.fast.cacheRead = c.fast.cache_read
+      if (price(c.fast.cache_write)) out.cost.fast.cacheWrite = c.fast.cache_write
+      if (positive(c.fast.maxInputTokens)) out.cost.fast.maxInputTokens = c.fast.maxInputTokens
+    }
   }
   return Object.keys(out).length ? out : undefined
 }
@@ -147,7 +174,14 @@ export function trimModelsDev(data: unknown): Record<string, TrimmedProvider> | 
         tool_call: m.tool_call,
         reasoning: m.reasoning,
         modalities: { input: m.modalities?.input },
-        ...(isObject(m.cost) ? { cost: { input, output, cache_read, cache_write } } : {}),
+        ...(isObject(m.cost)
+          ? {
+              cost: { input, output, cache_read, cache_write, ...(m.cost.fast ? { fast: m.cost.fast } : {}) },
+            }
+          : {}),
+        ...(m.fast !== undefined ? { fast: m.fast } : {}),
+        ...(m.tags !== undefined ? { tags: m.tags } : {}),
+        ...(m.service_tiers !== undefined ? { service_tiers: m.service_tiers } : {}),
       }
     }
     const metadata: Raw = {}

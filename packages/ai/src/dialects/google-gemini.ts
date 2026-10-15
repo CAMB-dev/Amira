@@ -1,4 +1,5 @@
 import type { Dialect, DialectContext } from "../dialect.ts"
+import { fastBody } from "../fast-mode.ts"
 import { hasNativeWebSearch, isGemini3 } from "../server-tools.ts"
 import { parseSSE } from "../sse.ts"
 import { adaptThinking } from "../thinking.ts"
@@ -55,6 +56,7 @@ export const googleGemini: Dialect = {
       readSSE,
       readPlain,
       errorOf: geminiError,
+      responseHeaders: (headers, acc) => acc.serviceTier(headers.get("x-gemini-service-tier")),
     })
   },
 }
@@ -63,6 +65,7 @@ export function geminiBody(req: ModelRequest): Record<string, unknown> {
   const sendTools = req.tools.length > 0 && req.model.caps.tools === "native"
   const webSearch = hasNativeWebSearch(req.model, sendTools)
   const body: Record<string, unknown> = {
+    ...fastBody(req),
     contents: toGeminiContents(adaptThinking(req.messages, GEMINI_DIALECT), {
       images: req.model.caps.images,
       // Tool context circulation is documented only for Gemini 3, even in search-only requests.
@@ -106,6 +109,7 @@ async function* readSSE(
     if (!chunk) continue
     parsed++
     if (chunk.error) {
+      yield* acc.apply({ usageMetadata: chunk.usageMetadata })
       const { error, retryable } = geminiError(chunk.error)
       yield acc.fail(error, retryable)
       return
@@ -125,6 +129,10 @@ async function* readPlain(text: string, type: string, acc: GeminiAccumulator): A
   const chunks: any[] = Array.isArray(json) ? json : json && typeof json === "object" ? [json] : []
   const failed = chunks.find((c) => c?.error)
   if (failed) {
+    for (const chunk of chunks) {
+      yield* acc.apply({ usageMetadata: chunk?.usageMetadata })
+      if (chunk === failed) break
+    }
     const { error, retryable } = geminiError(failed.error)
     yield acc.fail(error, retryable)
     return

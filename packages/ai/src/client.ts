@@ -4,6 +4,7 @@ import { usageCost, withCost } from "./cost.ts"
 import type { Dialect, DialectContext } from "./dialect.ts"
 import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { modelErrorKind } from "./errors.ts"
+import { fastOption, fastVendor, withFastFallback } from "./fast-mode.ts"
 import {
   type CompactAttempt,
   CompactionFailures,
@@ -330,13 +331,55 @@ export function createAi(opts: AiOptions = {}): Ai {
       const host = hostOf(p.baseUrl)
       const messages = forReplay(req.messages, targetOf(p, req.model, req.tools.length > 0))
       const sendable = messages === req.messages ? req : { ...req, messages }
-      const attempt = (attemptSignal: AbortSignal) =>
-        withTextTools(sendable, (r) => dialect.stream(r, { ...ctx, signal: attemptSignal }))
+      // A dialect's fast fallback is scoped to this stream, including subsequent normal retries.
+      let standard = false
+      const attempt = async function* (attemptSignal: AbortSignal): AsyncGenerator<StreamEvent> {
+        const req = standard ? { ...sendable, fastMode: false, forceStandard: true } : sendable
+        for await (const ev of withFastFallback(
+          req,
+          (request) =>
+            withTextTools(request, async function* (r) {
+              const header =
+                fastVendor(ctx.endpoint.baseUrl) === "google"
+                  ? "x-gemini-service-tier"
+                  : r.model.fast && r.model.fast.kind === "service-tier"
+                    ? r.model.fast.responseHeader
+                    : undefined
+              let tier: string | null = null
+              const fetchWithTier = (async (input, init) => {
+                const response = await ctx.fetch(input, init)
+                if (header) tier = response.headers.get(header)
+                return response
+              }) as typeof ctx.fetch
+              for await (const ev of dialect.stream(r, {
+                ...ctx,
+                fetch: fetchWithTier,
+                signal: attemptSignal,
+              })) {
+                if (header && (ev.type === "done" || ev.type === "error" || ev.type === "request.end")) {
+                  if (tier) {
+                    ev.message.usage ??= { ...emptyUsage(), outputReported: false }
+                    ev.message.usage.serviceTier = tier
+                  } else if (ev.message.usage) {
+                    // An authoritative header's absence cannot be replaced with body metadata.
+                    delete ev.message.usage.serviceTier
+                    delete ev.message.usage.speed
+                  }
+                }
+                yield ev
+              }
+            }),
+          attemptSignal,
+        )) {
+          if (ev.type === "fast.fallback") standard = true
+          yield ev
+        }
+      }
       const events = withSignatureHost(
         withRetry(attempt, sig, opts.retry, { provider: req.model.provider, model: req.model.id }),
         host,
       )
-      return withErrorFacts(withCost(events, req.model), host)
+      return withErrorFacts(withCost(events, req.model, fastOption(req) !== undefined), host)
     },
     nativeCompaction,
     compact,

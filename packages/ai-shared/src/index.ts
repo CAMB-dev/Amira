@@ -20,6 +20,7 @@ export interface UsageCounts {
   webSearchRequests?: number
   webSearchCost?: number
   cost?: number
+  pricingUnknown?: boolean
 }
 
 /** What these helpers read of a server tool block (@amira/ai's ServerToolBlock). */
@@ -45,6 +46,7 @@ export function addUsage(a: UsageCounts, b: UsageCounts): UsageCounts {
   }
   if (a.webSearchRequests !== undefined || b.webSearchRequests !== undefined)
     sum.webSearchRequests = (a.webSearchRequests ?? 0) + (b.webSearchRequests ?? 0)
+  if (a.pricingUnknown || b.pricingUnknown) sum.pricingUnknown = true
   sumUsageAccounting(a, b, sum)
   return sum
 }

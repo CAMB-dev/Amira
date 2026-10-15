@@ -49,6 +49,13 @@ export class GeminiAccumulator {
     this.#search = new GeminiWebSearch(this.message)
   }
 
+  /** Only the x-gemini-service-tier response header establishes the actual tier. */
+  serviceTier(tier: string | null) {
+    if (tier === null) return
+    this.message.usage ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, outputReported: false }
+    this.message.usage.serviceTier = tier
+  }
+
   *apply(chunk: any): Generator<StreamEvent> {
     if (chunk?.usageMetadata) {
       this.message.usage = { ...this.message.usage, ...mapUsage(chunk.usageMetadata) }

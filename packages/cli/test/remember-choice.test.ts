@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, isNoModel } from "@amira/ai"
+import { createAi, createMockDialect, isNoModel, type MockStep, type ProviderConfig } from "@amira/ai"
 import type { ExtensionAPI } from "@amira/api"
 import { Agent, loadSettings, resolveShimmer } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
@@ -47,22 +47,31 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-async function start(flags: string[] = [], directory = cwd) {
+async function start(
+  flags: string[] = [],
+  directory = cwd,
+  provider?: ProviderConfig,
+  steps: MockStep[] = [],
+) {
   const args = parseCliArgs(flags, directory, {})
   const config = resolveConfig(args, home)
+  const mock = createMockDialect(steps)
+  mock.id = provider?.dialect ?? "mock"
   const ai = createAi({
-    dialects: [createMockDialect([])],
-    providers: [
-      {
-        id: "mock",
-        dialect: "mock",
-        baseUrl: "",
-        models: [
-          { id: "first", caps: { thinking: true } },
-          { id: "second", caps: { thinking: true } },
+    dialects: [mock],
+    providers: provider
+      ? [provider]
+      : [
+          {
+            id: "mock",
+            dialect: "mock",
+            baseUrl: "",
+            models: [
+              { id: "first", caps: { thinking: true } },
+              { id: "second", caps: { thinking: true } },
+            ],
+          },
         ],
-      },
-    ],
   })
   const session = await createSession({
     ai,
@@ -81,15 +90,15 @@ async function start(flags: string[] = [], directory = cwd) {
     cwd: directory,
     home,
     interactive: !args.print && !args.rpc,
-    aliases: { fast: "model mock/second" },
+    aliases: { second: "model mock/second" },
   })
   hosts.push(commands)
-  return { session, commands, config }
+  return { session, commands, config, mock }
 }
 
 test("interactive commands save both choices on each change, and the last change wins", async () => {
   const { commands } = await start()
-  expect((await commands.run("/fast", { frontend: "tui" })).ok).toBe(true)
+  expect((await commands.run("/second", { frontend: "tui" })).ok).toBe(true)
   await commands.flushChoices()
   for (const file of [globalFile(), localFile()]) {
     expect(json(file)).toEqual({ model: "mock/second", thinking: "default" })
@@ -103,6 +112,197 @@ test("interactive commands save both choices on each change, and the last change
   for (const file of [globalFile(), localFile()]) {
     expect(json(file)).toEqual({ model: "mock/first", thinking: "max" })
   }
+})
+
+test("fast commands remember the preference even when unavailable, and reload it", async () => {
+  const { commands, session } = await start()
+  expect(commands.control.info().fastMode).toEqual({ requested: false, applied: false })
+  expect((await commands.run("/fast on", { frontend: "tui" })).ok).toBe(true)
+  expect(session.agent.fastMode).toBe(true)
+  expect(commands.control.info().fastMode).toEqual({ requested: true, applied: false })
+  await commands.flushChoices()
+  for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(true)
+  expect((await commands.run("/fast status", { frontend: "tui" })).ok).toBe(true)
+  const reloaded = await start()
+  expect(reloaded.session.agent.fastMode).toBe(true)
+  await commands.control.newSession()
+  expect(commands.control.info().fastMode?.requested).toBe(true)
+  expect((await commands.run("/fast", { frontend: "tui" })).ok).toBe(true)
+  await commands.flushChoices()
+  for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(false)
+  expect((await commands.run("/fast off", { frontend: "tui" })).ok).toBe(true)
+  await commands.flushChoices()
+  expect((await start()).session.agent.fastMode).toBe(false)
+})
+
+test("fast applies immediately on supported models and status reports the last response", async () => {
+  const mock = createMockDialect([
+    { text: "fast reply", usage: { speed: "fast" } },
+    { text: "plain reply", usage: { speed: "standard" } },
+    { text: "fast again" },
+  ])
+  mock.id = "anthropic-messages"
+  const ai = createAi({
+    dialects: [mock],
+    providers: [
+      {
+        id: "claude",
+        dialect: mock.id,
+        baseUrl: "https://api.anthropic.com",
+        models: [
+          {
+            id: "claude-opus-5",
+            fast: { kind: "anthropic-speed" },
+            cost: { input: 5, output: 25, fast: { input: 10, output: 50 } },
+          },
+          { id: "claude-opus-4-7" },
+        ],
+      },
+    ],
+  })
+  const session = await createSession({
+    ai,
+    model: "claude/claude-opus-5",
+    cwd,
+    settings: { fastMode: true },
+    extensions: [],
+    noBuiltins: false,
+    builtins: async () => [{ source: "builtin:commands", extension: commandsExtension }],
+  })
+  sessions.push(session)
+  const commands = createCommandHost({ session, cwd, home, interactive: true })
+  hosts.push(commands)
+  await session.agent.prompt("one")
+  expect(mock.requests[0]?.fastMode).toBe(true)
+  expect(commands.control.info().fastMode).toEqual({ requested: true, applied: true, used: "fast" })
+  commands.control.setModel("claude/claude-opus-4-7")
+  await session.agent.prompt("two")
+  expect(mock.requests[1]).not.toHaveProperty("fastMode")
+  expect(commands.control.info().fastMode).toEqual({ requested: true, applied: false, used: "standard" })
+  commands.control.setModel("claude/claude-opus-5")
+  await session.agent.prompt("three")
+  expect(mock.requests[2]?.fastMode).toBe(true)
+  expect(commands.control.info().fastMode).toEqual({
+    requested: true,
+    applied: true,
+    pricingUnknown: true,
+  })
+})
+
+test.each(["openai-chat", "openai-responses"])(
+  "%s fast commands persist a provider-neutral preference and report actual service tiers",
+  async (dialect) => {
+    const provider: ProviderConfig = {
+      id: "gateway",
+      dialect,
+      baseUrl: "https://provider.invalid",
+      catalogId: false,
+      models: [
+        {
+          id: "priority",
+          fast: { kind: "service-tier", value: "priority" },
+          cost: { input: 2, output: 20 },
+        },
+        { id: "plain", fast: false },
+      ],
+    }
+    const { session, commands, mock } = await start(["-m", "gateway/priority"], cwd, provider, [
+      { text: "priority reply", usage: { input: 1000, output: 100, serviceTier: "priority" } },
+      { text: "downgraded reply", usage: { serviceTier: "default" } },
+      { text: "unknown reply" },
+    ])
+    expect(commands.control.info().fastMode).toEqual({ requested: false, applied: false })
+    const enabled = await commands.run("/fast on", { frontend: "tui" })
+    expect(enabled.ok).toBe(true)
+    expect(enabled.output.join("\n")).toContain("requested on; applied on; last used not reported")
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) {
+      expect(json(file)).toMatchObject({ model: "gateway/priority", fastMode: true })
+      expect(json(file)).not.toHaveProperty("serviceTier")
+    }
+    expect((await start([], cwd, provider)).session.agent.fastModeApplied).toBe(true)
+
+    await session.agent.prompt("one")
+    expect(mock.requests[0]?.fastMode).toBe(true)
+    expect(commands.control.info().fastMode).toEqual({
+      requested: true,
+      applied: true,
+      used: "priority",
+      pricingUnknown: true,
+    })
+    expect(commands.control.replies().at(-1)?.usage).toMatchObject({
+      serviceTier: "priority",
+      speed: "fast",
+      cost: 0.004,
+      pricingUnknown: true,
+    })
+    const status = await commands.run("/fast status", { frontend: "tui" })
+    expect(status.ok).toBe(true)
+    expect(status.output.join("\n")).toContain("last used priority")
+    expect(status.output.join("\n")).toContain("Premium pricing unknown; costs use a standard-rate estimate.")
+    const cost = await commands.run("/cost", { frontend: "tui" })
+    expect(cost.ok).toBe(true)
+    expect(cost.output.join("\n")).toContain("standard-rate estimate")
+
+    await session.agent.prompt("two")
+    expect(commands.control.info().fastMode).toEqual({ requested: true, applied: true, used: "default" })
+    const downgraded = await commands.run("/fast status", { frontend: "tui" })
+    expect(downgraded.output.join("\n")).toContain("last used default")
+    expect(downgraded.output.join("\n")).not.toContain("Premium pricing unknown")
+    await session.agent.prompt("three")
+    expect(commands.control.info().fastMode).toEqual({ requested: true, applied: true, pricingUnknown: true })
+    expect(mock.requests.map((request) => request.fastMode)).toEqual([true, true, true])
+
+    commands.control.setModel("gateway/plain")
+    expect(commands.control.info().fastMode).toMatchObject({ requested: true, applied: false })
+    commands.control.setModel("gateway/priority")
+    expect(commands.control.info().fastMode).toMatchObject({ requested: true, applied: true })
+    expect((await commands.run("/fast off", { frontend: "tui" })).ok).toBe(true)
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(false)
+    expect((await start([], cwd, provider)).session.agent.fastMode).toBe(false)
+  },
+)
+
+test.each(["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1", "https://api.kimi.com/coding/v1"])(
+  "first-party Kimi fast status directs users to the highspeed model at %s",
+  async (baseUrl) => {
+    const { session, commands, mock } = await start(
+      ["-m", "kimi/kimi-k2.5"],
+      cwd,
+      {
+        id: "kimi",
+        dialect: "openai-chat",
+        baseUrl,
+        catalogId: false,
+        models: [{ id: "kimi-k2.5" }],
+      },
+      [{ text: "standard reply" }],
+    )
+    expect((await commands.run("/fast on", { frontend: "tui" })).ok).toBe(true)
+    expect(commands.control.info().fastMode).toEqual({
+      requested: true,
+      applied: false,
+      unavailableReason: "not available; use the highspeed model",
+    })
+    const status = await commands.run("/fast status", { frontend: "tui" })
+    expect(status.ok).toBe(true)
+    expect(status.output.join("\n")).toContain("not available; use the highspeed model")
+    await session.agent.prompt("go")
+    expect(mock.requests[0]).not.toHaveProperty("fastMode")
+    expect(session.agent.fastMode).toBe(true)
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(true)
+  },
+)
+
+test("non-interactive fast commands do not write settings", async () => {
+  const { commands, session } = await start(["--rpc"])
+  expect((await commands.run("/fast on", { frontend: "rpc" })).ok).toBe(true)
+  expect(session.agent.fastMode).toBe(true)
+  await commands.flushChoices()
+  expect(existsSync(globalFile())).toBe(false)
+  expect(existsSync(localFile())).toBe(false)
 })
 
 test("theme choices preserve nested settings and share the ordered choice writer", async () => {

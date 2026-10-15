@@ -12,6 +12,7 @@ export { openaiResponses, responsesBody, toResponsesInput } from "./dialects/ope
 export { retryAfterMs } from "./dialects/retry-after.ts"
 export { unansweredCalls } from "./dialects/tool-results.ts"
 export * from "./errors.ts"
+export { hasFastMode } from "./fast-mode.ts"
 export { repairJsonObject } from "./json-repair.ts"
 export * from "./native-compaction.ts"
 export * from "./probe.ts"

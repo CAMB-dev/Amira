@@ -1,4 +1,5 @@
 import {
+  hasFastMode,
   isNoModel,
   type Message,
   type ModelInfo,
@@ -41,7 +42,7 @@ import {
 import type { ContextManager } from "./agent/context-manager.ts"
 import { History } from "./agent/history.ts"
 import { modelRef } from "./agent/messages.ts"
-import { Thinking } from "./agent/model-call.ts"
+import { reportedSpeed, Thinking } from "./agent/model-call.ts"
 import { NoticeInbox } from "./agent/notices.ts"
 import { OwnedToolRunner } from "./agent/owned-tool.ts"
 import {
@@ -122,11 +123,24 @@ export class Agent {
   /** The permission policy of this session's tree. */
   readonly permissions: Permissions
   model: ModelInfo
+  /** Requested session preference, retained across switches to unsupported models. */
+  fastMode: boolean
+  /** Speed reported by the most recent model response, absent when not reported. */
+  lastSpeed: string | undefined
+  lastFastPricingUnknown: boolean | undefined
+  get fastModeApplied(): boolean {
+    return this.fastMode && hasFastMode(this.model)
+  }
   /** This session's saved tool outputs (A1). */
   readonly artifacts: ArtifactStore
   readonly providerSettings: Record<string, ProviderSettings>
   /** The effort for each model, with the /thinking override; new sub-agents inherit it. */
   readonly thinking: Thinking
+  /** Retried request usage for sessions without a backing file; never part of model context. */
+  #retryUsage: CompactionUsage[] = []
+  get retryUsage(): readonly CompactionUsage[] {
+    return this.#retryUsage
+  }
   /**
    * Records extensions keep in this session (SessionData): custom entries of its file, or
    * kept in memory when it has none.
@@ -204,6 +218,7 @@ export class Agent {
       this.permissions = opts.permissions ?? new Permissions()
       this.cwd = opts.cwd
       this.model = opts.model
+      this.fastMode = opts.fastMode ?? false
       this.providerSettings = opts.providerSettings ?? {}
       this.thinking = new Thinking(opts, (data) => this.#emit(undefined, "thinking.changed", data))
       this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
@@ -281,6 +296,16 @@ export class Agent {
         history,
       )
       this.messages = this.#history.messages
+      const lastReply = this.messages.findLast((m) => m.role === "assistant")
+      const lastUsage = lastReply?.usage
+      let lastModel = this.model
+      if (lastReply) {
+        try {
+          lastModel = opts.ai.model(`${lastReply.model.provider}/${lastReply.model.model}`)
+        } catch {}
+      }
+      this.lastSpeed = reportedSpeed(lastModel, lastUsage)
+      this.lastFastPricingUnknown = lastUsage?.pricingUnknown
       this.data = this.#history.data
       this.artifacts = createSessionArtifacts(opts, this.sessionId, this.#context)
       const { contextManager, compactor } = setupContext(
@@ -349,6 +374,18 @@ export class Agent {
         execution: this.execution,
         tools: this.tools,
         thinking: this.thinking,
+        fastMode: () => this.fastModeApplied,
+        recordAttempt: (message) => {
+          if (!message.usage) return
+          const entry = { model: message.model, usage: message.usage, label: "request retry" }
+          if (!this.session) this.#retryUsage.push(entry)
+          this.#history.store({ type: "side_usage", ...entry })
+          this.tree?.recordUsage(this, message.usage)
+        },
+        recordSpeed: (speed, pricingUnknown) => {
+          this.lastSpeed = speed
+          this.lastFastPricingUnknown = pricingUnknown
+        },
         model: () => this.model,
         maxSteps,
         maxTokens,

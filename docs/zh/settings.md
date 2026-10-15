@@ -30,6 +30,47 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 
 `/thinking default` 将顶层设置保存为 `"thinking": "default"`。这个标记会覆盖之前各层的顶层推理强度设置，不发送明确的强度，沿用服务端默认值；它不会关闭思考。模型单独设置的 `thinking` 仍按原有优先级覆盖顶层设置。
 
+## 快速模式
+
+`fastMode` 为布尔值，默认关闭。在支持的模型和端点上请求快速/优先服务，不改变模型或思考强度。请先使用 `"fastMode": true` 和[快速模式](usage.md#快速模式)中说明的端点/模型预设，不必为每个模型添加覆盖。
+
+`/fast` 切换请求，`/fast on` 和 `/fast off` 明确设置，`/fast status` 报告请求、应用情况、上次实际服务档位或 Claude 速度，以及不可用原因或价格未知提示。模型/provider 不支持时会保留请求，但不应用。交互式更改会将 `fastMode` 保存到上述用户文件和允许写入的项目本地文件；打印模式、RPC 和扩展中的更改不会保存。切换模式可能使提示词缓存失效。
+
+覆盖预设时，设置 `providers.<id>.models[].fast`，或通过 `defaultModel.fast` 设置 provider 级默认值。`false` 禁用；`{ "kind": "anthropic-speed" }` 使用 Claude 速度参数；`{ "kind": "service-tier", "value": "priority" }` 请求服务档位。服务档位还支持 `textOnly`（跳过含图片的请求）和 `responseHeader`（从指定 HTTP 响应头读取实际档位）。仅匹配目录中的模型名不会为任意兼容端点开启支持。
+
+以下是**已有配置**的 provider 的覆盖片段：请使用你的 provider ID 和实际支持的模型 ID。只有使用的所有模型都支持时才设置 provider 级默认值，否则应逐个模型设置 `fast`。DeepInfra 仅应为带有相应支持标签的模型启用优先处理。网关必须确实支持所选请求格式。
+
+```json
+{
+  "fastMode": true,
+  "providers": {
+    "deepinfra": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority" }
+      }
+    },
+    "xai": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority", "textOnly": true }
+      }
+    },
+    "google": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority", "responseHeader": "x-gemini-service-tier" }
+      }
+    },
+    "claude-gateway": {
+      "models": [
+        { "id": "supported-opus-id", "fast": { "kind": "anthropic-speed" } },
+        { "id": "unsupported-model-id", "fast": false }
+      ]
+    }
+  }
+}
+```
+
+模型的 `cost.fast` 可选，通过 `input`、`output`、`cacheRead` 和 `cacheWrite` 指定快速档位每百万 token 的美元价格；设置时 `input` 和 `output` 必填。内置溢价目前仅包含已确认的 Claude 快速费率；其他溢价在配置 `cost.fast` 前保持未知。请只填写向 provider 核实过的费率；示例故意不包含未经核实的价格。响应报告快速/优先用量但溢价费率未知时，费用按标准价格估算，并标记价格未知。`/cost` 拆分上报的快速和标准用量，将受影响的金额和总计标为估算，并提示溢价未知。标准价格估算不是精确的快速模式费用。实际档位、归一化速度和价格不确定性属于用量/会话元数据，不是设置键。
+
 ## 仅限用户文件的键
 
 项目文件会随你克隆的任何仓库一起出现，所以它不能决定请求和 API 密钥发往何处，不能开启服务端压缩（它会把对话以另一种形式发送到某个地址），也不能决定加载哪些包、信任哪些项目。下列键写在项目文件或 `settings.local.json` 中会被忽略，并给出警告：
@@ -122,6 +163,7 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | --- | --- | --- | --- | --- |
 | `model` | `string` | 无 | 默认模型，格式为 `"provider/model"`。未设置时，Amira 使用恢复的会话上次用的模型；只配置了一个 provider 时则用它的第一个模型。`--model` 和 `AMIRA_MODEL` 只在单次运行中覆盖；交互式 `/model` 的更改会保存模型和思考设置（见[保存模型与思考设置](#保存模型与思考设置)）。 |  |
 | `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "default"` | 无 | 对 `caps.thinking` 为真的模型，设置主对话请求的推理强度。未设置或设为 `"default"` 时沿用服务端默认强度，不会关闭思考。`"default"` 覆盖之前各层的顶层设置。模型的 `thinking` 仍优先于此项，`--thinking` 在单次运行中优先于两者。交互式 `/thinking` 的更改会保存模型和思考设置；`/thinking default` 保存 `"default"`。子 agent 继承父 agent 选中的档位；标题生成和上下文压缩不继承。 |  |
+| `fastMode` | `boolean` | 无 | 在支持的模型和端点上请求快速/优先服务；未设置时关闭。交互式 `/fast` 更改会保存；不支持的模型保留偏好但不发送该参数。子 agent 会继承此设置。切换速度可能使提示缓存失效。溢价未知时使用明确标注的标准价格估算。 |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Windows 上模型可用的 shell 工具：`"auto"` 同时提供 `bash` 和 `powershell`，`"bash"` 或 `"powershell"` 会隐藏另一个。其他平台只有 `bash`。`--shell` 优先。 |  |
 | `tools.disabled` | `string[]` | `[]` | 对模型隐藏的工具名。`--disable-tools` 在单次运行中替换这个列表，`/tools` 只修改当前会话。 |  |
 | `maxParallelTools` | `number` | `8` | 同时运行的工具调用数上限。必须是至少为 1 的整数；无效值会发出警告并使用默认值，即使优先级较低的文件中已有有效值。 |  |
@@ -158,11 +200,21 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.models[].contextWindow` | `number` | 取模型目录，否则为 `128000` | 上下文窗口大小（token）。压缩和 `/context` 依据这个值。 |  |
 | `providers.<id>.models[].maxOutput` | `number` | 取模型目录，否则为 `8192` | 单次回复的输出 token 上限。 |  |
 | `providers.<id>.models[].compat.thinkingDisplay` | `"summarized" \| "omitted"` | 先取 defaultModel，再取 provider 设置 | 该模型的思考显示方式，优先于 provider 设置。未设置时依次取 defaultModel、provider、地址默认值。 |  |
+| `providers.<id>.models[].fast` | `object \| false` | 端点/模型预设 | 快速服务请求配置；`false` 禁用预设。Claude 速度参数使用 `{ "kind": "anthropic-speed" }`，兼容服务档位使用 `{ "kind": "service-tier", "value": "priority" }`。仅为支持的端点/模型设置；见[快速模式](#快速模式)。 |  |
+| `providers.<id>.models[].fast.kind` | `"anthropic-speed" \| "service-tier"` | 无 | `"anthropic-speed"` 发送 Claude 的 `speed: "fast"`；`"service-tier"` 发送配置的 `service_tier` 值。`fast` 为对象时必填。 |  |
+| `providers.<id>.models[].fast.value` | `string` | 无 | 请求的服务档位，通常为 `"priority"`；仅 `"service-tier"` 必填。实际用量以响应为准，不根据此值推断。 |  |
+| `providers.<id>.models[].fast.textOnly` | `boolean` | `false` | 仅对纯文本请求应用该服务档位；含图片时不发送。用于 xAI 优先处理。 |  |
+| `providers.<id>.models[].fast.responseHeader` | `string` | 无 | 报告实际服务档位的 HTTP 响应头，例如 Google 的 `"x-gemini-service-tier"`；否则读取响应体。 |  |
 | `providers.<id>.models[].cost.input` | `number` | 取模型目录 | 每百万输入 token 的价格（美元）；设置 `cost` 时 `input` 和 `output` 必填。 |  |
 | `providers.<id>.models[].cost.output` | `number` | 取模型目录 | 每百万输出 token 的价格（美元）。 |  |
 | `providers.<id>.models[].cost.cacheRead` | `number` | 取模型目录 | 每百万缓存读取 token 的价格（美元）。 |  |
 | `providers.<id>.models[].cost.cacheWrite` | `number` | 取模型目录 | 每百万缓存写入 token 的价格（美元）。 |  |
 | `providers.<id>.models[].cost.webSearch` | `number` | 未知 | 每次托管网页搜索的价格（美元）。模型目录不提供搜索费用，不设置时，搜索过的回复费用显示为未知。 |  |
+| `providers.<id>.models[].cost.fast.input` | `number` | 取模型目录 | 快速模式每百万输入 token 的价格（美元）；设置 `cost.fast` 时 `input` 和 `output` 必填。仅用于响应确认的快速/优先用量。此项可选：没有经核实的溢价费率时，按标准价格估算，并提示溢价未知。 |  |
+| `providers.<id>.models[].cost.fast.output` | `number` | 取模型目录 | 快速模式每百万输出 token 的价格（美元）。 |  |
+| `providers.<id>.models[].cost.fast.cacheRead` | `number` | 输入缓存倍率 | 快速模式每百万缓存读取 token 的价格（美元）；否则将标准缓存与输入价格之比应用于快速输入价格。 |  |
+| `providers.<id>.models[].cost.fast.cacheWrite` | `number` | 输入缓存倍率 | 快速模式每百万缓存写入 token 的价格（美元）；否则将标准缓存与输入价格之比应用于快速输入价格。 |  |
+| `providers.<id>.models[].cost.fast.maxInputTokens` | `number` | 不限，除非预设指定上限 | 这些溢价费率适用的提示 token 数上限。超过时标记溢价未知，并按标准价格估算，不将短上下文费率视为精确费用。 |  |
 | `providers.<id>.models[].caps.tools` | `"native" \| "none"` | `"native"` | 模型不支持工具调用时设为 `"none"`。 |  |
 | `providers.<id>.models[].caps.images` | `boolean` | `false` | 模型接受图片输入。 |  |
 | `providers.<id>.models[].caps.thinking` | `boolean` | `false` | 模型支持推理；`anthropic-messages` 只在设置了这一项时请求思考。 |  |

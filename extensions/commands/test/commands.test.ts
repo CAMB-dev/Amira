@@ -57,6 +57,7 @@ function fakeControl(over: Partial<SessionControl> = {}) {
     model: { provider: "deepseek", model: "deepseek-flash" },
     contextWindow: 128000,
     supportsThinking: false,
+    fastMode: { requested: false, applied: false },
     busy: false,
     shell: "auto",
   }
@@ -98,6 +99,10 @@ function fakeControl(over: Partial<SessionControl> = {}) {
     setThinking: (level) => {
       calls.push(`setThinking ${level ?? "default"}`)
       info = { ...info, thinkingLevel: level, thinking: info.supportsThinking ? level : undefined }
+    },
+    setFastMode: (enabled) => {
+      calls.push(`setFastMode ${enabled}`)
+      info = { ...info, fastMode: { ...info.fastMode, requested: enabled, applied: enabled } }
     },
     newSession: async () => {
       calls.push("newSession")
@@ -210,6 +215,7 @@ test("every built-in command is registered with a description", async () => {
     "context",
     "cost",
     "ext",
+    "fast",
     "fork",
     "help",
     "model",
@@ -312,6 +318,7 @@ test("/help lists every command with its argument hint", async () => {
   const { run } = await setup()
   const { text } = await run("/help")
   expect(text).toContain("/model [provider/model]")
+  expect(text).toContain("/fast [on|off|status]")
   expect(text).toContain("/provider [add|edit|remove|key]")
   expect(text).toContain("/provider add picks a catalog vendor or Custom (choose a protocol).")
   expect(text).toContain("/provider add <vendor|protocol> skips the picker")
@@ -446,6 +453,160 @@ function thinkingControl(thinkingLevel?: ReasoningEffort, supportsThinking = tru
   }
   return { control, changes, info: () => info }
 }
+
+test("/fast toggles the requested choice, sets on/off, and warns only on changes", async () => {
+  const { run, calls, asked } = await setup()
+  expect(await run("/fast")).toMatchObject({
+    ok: true,
+    text: "Fast mode: requested on; applied on; last used not reported.\nChanging fast mode may invalidate the prompt cache.",
+  })
+  expect((await run("/fast on", "rpc")).text).not.toContain("invalidate")
+  expect(calls).toEqual(["setFastMode true"])
+  expect((await run("/fast off", "print")).text).toContain("requested off; applied off")
+  expect(calls).toEqual(["setFastMode true", "setFastMode false"])
+  expect((await run("/fast off")).text).not.toContain("invalidate")
+  await run("/fast")
+  await run("/fast")
+  expect(calls).toEqual(["setFastMode true", "setFastMode false", "setFastMode true", "setFastMode false"])
+  expect(asked).toEqual([])
+})
+
+test("/fast status reports requested, applied and last used without changing the choice", async () => {
+  for (const used of [undefined, "fast", "standard", "priority", "default", "ultrafast"] as const) {
+    const { control } = fakeControl()
+    const { run, calls } = await setup({
+      info: () => ({
+        ...control.info(),
+        fastMode: { requested: true, applied: true, ...(used ? { used } : {}) },
+      }),
+    })
+    expect(await run("/fast status")).toMatchObject({
+      ok: true,
+      text: `Fast mode: requested on; applied on; last used ${used ?? "not reported"}.`,
+    })
+    expect(calls).toEqual([])
+  }
+})
+
+test("/fast status reports unknown actual tier after a completed response without an echo", async () => {
+  let responses = 0
+  const ai = createAi({
+    providers: [
+      {
+        id: "gemini",
+        dialect: "google-gemini",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        defaultModel: { fast: { kind: "service-tier", value: "priority" } },
+      },
+    ],
+    fetch: Object.assign(
+      async () =>
+        Response.json(
+          {
+            usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2 },
+            candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+          },
+          { headers: ++responses === 1 ? { "x-gemini-service-tier": "priority" } : {} },
+        ),
+      { preconnect: () => {} },
+    ),
+    retry: { retries: 0 },
+  })
+  const agent = new Agent({ ai, model: ai.model("gemini/gemini-test"), cwd: process.cwd(), fastMode: true })
+  const { control } = fakeControl()
+  try {
+    const { run, calls } = await setup({
+      info: () => ({
+        ...control.info(),
+        fastMode: {
+          requested: agent.fastMode,
+          applied: agent.fastModeApplied,
+          ...(agent.lastSpeed ? { used: agent.lastSpeed } : {}),
+        },
+      }),
+      messages: () => agent.messages,
+      replies: () => agent.messages.filter((message) => message.role === "assistant"),
+    })
+    expect((await agent.prompt("first reply")).reason).toBe("done")
+    expect((await run("/fast status")).text).toContain("last used priority")
+    expect((await agent.prompt("reply without tier echo")).reason).toBe("done")
+    expect(responses).toBe(2)
+    expect(agent.messages.filter((message) => message.role === "assistant")).toHaveLength(2)
+    expect(agent.lastSpeed).toBeUndefined()
+    const status = await run("/fast status")
+    expect(status.text).toContain("requested on; applied on; last used not reported.")
+    expect(status.text).not.toContain("not used yet")
+    expect(calls).toEqual([])
+  } finally {
+    await agent.dispose()
+  }
+})
+
+test("/fast on remembers an unavailable request and toggles that request rather than applied mode", async () => {
+  const { control } = fakeControl()
+  let requested = false
+  const choices: boolean[] = []
+  const { run } = await setup({
+    info: () => ({ ...control.info(), fastMode: { requested, applied: false, used: "standard" } }),
+    setFastMode: (enabled) => {
+      requested = enabled
+      choices.push(enabled)
+    },
+  })
+  expect(await run("/fast on")).toMatchObject({
+    ok: true,
+    text: "Fast mode: requested on; applied off; last used standard. Unavailable for deepseek/deepseek-flash; request kept for a supported model/provider.\nChanging fast mode may invalidate the prompt cache.",
+  })
+  expect(requested).toBe(true)
+  expect((await run("/fast status")).text).toBe(
+    "Fast mode: requested on; applied off; last used standard. Unavailable for deepseek/deepseek-flash; request kept for a supported model/provider.",
+  )
+  expect(choices).toEqual([true])
+  expect((await run("/fast")).text).toContain("requested off; applied off")
+  expect(choices).toEqual([true, false])
+})
+
+test("/fast status explains unavailable tiers and highspeed model alternatives", async () => {
+  const { control } = fakeControl()
+  for (const [provider, model, reason] of [
+    ["moonshot", "kimi-k2.7-code", "not available; use the highspeed model"],
+    ["xai", "grok", "priority is text only"],
+  ] as const) {
+    const { run, calls } = await setup({
+      info: () => ({
+        ...control.info(),
+        model: { provider, model },
+        fastMode: { requested: true, applied: false, unavailableReason: reason },
+      }),
+    })
+    const result = await run("/fast status")
+    expect(result.text).toContain(`Unavailable for ${provider}/${model} (${reason})`)
+    expect(result.text).toContain("request kept")
+    expect(calls).toEqual([])
+  }
+})
+
+test("/fast status notes unknown premium pricing without changing the request", async () => {
+  const { control } = fakeControl()
+  const { run, calls } = await setup({
+    info: () => ({
+      ...control.info(),
+      fastMode: { requested: true, applied: true, used: "priority", pricingUnknown: true },
+    }),
+  })
+  expect((await run("/fast status")).text).toBe(
+    "Fast mode: requested on; applied on; last used priority. Premium pricing unknown; costs use a standard-rate estimate.",
+  )
+  expect(calls).toEqual([])
+})
+
+test("/fast rejects invalid arguments without mutation and completes its variants", async () => {
+  const { host, run, calls } = await setup()
+  for (const arg of ["true", "ON", "on off", "status extra"])
+    expect(await run(`/fast ${arg}`)).toMatchObject({ ok: false, error: "Usage: /fast [on|off|status]" })
+  expect(calls).toEqual([])
+  expect((await host.complete("/fast ")).candidates.map((c) => c.value)).toEqual(["on", "off", "status"])
+})
 
 test("/thinking accepts every effort and default, with no picker", async () => {
   const session = thinkingControl()
@@ -1056,6 +1217,99 @@ test("/cost breaks the session cost down by model", async () => {
   expect(text).toMatch(/openai\/gpt-5\s+1 reply\s+in 500\s+out 50\s+price unknown/)
   expect(text).toMatch(/total\s+in 3\.5k\s+out 350\s+\$0\.0030/)
   expect(costReport([])).toContain("No model replies")
+})
+
+test("/cost splits a model's reported fast and standard usage without inferring fast from the request", async () => {
+  const fast = reply("anthropic/claude", 200, 40, 0.02)
+  fast.usage!.speed = "fast"
+  const standard = reply("anthropic/claude", 300, 60, 0.03)
+  standard.usage!.speed = "standard"
+  const replies = [reply("anthropic/claude", 100, 20, 0.01), fast, standard]
+  expect(
+    costByModel(replies).map((r) => ({ model: r.model, speed: r.speed, replies: r.replies, cost: r.cost })),
+  ).toEqual([
+    { model: "anthropic/claude", speed: "standard", replies: 2, cost: 0.04 },
+    { model: "anthropic/claude", speed: "fast", replies: 1, cost: 0.02 },
+  ])
+  const { run } = await setup({ replies: () => replies })
+  const cost = (await run("/cost")).text
+  expect(cost).toMatch(/anthropic\/claude \(standard\)\s+2 replies\s+in 400\s+out 80\s+\$0\.040/)
+  expect(cost).toMatch(/anthropic\/claude \(fast\)\s+1 reply\s+in 200\s+out 40\s+\$0\.020/)
+  expect(cost).toMatch(/total\s+in 600\s+out 120\s+\$0\.060/)
+})
+
+test("/cost labels unknown premium prices and totals as standard-rate estimates", async () => {
+  const priority = reply("openai/gpt", 200, 40, 0.02)
+  priority.usage = { ...priority.usage!, speed: "fast", serviceTier: "priority", pricingUnknown: true }
+  const { run } = await setup({ replies: () => [priority, reply("openai/gpt", 100, 20, 0.01)] })
+  const report = (await run("/cost")).text
+  expect(report).toMatch(/openai\/gpt \(fast\).*\$0\.020 \(standard-rate estimate\)/)
+  expect(report).toMatch(/openai\/gpt \(standard\).*\$0\.010\n/)
+  expect(report).toMatch(/total.*\$0\.030 \(standard-rate estimate\)/)
+  expect(report).toContain(
+    "Premium pricing unknown for some replies; affected amounts use standard-rate estimates.",
+  )
+})
+
+test("/cost keeps unknown premium pricing after combining replies in either order", () => {
+  const unknown = reply("deepinfra/model", 200, 40, 0.02)
+  unknown.usage = { ...unknown.usage!, speed: "fast", pricingUnknown: true }
+  const known = reply("deepinfra/model", 100, 20, 0.01)
+  known.usage!.speed = "fast"
+  for (const replies of [
+    [unknown, known],
+    [known, unknown],
+  ]) {
+    const [row] = costByModel(replies)
+    expect(row?.usage.pricingUnknown).toBe(true)
+    expect(row?.cost).toBeCloseTo(0.03)
+    expect(costReport(replies)).toContain("$0.030 (standard-rate estimate)")
+  }
+  expect(costReport([known])).not.toContain("pricing unknown")
+  expect(costReport([known])).not.toContain("estimate")
+})
+
+test("/cost retains premium warnings for compaction and side requests even with unpriced searches", () => {
+  const fast = reply("google/gemini", 200, 40)
+  fast.usage = { ...fast.usage!, speed: "fast", pricingUnknown: true, webSearchRequests: 1 }
+  const report = costReport(
+    [],
+    [{ model: fast.model, usage: fast.usage }],
+    [{ model: fast.model, usage: fast.usage }],
+  )
+  expect(report).toContain("(fast) (compaction)")
+  expect(report).toContain("(fast) (session title)")
+  expect(report).toContain("price unknown")
+  expect(report).toContain("Search costs are unknown")
+  expect(report).toContain("Premium pricing unknown")
+})
+
+test("/cost keeps unpriced fast usage separate from standard usage, including side requests", () => {
+  const fast = reply("anthropic/claude", 200, 40)
+  fast.usage!.speed = "fast"
+  fast.usage!.webSearchRequests = 1
+  const standard = reply("anthropic/claude", 100, 20, 0.01)
+  const [fastRow, standardRow] = costByModel([fast, standard])
+  expect(fastRow?.cost).toBeUndefined()
+  expect(standardRow?.cost).toBe(0.01)
+  const model = standard.model
+  const report = costReport(
+    [standard],
+    [
+      { model, usage: fast.usage! },
+      { model, usage: standard.usage! },
+    ],
+    [
+      { model, usage: fast.usage! },
+      { model, usage: standard.usage! },
+    ],
+  )
+  expect(report).toContain("anthropic/claude (fast) (compaction)")
+  expect(report).toContain("anthropic/claude (standard) (compaction)")
+  expect(report).toContain("anthropic/claude (fast) (session title)")
+  expect(report).toContain("anthropic/claude (standard) (session title)")
+  expect(report).toContain("Search costs are unknown")
+  expect(report).toMatch(/total\s+in 700\s+out 140\s+price unknown/)
 })
 
 test("/cost and /status keep unpriced searches unknown after priced replies", async () => {

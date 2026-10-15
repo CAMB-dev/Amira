@@ -1,5 +1,13 @@
-import type { CatalogModel } from "./catalog.ts"
+import { type CatalogModel, catalogProviderId } from "./catalog.ts"
 import type { ProviderCompat } from "./dialect.ts"
+import {
+  anthropicFastCost,
+  builtinFastCost,
+  builtinFastOption,
+  compatibleFast,
+  fastVendor,
+  sameFastTier,
+} from "./fast-mode.ts"
 import { defaultWebSearch } from "./server-tools.ts"
 import {
   DEFAULT_CONTEXT_WINDOW,
@@ -75,7 +83,7 @@ export function resolveModelInfo(
 ): ModelInfo {
   const known = provider.models?.find((m) => m.id === modelId)
   const d = provider.defaultModel
-  const cost = known?.cost ?? catalog?.cost ?? d?.cost
+  let cost = known?.cost ?? catalog?.cost ?? d?.cost
   const compat = { ...d?.compat, ...known?.compat }
   const window: [number, ContextWindowSource] =
     known?.contextWindow !== undefined
@@ -87,6 +95,64 @@ export function resolveModelInfo(
           : [DEFAULT_CONTEXT_WINDOW, "default"]
   const dialect = known?.dialect ?? d?.dialect ?? provider.dialect
   const caps: ModelCaps = { ...DEFAULT_CAPS, ...d?.caps, ...catalog?.caps, ...known?.caps }
+  const vendor = fastVendor(provider.baseUrl)
+  const catalogId = catalogProviderId(provider)
+  const ownCatalog =
+    vendor !== undefined
+      ? catalogId === vendor
+      : catalogId === provider.id &&
+        ![
+          "anthropic",
+          "openai",
+          "xai",
+          "x-ai",
+          "google",
+          "google-vertex",
+          "openrouter",
+          "deepinfra",
+        ].includes(catalogId ?? "")
+  // A borrowed catalog must not turn on a premium option or supply another endpoint's prices.
+  const declared = known?.fast ?? d?.fast ?? (ownCatalog ? catalog?.fast : undefined)
+  let fast = compatibleFast(declared ?? (vendor ? builtinFastOption(vendor, modelId) : undefined), dialect)
+  if (vendor === "anthropic" && fast?.kind === "anthropic-speed" && !anthropicFastCost(modelId))
+    fast = undefined
+  if (known?.fast === undefined && d?.fast === undefined && vendor) {
+    const supportedDialect =
+      vendor === "anthropic"
+        ? dialect === "anthropic-messages"
+        : vendor === "google"
+          ? ["google-gemini", "openai-chat", "openai-responses"].includes(dialect)
+          : vendor === "openrouter"
+            ? ["anthropic-messages", "openai-chat", "openai-responses"].includes(dialect)
+            : vendor === "deepinfra"
+              ? dialect === "openai-chat"
+              : ["openai-chat", "openai-responses"].includes(dialect)
+    if (!supportedDialect) fast = undefined
+  }
+  if (cost) {
+    const preset = vendor ? builtinFastOption(vendor, modelId) : undefined
+    const matchesPreset =
+      !preset ||
+      !fast ||
+      (preset.kind === fast.kind &&
+        (preset.kind !== "service-tier" ||
+          (fast.kind === "service-tier" && sameFastTier(preset.value, fast.value))))
+    if (
+      cost === catalog?.cost &&
+      (!ownCatalog || !matchesPreset || (catalog.fast && !compatibleFast(catalog.fast, dialect)))
+    ) {
+      const { fast: _, ...standard } = cost
+      cost = standard
+    }
+    const premium =
+      known?.cost?.fast ??
+      d?.cost?.fast ??
+      cost.fast ??
+      (vendor && dialect === "anthropic-messages" && matchesPreset
+        ? builtinFastCost(vendor, modelId)
+        : undefined)
+    if (premium) cost = { ...cost, fast: premium }
+  }
   // Hosted web search: the model's caps, then the provider's compat, then on only at the vendor.
   if (
     caps.webSearch === undefined &&
@@ -102,6 +168,7 @@ export function resolveModelInfo(
     contextWindowSource: window[1],
     maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? DEFAULT_MAX_OUTPUT,
     caps,
+    ...(fast ? { fast } : declared === false ? { fast: false } : {}),
     ...(cost ? { cost } : {}),
     ...(Object.keys(compat).length ? { compat } : {}),
   }

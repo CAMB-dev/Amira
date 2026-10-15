@@ -23,6 +23,8 @@ export interface StreamRequest<A extends Failable> {
   readSSE(body: ReadableStream<Uint8Array>, acc: A, signal: AbortSignal): AsyncGenerator<StreamEvent>
   /** Reads a 200 response that is not an event stream. */
   readPlain(text: string, contentType: string, acc: A): AsyncGenerator<StreamEvent>
+  /** Reads response metadata before either the success or HTTP-error path. */
+  responseHeaders?(headers: Headers, acc: A): void
   /** Maps an HTTP error body's `error` field; defaults to the OpenAI shape. */
   errorOf?(raw: unknown): { error: ModelError; retryable: boolean }
 }
@@ -65,6 +67,7 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
     else yield acc.fail({ message: `request failed: ${(e as Error).message}` }, true)
     return
   }
+  r.responseHeaders?.(res.headers, acc)
   if (!res.ok) {
     const detail = await res.text().catch(() => "")
     yield withRetryAfter(acc.fail(...httpError(res.status, detail, r.errorOf ?? bodyError)), res.headers)
@@ -96,11 +99,11 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
   }
 }
 
-/** Keeps the status and, when the body has one, the provider's error code. */
-function httpError(
+/** Keeps the HTTP status, but uses only the provider error's message/code from structured bodies. */
+export function httpError(
   status: number,
   detail: string,
-  errorOf: NonNullable<StreamRequest<Failable>["errorOf"]>,
+  errorOf: NonNullable<StreamRequest<Failable>["errorOf"]> = bodyError,
 ): [ModelError, boolean] {
   const error: ModelError = { message: `HTTP ${status}: ${detail.slice(0, 500)}`, status }
   let bodyRetryable = isRetryableBodyError(error)
@@ -109,7 +112,8 @@ function httpError(
     const raw = Array.isArray(parsed) ? parsed[0]?.error : parsed?.error
     if (raw !== undefined) {
       const mapped = errorOf(raw)
-      bodyRetryable ||= isRetryableBodyError({ ...mapped.error, status })
+      error.message = `HTTP ${status}: ${mapped.error.message.slice(0, 500)}`
+      bodyRetryable = isRetryableBodyError({ ...mapped.error, status })
       const code = mapped.error.code
       if (code) error.code = code
     }

@@ -1,3 +1,4 @@
+import { fastErrorStatus } from "../fast-mode.ts"
 import type { ModelError } from "../types.ts"
 
 export const isRetryableStatus = (status: number) => status === 429 || status >= 500
@@ -35,11 +36,12 @@ export function bodyError(raw: unknown): { error: ModelError; retryable: boolean
   }
   const e = raw as Record<string, unknown>
   const error: ModelError = {
-    message: typeof e.message === "string" && e.message ? e.message : JSON.stringify(raw),
+    message: typeof e.message === "string" && e.message ? e.message : "stream error",
   }
   const code = e.code ?? e.type
   const name = codeName(e)
-  const status = asStatus(e.status) ?? asStatus(e.code) ?? (name ? CODE_STATUS[name] : undefined)
+  const status =
+    asStatus(e.status) ?? asStatus(e.code) ?? (name ? CODE_STATUS[name] : undefined) ?? fastErrorStatus(name)
   if (status !== undefined) error.status = status
   if ((typeof code === "string" && code) || typeof code === "number") error.code = String(code)
   return {

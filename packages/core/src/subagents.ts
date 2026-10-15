@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs"
 import path from "node:path"
-import type { Ai, Message, ModelInfo, Usage, UserMessage } from "@amira/ai"
+import { type Ai, hasFastMode, type Message, type ModelInfo, type Usage, type UserMessage } from "@amira/ai"
 import {
   type AnyEvent,
   agentStatusState,
@@ -400,6 +400,7 @@ export class AgentTree {
       cwd,
       providerSettings: parent.providerSettings,
       thinking: parent.thinking.for(parent.model),
+      fastMode: parent.fastMode && hasFastMode(model),
       fileRewindSettings: parent.fileRewindSettings,
       // A child whose directory overlaps the parent's writes the same files: one journal, one
       // restore. Worktrees live elsewhere and keep their own until their merge is captured.
@@ -544,7 +545,12 @@ export class AgentTree {
     const owner = child?.usageOwner ?? agent
     owner.bus.emit(
       "budget.update",
-      { tokens, ...(costUsd !== undefined ? { costUsd } : {}), ...(limit ? { limit } : {}) },
+      {
+        tokens,
+        ...(costUsd !== undefined ? { costUsd } : {}),
+        ...(this.#ledger.usage.pricingUnknown ? { pricingUnknown: true } : {}),
+        ...(limit ? { limit } : {}),
+      },
       metaOf(owner),
     )
     for (const g of child?.groups ?? []) {

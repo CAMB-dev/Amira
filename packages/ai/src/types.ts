@@ -71,6 +71,12 @@ export type AssistantContent = TextBlock | ThinkingBlock | ToolCallBlock | Serve
 export type ToolResultContent = TextBlock | ImageBlock
 
 export interface Usage {
+  /** Actual serving speed, reported directly or normalized from an echoed service tier. */
+  speed?: "fast" | "standard"
+  /** Actual service tier echoed by the provider, never inferred from the request. */
+  serviceTier?: string
+  /** Premium rates are unknown; cost, when present, is an estimate at standard rates. */
+  pricingUnknown?: boolean
   input: number
   output: number
   /** False when usage contains only non-token metadata, not a reported output count. */
@@ -174,6 +180,11 @@ export interface ModelCaps {
 /** Where a model's context window came from (ModelInfo.contextWindowSource). */
 export type ContextWindowSource = "settings" | "catalog" | "default"
 
+/** How a model opts into its provider's faster serving tier. false disables a preset. */
+export type FastOption =
+  | { kind: "anthropic-speed" }
+  | { kind: "service-tier"; value: string; textOnly?: boolean; responseHeader?: string }
+
 export interface ModelInfo {
   id: string
   provider: string
@@ -188,8 +199,18 @@ export interface ModelInfo {
   /** Per-model thinking display; overrides the provider's compat setting. */
   compat?: { thinkingDisplay?: "summarized" | "omitted" }
   caps: ModelCaps
+  /** Provider-specific fast request option; absent or false means unavailable. */
+  fast?: FastOption | false
   /** USD per million tokens; webSearch is USD per search request. */
-  cost?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; webSearch?: number }
+  cost?: {
+    input: number
+    output: number
+    cacheRead?: number
+    cacheWrite?: number
+    webSearch?: number
+    /** Token rates for usage the provider reports as fast; standard rates remain unchanged. */
+    fast?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; maxInputTokens?: number }
+  }
 }
 
 export interface ModelRequest {
@@ -203,6 +224,10 @@ export interface ModelRequest {
   reasoning?: { effort: ReasoningEffort }
   /** Mark stable prefixes for prompt caching where the dialect needs explicit markers. Default true. */
   promptCache?: boolean
+  /** Request fast serving when the resolved model supports it; never implies actual usage speed. */
+  fastMode?: boolean
+  /** Force the standard service tier for a capacity fallback, bypassing server project defaults. */
+  forceStandard?: boolean
 }
 
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max"
@@ -225,6 +250,8 @@ export type StreamEvent =
   | { type: "request.start"; thinkingDisplay?: "summarized" | "omitted" | "raw" }
   /** A failed attempt that will be retried; terminal done/error covers the final attempt. */
   | { type: "request.end"; message: AssistantMessage }
+  /** Fast capacity was unavailable; the same logical request is retried at standard speed. */
+  | { type: "fast.fallback" }
   /** The provider started a native content block or output item, even if it stays empty. */
   | { type: "content.start"; index?: number }
   | { type: "text.delta"; text: string }

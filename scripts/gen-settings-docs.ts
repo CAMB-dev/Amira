@@ -224,8 +224,19 @@ export function settingsRows(sources = readSources(), omit: Record<string, strin
     return [type, key]
   }
   const rows: Row[] = []
+  const variants = (type: Type): Field[] =>
+    type.name === "|" ? type.args!.flatMap(variants) : (type.fields ?? [])
   const walk = (type: Type, key: string) => {
-    for (const field of type.fields ?? []) {
+    // Discriminated option objects share a parent row, but each variant's keys need documentation.
+    const fields = new Map<string, Field>()
+    for (const field of variants(type)) {
+      const previous = fields.get(field.name)
+      fields.set(
+        field.name,
+        previous ? { ...field, type: { name: "|", args: [previous.type, field.type] } } : field,
+      )
+    }
+    for (const field of fields.values()) {
       const at = key ? `${key}.${field.name}` : field.name
       if (Object.hasOwn(omit, at)) continue
       if (collapsed.includes(at)) {
@@ -247,7 +258,8 @@ export function showType(type: Type): string {
     const item = showType(type.args![0]!)
     return item.includes(" ") ? `(${item})[]` : `${item}[]`
   }
-  if (type.name === "|" || type.name === "&") return type.args!.map(showType).join(` ${type.name} `)
+  if (type.name === "|" || type.name === "&")
+    return [...new Set(type.args!.map(showType))].join(` ${type.name} `)
   if (type.args) return `${type.name}<${type.args.map(showType).join(", ")}>`
   return type.name
 }
@@ -267,7 +279,8 @@ export function sampleValue(type: Type): unknown {
   if (type.name.startsWith('"')) return JSON.parse(type.name)
   if (type.name === "string") return "a b/c"
   if (type.name === "number") return 1000
-  if (type.name === "boolean") return true
+  if (type.name === "boolean" || type.name === "true") return true
+  if (type.name === "false") return false
   if (type.name === "unknown") return {}
   throw new Error(`No sample for type ${type.name}`)
 }

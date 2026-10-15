@@ -1,4 +1,5 @@
 import type { Dialect, DialectContext } from "../dialect.ts"
+import { fastBody } from "../fast-mode.ts"
 import { hasNativeWebSearch } from "../server-tools.ts"
 import { parseSSE } from "../sse.ts"
 import { adaptThinking } from "../thinking.ts"
@@ -42,6 +43,7 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
     }),
     stream: true,
     store: false,
+    ...fastBody(req),
   }
   if (req.systemPrompt) body.instructions = req.systemPrompt
   if (req.tools.length && req.model.caps.tools === "native") {
