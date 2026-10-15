@@ -27,6 +27,7 @@ type InfoControl = Pick<
   | "models"
   | "setModel"
   | "setThinking"
+  | "setFastMode"
   | "compact"
   | "send"
   | "preview"
@@ -38,12 +39,25 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     info: () => {
       const a = ctx.agent()
       const file = a.session?.file
+      const baseUrl = ctx.ai.providers().find((p) => p.id === a.model.provider)?.baseUrl
+      const highspeed =
+        !a.fastModeApplied &&
+        baseUrl &&
+        URL.canParse(baseUrl) &&
+        /(?:^|\.)(?:moonshot\.(?:cn|ai)|kimi\.(?:ai|com))$/.test(new URL(baseUrl).hostname)
       return {
         id: a.sessionId,
         ...(a.session?.title ? { title: a.session.title } : {}),
         cwd: a.cwd,
         model: { provider: a.model.provider, model: a.model.id },
         ...a.thinking.state(a.model),
+        fastMode: {
+          requested: a.fastMode,
+          applied: a.fastModeApplied,
+          ...(a.lastSpeed ? { used: a.lastSpeed } : {}),
+          ...(a.lastFastPricingUnknown ? { pricingUnknown: true } : {}),
+          ...(highspeed ? { unavailableReason: "not available; use the highspeed model" } : {}),
+        },
         contextWindow: a.model.contextWindow,
         ...(a.model.contextWindowSource ? { contextWindowSource: a.model.contextWindowSource } : {}),
         ...(a.contextTokens !== undefined ? { contextTokens: a.contextTokens } : {}),
@@ -73,12 +87,16 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
       return all.filter((m): m is AssistantMessage => m.role === "assistant")
     },
     compactions: () => ctx.agent().compactionUsage,
-    sideRequests: () =>
-      (ctx.agent().session?.entries ?? []).flatMap((e) =>
-        e.type === "side_usage"
-          ? [{ model: e.model, usage: e.usage, ...(e.label ? { label: e.label } : {}) }]
-          : [],
-      ),
+    sideRequests: () => {
+      const a = ctx.agent()
+      return a.session
+        ? a.session.entries.flatMap((e) =>
+            e.type === "side_usage"
+              ? [{ model: e.model, usage: e.usage, ...(e.label ? { label: e.label } : {}) }]
+              : [],
+          )
+        : a.retryUsage
+    },
     subagents: () => listSubagents(ctx.agent(), ctx.session.tree).map((e) => e.info),
     subagentMessages: (id) => subagentMessages(ctx.agent(), ctx.session.tree, id),
     stopSubagent: (id) =>
@@ -118,6 +136,9 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
       ctx.idle("change thinking effort")
       const a = ctx.agent()
       a.thinking.set(level, a.model)
+    },
+    setFastMode: (enabled) => {
+      ctx.agent().fastMode = enabled
     },
     compact: (instructions) => {
       ctx.idle("compact")

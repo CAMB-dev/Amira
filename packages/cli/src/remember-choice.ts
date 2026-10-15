@@ -51,11 +51,14 @@ export function rememberingControl(
     }
     return existsSync(project) ? path.join(project, "settings.local.json") : undefined
   }
-  const save = (theme?: {
-    name: string
-    variant: NonNullable<TuiSettings["themeVariant"]>
-    shimmer: [ShimmerEffect?]
-  }) => {
+  const save = (
+    theme?: {
+      name: string
+      variant: NonNullable<TuiSettings["themeVariant"]>
+      shimmer: [ShimmerEffect?]
+    },
+    fastMode?: boolean,
+  ) => {
     const a = agent()
     if (a.parentSessionId || a.depth > 0) return
     // Capture the choice now, not after a probe or another queued save finishes.
@@ -63,6 +66,7 @@ export function rememberingControl(
     const choice = {
       ...(!isNoModel(model) ? { model: `${model.provider}/${model.id}` } : {}),
       thinking: a.thinking.for(model) ?? "default",
+      ...(fastMode !== undefined ? { fastMode } : {}),
     }
     const write = (file: string) => {
       try {
@@ -122,6 +126,10 @@ export function rememberingControl(
         control.setModel(ref)
         const after = agent().model
         if (before.provider !== after.provider || before.id !== after.id) save()
+      },
+      setFastMode: (enabled) => {
+        control.setFastMode(enabled)
+        save(undefined, enabled)
       },
       setThinking: (level) => {
         const a = agent()

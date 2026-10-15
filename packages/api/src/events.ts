@@ -363,7 +363,13 @@ export interface EventMap {
   /** A spawn group ended: its owner ended it, or it went over its budget (`group.exceeded`). */
   "group.end": { group: SpawnGroupInfo }
   /** What the whole agent tree has used so far, sent after each model reply. */
-  "budget.update": { tokens: number; costUsd?: number; limit?: Budget }
+  "budget.update": {
+    tokens: number
+    costUsd?: number
+    /** The total includes usage whose price is only a standard-rate estimate. */
+    pricingUnknown?: boolean
+    limit?: Budget
+  }
   /** The tree went over its budget: running sub-agents are aborted and no new ones start. */
   "budget.exceeded": { tokens: number; costUsd?: number; limit: Budget }
   /**

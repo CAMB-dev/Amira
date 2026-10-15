@@ -266,6 +266,9 @@ const usage = obj({
   cacheRead: num,
   cacheWrite: num,
   "cost?": num,
+  "pricingUnknown?": bool,
+  "speed?": strings("fast", "standard"),
+  "serviceTier?": str,
   "webSearchRequests?": num,
   "webSearchCost?": num,
 })
@@ -494,7 +497,7 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
   "group.start": obj({ group: spawnGroup }),
   "group.update": obj({ group: spawnGroup }),
   "group.end": obj({ group: spawnGroup }),
-  "budget.update": obj({ tokens: num, "costUsd?": num, "limit?": budget }),
+  "budget.update": obj({ tokens: num, "costUsd?": num, "pricingUnknown?": bool, "limit?": budget }),
   "budget.exceeded": obj({ tokens: num, "costUsd?": num, limit: budget }),
   "notice.retry": obj(
     { attempt: num, attempts: num, delayMs: num, "error?": str },

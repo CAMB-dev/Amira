@@ -2,6 +2,7 @@ import { type CommandDefinition, defineExtension, type ExtensionAPI } from "@ami
 import { compactCommand, contextCommand, pruneCommand } from "./context-commands.ts"
 import { costCommand } from "./cost-command.ts"
 import { extensionCommand } from "./ext-command.ts"
+import { fastCommand } from "./fast-command.ts"
 import { helpCommand } from "./help-command.ts"
 import { modelCommand } from "./model-command.ts"
 import { permissionsCommand } from "./permissions-command.ts"
@@ -48,6 +49,7 @@ export default defineExtension((api: ExtensionAPI) => {
   add(clearCommand())
   add(modelCommand())
   add(thinkingCommand())
+  add(fastCommand())
   add(status)
   add(compactCommand())
   add(renameCommand())

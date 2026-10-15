@@ -122,6 +122,20 @@ const thinking = oneOf("low", "medium", "high", "xhigh", "max")
 
 const thinkingDisplay = oneOf("summarized", "omitted")
 
+const fast: Check = (value, key, out) => {
+  if (value === false) return false
+  const tier = isPlainObject(value) && value.kind === "service-tier"
+  return object(
+    {
+      kind: oneOf("anthropic-speed", "service-tier"),
+      value: expect("a non-empty service tier", (v) => typeof v === "string" && v.trim().length > 0),
+      textOnly: boolean,
+      responseHeader: string,
+    },
+    tier ? ["kind", "value"] : ["kind"],
+  )(value, key, out)
+}
+
 const modelOverrides = (required: string[], tools = false) =>
   object(
     {
@@ -130,6 +144,7 @@ const modelOverrides = (required: string[], tools = false) =>
       contextWindow: integer(1),
       maxOutput: integer(1),
       compat: object({ thinkingDisplay }),
+      fast,
       ...(tools ? { tools: editingTools, thinking } : {}),
       caps: object({
         tools: oneOf("native", "none"),
@@ -140,7 +155,23 @@ const modelOverrides = (required: string[], tools = false) =>
         webSearch: boolean,
       }),
       cost: object(
-        { input: number, output: number, cacheRead: number, cacheWrite: number, webSearch: number },
+        {
+          input: number,
+          output: number,
+          cacheRead: number,
+          cacheWrite: number,
+          webSearch: number,
+          fast: object(
+            {
+              input: number,
+              output: number,
+              cacheRead: number,
+              cacheWrite: number,
+              maxInputTokens: integer(1),
+            },
+            ["input", "output"],
+          ),
+        },
         ["input", "output"],
       ),
     },
@@ -210,6 +241,7 @@ const settings = object({
   $schema: string,
   model: modelRef,
   thinking: oneOf("low", "medium", "high", "xhigh", "max", "default"),
+  fastMode: boolean,
   providers: record(provider),
   shell: oneOf("auto", "bash", "powershell"),
   tools: object({ disabled: list(string) }),

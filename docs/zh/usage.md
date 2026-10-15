@@ -14,6 +14,26 @@
 
 Responses 和 Anthropic 自适应模式原样发送档位。Anthropic 预算模式将 `xhigh` 映射为 32,768 token，低于 `max` 的 64,000，并根据输出上限为回答预留空间。Gemini 将 `xhigh` 按 `high` 处理，保留 Gemini 2.5 Pro 在 `max` 下的更大预算。Chat Completions 当前不发送推理参数。
 
+## 快速模式
+
+`/fast` 切换请求的快速模式偏好；`/fast on` 和 `/fast off` 明确开启或关闭。`/fast status` 显示请求、当前模型/provider 是否应用，以及上次回复的实际服务档位或 Claude 速度（例如 `priority`、`default`、`fast` 或 `standard`），不会更改偏好。不支持的模型会保留请求，供之后切换到支持的模型使用，并显示未应用的原因。
+
+快速模式请求更快的服务，不改变模型或思考强度。预设取决于端点和模型：
+
+| Provider | 预设与限制 |
+| --- | --- |
+| Claude 官方 API | 支持的 Claude Opus 模型使用 Anthropic 的 `speed: "fast"`（研究预览）。快速模式有单独的速率限制。不会自动为兼容网关、Bedrock、Vertex、Foundry 或 Claude Platform on AWS 启用。 |
+| OpenAI | Chat Completions 和 Responses 请求 `service_tier: "priority"`；可用性取决于模型和账号。Priority 共享该模型在标准模式下的速率限制。响应报告实际档位，降级后可能是标准档位。 |
+| xAI | 仅对纯文本请求使用 `priority`。含图片的请求不应用该档位；优先容量不足时可回退到 `default`。 |
+| Google Gemini | 为支持的模型请求 `priority`。通过响应头 `x-gemini-service-tier` 获取实际档位；容量超限时可以无错误地降级为标准档位。 |
+| OpenRouter | 仅部分受支持的模型：OpenAI、Anthropic 快速模式、Google Vertex/AI Studio 和 xAI 类别。可用性和价格取决于所选模型及上游端点，仅匹配模型目录不保证支持。 |
+| DeepInfra | 仅标记支持优先处理的模型可用。确认支持后配置模型的 `fast` 服务档位覆盖；不支持的档位可能静默按标准速度运行。 |
+| DeepSeek 和 Moonshot/Kimi 官方 API | DeepSeek 没有快速请求参数。Kimi 需要切换到独立的 `*-highspeed` 模型；`/fast` 不切换模型。 |
+
+定价和容量限制因 provider 而异。请求可回退到标准模式，但不会关闭偏好；更改偏好可能使提示词缓存失效。`/cost` 按模型将实际报告的用量分为快速和标准行，不根据请求推断快速计费。溢价费率未知时，`/fast status` 会提示，`/cost` 会将受影响的金额和总计标注为**标准价格估算**，并说明**溢价未知**。这不是精确的快速模式费用；设置可选的 `cost.fast` 前，请核实 provider 的当前费率。
+
+默认关闭。在[设置](settings.md#快速模式)中指定 `"fastMode": true` 可在启动时请求快速模式，该节也提供端点/模型覆盖示例。交互式 `/fast` 的实际更改会将偏好保存到用户设置，并在允许时保存到项目的 `settings.local.json`；查询状态或选择当前值不会保存。打印模式、RPC 和扩展中的更改不会保存。子 agent 继承偏好，但仅在支持时应用。
+
 ## 终端模式与对话记录
 
 ```sh

@@ -165,6 +165,11 @@ function storedInfo(
     if (!m.usage) continue
     usage = addUsage(usage, m.usage)
   }
+  // Bill every persisted attempt, not just the current model context. Private replies and
+  // consultations already have one side_usage receipt each; do not add descendant totals here.
+  for (const e of store.entries) {
+    if (e.type === "side_usage") usage = addUsage(usage, e.usage)
+  }
   // A child has one turn: its task is the last user message (a forked one follows the history).
   const asked = messages.findLast((m) => m.role === "user")
   const task = asked ? asked.content.map((b) => (b.type === "text" ? b.text : "")).join("") : ""

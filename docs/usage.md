@@ -14,6 +14,26 @@ After you pick a thinking-capable model in the interactive `/model` picker, a se
 
 Responses and Anthropic adaptive mode send the level unchanged. Anthropic budget mode maps `xhigh` to 32,768 tokens, below `max` at 64,000, capped to leave room for the answer. Gemini maps `xhigh` like `high`, keeping its larger `max` budget for Gemini 2.5 Pro. Chat Completions currently does not send reasoning parameters.
 
+## Fast mode
+
+`/fast` toggles the requested fast-mode preference. `/fast on` and `/fast off` set it explicitly; `/fast status` reports the request, whether it applies to the current model/provider, and the last reply's actual service tier or Claude speed (for example, `priority`, `default`, `fast` or `standard`). Status does not change the preference. Unsupported models keep the request for a supported one and show the reason it is not applied.
+
+Fast mode requests faster serving, not a different model or thinking effort. Presets depend on the endpoint and model:
+
+| Provider | Preset and limits |
+| --- | --- |
+| First-party Claude API | Supported Claude Opus models use Anthropic `speed: "fast"` (research preview). Fast mode has separate rate limits. This does not automatically enable compatible gateways, Bedrock, Vertex, Foundry or Claude Platform on AWS. |
+| OpenAI | Chat Completions and Responses request `service_tier: "priority"`; availability depends on the model and your account. Priority shares the standard model's rate limits. The response reports the actual tier, which can be standard after a downgrade. |
+| xAI | Requests `priority` for text-only requests. Requests containing images do not apply the tier; priority capacity can fall back to `default`. |
+| Google Gemini | Requests `priority` on supported models. The `x-gemini-service-tier` response header reports the tier actually served; capacity overflow can downgrade to standard without an error. |
+| OpenRouter | Only selected supported models: OpenAI, Anthropic fast mode, Google Vertex/AI Studio and xAI categories. Availability and pricing depend on the selected model and upstream endpoint; a catalog match alone does not guarantee support. |
+| DeepInfra | Priority is available only on models tagged for it. Configure the model's `fast` service-tier override when supported; unsupported tiers may silently run at standard speed. |
+| First-party DeepSeek and Moonshot/Kimi | DeepSeek has no fast request flag. For Kimi, switch to a separate `*-highspeed` model; `/fast` does not switch models. |
+
+Pricing and capacity limits depend on the provider. A request can fall back to standard without turning off your preference; changing the preference may invalidate the prompt cache. `/cost` groups each model's actual reported usage into fast and standard rows, never inferring fast billing from the request. When premium rates are unknown, `/fast status` warns and `/cost` marks affected amounts and totals as **standard-rate estimates**, with a **premium pricing unknown** note. These are not exact premium charges; verify your provider's current rates before setting optional `cost.fast` prices.
+
+The default is off. Set `"fastMode": true` in [Settings](settings.md#fast-mode) to request it at startup; that section also shows endpoint/model overrides. Interactive `/fast` changes save the preference to your user settings and, when allowed, the project's `settings.local.json`; status and unchanged choices do not save. Print mode, RPC and extension changes do not save it. Sub-agents inherit the preference but apply it only where supported.
+
 ## Terminal modes and the transcript
 
 ```sh

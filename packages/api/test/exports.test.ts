@@ -7,10 +7,14 @@ import type {
   EventMap,
   ExtensionAPI,
   ExtensionView,
+  ModelSettings,
   OwnedConversation,
   OwnedConversations,
   PanelRenderOptions,
   PrintOptions,
+  SessionControl,
+  SessionInfo,
+  Settings,
   ShimmerColors,
   ShimmerEffect,
   ShimmerOptions,
@@ -24,6 +28,7 @@ import type {
   TuiSettings,
   UiRequest,
   UiRequestOptions,
+  Usage,
 } from "../src/index.ts"
 
 test("the public API exports stay stable", async () => {
@@ -212,6 +217,69 @@ test("the public display-state source contract handles clean stops and pauses wi
       ],
       "terminal": "stopped",
       "version": "0.1.53",
+    }
+  `)
+})
+
+test("the fast mode contract is additive without a version bump", () => {
+  const settings: Pick<Settings, "fastMode"> = { fastMode: true }
+  const state: Pick<SessionInfo, "fastMode"> = {
+    fastMode: { requested: true, applied: true, used: "standard" },
+  }
+  const control: Pick<SessionControl, "setFastMode"> = {
+    setFastMode: (enabled) => {
+      settings.fastMode = enabled
+    },
+  }
+  control.setFastMode(false)
+  expect({ settings, state, methods: Object.keys(control) }).toMatchInlineSnapshot(`
+    {
+      "methods": [
+        "setFastMode",
+      ],
+      "settings": {
+        "fastMode": false,
+      },
+      "state": {
+        "fastMode": {
+          "applied": true,
+          "requested": true,
+          "used": "standard",
+        },
+      },
+    }
+  `)
+})
+
+test("provider-neutral fast options and served tiers remain additive", () => {
+  const fast: ModelSettings["fast"] = { kind: "service-tier", value: "priority", textOnly: true }
+  const usage: Pick<Usage, "serviceTier" | "pricingUnknown"> = {
+    serviceTier: "priority",
+    pricingUnknown: true,
+  }
+  const status: SessionInfo["fastMode"] = {
+    requested: true,
+    applied: true,
+    used: "priority",
+    pricingUnknown: true,
+  }
+  expect({ fast, usage, status }).toMatchInlineSnapshot(`
+    {
+      "fast": {
+        "kind": "service-tier",
+        "textOnly": true,
+        "value": "priority",
+      },
+      "status": {
+        "applied": true,
+        "pricingUnknown": true,
+        "requested": true,
+        "used": "priority",
+      },
+      "usage": {
+        "pricingUnknown": true,
+        "serviceTier": "priority",
+      },
     }
   `)
 })

@@ -204,6 +204,8 @@ export class MessagesAccumulator {
     if (!u || typeof u !== "object") return
     this.message.usage ??= emptyUsage()
     const usage = this.message.usage
+    if (u.speed === "fast" || u.speed === "standard") usage.speed = u.speed
+    if (typeof u.service_tier === "string") usage.serviceTier = u.service_tier
     const pick = (v: unknown, prev: number) => (typeof v === "number" ? v : prev)
     usage.input = pick(u.input_tokens, usage.input)
     usage.output = pick(u.output_tokens, usage.output)

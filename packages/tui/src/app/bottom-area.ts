@@ -116,6 +116,9 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         priority: model?.priority ?? 40,
         text: `${model?.text ?? fallback} ${glyphs.separator} ${agent.permissions.mode}`,
       },
+      ...(agent.fastModeApplied
+        ? [{ id: "fast", align: "right", tone: "accent", priority: 40, text: "fast" } as const]
+        : []),
     ]
   }
   const inputBox = new InputBox(editor, statusItems)

@@ -30,6 +30,47 @@ Existing files must be strict JSON. An invalid file is left untouched with a war
 
 `/thinking default` saves the top-level `"thinking": "default"` sentinel. This overrides effort set by earlier top-level settings layers and sends no explicit effort, leaving it to the server; it does not disable thinking. Per-model `thinking` keeps its existing precedence over the top-level setting.
 
+## Fast mode
+
+`fastMode` is a boolean, off by default. It requests fast/priority serving on supported models and endpoints; it does not change the model or thinking effort. Start with `"fastMode": true` and the endpoint/model presets described in [Fast mode](usage.md#fast-mode), rather than adding an override to every model.
+
+`/fast` toggles the request, `/fast on` and `/fast off` set it, and `/fast status` reports the request, application, last-used actual service tier or Claude speed, and any unavailable reason or unknown-pricing note. Unsupported models/providers keep the request but do not apply it. Interactive changes save `fastMode` to the same user and permitted project-local files described above; print mode, RPC and extension changes do not save it. Switching modes may invalidate the prompt cache.
+
+To override a preset, set `providers.<id>.models[].fast`, or `defaultModel.fast` for a provider-wide default. `false` disables it; `{ "kind": "anthropic-speed" }` uses Claude speed; `{ "kind": "service-tier", "value": "priority" }` requests a service tier. Service-tier options are `textOnly` (skip requests containing images) and `responseHeader` (read the actual tier from that HTTP response header). A catalog model name alone does not enable arbitrary compatible endpoints.
+
+The following is an override fragment for **already configured** providers: use your provider IDs and actual supported model IDs. Apply a provider-wide default only if all models you use there support it; otherwise put `fast` on individual model entries. For DeepInfra, enable priority only for appropriately tagged models. Gateways must actually support the selected request format.
+
+```json
+{
+  "fastMode": true,
+  "providers": {
+    "deepinfra": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority" }
+      }
+    },
+    "xai": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority", "textOnly": true }
+      }
+    },
+    "google": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority", "responseHeader": "x-gemini-service-tier" }
+      }
+    },
+    "claude-gateway": {
+      "models": [
+        { "id": "supported-opus-id", "fast": { "kind": "anthropic-speed" } },
+        { "id": "unsupported-model-id", "fast": false }
+      ]
+    }
+  }
+}
+```
+
+Model `cost.fast` is optional and contains fast-tier `input`, `output`, `cacheRead` and `cacheWrite` prices in USD per million tokens; `input` and `output` are required if it is set. Built-in premium prices currently cover confirmed Claude fast rates only; other premiums remain unknown unless you configure `cost.fast`. Enter only rates verified with your provider; these examples intentionally include no unverified prices. If fast/priority usage is reported but premium rates are unknown, cost uses a standard-rate estimate and sets an unknown-pricing marker. `/cost` splits reported fast and standard usage, labels affected amounts and totals as estimates, and says premium pricing is unknown. Standard estimates are not exact premium charges. Actual tier, normalized speed and pricing uncertainty are usage/session metadata, not settings keys.
+
 ## User-only keys
 
 A project file travels with whatever repository you clone, so it may not decide where requests and API keys go, turn on server-side compaction, which sends the conversation to an endpoint in a different form, or decide which packages load and which projects are trusted. These keys are ignored, with a warning, in project files and `settings.local.json`:
@@ -122,6 +163,7 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 | --- | --- | --- | --- | --- |
 | `model` | `string` | none | Default model as `"provider/model"`. Without it, Amira uses the resumed session's model, or the first model of the only provider. `--model` and `AMIRA_MODEL` override it for one run; interactive `/model` changes save the model and thinking choice (see [Saving model and thinking choices](#saving-model-and-thinking-choices)). |  |
 | `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "default"` | none | Reasoning effort for main conversation requests on models with `caps.thinking`. Unset or `"default"` leaves effort to the server; it does not turn thinking off. `"default"` overrides earlier top-level layers. A model's `thinking` still overrides this; `--thinking` overrides both for one run. Interactive `/thinking` changes save the model and thinking choice; `/thinking default` saves `"default"`. Sub-agents inherit the parent's selected effort; titles and compaction do not. |  |
+| `fastMode` | `boolean` | none | Request fast/priority serving on supported models and endpoints; off when unset. Interactive `/fast` changes are remembered; unsupported models retain the preference without sending it. Sub-agents inherit it. Changing speed may invalidate the prompt cache. Unknown premium prices use a clearly marked standard-rate estimate. |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Which shell tools the model gets on Windows: `"auto"` offers both `bash` and `powershell`, `"bash"` or `"powershell"` hides the other one. Elsewhere only `bash` exists. `--shell` wins. |  |
 | `tools.disabled` | `string[]` | `[]` | Tool names to hide from the model. `--disable-tools` replaces the list for one run; `/tools` changes the current session only. |  |
 | `maxParallelTools` | `number` | `8` | Most tool calls running at once. Use a whole number of at least 1; invalid values warn and use the default, even over a valid value in a lower-precedence file. |  |
@@ -158,11 +200,21 @@ Amira has no built-in providers: an entry needs `dialect` and `baseUrl`, and `ba
 | `providers.<id>.models[].contextWindow` | `number` | catalog, else `128000` | Context window in tokens. Compaction and `/context` use it. |  |
 | `providers.<id>.models[].maxOutput` | `number` | catalog, else `8192` | Most output tokens per reply. |  |
 | `providers.<id>.models[].compat.thinkingDisplay` | `"summarized" \| "omitted"` | defaultModel, then the provider's | Thinking display for this model; overrides the provider's setting. Otherwise uses defaultModel, then the provider, then the endpoint default. |  |
+| `providers.<id>.models[].fast` | `object \| false` | endpoint/model preset | Fast-serving request configuration; `false` disables the preset. Use `{ "kind": "anthropic-speed" }` for Claude speed, or `{ "kind": "service-tier", "value": "priority" }` for a compatible service tier. Set only for endpoints/models that support it; see [Fast mode](#fast-mode). |  |
+| `providers.<id>.models[].fast.kind` | `"anthropic-speed" \| "service-tier"` | none | `"anthropic-speed"` sends Claude `speed: "fast"`; `"service-tier"` sends the configured `service_tier` value. Required when `fast` is an object. |  |
+| `providers.<id>.models[].fast.value` | `string` | none | Requested service tier, usually `"priority"`; required only for `"service-tier"`. Actual usage comes from the response, not this value. |  |
+| `providers.<id>.models[].fast.textOnly` | `boolean` | `false` | Apply the service tier only to text-only requests; omit it when images are present. Used for xAI priority. |  |
+| `providers.<id>.models[].fast.responseHeader` | `string` | none | HTTP response header reporting the tier actually served, such as Google `"x-gemini-service-tier"`; otherwise read the response body. |  |
 | `providers.<id>.models[].cost.input` | `number` | catalog | USD per million input tokens; `input` and `output` are required when `cost` is set. |  |
 | `providers.<id>.models[].cost.output` | `number` | catalog | USD per million output tokens. |  |
 | `providers.<id>.models[].cost.cacheRead` | `number` | catalog | USD per million tokens read from the prompt cache. |  |
 | `providers.<id>.models[].cost.cacheWrite` | `number` | catalog | USD per million tokens written to the prompt cache. |  |
 | `providers.<id>.models[].cost.webSearch` | `number` | unknown | USD per hosted web search. Catalogs list no search fees, so without it a reply that searched shows its cost as unknown. |  |
+| `providers.<id>.models[].cost.fast.input` | `number` | catalog | USD per million fast input tokens; `input` and `output` are required when `cost.fast` is set. Used only for reported fast/priority usage. Optional: without verified premium rates, costs use standard-rate estimates and warn that premium pricing is unknown. |  |
+| `providers.<id>.models[].cost.fast.output` | `number` | catalog | USD per million fast output tokens. |  |
+| `providers.<id>.models[].cost.fast.cacheRead` | `number` | input cache multiplier | USD per million fast cache-read tokens; otherwise the standard cache/input ratio applies to the fast input price. |  |
+| `providers.<id>.models[].cost.fast.cacheWrite` | `number` | input cache multiplier | USD per million fast cache-write tokens; otherwise the standard cache/input ratio applies to the fast input price. |  |
+| `providers.<id>.models[].cost.fast.maxInputTokens` | `number` | no limit, unless the preset sets one | Largest prompt token count covered by these premium rates. Beyond it, mark premium pricing as unknown and use a standard-rate estimate instead of treating short-context rates as exact. |  |
 | `providers.<id>.models[].caps.tools` | `"native" \| "none"` | `"native"` | `"none"` for a model that cannot call tools. |  |
 | `providers.<id>.models[].caps.images` | `boolean` | `false` | The model accepts images. |  |
 | `providers.<id>.models[].caps.thinking` | `boolean` | `false` | The model can reason; `anthropic-messages` asks for thinking only when this is set. |  |

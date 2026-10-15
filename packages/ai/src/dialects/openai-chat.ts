@@ -1,10 +1,12 @@
 import type { Dialect, DialectContext, ProviderCompat } from "../dialect.ts"
+import { fastBody } from "../fast-mode.ts"
 import { requestHeaders } from "../request-headers.ts"
 import { DEFAULT_MAX_TOKENS_FIELD, DEFAULT_STREAM_USAGE } from "../settings-defaults.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
+import { httpError } from "./http-stream.ts"
 import { ChatAccumulator } from "./openai-chat-accumulate.ts"
-import { bodyError, isRetryableBodyError, isRetryableStatus } from "./openai-chat-errors.ts"
+import { bodyError, isRetryableBodyError } from "./openai-chat-errors.ts"
 import { toChatMessages } from "./openai-chat-messages.ts"
 import { withRetryAfter } from "./retry-after.ts"
 
@@ -48,11 +50,7 @@ export const openaiChat: Dialect = {
     }
     if (!res.ok) {
       const detail = await res.text().catch(() => "")
-      const status = res.status
-      const failed = acc.fail(
-        { message: `HTTP ${status}: ${detail.slice(0, 500)}`, status },
-        isRetryableStatus(status) || isRetryableBodyError({ message: detail, status }),
-      )
+      const failed = acc.fail(...httpError(res.status, detail))
       yield withRetryAfter(failed, res.headers)
       return
     }
@@ -116,6 +114,7 @@ function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<str
     model: req.model.id,
     messages: toChatMessages(req.systemPrompt, req.messages, { images: req.model.caps.images }),
     stream: true,
+    ...fastBody(req),
   }
   if ((compat.streamUsage ?? DEFAULT_STREAM_USAGE) !== false) body.stream_options = { include_usage: true }
   if (req.tools.length && req.model.caps.tools === "native") {
@@ -151,6 +150,7 @@ async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<S
   yield { type: "start" }
   yield* acc.apply({
     usage: json.usage,
+    service_tier: json.service_tier,
     choices: [{ delta: choice.message, finish_reason: choice.finish_reason }],
   })
   yield* acc.finishThinking()

@@ -30,6 +30,47 @@ Amira は起動時に JSON ファイルから設定を読み込みます。す�
 
 `/thinking default` は、トップレベルに `"thinking": "default"` という特別な値を保存します。これは、それより前のトップレベルの設定レイヤーで指定した推論の強度を上書きし、明示的な強度を送らずにサーバーに任せます。思考を無効にするものではありません。モデルごとの `thinking` は、引き続き従来の優先順位でトップレベルの設定より優先されます。
 
+## 高速モード
+
+`fastMode` は真偽値で、デフォルトはオフです。対応するモデルとエンドポイントに高速/優先処理を要求し、モデルや思考の強度は変更しません。まずは `"fastMode": true` と[高速モード](usage.md#高速モード)で説明するエンドポイント/モデルのプリセットを使ってください。すべてのモデルに上書きを追加する必要はありません。
+
+`/fast` は要求を切り替え、`/fast on` と `/fast off` は明示的に設定します。`/fast status` は、要求、適用状況、最後の実際のサービス層または Claude の速度、利用できない理由や料金不明の注意を表示します。非対応のモデル/プロバイダーでは要求を保持しますが、適用しません。対話中の変更は、上記のユーザーファイルと保存が許可されたプロジェクトローカルファイルに `fastMode` を保存します。print モード、RPC、拡張機能による変更では保存しません。モードを切り替えるとプロンプトキャッシュが無効になる場合があります。
+
+プリセットを上書きするには `providers.<id>.models[].fast` を、プロバイダー共通のデフォルトには `defaultModel.fast` を設定します。`false` は無効化、`{ "kind": "anthropic-speed" }` は Claude の速度指定、`{ "kind": "service-tier", "value": "priority" }` はサービス層の要求です。サービス層には `textOnly`（画像を含むリクエストを除外）と `responseHeader`（指定した HTTP レスポンスヘッダーから実際の層を取得）も指定できます。カタログのモデル名と一致するだけでは、任意の互換エンドポイントで有効にはなりません。
+
+以下は**設定済み**のプロバイダーに加える上書き設定です。自身のプロバイダー ID と実際に対応するモデル ID に置き換えてください。使用するすべてのモデルが対応する場合だけプロバイダー共通のデフォルトを使い、それ以外は個々のモデルに `fast` を設定してください。DeepInfra では対応タグのあるモデルだけで優先処理を有効にします。ゲートウェイは選択したリクエスト形式に対応している必要があります。
+
+```json
+{
+  "fastMode": true,
+  "providers": {
+    "deepinfra": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority" }
+      }
+    },
+    "xai": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority", "textOnly": true }
+      }
+    },
+    "google": {
+      "defaultModel": {
+        "fast": { "kind": "service-tier", "value": "priority", "responseHeader": "x-gemini-service-tier" }
+      }
+    },
+    "claude-gateway": {
+      "models": [
+        { "id": "supported-opus-id", "fast": { "kind": "anthropic-speed" } },
+        { "id": "unsupported-model-id", "fast": false }
+      ]
+    }
+  }
+}
+```
+
+モデルの `cost.fast` は任意で、`input`、`output`、`cacheRead`、`cacheWrite` に高速層の 100 万トークン当たりの米ドル料金を指定します。設定する場合、`input` と `output` は必須です。組み込みの追加料金は、確認済みの Claude 高速料金だけです。その他は `cost.fast` を設定するまで不明として扱います。プロバイダーに確認した料金だけを入力してください。例には未確認の料金を含めていません。高速/優先処理の使用が報告されても追加料金が不明な場合、標準料金で見積もり、料金不明のフラグを付けます。`/cost` は報告された高速と標準の使用量を分け、対象金額と合計を見積もりと表示し、追加料金が不明であることを明記します。標準料金の見積もりは正確な高速料金ではありません。実際の層、正規化した速度、料金の不確実性は使用量/セッションのメタデータであり、設定キーではありません。
+
 ## ユーザーファイル専用のキー
 
 プロジェクトファイルはクローンしたリポジトリに付属するため、リクエストや API キーの送信先を決めたり、会話を別の形式でエンドポイントに送るサーバー側圧縮を有効にしたり、読み込むパッケージや信頼するプロジェクトを決めたりすることはできません。以下のキーは、プロジェクトファイルと `settings.local.json` では警告を出して無視します。
@@ -122,6 +163,7 @@ Brave で検索し、失敗した場合は Exa、SearXNG インスタンスの�
 | --- | --- | --- | --- | --- |
 | `model` | `string` | なし | デフォルトのモデルを `"provider/model"` 形式で指定します。未設定の場合、Amira は再開したセッションのモデル、またはプロバイダーが 1 つだけならその最初のモデルを使用します。`--model` と `AMIRA_MODEL` は 1 回の実行に限って上書きします。対話中の `/model` による変更は、モデルと思考設定を保存します（[モデルと思考設定の保存](#モデルと思考設定の保存)を参照）。 |  |
 | `thinking` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "default"` | なし | `caps.thinking` を持つモデルで、メインの会話リクエストに使う推論の強度です。未設定または `"default"` では強度をサーバーに任せます。思考を無効にするものではありません。`"default"` は、それより前のトップレベルの設定レイヤーを上書きします。モデルごとの `thinking` は引き続きこの設定より優先され、`--thinking` は 1 回の実行に限って両方を上書きします。対話中の `/thinking` による変更はモデルと思考設定を保存し、`/thinking default` は `"default"` を保存します。サブエージェントは親が選択した強度を引き継ぎますが、タイトル生成と圧縮には引き継がれません。 |  |
+| `fastMode` | `boolean` | なし | 対応するモデルとエンドポイントで高速/優先処理を要求します。未設定時は無効です。対話中の `/fast` による変更は保存され、非対応モデルでは送信せずに設定を保持します。サブエージェントも引き継ぎます。速度を変更するとプロンプトキャッシュが無効になる場合があります。追加料金が不明な場合は、標準料金による見積もりと明記します。 |  |
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Windows でモデルに提供するシェルツールです。`"auto"` は `bash` と `powershell` の両方を提供し、`"bash"` または `"powershell"` はもう一方を非表示にします。他のプラットフォームでは `bash` のみです。`--shell` が優先されます。 |  |
 | `tools.disabled` | `string[]` | `[]` | モデルに表示しないツールの名前です。`--disable-tools` は 1 回の実行に限ってリストを置き換え、`/tools` は現在のセッションだけを変更します。 |  |
 | `maxParallelTools` | `number` | `8` | 同時に実行できるツール呼び出しの最大数です。1 以上の整数を指定してください。無効な値には警告を表示し、優先順位の低いファイルに有効な値があってもデフォルトを使用します。 |  |
@@ -158,11 +200,21 @@ Amira に組み込みのプロバイダーはありません。各エントリ�
 | `providers.<id>.models[].contextWindow` | `number` | カタログの値、なければ `128000` | コンテキストウィンドウのトークン数です。圧縮と `/context` で使用します。 |  |
 | `providers.<id>.models[].maxOutput` | `number` | カタログの値、なければ `8192` | 1 回の返信で出力できるトークン数の上限です。 |  |
 | `providers.<id>.models[].compat.thinkingDisplay` | `"summarized" \| "omitted"` | defaultModel、次にプロバイダーの設定 | このモデルの思考の表示方法です。プロバイダーの設定を上書きします。未設定の場合は defaultModel、プロバイダー、エンドポイントのデフォルトの順に使用します。 |  |
+| `providers.<id>.models[].fast` | `object \| false` | エンドポイント/モデルのプリセット | 高速処理のリクエスト設定です。`false` でプリセットを無効にします。Claude の速度指定には `{ "kind": "anthropic-speed" }`、互換サービス層には `{ "kind": "service-tier", "value": "priority" }` を使います。対応するエンドポイント/モデルだけに設定してください。[高速モード](#高速モード)を参照してください。 |  |
+| `providers.<id>.models[].fast.kind` | `"anthropic-speed" \| "service-tier"` | なし | `"anthropic-speed"` は Claude の `speed: "fast"` を送信し、`"service-tier"` は設定した `service_tier` の値を送信します。`fast` がオブジェクトの場合は必須です。 |  |
+| `providers.<id>.models[].fast.value` | `string` | なし | 要求するサービス層で、通常は `"priority"` です。`"service-tier"` の場合のみ必須です。実際の使用量はこの値ではなく、レスポンスに基づきます。 |  |
+| `providers.<id>.models[].fast.textOnly` | `boolean` | `false` | テキストのみのリクエストにサービス層を適用し、画像が含まれる場合は送信しません。xAI の優先処理で使用します。 |  |
+| `providers.<id>.models[].fast.responseHeader` | `string` | なし | 実際に使用されたサービス層を報告する HTTP レスポンスヘッダーです。Google では `"x-gemini-service-tier"` を指定します。未指定時はレスポンス本文を読み取ります。 |  |
 | `providers.<id>.models[].cost.input` | `number` | カタログの値 | 入力 100 万トークンあたりの料金（USD）です。`cost` を設定する場合、`input` と `output` は必須です。 |  |
 | `providers.<id>.models[].cost.output` | `number` | カタログの値 | 出力 100 万トークンあたりの料金（USD）です。 |  |
 | `providers.<id>.models[].cost.cacheRead` | `number` | カタログの値 | プロンプトキャッシュから読み取る 100 万トークンあたりの料金（USD）です。 |  |
 | `providers.<id>.models[].cost.cacheWrite` | `number` | カタログの値 | プロンプトキャッシュに書き込む 100 万トークンあたりの料金（USD）です。 |  |
 | `providers.<id>.models[].cost.webSearch` | `number` | 不明 | ホスト型 Web 検索 1 回あたりの料金（USD）です。カタログには検索料金がないため、未設定の場合、検索した返信の料金は不明と表示されます。 |  |
+| `providers.<id>.models[].cost.fast.input` | `number` | カタログの値 | 高速入力 100 万トークンあたりの料金（USD）。`cost.fast` を指定する場合、`input` と `output` は必須です。報告された高速/優先処理の使用量だけに適用します。省略可能で、確認済みの追加料金がなければ標準料金で見積もり、追加料金が不明であることを表示します。 |  |
+| `providers.<id>.models[].cost.fast.output` | `number` | カタログの値 | 高速出力 100 万トークンあたりの料金（USD）です。 |  |
+| `providers.<id>.models[].cost.fast.cacheRead` | `number` | 入力キャッシュ倍率 | 高速キャッシュ読み取り 100 万トークンあたりの料金（USD）。未指定時は標準のキャッシュ対入力料金比率を高速入力料金に適用します。 |  |
+| `providers.<id>.models[].cost.fast.cacheWrite` | `number` | 入力キャッシュ倍率 | 高速キャッシュ書き込み 100 万トークンあたりの料金（USD）。未指定時は標準のキャッシュ対入力料金比率を高速入力料金に適用します。 |  |
+| `providers.<id>.models[].cost.fast.maxInputTokens` | `number` | プリセットで指定しない限り無制限 | この追加料金が適用されるプロンプトの最大トークン数です。超えた場合は追加料金を不明とし、短いコンテキスト向けの料金を正確な金額として扱わず、標準料金で見積もります。 |  |
 | `providers.<id>.models[].caps.tools` | `"native" \| "none"` | `"native"` | ツールを呼び出せないモデルには `"none"` を指定します。 |  |
 | `providers.<id>.models[].caps.images` | `boolean` | `false` | モデルが画像入力を受け付けることを示します。 |  |
 | `providers.<id>.models[].caps.thinking` | `boolean` | `false` | モデルが推論できることを示します。`anthropic-messages` は、この設定が有効な場合にのみ思考を要求します。 |  |

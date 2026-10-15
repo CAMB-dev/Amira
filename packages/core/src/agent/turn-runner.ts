@@ -22,7 +22,7 @@ import type { buildContext } from "./context-builder.ts"
 import type { ContextManager } from "./context-manager.ts"
 import type { History } from "./history.ts"
 import { joinMessages, modelRef } from "./messages.ts"
-import { modelCall, type Thinking } from "./model-call.ts"
+import { modelCall, reportedSpeed, type Thinking } from "./model-call.ts"
 import type { NoticeInbox } from "./notices.ts"
 import type { ToolRunner } from "./tool-runner.ts"
 import {
@@ -54,6 +54,8 @@ interface TurnRunnerDeps {
   execution: PauseGate
   tools: ToolRegistry
   thinking: Thinking
+  fastMode: () => boolean
+  recordSpeed: (speed: string | undefined, pricingUnknown?: boolean) => void
   model: () => ModelInfo
   maxSteps: number
   maxTokens: number | undefined
@@ -69,6 +71,7 @@ interface TurnRunnerDeps {
   ownsIdleNotices: () => boolean
   endTurn: () => boolean | undefined
   recordTreeUsage: (usage: Usage) => void
+  recordAttempt: (message: AssistantMessage) => void
 }
 
 type ModelReply =
@@ -288,10 +291,14 @@ export class TurnRunner {
       tools: () => this.#deps.offeredTools(),
       maxTokens: this.#deps.maxTokens,
       thinking: this.#deps.thinking.for(this.#deps.model()),
+      fastMode: this.#deps.fastMode(),
+      recordAttempt: this.#deps.recordAttempt,
       signal: turn.signal,
       emit: <K extends keyof EventMap>(type: K, data: EventMap[K]) => this.#deps.emit(turn, type, data),
     })
     const { message, aborted, error, modelError } = call
+    const speed = reportedSpeed(this.#deps.model(), message.usage)
+    this.#deps.recordSpeed(speed, message.usage?.pricingUnknown)
     if (!aborted && !error)
       message.content = message.content.map((b) => (b.type === "toolCall" ? this.#fixToolName(b) : b))
     if (message.content.length) this.#deps.history.push(message)

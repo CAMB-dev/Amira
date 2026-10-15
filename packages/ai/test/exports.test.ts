@@ -35,6 +35,7 @@ test("the public ai exports stay stable", async () => {
     "forReplay",
     "geminiBody",
     "googleGemini",
+    "hasFastMode",
     "hasNativeWebSearch",
     "hasUnpricedSearch",
     "host",

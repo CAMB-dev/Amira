@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from "node:fs"
 import path from "node:path"
-import { type Ai, type Message, userMessage } from "@amira/ai"
+import { type Ai, hasFastMode, type Message, userMessage } from "@amira/ai"
 import type {
   ConversationRuntime,
   ConversationSpec,
@@ -160,6 +160,7 @@ export class OwnedConversationManager {
           context: main.context,
           tree,
           thinking: main.thinking.for(model),
+          fastMode: main.fastMode && hasFastMode(model),
           fileRewindSettings: main.fileRewindSettings,
           backgroundJobs: main.backgroundJobsHost,
           maxParallelTools: main.maxParallelTools,

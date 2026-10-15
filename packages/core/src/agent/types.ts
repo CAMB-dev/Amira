@@ -65,6 +65,8 @@ export type Asker = (request: AskRequest, signal: AbortSignal) => Promise<AskOut
 export interface AgentOptions {
   ai: Ai
   model: ModelInfo
+  /** Session preference; sent only when the model and dialect support fast mode. */
+  fastMode?: boolean
   /** Explicit effort from a CLI flag or parent agent; overrides per-model settings. */
   thinking?: ReasoningEffort
   /** Top-level setting, used when no explicit or per-model effort is set. */

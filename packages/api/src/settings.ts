@@ -75,6 +75,8 @@ export interface Settings {
   model?: string
   /** Reasoning effort for thinking models; "default" explicitly leaves effort to the server. */
   thinking?: ReasoningEffort | "default"
+  /** Prefer each supported model's faster serving tier. Default false. */
+  fastMode?: boolean
   /** baseUrl, apiKeyEnv, apiKeyEnvFallbacks and headers are only taken from the user file. */
   providers?: Record<string, ProviderSettings>
   /** Which shell tools the model gets on Windows (D68). */

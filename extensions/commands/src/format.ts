@@ -63,39 +63,45 @@ export function table(rows: string[][]): string {
 
 export interface ModelCost {
   model: string
+  speed: "fast" | "standard"
   replies: number
   usage: Usage
   /** Undefined when no reply had a price, or a search fee is unknown. */
   cost?: number
 }
 
-/** Usage and cost of the replies, per model in the order they were first used. */
+/** Usage and cost of replies, per model and reported speed in first-use order. */
 export function costByModel(replies: readonly AssistantMessage[]): ModelCost[] {
   const out = new Map<string, ModelCost>()
   const unpricedSearch = new Set<string>()
   for (const r of replies) {
     if (!r.usage) continue
     const model = `${r.model.provider}/${r.model.model}`
-    const row = out.get(model) ?? {
+    const speed = r.usage.speed === "fast" ? "fast" : "standard"
+    const key = `${model}\0${speed}`
+    const row = out.get(key) ?? {
       model,
+      speed,
       replies: 0,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     }
     row.replies++
+    const pricingUnknown = row.usage.pricingUnknown || r.usage.pricingUnknown
     row.usage = addUsage(row.usage, r.usage)
+    if (pricingUnknown) row.usage.pricingUnknown = true
     // Counted search adjustments are reconciled by addUsage. Uncounted blocks and
     // missing token prices still need a separate marker: no search counter can resolve them.
     if (
       hasUnpricedSearch(r) &&
       ((r.usage.webSearchRequests ?? 0) === 0 || r.usage.webSearchCost !== undefined)
     )
-      unpricedSearch.add(model)
+      unpricedSearch.add(key)
     row.cost = row.usage.cost
-    if (unpricedSearch.has(model)) {
+    if (unpricedSearch.has(key)) {
       delete row.cost
       delete row.usage.cost
     }
-    out.set(model, row)
+    out.set(key, row)
   }
   return [...out.values()]
 }
@@ -143,16 +149,21 @@ export function costReport(
       count,
       `in ${formatTokens(prompt)}${cached}`,
       `out ${formatTokens(u.output)}`,
-      r.cost === undefined ? "price unknown" : formatCost(r.cost),
+      r.cost === undefined
+        ? "price unknown"
+        : `${formatCost(r.cost)}${u.pricingUnknown ? " (standard-rate estimate)" : ""}`,
     ]
   }
-  const body = rows.map((r) =>
-    r.compaction
-      ? line(r, `${r.model} (compaction)`, `${r.replies} ${r.replies === 1 ? "compaction" : "compactions"}`)
+  // Preserve the usual report for standard-only models; label both speeds once fast was used.
+  const fastModels = new Set(rows.filter((r) => r.speed === "fast").map((r) => r.model))
+  const body = rows.map((r) => {
+    const model = fastModels.has(r.model) ? `${r.model} (${r.speed})` : r.model
+    return r.compaction
+      ? line(r, `${model} (compaction)`, `${r.replies} ${r.replies === 1 ? "compaction" : "compactions"}`)
       : r.side
-        ? line(r, `${r.model} (${r.side})`, `${r.replies} requests`)
-        : line(r, r.model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`),
-  )
+        ? line(r, `${model} (${r.side})`, `${r.replies} requests`)
+        : line(r, model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`)
+  })
   if (rows.length > 1) {
     const usage = rows.reduce<Usage>((u, r) => addUsage(u, r.usage), {
       input: 0,
@@ -160,6 +171,7 @@ export function costReport(
       cacheRead: 0,
       cacheWrite: 0,
     })
+    if (rows.some((r) => r.usage.pricingUnknown)) usage.pricingUnknown = true
     body.push(line({ usage, cost: unpricedSearch ? undefined : usage.cost }, "total", ""))
   }
   const priced = unpricedSearch
@@ -167,7 +179,10 @@ export function costReport(
     : rows.some((r) => r.cost === undefined)
       ? "\nModels without known prices are not counted."
       : ""
-  return `Session cost by model:\n${table(body)}${priced}`
+  const premium = rows.some((r) => r.usage.pricingUnknown)
+    ? "\nPremium pricing unknown for some replies; affected amounts use standard-rate estimates."
+    : ""
+  return `Session cost by model:\n${table(body)}${priced}${premium}`
 }
 
 /** Rough token estimate: about four characters per token; images count as a flat 1000. */

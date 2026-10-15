@@ -66,6 +66,7 @@ export class ResponsesAccumulator {
   }
 
   *apply(ev: any): Generator<StreamEvent> {
+    this.#usage(ev?.response)
     switch (ev?.type) {
       case "response.output_item.added":
         yield {
@@ -117,16 +118,13 @@ export class ResponsesAccumulator {
       }
       case "response.completed":
         yield* this.#closeReasoning()
-        this.#usage(ev.response)
         this.#terminal = this.end()
         break
       case "response.incomplete":
         yield* this.#closeReasoning()
-        this.#usage(ev.response)
         this.#terminal = this.end(ev.response?.incomplete_details?.reason)
         break
       case "response.failed": {
-        this.#usage(ev.response)
         const { error, retryable } = responsesError(ev.response?.error ?? "the response failed")
         this.#terminal = this.fail(error, retryable)
         break
@@ -331,8 +329,15 @@ export class ResponsesAccumulator {
   }
 
   #usage(response: any) {
+    if (typeof response?.service_tier === "string") {
+      this.message.usage ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, outputReported: false }
+      this.message.usage.serviceTier = response.service_tier
+    }
     const u = response?.usage
-    if (u) this.message.usage = mapUsage(u)
+    if (u) {
+      this.message.usage = { ...this.message.usage, ...mapUsage(u) }
+      delete this.message.usage.outputReported
+    }
   }
 }
 

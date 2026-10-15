@@ -8,9 +8,18 @@ import type {
   ModelRef,
   ReasoningEffort,
   ToolSpec,
+  Usage,
 } from "@amira/ai"
+import { hasFastMode } from "@amira/ai"
 import type { EventMap } from "@amira/api"
 import type { AgentOptions } from "./types.ts"
+
+/** Live and restored status interpret the reported field for this model's fast option. */
+export function reportedSpeed(model: ModelInfo, usage: Usage | undefined): string | undefined {
+  if (model.dialect === "anthropic-messages" && !(model.fast && model.fast.kind === "service-tier"))
+    return usage?.speed
+  return usage?.serviceTier ?? usage?.speed
+}
 
 export type ModelCallEmit = <K extends keyof EventMap>(type: K, data: EventMap[K]) => void
 
@@ -24,8 +33,11 @@ export interface ModelCallOptions {
   tools: () => ToolSpec[]
   maxTokens?: number
   thinking?: ReasoningEffort
+  fastMode?: boolean
   signal: AbortSignal
   emit: ModelCallEmit
+  /** Keep fast-fallback usage separate from the final response's reported speed. */
+  recordAttempt?: (message: AssistantMessage) => void
 }
 
 /** The reasoning effort an agent asks for on a model; undefined sends none (the server default). */
@@ -102,6 +114,7 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
   let modelError: ModelError | undefined
   let aborted = false
   let retrying = false
+  let endedAttempt: AssistantMessage | undefined
   try {
     const stream = options.ai.stream(
       {
@@ -110,6 +123,7 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
         messages: options.messages,
         tools: options.tools(),
         ...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
+        ...(options.fastMode && hasFastMode(options.model) ? { fastMode: true } : {}),
         ...(options.model.caps.thinking && options.thinking
           ? { reasoning: { effort: options.thinking } }
           : {}),
@@ -122,6 +136,15 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
         options.emit("status.changed", { status: "working" })
       }
       switch (ev.type) {
+        case "fast.fallback":
+          if (endedAttempt) options.recordAttempt?.(endedAttempt)
+          endedAttempt = undefined
+          options.emit("extension.notice", {
+            source: "fast",
+            text: "fast mode rate-limited; this request ran at standard speed — cache miss",
+            level: "warning",
+          })
+          break
         case "request.start":
           options.emit("message.stream", { kind: "request", thinkingDisplay: ev.thinkingDisplay })
           break
@@ -132,6 +155,7 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
           options.emit("message.stream", { kind: "thinkingEnd", index: ev.index })
           break
         case "request.end":
+          endedAttempt = ev.message
           options.emit("message.stream", {
             kind: "end",
             outputTokens: ev.message.usage?.outputReported === false ? undefined : ev.message.usage?.output,

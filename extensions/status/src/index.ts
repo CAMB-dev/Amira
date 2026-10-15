@@ -54,6 +54,7 @@ export default defineExtension((api) => {
   let context = 0
   let contextWindow: number | undefined
   let cost: number | undefined
+  let pricingUnknown = false
   let unpricedSearch = false
   /** The agent tree's own total, which also counts calls made outside a turn (approvals). */
   let treeCost: number | undefined
@@ -72,6 +73,7 @@ export default defineExtension((api) => {
     context = e.data.contextTokens ?? 0
     if (e.data.contextWindow) contextWindow = e.data.contextWindow
     cost = undefined
+    pricingUnknown = false
     unpricedSearch = false
     treeCost = undefined
     place ||= path.basename(e.data.cwd)
@@ -99,6 +101,7 @@ export default defineExtension((api) => {
     const u = e.data.message.usage
     if (!u) return
     unpricedSearch ||= hasUnpricedSearch(e.data.message)
+    pricingUnknown ||= u.pricingUnknown === true
     if (u.cost !== undefined) cost = (cost ?? 0) + u.cost
     if (!own(e)) return api.requestRender()
     // An interrupted reply may end with no usage counted; the context is still what it was.
@@ -107,8 +110,8 @@ export default defineExtension((api) => {
     api.requestRender()
   })
   api.on("budget.update", (e) => {
-    if (e.data.costUsd === undefined) return
-    treeCost = e.data.costUsd
+    pricingUnknown ||= e.data.pricingUnknown === true
+    if (e.data.costUsd !== undefined) treeCost = e.data.costUsd
     api.requestRender()
   })
 
@@ -140,7 +143,7 @@ export default defineExtension((api) => {
     text: () => {
       if (unpricedSearch) return "cost unknown"
       const total = treeCost ?? cost
-      return total === undefined ? "" : formatCost(total)
+      return total === undefined ? "" : `${pricingUnknown ? "~" : ""}${formatCost(total)}`
     },
   })
   api.registerStatusItem({
