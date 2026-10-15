@@ -731,14 +731,14 @@ test("keys a block selection does not use reach the input: Ctrl+C interrupts, ty
   terminal.send(CTRL_UP)
   await waitFor(() => SELECT_BAR.test(view()), "selected again")
   terminal.send("hello")
-  await shows("│›hello")
+  await shows("│ › hello")
   expect(view()).not.toMatch(SELECT_BAR)
   // A paste too.
   terminal.send("\x03")
   terminal.send(CTRL_UP)
   await waitFor(() => SELECT_BAR.test(view()), "selected once more")
   terminal.send("\x1b[200~pasted text\x1b[201~")
-  await shows("│›pasted text")
+  await shows("│ › pasted text")
   // Ctrl+C with a selection and an empty input quits.
   terminal.send("\x03")
   terminal.send(CTRL_UP)
@@ -762,7 +762,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   const row = screen.lines.findIndex((l) => l.includes("└ read a.ts"))
   expect(row).toBeGreaterThanOrEqual(0)
   terminal.send("next question")
-  await shows("│›next question")
+  await shows("│ › next question")
   terminal.send(click(row))
   terminal.send("\r")
   await shows("second answer")
@@ -774,7 +774,7 @@ test("a click selects no block: a draft keeps Enter, typing types; right-click s
   terminal.send(click(again))
   terminal.send(click(again - 1))
   terminal.send("x")
-  await shows("│›x")
+  await shows("│ › x")
   expect(view()).not.toMatch(SELECT_BAR)
   terminal.send(click(again, 2))
   await shows("shift+right-click (or ctrl+v) pastes, shift+drag selects natively.")
@@ -845,7 +845,7 @@ test("dragging selects text across blocks, marks it, and copies it without the c
   expect(clipboard(terminal.output)).toBe(copied)
   // It stays marked; typing still goes to the input.
   terminal.send("x")
-  await shows("│›x")
+  await shows("│ › x")
   // A click clears it and does nothing else: no block is selected, nothing is copied.
   terminal.clearWrites()
   terminal.send(press(2, 1) + release(2, 1))
@@ -1044,7 +1044,7 @@ test("Ctrl+F finds text in the transcript, highlights matches and moves between 
   await waitFor(() => !view().includes("⌕ find"), "closed")
   // Typing goes to the input again.
   terminal.send("x")
-  await shows("│›x")
+  await shows("│ › x")
   terminal.send("\x03\x03")
   await exited
 })

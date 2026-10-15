@@ -1,4 +1,5 @@
 import pkg from "../package.json" with { type: "json" }
+import { installSource, upgradeCommand } from "./install-source.ts"
 
 declare const AMIRA_VERSION: string | undefined
 declare const AMIRA_CHANNEL: string | undefined
@@ -11,4 +12,6 @@ export const target =
     ? AMIRA_TARGET
     : `bun-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`
 
-export const versionLine = `${version} (${channel}, ${target})`
+const source = installSource()
+const upgrade = upgradeCommand(source)
+export const versionLine = `${version} (${channel}, ${target}; installed via ${source})${upgrade ? `; upgrade: ${upgrade}` : ""}`

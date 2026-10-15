@@ -78,7 +78,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
         expect(s.agent.messages).toHaveLength(0)
         expect(history.entries.map((entry) => entry.text)).toEqual(["/btw question"])
         s.terminal.send("\x1b[A")
-        await waitFor(() => s.live().includes("│›/btw question"), "command recalled")
+        await waitFor(() => s.live().includes("│ › /btw question"), "command recalled")
       } finally {
         await closeImageApp(s)
       }

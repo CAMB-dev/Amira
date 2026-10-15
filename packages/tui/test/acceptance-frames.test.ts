@@ -102,7 +102,8 @@ test("composer keeps both sides and its caret/content column, status reaches the
   ])
   for (const width of [30, 60, 100]) {
     const rows = box.render(width, ctx).map(stripAnsi)
-    expect(rows[1]).toBe(`│›hello${" ".repeat(width - 8)}│`)
+    expect(rows[1]).toBe(`│ › hello${" ".repeat(width - 10)}│`)
+    expect(rows[1]!.indexOf("hello")).toBe(4)
     expect(rows.at(-2)).toBe(`╰${"─".repeat(width - 2)}╯`)
     expect(rows.at(-1)).toBe(`${" ".repeat(width - 5)}ready`)
     expect(rows.every((row) => visibleWidth(row) === width)).toBe(true)

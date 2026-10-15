@@ -336,7 +336,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
         s
           .live()
           .split("\n")
-          .filter((row) => row.startsWith("│ ")),
+          .filter((row) => row.startsWith("│ ") && !row.startsWith("│ › ")),
       ).toEqual(["│ 2-earlier", "│ 2-latest", "│ 2-tail"])
       for (const release of releases) release()
       await s.shows("After the checks.")
@@ -379,7 +379,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
       expect(
         rows.filter((row) => /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/.test(row) && row.includes("stream check-")),
       ).toHaveLength(3)
-      expect(rows.filter((row) => row.startsWith("│ "))).toEqual([
+      expect(rows.filter((row) => row.startsWith("│ ") && !row.startsWith("│ › "))).toEqual([
         "│ 1-latest",
         "│ 1-tail",
         "│ 2-latest",

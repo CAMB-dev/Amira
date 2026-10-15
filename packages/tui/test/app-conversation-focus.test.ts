@@ -38,7 +38,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
       await s.shows("Main reply")
       expect(userTexts(s.agent)).toEqual(["Main history"])
       s.terminal.send("\x1b[A")
-      await waitFor(() => s.live().includes("│›Design prompt"), "owned recall")
+      await waitFor(() => s.live().includes("│ › Design prompt"), "owned recall")
       s.terminal.send(F6)
       await waitFor(() => !s.live().includes("main idle"), "return to main")
       if (mode === "fullscreen") expect(s.live()).toContain("Main history")
@@ -48,7 +48,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
       expect(userTexts(s.agent)).toEqual(["Main history", "Main prompt"])
       expect(userTexts(s.owned)).toEqual(["Design history", "Design prompt"])
       expect(s.context().focusConversation?.(s.conversation)).toBe(true)
-      await waitFor(() => s.live().includes("│›Design prompt"), "owned draft restored")
+      await waitFor(() => s.live().includes("│ › Design prompt"), "owned draft restored")
       expect(s.context().unfocusConversation?.()).toBe(true)
       expect(s.context().unfocusConversation?.()).toBe(false)
     } finally {

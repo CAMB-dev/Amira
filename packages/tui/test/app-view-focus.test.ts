@@ -109,7 +109,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
 
         // Slash both focuses and starts a command; Tab wins even over a completion popup.
         s.terminal.send("/")
-        await waitFor(() => s.live().includes("│›/"), "slash in composer")
+        await waitFor(() => s.live().includes("│ › /"), "slash in composer")
         s.terminal.send("\t")
         await hint("tab → input")
         s.terminal.send("\t\x15")
@@ -119,18 +119,18 @@ for (const mode of ["inline", "fullscreen"] as const) {
 
         // Unhandled printable keys go through the real editor. Esc keeps the draft intact.
         s.terminal.send("z")
-        await waitFor(() => s.live().includes("│›z"), "printable in composer")
+        await waitFor(() => s.live().includes("│ › z"), "printable in composer")
         expect(focused).toBe(false)
         expect(s.screen.lines.at(-1)).not.toContain("esc → view")
         s.terminal.send("\x1b[27u")
         await s.idle()
-        expect(s.live()).toContain("│›z")
+        expect(s.live()).toContain("│ › z")
         expect(focused).toBe(false)
         s.terminal.send("\t")
         await hint("tab → input")
         s.terminal.send("\t")
         await hint("tab → view")
-        expect(s.live()).toContain("│›z")
+        expect(s.live()).toContain("│ › z")
         s.terminal.send("\x15\t")
         await hint("tab → input")
 
@@ -178,7 +178,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       ask()
       await waitFor(() => s.host.ui.pending.length === 1, "confirmation waiting behind view")
       s.terminal.send("\tn")
-      await waitFor(() => s.live().includes("│›n"), "visible composer receives n")
+      await waitFor(() => s.live().includes("│ › n"), "visible composer receives n")
       expect(answered).toBe(false)
       expect(s.host.ui.pending).toHaveLength(1)
       s.terminal.send("\x15\t\x03")
@@ -228,10 +228,10 @@ for (const mode of ["inline", "fullscreen"] as const) {
       refresh()
       await waitFor(() => context.focused === false, "composer focus restored")
       s.terminal.send("z")
-      await waitFor(() => s.live().includes("│›z"), "caret and editor active")
+      await waitFor(() => s.live().includes("│ › z"), "caret and editor active")
       s.terminal.send("\x1b[27u")
       await waitFor(() => !s.live().includes("Esc close dock"), "empty dock closes")
-      expect(s.live()).toContain("│›z")
+      expect(s.live()).toContain("│ › z")
     } finally {
       s.terminal.send("\x03")
       await closeImageApp(s)

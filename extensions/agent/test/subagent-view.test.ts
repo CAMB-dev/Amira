@@ -1154,7 +1154,7 @@ test("/agents view shows a running sub-agent live; main-session lines land in th
   expect(main).not.toContain("⠋ working Check explorer")
   // The live region is back: the editor box and the hint line.
   expect(s.view()).toContain("  shift+tab mode  ·  ctrl+o detail  ·  ? keys")
-  expect(s.view()).toMatch(/^│›Message Amira +│$/m)
+  expect(s.view()).toMatch(/^│ › Message Amira +│$/m)
   expect(s.screen.altSwitches).toEqual([true, false])
   s.terminal.send("\x03")
   await s.exited
@@ -1257,7 +1257,7 @@ test("Ctrl+L and focus reports in the viewer leave the main screen alone", async
   const main = s.screen.mainText
   expect(main.split("› go").length).toBe(2)
   expect(s.screen.scrollback.join("\n")).not.toContain("Message Amira")
-  expect(s.view()).toMatch(/^│›Message Amira +│$/m)
+  expect(s.view()).toMatch(/^│ › Message Amira +│$/m)
   s.terminal.send("\x03")
   await s.exited
 })
@@ -1346,7 +1346,7 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   expect(s.screen.inAltScreen).toBe(true)
   // Unhandled y goes to the visible composer, never to the hidden dialog.
   s.terminal.send("y")
-  await waitFor(() => s.view().includes("│›y"), "composer input")
+  await waitFor(() => s.view().includes("│ › y"), "composer input")
   expect(s.host.ui.pending).toHaveLength(1)
   s.terminal.send("\x15\x1b[9;5u")
   s.terminal.send(ESC)

@@ -138,7 +138,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           expect(s.live()).toContain("f6 to answer")
           if (overlay === "form") expect(s.screen.lines[s.screen.y]).toContain("Form draft")
           if (overlay === "view") {
-            const row = s.screen.lines.findIndex((line) => line.includes("│›"))
+            const row = s.screen.lines.findIndex((line) => line.includes("│ › "))
             expect(row).toBeGreaterThanOrEqual(0)
             s.terminal.send(`\x1b[<0;5;${row + 1}M\x1b[<0;5;${row + 1}m`)
             await waitFor(() => !viewFocused, "pointer hits visible composer")

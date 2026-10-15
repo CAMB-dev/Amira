@@ -42,33 +42,24 @@ jobs:
           import datetime
           import json
           import os
-          import re
           import subprocess
+          from scripts.release_policy import nightly_releases, next_nightly_tag
 
           def git(*args):
               return subprocess.check_output(["git", *args], text=True).strip()
 
-          pattern = re.compile(r"^v\d+\.\d+\.\d+-nightly\.\d{8}(?:\.\d+)?$")
           with open(os.path.join(os.environ["RUNNER_TEMP"], "releases.json")) as file:
               releases = [release for page in json.load(file) for release in page]
-          nightlies = sorted(
-              (release for release in releases if release["prerelease"] and not release["draft"]
-               and pattern.fullmatch(release["tag_name"])),
-              key=lambda release: release["published_at"], reverse=True,
-          )
+          nightlies = nightly_releases(releases)
           previous = nightlies[0]["tag_name"] if nightlies else ""
           sha = git("rev-parse", "HEAD")
           changed = not previous or bool(git("rev-list", f"{previous}..{sha}"))
           with open("packages/cli/package.json") as file:
               version = json.load(file)["version"]
-          base = f"v{version}-nightly.{datetime.datetime.now(datetime.timezone.utc):%Y%m%d}"
           occupied = set(git("tag", "--list").splitlines())
           occupied.update(release["tag_name"] for release in releases)
-          # Never fill suffix gaps: pruned immutable tags cannot be reused either.
-          same_day = re.compile(re.escape(base) + r"(?:\.(\d+))?$")
-          suffixes = [int(match[1] or 0) for tag in occupied
-                      if (match := same_day.fullmatch(tag))]
-          tag = f"{base}.{max(suffixes) + 1}" if suffixes else base
+          date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+          tag = next_nightly_tag(version, date, occupied)
           with open(os.environ["GITHUB_OUTPUT"], "a") as file:
               for key, value in {"changed": str(changed).lower(), "sha": sha,
                                  "previous": previous, "tag": tag, "version": tag[1:]}.items():
@@ -252,17 +243,12 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          import re
           import subprocess
+          from scripts.release_policy import nightly_releases
 
           with open(os.path.join(os.environ["RUNNER_TEMP"], "releases.json")) as file:
               releases = [release for page in json.load(file) for release in page]
-          pattern = re.compile(r"^v\d+\.\d+\.\d+-nightly\.\d{8}(?:\.\d+)?$")
-          nightlies = sorted(
-              (release for release in releases if release["prerelease"] and not release["draft"]
-               and pattern.fullmatch(release["tag_name"])),
-              key=lambda release: release["published_at"], reverse=True,
-          )
+          nightlies = nightly_releases(releases)
           for release in nightlies[14:]:
               # Deleting the release first unlocks its immutable tag for deletion.
               subprocess.run(["gh", "release", "delete", release["tag_name"],
