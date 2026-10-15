@@ -121,8 +121,8 @@ if (process.platform === "win32") {
       waits.mockRestore()
       fs.rmSync(f.dir, { recursive: true, force: true })
     }
-    // 15s reader startup plus the original 7s operation/cleanup watchdog.
-  }, 22000)
+    // 30s reader startup plus the original 7s operation/cleanup watchdog.
+  }, 37000)
 }
 
 for (const code of ["EPERM", "EBUSY", "EACCES"]) {

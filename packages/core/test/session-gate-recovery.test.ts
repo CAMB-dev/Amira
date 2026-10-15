@@ -9,6 +9,8 @@ import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 let dir: string
 let origin: SessionStore
 const workers: ReturnType<typeof startWorker>[] = []
+// Four Windows spawns can each stall for 4-10s; setup is hang-protected, not timed work.
+const RECOVERY_STARTUP_TIMEOUT_MS = 60_000
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-session-gate-"))
   origin = SessionStore.create({ cwd: dir, dir })
@@ -43,8 +45,12 @@ function startWorker(mode: string): Bun.Subprocess<"ignore", "ignore", "pipe"> {
   workers.push(worker)
   return worker
 }
-async function waitFor(worker: ReturnType<typeof startWorker>, marker: string, present = true) {
-  const deadline = Date.now() + 4000
+async function waitFor(
+  worker: ReturnType<typeof startWorker>,
+  marker: string,
+  present = true,
+  deadline = Date.now() + 4000,
+) {
   while (fs.existsSync(path.join(dir, marker)) !== present) {
     if (worker.exitCode !== null)
       throw new Error(`gate worker exited: ${await new Response(worker.stderr).text()}`)
@@ -61,13 +67,21 @@ async function killWorker(worker: ReturnType<typeof startWorker>) {
     }),
   ])
 }
-async function abandonedGate(mode: string) {
+async function exitBefore(worker: ReturnType<typeof startWorker>, deadline: number) {
+  return Promise.race([
+    worker.exited,
+    Bun.sleep(Math.max(0, deadline - Date.now())).then(() => {
+      throw new Error(`gate worker operation timed out waiting for exit: ${worker.pid}`)
+    }),
+  ])
+}
+async function abandonedGate(mode: string, deadline = Date.now() + 4000) {
   const worker = startWorker(mode)
   if (mode === "session-pause-gate-release" || mode === "session-pause-gate-retire") {
-    await waitFor(worker, "acquired")
+    await waitFor(worker, "acquired", true, deadline)
     fs.writeFileSync(path.join(dir, "release"), "go")
   }
-  await waitFor(worker, "paused")
+  await waitFor(worker, "paused", true, deadline)
   expect(fs.existsSync(`${sessionLockFile(origin.file)}.lease-gate`)).toBe(
     mode !== "session-pause-gate-init" && mode !== "session-pause-gate-retire",
   )
@@ -153,14 +167,27 @@ test("live gate blocks with an accurate stale-write-guard path and safe manual r
 
 for (const fault of [undefined, "EPERM", "EBUSY", "EACCES"]) {
   test(`cross-process simultaneous dead-gate recoverers grant exactly one lease and preserve its live authority (${fault ?? "real OS"})`, async () => {
-    await abandonedGate("session-pause-gate-create")
+    await abandonedGate("session-pause-gate-create", Date.now() + RECOVERY_STARTUP_TIMEOUT_MS)
     fs.rmSync(path.join(dir, "paused"))
     const disk = fs.readFileSync(origin.file)
-    const mode = fault ? `session-contend-${fault}` : "session-contend"
+    const mode = fault ? `session-contend-recover-${fault}` : "session-contend-recover"
+    const startupDeadline = Date.now() + RECOVERY_STARTUP_TIMEOUT_MS
     const contenders = Array.from({ length: 4 }, () => startWorker(mode))
-    await Promise.all(contenders.map((worker) => waitFor(worker, `ready-${worker.pid}`)))
+    await Promise.all(
+      contenders.map((worker) => waitFor(worker, `ready-${worker.pid}`, true, startupDeadline)),
+    )
     fs.writeFileSync(path.join(dir, "contend"), "go")
-    await Promise.all(contenders.map((worker) => waitFor(worker, `result-${worker.pid}`)))
+    await Promise.all(
+      contenders.map((worker) => waitFor(worker, `recovery-ready-${worker.pid}`, true, startupDeadline)),
+    )
+    // The rendezvous must not consume the real two-second sharing-error retry budget.
+    if (fault) await Bun.sleep(2500)
+    // Start the operation watchdog only after every recoverer has reached the barrier.
+    const operationDeadline = Date.now() + 6000
+    fs.writeFileSync(path.join(dir, "recover"), "go")
+    await Promise.all(
+      contenders.map((worker) => waitFor(worker, `result-${worker.pid}`, true, operationDeadline)),
+    )
     const winners = contenders.filter((worker) => {
       const result = JSON.parse(fs.readFileSync(path.join(dir, `result-${worker.pid}`), "utf8"))
       if (!result.held) expect(result.error).toMatch(/stale-write guard|open in another Amira process/)
@@ -171,8 +198,13 @@ for (const fault of [undefined, "EPERM", "EBUSY", "EACCES"]) {
     // A result is not a quiescence barrier: losers may still be finalizing their
     // short-lived gates. Finish them and the winner's gate before probing its lease.
     for (const worker of contenders.filter((worker) => worker !== winners[0]))
-      expect(await worker.exited).toBe(0)
-    await waitFor(winners[0]!, path.basename(`${sessionLockFile(origin.file)}.lease-gate`), false)
+      expect(await exitBefore(worker, operationDeadline)).toBe(0)
+    await waitFor(
+      winners[0]!,
+      path.basename(`${sessionLockFile(origin.file)}.lease-gate`),
+      false,
+      operationDeadline,
+    )
     expect(fs.readFileSync(origin.file)).toEqual(disk)
     expect(isProcessAlive(winners[0]!.pid)).toBe(true)
     const contents = fs.readFileSync(sessionLockFile(origin.file), "utf8")
@@ -181,11 +213,11 @@ for (const fault of [undefined, "EPERM", "EBUSY", "EACCES"]) {
     expect(fs.readFileSync(sessionLockFile(origin.file), "utf8")).toBe(contents)
     fs.writeFileSync(path.join(dir, "release"), "go")
     for (const worker of contenders) {
-      expect(await worker.exited).toBe(0)
+      expect(await exitBefore(worker, operationDeadline)).toBe(0)
       expect(await new Response(worker.stderr).text()).toBe("")
     }
     expect(origin.claim()).toBe(true)
-  }, 10000)
+  }, 130_000)
 }
 
 for (const barrier of ["session-pause-gate-proof", "session-pause-gate-recheck"]) {

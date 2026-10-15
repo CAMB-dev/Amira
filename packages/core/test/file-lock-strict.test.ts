@@ -215,8 +215,8 @@ function startWorker(file: string, mode: string) {
   )
 }
 
-async function waitForWorker(worker: ReturnType<typeof startWorker>, marker: string) {
-  const deadline = Date.now() + 3000
+async function waitForWorker(worker: ReturnType<typeof startWorker>, marker: string, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs
   while (!fs.existsSync(path.join(dir, marker))) {
     if (worker.exitCode !== null) {
       throw new Error(`file-lock worker exited: ${await new Response(worker.stderr).text()}`)
@@ -411,10 +411,12 @@ for (const mode of [
       },
     )
     try {
+      await waitForWorker(worker, `ready-${worker.pid}`, 15_000)
+      fs.writeFileSync(path.join(dir, "review-go"), "go")
       await Promise.race([
         worker.exited,
         Bun.sleep(4000).then(() => {
-          throw new Error("review worker timed out")
+          throw new Error("review worker operation timed out")
         }),
       ])
       const stderr = await new Response(worker.stderr).text()
@@ -424,7 +426,7 @@ for (const mode of [
     } finally {
       await finishWorker(worker)
     }
-  })
+  }, 25_000)
 }
 
 test("120 ordinary strict claims/releases leave no gates, tombstones or other artifacts", () => {

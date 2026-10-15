@@ -7,8 +7,8 @@ import { filesystemGatePath } from "./file-lock-fixtures.ts"
 const [file, dir, mode] = process.argv.slice(2)
 if (!file || !dir || !mode) throw new Error("missing file-lock worker arguments")
 const mark = (name: string) => fs.writeFileSync(path.join(dir, name), "ready")
-const wait = (name: string) => {
-  const deadline = Date.now() + 5000
+const wait = (name: string, timeoutMs = 5000) => {
+  const deadline = Date.now() + timeoutMs
   const pause = new Int32Array(new SharedArrayBuffer(4))
   while (!fs.existsSync(path.join(dir, name))) {
     if (Date.now() > deadline) throw new Error(`file-lock worker timed out: ${name}`)
@@ -33,7 +33,12 @@ const write = fs.writeFileSync
 const gate = filesystemGatePath(file)
 let releaseStarted = false
 const contender = mode.startsWith("session-contend")
-const sharingCode = mode.slice("session-contend-".length)
+const synchronizedRecovery = mode.startsWith("session-contend-recover")
+const realNow = performance.now.bind(performance)
+let recoveryWaitMs = 0
+const sharingCode = mode.slice(
+  (synchronizedRecovery ? "session-contend-recover-" : "session-contend-").length,
+)
 const sharingHook =
   contender && ["EPERM", "EBUSY", "EACCES"].includes(sharingCode)
     ? spyOn(fs, "renameSync").mockImplementation((...args) => {
@@ -58,15 +63,26 @@ const initHook =
 const delayedRecovery = mode === "session-pause-gate-proof" || mode === "session-pause-gate-recheck"
 const probe = process.kill
 const proofHook =
-  mode === "session-pause-gate-proof"
+  mode === "session-pause-gate-proof" || synchronizedRecovery
     ? spyOn(process, "kill").mockImplementation(((...args: Parameters<typeof probe>) => {
         try {
           return probe(...args)
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ESRCH") {
             // The real OS has proved death, not just supplied a dead-looking record.
-            mark("paused-proof")
-            wait("continue-proof")
+            if (synchronizedRecovery) {
+              // Every recoverer proves the same dead owner before any can retire it.
+              const started = realNow()
+              try {
+                mark(`recovery-ready-${process.pid}`)
+                wait("recover", 60_000)
+              } finally {
+                recoveryWaitMs += realNow() - started
+              }
+            } else {
+              mark("paused-proof")
+              wait("continue-proof")
+            }
           }
           throw error
         }
@@ -148,16 +164,25 @@ const openHook =
 
 if (contender) {
   mark(`ready-${process.pid}`)
-  wait("contend")
+  // Early workers must survive the startup watchdog for all their peers.
+  wait("contend", synchronizedRecovery ? 60_000 : 5000)
 }
 let held: FileLock | undefined
 try {
   if (store) {
     if (contender) {
-      await store.withClaim(() => {
-        // Retain the worker's lease beyond the temporary awaited-acquisition ref.
-        store.claim()
-      })
+      // Exclude only the artificial recovery rendezvous, not OS work or retry delays.
+      const clockHook = synchronizedRecovery
+        ? spyOn(performance, "now").mockImplementation(() => realNow() - recoveryWaitMs)
+        : undefined
+      try {
+        await store.withClaim(() => {
+          // Retain the worker's lease beyond the temporary awaited-acquisition ref.
+          store.claim()
+        })
+      } finally {
+        clockHook?.mockRestore()
+      }
     } else store.claim()
     held = { release: () => store.release() }
   } else {
@@ -183,7 +208,7 @@ if (!held) throw new Error("file-lock worker was not granted authority")
 if (mode === "crash-lease") process.exit(0)
 if (contender || delayedRecovery) {
   publishResult({ held: true })
-  wait("release")
+  wait("release", synchronizedRecovery ? 10_000 : 5000)
 } else {
   mark("acquired")
   wait("release")

@@ -20,7 +20,7 @@ if (process.platform === "win32") {
           const args = [...command]
           args[args.length - 1] =
             startup === "slow"
-              ? `Start-Sleep -Milliseconds 3500\n${args.at(-1)}`
+              ? `Start-Sleep -Milliseconds 10000\n${args.at(-1)}`
               : "[Console]::Error.WriteLine('reader startup probe failed'); exit 7"
           return spawn(args, options as Parameters<typeof Bun.spawn>[1])
         })
@@ -34,7 +34,7 @@ if (process.platform === "win32") {
             )
           } else {
             await waitUntilReady()
-            expect(performance.now() - start).toBeGreaterThanOrEqual(3500)
+            expect(performance.now() - start).toBeGreaterThanOrEqual(10000)
             expect(reader.exitCode).toBeNull()
             fs.writeFileSync(go, "go")
             expect(await boundedExit(reader, "slow reader")).toBe(0)
@@ -49,4 +49,28 @@ if (process.platform === "win32") {
       timeout,
     )
   }
+
+  test(
+    "Windows reader keeps its handle until go when the ready parent is delayed",
+    async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-reader-parent-delay-"))
+      const metadata = path.join(dir, "owner.json")
+      fs.writeFileSync(metadata, "reader fixture")
+      const { reader, go, stderr, waitUntilReady } = startGateReader(metadata, dir)
+      try {
+        await waitUntilReady()
+        // Simulate a descheduled parent, not the measured deny-delete interval.
+        await Bun.sleep(3500)
+        expect(reader.exitCode).toBeNull()
+        fs.writeFileSync(go, "go")
+        expect(await boundedExit(reader, "delayed parent reader")).toBe(0)
+        expect(await stderr).toBe("")
+      } finally {
+        if (reader.exitCode === null) reader.kill()
+        await boundedExit(reader, "owned delayed parent reader")
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    timeout,
+  )
 }

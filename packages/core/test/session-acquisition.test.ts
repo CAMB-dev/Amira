@@ -170,13 +170,12 @@ test("an own pending lease does not make a foreign blocking gate retryable", () 
 for (const overshoot of [0, 249]) {
   test(`two-second acquisition deadline is monotonic and retains the original path diagnostic (${overshoot}ms scheduler overshoot)`, async () => {
     const { dir, store, file } = fixture()
-    const link = fs.linkSync
     const failure = Object.assign(new Error(`EPERM: link ${file}`), { code: "EPERM", path: file })
     const later = Object.assign(new Error("later sharing failure"), { code: "EACCES" })
     let attempts = 0
-    const hook = spyOn(fs, "linkSync").mockImplementation((from, to) => {
-      if (String(to) === file) throw ++attempts === 1 ? failure : later
-      return link(from, to)
+    // Publication errors are covered above; the deadline should not do 200 real filesystem claims.
+    const hook = spyOn(store, "claim").mockImplementation(() => {
+      throw ++attempts === 1 ? failure : later
     })
     const clock = spyOn(Date, "now").mockReturnValue(123)
     let now = 5000

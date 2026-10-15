@@ -1,9 +1,9 @@
 import * as fs from "node:fs"
 import path from "node:path"
 
-// Loaded Windows runners may spend several seconds starting PowerShell/antivirus.
-// Setup is outside every measured lock interval; post-readiness budgets stay separate.
-export const READER_READY_TIMEOUT_MS = 15000
+// Antivirus can stall a Windows spawn for 4-10s, especially under parallel load.
+// These setup/IPC deadlines only protect against hangs; the 100ms hold starts at go.
+export const READER_READY_TIMEOUT_MS = 30000
 
 /** Windows read-sharing without delete-sharing, with bounded ready/go IPC. No FFI. */
 export function startGateReader(metadata: string, dir: string) {
@@ -21,7 +21,7 @@ export function startGateReader(metadata: string, dir: string) {
 $stream = [IO.File]::Open($env:LOCK_READER_FILE, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
 try {
   [IO.File]::WriteAllText($env:LOCK_READER_READY, 'ready')
-  $deadline = [DateTime]::UtcNow.AddSeconds(3)
+  $deadline = [DateTime]::UtcNow.AddMilliseconds([double]$env:LOCK_READER_GO_TIMEOUT_MS)
   while (-not [IO.File]::Exists($env:LOCK_READER_GO)) {
     if ([DateTime]::UtcNow -gt $deadline) { throw 'reader go timed out' }
     [Threading.Thread]::Sleep(2)
@@ -37,6 +37,7 @@ try {
         LOCK_READER_FILE: metadata,
         LOCK_READER_READY: ready,
         LOCK_READER_GO: go,
+        LOCK_READER_GO_TIMEOUT_MS: String(READER_READY_TIMEOUT_MS),
       },
       stdin: "ignore",
       stdout: "ignore",
@@ -46,7 +47,7 @@ try {
   const stderr = new Response(reader.stderr).text()
   const waitUntilReady = async () => {
     const deadline = performance.now() + READER_READY_TIMEOUT_MS
-    while (!fs.existsSync(ready)) {
+    while (true) {
       if (reader.exitCode !== null || performance.now() > deadline) {
         const reason = reader.exitCode === null ? "timed out" : "exited"
         if (reader.exitCode === null) reader.kill()
@@ -55,6 +56,7 @@ try {
           `reader readiness ${reason}: exitCode=${reader.exitCode}, signalCode=${reader.signalCode}\nstderr:\n${await stderr}`,
         )
       }
+      if (fs.existsSync(ready)) return
       await Bun.sleep(2)
     }
   }

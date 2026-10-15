@@ -1,18 +1,91 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import {
   assertInlineResponsive,
   INLINE_LATENCY_REPORT,
   INLINE_LATENCY_RUNS,
   type InlineLatencySample,
+  LATENCY_WORKER_READY,
+  LATENCY_WORKER_READY_TIMEOUT_MS,
 } from "./file-lock-latency-timing.ts"
-import { READER_READY_TIMEOUT_MS } from "./file-lock-reader-fixture.ts"
+
+async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-lock-latency-"))
+  const worker = Bun.spawn(
+    [
+      process.execPath,
+      "--preload",
+      path.join(import.meta.dir, "file-lock-worker-preload.ts"),
+      path.join(
+        import.meta.dir,
+        mode === "windows-reader" ? "file-lock-latency-reader-worker.ts" : "file-lock-latency-worker.ts",
+      ),
+      dir,
+      mode,
+    ],
+    {
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
+      ),
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
+  const stdout = new Response(worker.stdout).text()
+  const stderr = new Response(worker.stderr).text()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const ready = path.join(dir, LATENCY_WORKER_READY)
+    const deadline = performance.now() + LATENCY_WORKER_READY_TIMEOUT_MS
+    while (true) {
+      if (worker.exitCode !== null) {
+        throw new Error(
+          `latency worker readiness exited: exitCode=${worker.exitCode}, signalCode=${worker.signalCode}\nstderr:\n${await stderr}`,
+        )
+      }
+      if (performance.now() > deadline) throw new Error("latency worker readiness timed out")
+      if (fs.existsSync(ready)) break
+      await Bun.sleep(2)
+    }
+    // The real reader is holding its handle and warmup is complete. Only now
+    // start the original operation watchdog, then explicitly release the worker.
+    await Promise.race([
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("latency worker operation timed out")), 4000)
+      }),
+      (async () => {
+        worker.stdin.write("go")
+        await worker.stdin.end()
+        return worker.exited
+      })(),
+    ])
+    const lines = (await stdout).split("\n")
+    console.log(
+      lines
+        .filter((line) => !line.startsWith(INLINE_LATENCY_REPORT))
+        .join("\n")
+        .trim(),
+    )
+    // Structural and automatic-callback checks must pass in EVERY fixture.
+    expect(await stderr).toBe("")
+    expect(await worker.exited).toBe(0)
+    const reports = lines.filter((line) => line.startsWith(INLINE_LATENCY_REPORT))
+    expect(reports).toHaveLength(1)
+    return JSON.parse(reports[0]!.slice(INLINE_LATENCY_REPORT.length))
+  } finally {
+    clearTimeout(timer)
+    if (worker.exitCode === null) worker.kill()
+    await worker.exited
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
 
 const modes = ["claim", "release", "reclaim", ...(process.platform === "win32" ? ["windows-reader"] : [])]
 for (const mode of modes) {
-  const startupBudget = mode === "windows-reader" ? READER_READY_TIMEOUT_MS : 0
   test(
     `100ms gate reader keeps ${mode} inline and automatic cleanup responsive`,
     async () => {
@@ -20,59 +93,7 @@ for (const mode of modes) {
       for (let run = 0; run < INLINE_LATENCY_RUNS; run++) {
         // Each repetition has a new process and filesystem fixture. Reusing an
         // already release-requested gate would not repeat the contended operation.
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-lock-latency-"))
-        const worker = Bun.spawn(
-          [
-            process.execPath,
-            "--preload",
-            path.join(import.meta.dir, "file-lock-worker-preload.ts"),
-            path.join(
-              import.meta.dir,
-              mode === "windows-reader"
-                ? "file-lock-latency-reader-worker.ts"
-                : "file-lock-latency-worker.ts",
-            ),
-            dir,
-            mode,
-          ],
-          {
-            env: Object.fromEntries(
-              Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
-            ),
-            stdin: "ignore",
-            stdout: "pipe",
-            stderr: "pipe",
-          },
-        )
-        const stdout = new Response(worker.stdout).text()
-        const stderr = new Response(worker.stderr).text()
-        let timer: ReturnType<typeof setTimeout> | undefined
-        try {
-          await Promise.race([
-            worker.exited,
-            new Promise<never>((_, reject) => {
-              timer = setTimeout(() => reject(new Error("latency worker timed out")), startupBudget + 4000)
-            }),
-          ])
-          const lines = (await stdout).split("\n")
-          console.log(
-            lines
-              .filter((line) => !line.startsWith(INLINE_LATENCY_REPORT))
-              .join("\n")
-              .trim(),
-          )
-          // Structural and automatic-callback checks must pass in EVERY fixture.
-          expect(await stderr).toBe("")
-          expect(worker.exitCode).toBe(0)
-          const reports = lines.filter((line) => line.startsWith(INLINE_LATENCY_REPORT))
-          expect(reports).toHaveLength(1)
-          samples.push(...JSON.parse(reports[0]!.slice(INLINE_LATENCY_REPORT.length)))
-        } finally {
-          clearTimeout(timer)
-          if (worker.exitCode === null) worker.kill()
-          await worker.exited
-          fs.rmSync(dir, { recursive: true, force: true })
-        }
+        samples.push(...(await runLatencyWorker(mode)))
       }
       const entries =
         mode === "reclaim"
@@ -81,8 +102,90 @@ for (const mode of modes) {
             ? ["release", "unlock"]
             : [mode]
       assertInlineResponsive(mode, samples, entries)
-      // Only reader startup gets extra time; measured cleanup budgets are unchanged.
+      // Startup hang protection is separate; measured cleanup budgets are unchanged.
     },
-    (startupBudget + 7000) * INLINE_LATENCY_RUNS,
+    (LATENCY_WORKER_READY_TIMEOUT_MS + 7000) * INLINE_LATENCY_RUNS,
+  )
+}
+
+for (const mode of ["release", "reclaim"]) {
+  test(
+    `latency worker finishes slow ${mode} fixture setup before readiness`,
+    async () => {
+      const spawn = Bun.spawn
+      const hook = spyOn(Bun, "spawn").mockImplementationOnce((...parameters) => {
+        const [command, options] = parameters
+        if (!Array.isArray(command)) throw new Error("latency worker command required")
+        const args = [...command]
+        const worker = args[3]!
+        const store = pathToFileURL(path.join(import.meta.dir, "../src/session-store.ts")).href
+        args.splice(
+          3,
+          1,
+          "--eval",
+          `const { SessionStore } = await import(${JSON.stringify(store)});
+const claim = SessionStore.prototype.claim;
+let warmFile, delayed = false;
+SessionStore.prototype.claim = function () {
+  warmFile ??= this.file;
+  if (!delayed && this.file !== warmFile) {
+    delayed = true;
+    const until = performance.now() + 4500;
+    while (performance.now() < until) {}
+  }
+  return claim.call(this);
+};
+process.argv.splice(1, 0, ${JSON.stringify(worker)});
+await import(${JSON.stringify(pathToFileURL(worker).href)});`,
+        )
+        return spawn(args, options as Parameters<typeof Bun.spawn>[1])
+      })
+      try {
+        const samples = await runLatencyWorker(mode)
+        expect(samples.map((sample) => sample.entry)).toEqual(
+          mode === "release" ? ["release"] : ["unlock", "release", "reclaim"],
+        )
+      } finally {
+        hook.mockRestore()
+      }
+    },
+    LATENCY_WORKER_READY_TIMEOUT_MS + 7000,
+  )
+}
+
+for (const startup of ["slow", "crash"] as const) {
+  test(
+    `latency worker diagnoses ${startup} startup separately from the operation watchdog`,
+    async () => {
+      const spawn = Bun.spawn
+      const hook = spyOn(Bun, "spawn").mockImplementationOnce((...parameters) => {
+        const [command, options] = parameters
+        if (!Array.isArray(command)) throw new Error("latency worker command required")
+        const args = [...command]
+        const worker = args[3]!
+        args.splice(
+          3,
+          1,
+          "--eval",
+          startup === "slow"
+            ? `await Bun.sleep(4500); process.argv.splice(1, 0, ${JSON.stringify(worker)}); await import(${JSON.stringify(pathToFileURL(worker).href)})`
+            : "console.error('latency startup probe failed'); process.exit(7)",
+        )
+        return spawn(args, options as Parameters<typeof Bun.spawn>[1])
+      })
+      try {
+        if (startup === "crash") {
+          await expect(runLatencyWorker("claim")).rejects.toThrow(
+            "latency worker readiness exited: exitCode=7, signalCode=null\nstderr:\nlatency startup probe failed",
+          )
+        } else {
+          const samples = await runLatencyWorker("claim")
+          expect(samples.map((sample) => sample.entry)).toEqual(["claim"])
+        }
+      } finally {
+        hook.mockRestore()
+      }
+    },
+    LATENCY_WORKER_READY_TIMEOUT_MS + 7000,
   )
 }

@@ -1,4 +1,33 @@
 import { expect, spyOn } from "bun:test"
+import * as fs from "node:fs"
+import path from "node:path"
+
+// Windows AV can delay both the Bun worker and its PowerShell reader by 4-10s.
+// Include warmup and the nested spawn, but only as hang protection, not latency slack.
+export const LATENCY_WORKER_READY_TIMEOUT_MS = 60000
+export const LATENCY_WORKER_READY = "latency-worker-ready"
+
+/** Finish all setup before the parent starts its operation watchdog. */
+export async function latencyWorkerReady(dir: string) {
+  const ready = path.join(dir, LATENCY_WORKER_READY)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    fs.writeFileSync(ready, "ready")
+    const go = await Promise.race([
+      Bun.stdin.text(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("latency worker go timed out")),
+          LATENCY_WORKER_READY_TIMEOUT_MS,
+        )
+      }),
+    ])
+    if (go !== "go") throw new Error("latency worker requires go after readiness")
+    fs.unlinkSync(ready)
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 interface CallbackSample {
   attempted: boolean
