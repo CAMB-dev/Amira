@@ -50,7 +50,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     })
     try {
       s.terminal.send("@writer")
-      await waitFor(() => /^│›@writer.*│$/m.test(s.live()), "member address in editor")
+      await waitFor(() => /^│ › @writer.*│$/m.test(s.live()), "member address in editor")
       await Bun.sleep(50)
       expect(frames.some((frame) => frame.includes("› writer.ts"))).toBe(false)
       expect(s.live()).not.toContain("› writer.ts")

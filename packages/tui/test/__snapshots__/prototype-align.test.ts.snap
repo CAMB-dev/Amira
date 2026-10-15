@@ -25,7 +25,7 @@ exports[`width-100 fullscreen running turn matches the chosen prototype details 
 
 ⠋ Responding… 4.1s                                           1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│›Message Amira                                                                                    │
+│ › Message Amira                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                         claude-opus-5-5 (high) · ask
   shift+tab mode  ·  esc stop  ·  ctrl+o detail  ·  ? keys"

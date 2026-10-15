@@ -20,11 +20,14 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await waitFor(() => reading, "clipboard still loading")
       s.terminal.send("\r")
       await s.shows("Clipboard paste is still loading")
-      expect(s.live()).toContain("│›OWNED_DRAFT")
+      expect(s.live()).toContain("│ › OWNED_DRAFT")
       expect(userTexts(s.agent)).toEqual(["Main history"])
       expect(userTexts(s.owned)).toEqual(["Design history"])
       pending.resolve({ type: "text", text: "_PASTE" })
-      await waitFor(() => s.live().includes("│›OWNED_DRAFT_PASTE"), "loaded clipboard retains correct draft")
+      await waitFor(
+        () => s.live().includes("│ › OWNED_DRAFT_PASTE"),
+        "loaded clipboard retains correct draft",
+      )
       s.terminal.send("\r")
       await waitFor(() => userTexts(s.owned).length === 2, "owned send after paste")
       expect(userTexts(s.owned)).toEqual(["Design history", "OWNED_DRAFT_PASTE"])

@@ -93,13 +93,13 @@ for (const mode of ["inline", "fullscreen"] as const) {
           expect(s.hint()).toContain(needsTab ? "f6 → view" : "tab → view")
           if (!needsTab) expect(s.hint()).not.toContain("f6")
           s.terminal.send("draft")
-          await waitFor(() => s.live().includes("│›draft"), "draft")
+          await waitFor(() => s.live().includes("│ › draft"), "draft")
           s.terminal.send(bytes)
           await waitFor(() => s.context().focused === true, "F6 to view with text")
           expect(s.hint()).toContain(needsTab ? "f6 → input" : "tab → input")
           s.terminal.send(bytes)
           await waitFor(() => s.context().focused === false, "F6 to composer")
-          expect(s.live()).toContain("│›draft")
+          expect(s.live()).toContain("│ › draft")
         } finally {
           await close(s)
         }
@@ -190,7 +190,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         await Bun.sleep(100)
         s.terminal.send("z")
         await Bun.sleep(80)
-        expect(s.live()).toContain("│›z")
+        expect(s.live()).toContain("│ › z")
         expect(s.live()).not.toContain("search history")
         expect(s.context().focused).toBe(false)
         s.terminal.send("\x15\x12")
@@ -203,7 +203,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         s.terminal.send("\x1b")
         await waitFor(() => s.context().focused === true, "second empty Esc to view")
         s.terminal.send("z")
-        await waitFor(() => s.live().includes("│›z"), "unhandled printable after handoff")
+        await waitFor(() => s.live().includes("│ › z"), "unhandled printable after handoff")
       } finally {
         await close(s)
       }
@@ -220,7 +220,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       s.terminal.send(encodings.legacy)
       await waitFor(() => s.context().focused === false, "F6 return")
       s.terminal.send("z")
-      await waitFor(() => s.live().includes("│›draftz"), "draft restored without invisible search")
+      await waitFor(() => s.live().includes("│ › draftz"), "draft restored without invisible search")
       expect(s.live()).not.toContain("search history")
     } finally {
       await close(s)
@@ -239,11 +239,11 @@ for (const mode of ["inline", "fullscreen"] as const) {
         s.terminal.send("\x1b[B")
         await waitFor(() => s.context().state.selected.tasks === "1", "dock keyboard selection")
         s.terminal.send("\tdraft")
-        await waitFor(() => s.live().includes("│›draft"), "dock draft")
+        await waitFor(() => s.live().includes("│ › draft"), "dock draft")
         expect(s.hint()).toContain("esc close dock")
         s.terminal.send(escapeBytes)
         await waitFor(() => !s.live().includes("Task 1"), "nonempty input closes dock as before")
-        expect(s.live()).toContain("│›draft")
+        expect(s.live()).toContain("│ › draft")
       } finally {
         await close(s)
       }

@@ -19,7 +19,7 @@ const message = {
 }
 const plain = (rows: string[]) => rows.map(stripAnsi)
 
-test("prompt, thought, command and composer share the two-cell marker column", () => {
+test("prompt, thought and command share the marker column; the composer adds padding", () => {
   for (const width of [12, 20, 60]) {
     for (const theme of [defaultTheme, { ...defaultTheme, ...surfaceTheme("dark") }]) {
       const user = plain(userLines(theme, message, width)).filter((row) => row.trim())
@@ -30,7 +30,7 @@ test("prompt, thought, command and composer share the two-cell marker column", (
       const editor = new Editor({ prompt: "› " })
       editor.setText("hello")
       const composer = plain(new InputBox(editor).render(width, { theme, color: false, rows: 24 }))
-      expect(composer[1]).toStartWith("│›hello")
+      expect(composer[1]).toStartWith("│ › hello")
       expect(composer.every((row) => visibleWidth(row) === width)).toBe(true)
     }
   }

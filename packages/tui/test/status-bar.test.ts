@@ -96,7 +96,7 @@ test("the input box keeps its bottom edge intact and puts status and hidden coun
   const box = new InputBox(editor, () => items.slice(0, 2))
   expect(box.render(50, plain).map(stripAnsi)).toEqual([
     `╭${"─".repeat(48)}╮`,
-    `│›${" ".repeat(47)}│`,
+    `│ ›${" ".repeat(46)}│`,
     `╰${"─".repeat(48)}╯`,
     `  deepseek-flash${" ".repeat(14)}ctx 29.4k/128k (23%)`,
   ])

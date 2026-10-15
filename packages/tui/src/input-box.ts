@@ -55,7 +55,6 @@ export class InputBox implements Component {
       },
     }
     this.box = new Box(this.input, {
-      markerGutter: true,
       labels: () => {
         const { above } = this.editor.hidden
         return above > 0 ? { top: `${this.arrowUp} ${above} ${above === 1 ? "row" : "rows"}` } : {}
@@ -63,10 +62,15 @@ export class InputBox implements Component {
     })
   }
 
+  /** Whether the composer has room for its frame and side padding. */
+  framed(width: number): boolean {
+    return width >= 8 && this.maxRows >= 4
+  }
+
   render(width: number, ctx: RenderContext): string[] {
     const arrows = chromeGlyphs(ctx.glyphs)
     this.arrowUp = arrows.arrowUp
-    const framed = width >= 8 && this.maxRows >= 4
+    const framed = this.framed(width)
     const chrome = width < 8 ? 0 : (framed ? 2 : 0) + (this.maxRows >= 2 ? 1 : 0)
     this.editor.maxRows = Math.min(inputRows(ctx.rows), Math.max(1, this.maxRows - chrome))
     const border = themeToken(ctx.theme, "borderFocused") ?? ctx.theme.accent

@@ -119,6 +119,16 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     ]
   }
   const inputBox = new InputBox(editor, statusItems)
+  /** Lists supply their own two-cell gutter; the frame adds two more before the text. */
+  const listLines = (
+    list: NonNullable<ReturnType<typeof inputList>>,
+    width: number,
+    ctx: RenderContext,
+    maxRows: number,
+  ) => {
+    const inset = inputBox.framed(width) ? "  " : ""
+    return list.lines(width - inset.length, ctx, maxRows).map((row) => inset + row)
+  }
   /** Rows the last frame's dialog took, to size it against the rest of the bottom area. */
   let dialogRows = 0
   let composerRows = 0
@@ -247,7 +257,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         listRows = 0
         return []
       }
-      const rows = list.lines(width, ctx, listRoom)
+      const rows = listLines(list, width, ctx, listRoom)
       if (deps.mode() === "fullscreen") {
         listRows = Math.min(listRoom, Math.max(listRows, rows.length))
         while (rows.length < listRows) rows.push("")
@@ -441,7 +451,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       inputBox.accentFocus = true
       inputBox.maxRows = Math.max(1, budget - (list ? 1 : 0))
       const rows = inputBox.render(width, ctx)
-      if (list) rows.push(...list.lines(width, ctx, Math.max(0, budget - rows.length)))
+      if (list) rows.push(...listLines(list, width, ctx, Math.max(0, budget - rows.length)))
       return rows
     },
     get panelsShown() {

@@ -57,8 +57,8 @@ for (const [rows, toolCount] of [
           app.screen.resize(cols, 24)
           app.terminal.setSize(cols, 24)
           app.terminal.send("next")
-          await waitFor(() => app.live().includes("│›next"), "composer focus restored")
-          expect(app.screen.y).toBe(app.screen.lines.findIndex((row) => row.includes("│›next")))
+          await waitFor(() => app.live().includes("│ › next"), "composer focus restored")
+          expect(app.screen.y).toBe(app.screen.lines.findIndex((row) => row.includes("│ › next")))
           expect(app.screen.lines.filter((row) => row.includes("slow"))).toHaveLength(toolCount)
           expect(app.agent.status).toBe("working")
         } finally {

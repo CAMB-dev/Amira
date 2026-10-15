@@ -149,7 +149,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     terminal.send("hi")
     terminal.send("\x1b[Z")
     await waitFor(() => /^╰─{98}╯\n {90}m1 · edits$/m.test(live()), "edits again")
-    expect(live()).toContain("│›hi")
+    expect(live()).toContain("│ › hi")
     terminal.send("\x03")
     terminal.send("\x03")
     await exited

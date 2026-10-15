@@ -95,7 +95,7 @@ test("without providers the UI starts with a welcome card; a message sent keeps 
   terminal.send("hello\r")
   await shows("No providers configured: add one with /provider add, then pick a model with /model.")
   // Not sent: the message waits in the input for a model.
-  expect(live()).toMatch(/^│›hello.*│$/m)
+  expect(live()).toMatch(/^│ › hello.*│$/m)
   expect(agent.messages).toEqual([])
   expect(mock.requests).toHaveLength(0)
   terminal.send("\x03")
@@ -111,7 +111,7 @@ test("with providers but no model picked, a message says to pick one and stays i
   await shows("No model selected — pick one with /model")
   terminal.send("hello\r")
   await shows("No model selected: pick one with /model.")
-  expect(live()).toContain("│›hello")
+  expect(live()).toContain("│ › hello")
   terminal.send("\x03")
   terminal.send("\x03")
   expect(await exited).toBe(0)
@@ -976,13 +976,13 @@ test("the editor sits in an intact rounded box with the status below and the car
   const top = rows.findIndex((l) => l.startsWith("╭"))
   expect(rows.slice(top, top + 4)).toEqual([
     `╭${"─".repeat(28)}╮`,
-    "│›héllo 你好                 │",
+    "│ › héllo 你好               │",
     "╰────────────────────────────╯",
     "                     m1 · auto",
   ])
   expect(rows[top + 4]).toBe("  shift+tab mode")
-  // The prompt sits inside the left border: content at cell two, "héllo " and two wide characters.
-  expect({ x: screen.x, y: screen.y }).toEqual({ x: 2 + 6 + 4, y: top + 1 })
+  // The prompt sits inside the left border: content at cell four, "héllo " and two wide characters.
+  expect({ x: screen.x, y: screen.y }).toEqual({ x: 4 + 6 + 4, y: top + 1 })
   terminal.send("\x03")
   terminal.send("\x03")
   await exited
@@ -1242,7 +1242,7 @@ test("steering the final reply becomes the next turn, not editor text", async ()
   expect(agent.messages.filter((m) => m.role === "user").length).toBe(2)
   expect(live()).not.toContain("steering ›")
   // The editor is empty (its placeholder shows) and the message appears once, as a prompt.
-  expect(live()).toContain("│›Message Amira")
+  expect(live()).toContain("│ › Message Amira")
   expect(live().split("› then this").length).toBe(2)
   terminal.send("\x03")
   await exited

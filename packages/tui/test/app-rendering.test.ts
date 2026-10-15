@@ -675,7 +675,7 @@ test("the status stays below the intact frame when a dialog takes the input box'
     terminal.send("\x1b[27u")
     expect(await answer).toBeUndefined()
     await waitFor(
-      () => live().includes("│›Message Amira") && /^╰─{58}╯\n {51}m1 · auto$/m.test(live()),
+      () => live().includes("│ › Message Amira") && /^╰─{58}╯\n {51}m1 · auto$/m.test(live()),
       `${mode}: composer and status restored`,
     )
     expect(live()).toMatch(/^ {51}m1 · auto$/m)
@@ -774,7 +774,7 @@ test("? opens the key reference on an empty input; it lists every action with it
     expect(live()).not.toContain("Keys")
     // With text in the input, ? is typed.
     terminal.send("a?")
-    await waitFor(() => live().includes("│›a?"), `${mode}: typed`)
+    await waitFor(() => live().includes("│ › a?"), `${mode}: typed`)
     expect(live()).not.toContain("Keys")
     terminal.send("\x03\x03")
     await exited
@@ -786,7 +786,7 @@ test("the input's editing keys: Ctrl+W and Ctrl+U cut, Ctrl+Y pastes back, Ctrl+
   terminal.send("one two three")
   await waitFor(() => live().includes("one two three"), "typed")
   terminal.send("\x17")
-  await waitFor(() => live().includes("│›one two ") && !live().includes("three"), "word cut")
+  await waitFor(() => live().includes("│ › one two ") && !live().includes("three"), "word cut")
   terminal.send("\x15")
   await waitFor(() => !live().includes("one two"), "line cut")
   terminal.send("\x19")
@@ -804,8 +804,8 @@ for (const mode of ["inline", "fullscreen"] as const) {
     const input = () =>
       live()
         .split("\n")
-        .find((line) => line.startsWith("│›"))
-        ?.replace(/^│›/, "› ")
+        .find((line) => line.startsWith("│ › "))
+        ?.slice(2)
         .replace(/ *│$/, "")
     try {
       terminal.send("one two")
@@ -835,8 +835,8 @@ for (const mode of ["inline", "fullscreen"] as const) {
       const input = () =>
         live()
           .split("\n")
-          .find((line) => line.startsWith("│›"))
-          ?.replace(/^│›/, "› ")
+          .find((line) => line.startsWith("│ › "))
+          ?.slice(2)
           .replace(/ *│$/, "")
       try {
         terminal.send("review @rea")
@@ -873,9 +873,9 @@ test("Ctrl+G edits the message in $VISUAL and takes the text back", async () => 
       env: { VISUAL: `"${process.execPath}" "${script}"` },
     })
     terminal.send("draft")
-    await waitFor(() => live().includes("│›draft"), "typed")
+    await waitFor(() => live().includes("│ › draft"), "typed")
     terminal.send("\x07")
-    await waitFor(() => live().includes("│›draft and more"), "edited")
+    await waitFor(() => live().includes("│ › draft and more"), "edited")
     terminal.send("\x03")
     terminal.send("\x03")
     await exited

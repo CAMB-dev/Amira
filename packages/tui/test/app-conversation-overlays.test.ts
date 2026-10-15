@@ -37,7 +37,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       expect(await answer).toBeUndefined()
       await waitFor(() => s.live().includes("Design · fixture"), "owned transcript restored")
       s.terminal.send("Usable owned composer")
-      await waitFor(() => s.live().includes("│›Usable owned composer"), "composer not stuck in overlay")
+      await waitFor(() => s.live().includes("│ › Usable owned composer"), "composer not stuck in overlay")
     } finally {
       s.host.ui.cancelAll()
       s.context()?.unfocusConversation?.()
@@ -56,10 +56,10 @@ for (const mode of ["inline", "fullscreen"] as const) {
       s.terminal.send(F6)
       await waitFor(() => !s.live().includes("main idle"), "main after key reference")
       s.terminal.send("Main draft")
-      await waitFor(() => s.live().includes("│›Main draft"), "main composer usable")
+      await waitFor(() => s.live().includes("│ › Main draft"), "main composer usable")
       expect(s.context().focusConversation?.(s.conversation)).toBe(true)
       s.terminal.send("Owned draft")
-      await waitFor(() => s.live().includes("│›Owned draft"), "owned composer usable")
+      await waitFor(() => s.live().includes("│ › Owned draft"), "owned composer usable")
     } finally {
       s.context()?.unfocusConversation?.()
       await s.conversation.release()

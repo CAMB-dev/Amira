@@ -33,7 +33,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           )
           s.terminal.send(`\x12${origin === "main" ? "MAIN_HISTORY_PREVIEW" : "Design history"}`)
           const preview = origin === "main" ? "MAIN_HISTORY_PREVIEW" : "Design history"
-          await waitFor(() => s.live().includes(`│›${preview}`), "actual history preview")
+          await waitFor(() => s.live().includes(`│ › ${preview}`), "actual history preview")
           if (origin === "main") expect(s.context().focusConversation?.(s.conversation)).toBe(true)
           else expect(s.context().unfocusConversation?.()).toBe(true)
           await waitFor(
@@ -46,7 +46,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           expect(s.live()).toContain(
             kind === "image" ? "[image 1:" : kind === "paste" ? "[pasted 12 lines" : text,
           )
-          expect(s.live()).not.toContain(`│›${preview}`)
+          expect(s.live()).not.toContain(`│ › ${preview}`)
           s.terminal.send("\r")
           const agent = origin === "main" ? s.agent : s.owned
           await waitFor(

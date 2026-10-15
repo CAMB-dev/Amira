@@ -55,12 +55,12 @@ for (const mode of ["inline", "fullscreen"] as const) {
     try {
       await focus(s)
       s.terminal.send(paste("Private owned draft"))
-      await waitFor(() => s.live().includes("│›Private owned draft"), "owned draft")
+      await waitFor(() => s.live().includes("│ › Private owned draft"), "owned draft")
       await main(s)
       await sendMain(s, `${UNDO}Main safe`, "Main safe")
       expect(userTexts(s.owned)).toEqual(["Design history"])
       expect(s.context().focusConversation?.(s.conversation)).toBe(true)
-      await waitFor(() => s.live().includes("│›Private owned draft"), "owned restored draft")
+      await waitFor(() => s.live().includes("│ › Private owned draft"), "owned restored draft")
       await sendOwned(s, `${UNDO}${REDO}`, "Private owned draft")
       expect(userTexts(s.agent)).toEqual(["Main history", "Main safe"])
     } finally {
@@ -152,9 +152,9 @@ for (const mode of ["inline", "fullscreen"] as const) {
         await focus(s)
         if (source === "main") await main(s)
         s.terminal.send(`${paste(`Private ${source} kill`)}${KILL}marker`)
-        await waitFor(() => s.live().includes("│›marker"), "kill processed")
+        await waitFor(() => s.live().includes("│ › marker"), "kill processed")
         s.terminal.send(UNDO)
-        await waitFor(() => !s.live().includes("│›marker"), "empty source draft")
+        await waitFor(() => !s.live().includes("│ › marker"), "empty source draft")
         if (source === "main") {
           expect(s.context().focusConversation?.(s.conversation)).toBe(true)
           await waitFor(() => s.live().includes("main idle"), "owned focus")

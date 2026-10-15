@@ -13,8 +13,8 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   await waitFor(() => live().includes("/status"), "popup")
   const rows = live().split("\n")
   const popupRow = rows.findIndex((l) => l.includes("/clear"))
-  // A: the prompt sits inside the intact frame, with content at cell two.
-  const editorRow = rows.findIndex((l) => /^│›\/ *│$/.test(l.trimEnd()))
+  // A: the prompt sits inside the intact frame, with content at cell four.
+  const editorRow = rows.findIndex((l) => /^│ › \/ *│$/.test(l.trimEnd()))
   expect(editorRow).toBeGreaterThan(-1)
   expect(popupRow).toBeGreaterThan(editorRow)
   // The list follows the separate status row, replaces the hint, and ends with its own hint.
@@ -25,10 +25,10 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   terminal.send("he")
   await waitFor(() => live().includes("› /help"), "help selected")
   terminal.send("\t")
-  await waitFor(() => live().includes("│›/help "), "completed")
+  await waitFor(() => live().includes("│ › /help "), "completed")
   terminal.send("\r")
   await shows("HELP TEXT")
-  expect(live()).toContain("│›Message Amira")
+  expect(live()).toContain("│ › Message Amira")
   terminal.send("\x03")
   await exited
 })
@@ -61,20 +61,20 @@ test("typing a command: the input box stays put and each key draws one frame wit
       "/",
       [
         // Nothing marked on a bare "/"; names show the arguments they take.
-        "  /clear                   Start a new session",
-        "  /help                    List the slash commands",
-        "  /model [provider/model]  Switch the model",
-        "  /quit                    Leave Amira",
-        "  /status                  Show the status",
+        "    /clear                  Start a new session",
+        "    /help                   List the slash commands",
+        "    /model [provider/mode…  Switch the model",
+        "    /quit                   Leave Amira",
+        "    /status                 Show the status",
       ],
     ],
-    ["m", ["› /model [provider/model]  Switch the model"]],
-    ["o", ["› /model [provider/model]  Switch the model"]],
-    ["d", ["› /model [provider/model]  Switch the model"]],
-    ["e", ["› /model [provider/model]  Switch the model"]],
-    ["l", ["› /model [provider/model]  Switch the model"]],
-    [" ", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro", "  openai/gpt-5"]],
-    ["d", ["› deepseek/deepseek-flash", "  deepseek/deepseek-pro"]],
+    ["m", ["  › /model [provider/mode…  Switch the model"]],
+    ["o", ["  › /model [provider/mode…  Switch the model"]],
+    ["d", ["  › /model [provider/mode…  Switch the model"]],
+    ["e", ["  › /model [provider/mode…  Switch the model"]],
+    ["l", ["  › /model [provider/mode…  Switch the model"]],
+    [" ", ["  › deepseek/deepseek-flash", "    deepseek/deepseek-pro", "    openai/gpt-5"]],
+    ["d", ["  › deepseek/deepseek-flash", "    deepseek/deepseek-pro"]],
   ]
   for (const [k, expected] of steps) {
     const before = frames.length
@@ -340,7 +340,7 @@ test("Esc closes the popup without leaving the text; Enter then runs what was ty
   await waitFor(() => live().includes("› /status"), "popup")
   terminal.send("\x1b[27u")
   await waitFor(() => !live().includes("Show the status"), "closed")
-  expect(live()).toContain("│›/sta")
+  expect(live()).toContain("│ › /sta")
   terminal.send("tus\r")
   await shows("STATUS OK")
   expect(all()).toContain("› /status")
