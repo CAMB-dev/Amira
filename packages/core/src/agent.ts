@@ -43,6 +43,7 @@ import { History } from "./agent/history.ts"
 import { modelRef } from "./agent/messages.ts"
 import { Thinking } from "./agent/model-call.ts"
 import { NoticeInbox } from "./agent/notices.ts"
+import { OwnedToolRunner } from "./agent/owned-tool.ts"
 import {
   callToolSession,
   createSessionArtifacts,
@@ -52,7 +53,7 @@ import {
   setupContext,
   setupToolSession,
 } from "./agent/setup.ts"
-import { ToolRunner } from "./agent/tool-runner.ts"
+import { checkRestoredTools, setupToolRunner } from "./agent/tool-setup.ts"
 import { TurnRunner, type TurnState } from "./agent/turn-runner.ts"
 import {
   type AfterCompaction,
@@ -78,6 +79,7 @@ import { FileRewind } from "./file-rewind.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
 import { assertOwnedSession } from "./owned-session.ts"
 import { Permissions } from "./permissions/policy.ts"
+import { intersectWriteRoots } from "./permissions/write-roots.ts"
 import {
   addNonInteractive,
   NON_INTERACTIVE_LINE,
@@ -86,6 +88,7 @@ import {
   setSection,
 } from "./prompt.ts"
 import { newSessionId, type SessionStore } from "./session-store.ts"
+import { scopeAdmission } from "./subagents/lifecycle.ts"
 import { PauseGate } from "./subagents/pause.ts"
 import type { AgentTree } from "./subagents.ts"
 import { ToolRegistry } from "./tool-registry.ts"
@@ -99,6 +102,10 @@ export class Agent {
   readonly interceptors: InterceptorRegistry
   readonly tools: ToolRegistry
   readonly callableTools: ReadonlySet<string> | undefined
+  #writeRoots: readonly string[] | undefined
+  get writeRoots(): readonly string[] | undefined {
+    return this.#writeRoots
+  }
   readonly cwd: string
   readonly messages: Message[]
   readonly session: SessionStore | undefined
@@ -149,6 +156,7 @@ export class Agent {
   #status: SessionStatus = "idle"
   #turnState: TurnState = { abort: undefined, turn: undefined, steering: [], steerAbort: undefined }
   #turnRunner: TurnRunner
+  #ownedTools: OwnedToolRunner
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
 
@@ -189,6 +197,10 @@ export class Agent {
       this.interceptors = opts.interceptors ?? new InterceptorRegistry()
       this.tools = opts.tools ?? new ToolRegistry()
       this.callableTools = opts.callableTools
+      this.#writeRoots = intersectWriteRoots(
+        intersectWriteRoots(opts.session?.header.owned?.spec.writeRoots, opts.session?.header.writeRoots),
+        opts.writeRoots,
+      )
       this.permissions = opts.permissions ?? new Permissions()
       this.cwd = opts.cwd
       this.model = opts.model
@@ -224,20 +236,10 @@ export class Agent {
         },
         working: (turn) => this.#setStatus(turn, "working"),
       })
-      const toolRunner = new ToolRunner({
-        tools: this.tools,
-        interceptors: this.interceptors,
-        permissions: this.permissions,
+      const toolRunner = setupToolRunner(this, {
         approvals: this.#approvals,
-        cwd: this.cwd,
-        sessionId: this.sessionId,
-        maxParallelTools: this.#maxParallelTools,
         abortGraceMs: opts.abortGraceMs ?? 2000,
-        fileRewind: this.fileRewind,
-        backgroundJobs: this.backgroundJobs,
         allowsTool: (tool) => this.#allowsTool(tool),
-        callableTools: this.callableTools,
-        isSubAgent: this.depth > 0,
         steerSignal: () => this.#turnState.steerAbort?.signal,
         storeFailed: () => this.#history.storeFailed,
         callSession: (turn, toolCallId) => this.#callSession(turn, toolCallId),
@@ -247,6 +249,13 @@ export class Agent {
         },
         emit: (turn, type, data) => this.#emit(turn, type, data),
       })
+      this.#ownedTools = new OwnedToolRunner(
+        this,
+        this.#turnState,
+        toolRunner,
+        (turn, status) => this.#setStatus(turn, status),
+        () => this.#disposed,
+      )
       this.#onIdleNotice = opts.onIdleNotice
       this.#inbox = new NoticeInbox({
         retryMs,
@@ -736,6 +745,7 @@ export class Agent {
   dispose(reason: EventMap["session.end"]["reason"] = "exit"): Promise<void> {
     if (this.#disposePromise) return this.#disposePromise
     this.#disposed = true
+    if (this.tree) scopeAdmission(this.tree).closeParent(this.sessionId)
     this.#disposePromise = this.#dispose(reason)
     return this.#disposePromise
   }
@@ -751,11 +761,12 @@ export class Agent {
     this.#startAfterCompaction(true, this.#holding ?? "session")
     // A sub-agent's end is subagent.end; session.end means the conversation itself ended.
     if (this.depth === 0) this.#emit(undefined, "session.end", { reason })
-
     if (this.depth === 0) this.tree?.abortAll("the session ended")
     else this.tree?.abortChildren(this.sessionId, "the session ended")
     const current = this.#current
     if (current) await current.catch(() => {})
+    await this.#ownedTools.current?.catch(() => {})
+    await this.#ownedTools.drain()
     await this.tree?.waitForChildren(this.depth === 0 ? undefined : this.sessionId)
 
     // Never rejects: a job that fails to stop here still ends with the process.
@@ -841,18 +852,8 @@ export class Agent {
 
   /** Drops restored tools that are gone (e.g. an MCP server removed since), with a note. */
   #checkRestoredTools() {
-    const restored = this.#restoredTools
-    if (!restored) return
+    checkRestoredTools(this, this.#loadedTools, this.#restoredTools)
     this.#restoredTools = undefined
-    // Disabled tools stay loaded for later; tools that became active are offered anyway.
-    const unavailable = restored.filter((name) => !this.tools.has(name))
-    for (const name of restored) {
-      const tool = this.tools.get(name)
-      if (!this.tools.has(name) || (tool && tool.exposure !== "deferred")) this.#loadedTools.delete(name)
-    }
-    if (!unavailable.length) return
-    const error = `tools loaded earlier in this session are no longer available: ${unavailable.join(", ")}`
-    this.bus.emit("extension.error", { source: "session", error }, { sessionId: this.sessionId })
   }
 
   /**

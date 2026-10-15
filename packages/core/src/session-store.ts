@@ -25,11 +25,13 @@ import {
 } from "./file-lock.ts"
 import type { FileJournalEntry } from "./file-rewind.ts"
 import type { OwnedSessionIdentity } from "./owned-session.ts"
+import { intersectWriteRoots } from "./permissions/write-roots.ts"
 import {
   type SessionAcquisitionOptions,
   sessionClaimAcquired,
   withSessionClaim,
 } from "./session-acquisition.ts"
+import { isSessionHeader, type SessionHeader } from "./session-header.ts"
 import { canonicalSessionFile } from "./session-path.ts"
 import { sessionsDir } from "./session-project.ts"
 
@@ -81,17 +83,7 @@ export class SessionInUseError extends Error {
   }
 }
 
-export interface SessionHeader {
-  type: "session"
-  v: 1
-  id: string
-  cwd: string
-  createdAt: string
-  /** The session this one was forked from, if any. */
-  parent: string | null
-  /** Host-owned policy identity; not resumable or forkable as an ordinary root. */
-  owned?: OwnedSessionIdentity
-}
+export type { SessionHeader } from "./session-header.ts"
 
 export type SessionEntryData =
   | FileJournalEntry
@@ -201,18 +193,28 @@ export class SessionStore {
     parent?: string
     dir?: string
     owned?: OwnedSessionIdentity
+    writeRoots?: readonly string[]
   }): SessionStore {
     const id = opts.id ?? newSessionId()
     const dir = opts.dir ?? sessionsDir(opts.cwd)
+    const owned = opts.owned ? structuredClone(opts.owned) : undefined
+    if (owned && opts.owned?.spec.writeRoots !== undefined) {
+      // Keep the frozen policy array even though the public spec type permits mutable arrays.
+      owned.spec.writeRoots = intersectWriteRoots(undefined, opts.owned.spec.writeRoots) as string[]
+    }
     const header: SessionHeader = {
-      type: "session",
-      v: 1,
+      type: opts.owned?.v === 2 || opts.writeRoots !== undefined ? "session-policy" : "session",
+      v: opts.owned?.v === 2 || opts.writeRoots !== undefined ? 2 : 1,
+      ...(opts.writeRoots !== undefined
+        ? { writeRoots: intersectWriteRoots(undefined, opts.writeRoots) }
+        : {}),
       id,
       cwd: opts.cwd,
       createdAt: new Date().toISOString(),
       parent: opts.parent ?? null,
-      ...(opts.owned ? { owned: structuredClone(opts.owned) } : {}),
+      ...(owned ? { owned } : {}),
     }
+    if (!isSessionHeader(header)) throw new Error("Invalid session header policy identity")
     return new SessionStore(path.join(dir, `${id}.jsonl`), header, false)
   }
 
@@ -227,7 +229,7 @@ export class SessionStore {
     const raw = bytes.toString("utf8")
     const lines = raw.split("\n")
     const header = parseLine(lines[0] ?? "")
-    if (!isHeader(header)) throw new Error(`not an Amira session file: ${file}`)
+    if (!isSessionHeader(header)) throw new Error(`not an Amira session file: ${file}`)
     const store = new SessionStore(file, header, true)
     for (const line of lines.slice(1)) {
       const e = parseLine(line)
@@ -560,7 +562,12 @@ export class SessionStore {
     const ended = new Set(this.#entries.flatMap((e) => (e.type === "file_restore_end" ? [e.restoreId] : [])))
     if (this.#entries.some((e) => e.type === "file_restore" && !ended.has(e.id)))
       throw new Error("finish or abandon the interrupted file restore before forking")
-    const next = SessionStore.create({ cwd: this.header.cwd, parent: this.id, dir: path.dirname(this.file) })
+    const next = SessionStore.create({
+      cwd: this.header.cwd,
+      parent: this.id,
+      dir: path.dirname(this.file),
+      writeRoots: this.header.writeRoots,
+    })
     const kept = new Set(branch.slice(0, at + 1).map((e) => e.id))
     const end = target === null ? -1 : this.#entries.findIndex((e) => e.id === target)
     // Physical file versions and gaps survive conversation-only checkouts. Retain their entire
@@ -862,11 +869,6 @@ function checkpointIn(v: unknown): Signature | undefined {
     host: s.host!,
     model: s.model!,
   }
-}
-
-function isHeader(v: unknown): v is SessionHeader {
-  const h = v as SessionHeader | undefined
-  return h?.type === "session" && typeof h.id === "string"
 }
 
 const ENTRY_TYPES = new Set<unknown>([

@@ -1,4 +1,28 @@
 import { expect, test } from "bun:test"
+import type { SessionHeader } from "../src/index.ts"
+
+test("policy-bearing session header types remain exported with an explicit format discriminator", () => {
+  const header: SessionHeader = {
+    type: "session-policy",
+    v: 2,
+    id: "s_bounded",
+    cwd: "/workspace",
+    parent: null,
+    createdAt: "2026-10-15T00:00:00.000Z",
+    writeRoots: [],
+  }
+  expect(header).toMatchInlineSnapshot(`
+    {
+      "createdAt": "2026-10-15T00:00:00.000Z",
+      "cwd": "/workspace",
+      "id": "s_bounded",
+      "parent": null,
+      "type": "session-policy",
+      "v": 2,
+      "writeRoots": [],
+    }
+  `)
+})
 
 test("the public core exports stay stable", async () => {
   const actual = Object.keys(await import("../src/index.ts")).sort()

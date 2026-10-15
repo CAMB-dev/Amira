@@ -84,6 +84,26 @@ function setup() {
   return { view, activity, changed, ...createConversationEvents(view, activity, changed) }
 }
 
+test("owned tool operations start and end activity without inventing a model prompt", () => {
+  const { onEvent, view, activity } = setup()
+  onEvent({ ...event("status.changed", { status: "working" }), turnId: "o_check" })
+  expect(activity.turnStarted).toHaveBeenCalledTimes(1)
+  onEvent({
+    ...event("tool.execute.start", { toolCallId: "check", name: "bash", args: { command: "echo check" } }),
+    turnId: "o_check",
+  })
+  onEvent({
+    ...event("tool.execute.end", { toolCallId: "check", name: "bash", result, durationMs: 1 }),
+    turnId: "o_check",
+  })
+  onEvent({ ...event("status.changed", { status: "idle" }), turnId: "o_check" })
+  expect(activity.turnEnded).toHaveBeenCalledTimes(1)
+  expect(view.toolStart).toHaveBeenCalledTimes(1)
+  expect(view.toolEnd).toHaveBeenCalledTimes(1)
+  expect(view.user).not.toHaveBeenCalled()
+  expect(view.notice).not.toHaveBeenCalled()
+})
+
 test("owned turns show users, streamed text and thinking, calls, and usage", () => {
   const { onEvent, view, activity, changed } = setup()
   onEvent(event("turn.start", { prompt }))

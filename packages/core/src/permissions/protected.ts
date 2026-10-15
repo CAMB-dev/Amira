@@ -308,6 +308,25 @@ export function protectedWritePath(
   return undefined
 }
 
+type WrittenPathsCheck = (paths: string[] | undefined) => void
+const writtenPathsChecks = new WeakMap<Record<string, unknown>, WrittenPathsCheck>()
+
+/** Internal call scope: validate each report without letting callers supply replacement paths. */
+export async function withWrittenPathsCheck<T>(
+  args: Record<string, unknown>,
+  check: WrittenPathsCheck,
+  action: () => Promise<T>,
+): Promise<T> {
+  const previous = writtenPathsChecks.get(args)
+  writtenPathsChecks.set(args, check)
+  try {
+    return await action()
+  } finally {
+    if (previous) writtenPathsChecks.set(args, previous)
+    else writtenPathsChecks.delete(args)
+  }
+}
+
 /**
  * The paths a call may write: the tool's own report, plus, for a tool under a built-in file
  * tool's name, the paths its arguments name (so an override cannot report its way past the
@@ -315,6 +334,17 @@ export function protectedWritePath(
  * report fails or is malformed: callers treat that as unknown.
  */
 export async function writtenPaths(
+  tool: Pick<ToolDefinition, "name" | "getWrittenPaths">,
+  args: Record<string, unknown>,
+  cwd: string,
+): Promise<string[] | undefined> {
+  const paths = await reportWrittenPaths(tool, args, cwd)
+  // Outside the reporter's catch: a failed ceiling check is never an approvable unknown report.
+  writtenPathsChecks.get(args)?.(paths)
+  return paths
+}
+
+async function reportWrittenPaths(
   tool: Pick<ToolDefinition, "name" | "getWrittenPaths">,
   args: Record<string, unknown>,
   cwd: string,

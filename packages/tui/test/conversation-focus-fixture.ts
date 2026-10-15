@@ -9,6 +9,7 @@ export async function focusFixture(
   steps: MockStep[] = [{ text: "Main reply" }],
   ownedCwd = "/work/design",
   options: SetupOptions = {},
+  name = "Design · fixture",
 ) {
   let conversation!: OwnedConversation
   let context!: CommandContext
@@ -46,7 +47,7 @@ export async function focusFixture(
   conversation = {
     id: owned.sessionId,
     key: "design",
-    name: "Design · fixture",
+    name,
     cwd: owned.cwd,
     data: owned.data,
     history: () => owned.messages,
@@ -58,6 +59,9 @@ export async function focusFixture(
         content: [...(text ? [{ type: "text" as const, text }] : []), ...(options?.images ?? [])],
         ...(options?.display ? { display: options.display } : {}),
       })
+    },
+    runTool: async () => {
+      throw new Error("fixture does not invoke tools")
     },
     stop: async () => {
       stops++

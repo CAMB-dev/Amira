@@ -447,10 +447,14 @@ export default defineExtension((api) => {
 `api.conversations?: OwnedConversations` 是可选宿主能力，使用前必须检测。不能用临时子 agent 替代它，却声称历史已保存。与 `/btw` 风格的子 agent 不同，owned conversation 有稳定的 owner/key 身份、独立保存的会话和单写者租约。它属于扩展，不属于当前主会话；主会话的 `/clear`、`/resume`、rewind 和 fork 不会停止它或改变其绑定。关闭视图只隐藏内容。TUI 可将焦点切换到此会话，使用同一原生对话记录和输入框，主会话仍在后台继续运行。
 
 - `openOrCreate(spec, runtime): Promise<OwnedConversation>` 打开所属扩展已保存的 key，或创建新会话。`open(id, runtime)` 只能打开该扩展拥有的会话。另一个宿主或进程持有租约时会得到明确的 **in use** 错误。同一扩展实例重复打开会返回现有句柄。
-- `ConversationSpec` 包含 `key`、`name`、绝对路径 `cwd`、可选的 `model`（`provider/model`）、`systemPrompt` 和必填的 `callableTools: string[]`。宿主保存此规格；重新打开不能悄悄修改它或扩大工具权限。此类历史独立于普通主会话的列表、resume 和 fork 路径。
+- `ConversationSpec` 包含 `key`、`name`、绝对路径 `cwd`、可选的 `model`（`provider/model`）、`systemPrompt`、必填的 `callableTools: string[]`，以及可选的 `writeRoots: string[]` 和 `descendants: "research" | "inherit"`。宿主保存此规格；重新打开不能悄悄修改它或扩大工具权限。此类历史独立于普通主会话的列表、resume 和 fork 路径。
 - `ConversationRuntime` 包含必填的 `askUser(questions, { sessionId, signal }): Promise<AskAnswer[] | undefined>` 和可选的 `extraTools: ToolDefinition[]`。每次重新打开都要绑定回调与执行函数；它们不序列化。缺少必要工具时拒绝运行。提问直接进入此回调，绝不交给主会话模型回答。回调必须展示真实的人类选择、响应取消，并在返回前保存需要的决策证据。返回 `undefined` 表示取消。
-- 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `OwnedConversation.send(text, { images?: ImageBlock[], display?: MessageDisplay, signal? })` 才启动一轮，仅发送图片时文本可为空；在该轮结束时完成，并发 send 会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
-- 保存的 callable allowlist 在审批前限制本地工具执行，并从 provider 请求中排除不允许的托管工具，包括压缩请求。`createGroup(options)` 绑定到此会话。后代只能使用继承权限的交集，不能运行 shell 工具或使用 worktree，不能扩大权限上限。允许工具名意味着信任其实现；这不是扩展代码的沙箱。
+- 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()`、`runTool()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `OwnedConversation.send(text, { images?: ImageBlock[], display?: MessageDisplay, signal? })` 才启动一轮，仅发送图片时文本可为空；在该轮结束时完成，重叠的 send/tool 操作会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
+- 保存的 callable allowlist 在审批前限制本地工具执行，并从 provider 请求中排除不允许的托管工具，包括压缩请求。`createGroup(options)` 绑定到此会话。后代继承 callable 和写入上限的交集，即使使用临时子 agent 或额外工具也不能扩大权限。允许工具名意味着信任其实现。
+- `descendants` 默认为 `"research"`：子 agent 不能运行 shell 工具、更改 cwd 或准备 worktree，保持现有已保存会话的行为。显式设置 `"inherit"` 后，子 agent 可正常使用 cwd/shell，包括不同 git worktree 的 cwd，但仍共享你的当前权限、所属会话的生命周期和用量统计，并将提问与审批直接交给人类，不向另一个模型咨询人类问题。`ToolSession.restricted` 仍表示仅研究限制。
+- `writeRoots` 是不可变的文件工具写入上限，根目录必须是有效绝对路径。省略表示不增加目录限制；`[]` 表示不允许文件工具写入。`SpawnOptions.writeRoots` 省略时继承父会话，指定时只能缩小上限；读取不受此目录限制。宿主在最终参数拦截后、审批和执行前检查全部写入路径，包括删除和 patch 移动的源与目标，并在变更钩子处再次检查。重新计算的路径报告必须一致；变化、越界、无法解析、格式错误或抛错的报告均在审批前拒绝，不会询问；审批、auto 模式和扩展数据目录豁免都不能覆盖此上限。受限写入拒绝多链接（硬链接）目标以及 symlink/junction 逃逸。带策略的元数据和会话头使用旧读取器会拒绝的格式；旧的无限制记录保持原有行为。
+- **这不是操作系统沙箱。** 写入上限约束文件工具（`write`、`edit`、`apply_patch` 及声明文件写入/路径能力的工具），不约束任意 shell 子进程、导入的程序或受信任扩展代码。shell 工具仍遵守你的当前权限模式和命令规则。自定义工具必须诚实报告全部写入，并按声明使用变更钩子；恶意并发文件系统变更仍存在竞态，不属于沙箱保证。
+- `runTool(name, args, { signal? }?): Promise<ToolResult>` 仅在会话空闲时调用持久化 callable 上限内的工具，不提供 cwd、权限或执行器覆盖。它复用模型工具调用的注册表/宿主启用限制、拦截器、权限上限、参数校验、权限/审批、事件、输出处理和变更钩子，但不请求 provider，也不添加模型历史消息。拒绝、取消、失败或超时都返回错误结果，绝不表示检查成功；请检查 `isError` 及工具的退出/结果详情。`stop()` 和 `release()` 会取消并等待执行器实际结束，即使超过中止宽限期，也保留 busy 状态和租约。取消后变更钩子失效；忽略取消的执行器可能使清理无限等待。与直接 owned 检查不同，普通模型调用仍允许 after 拦截器恢复执行错误；执行权限上限的拒绝仍不可覆盖。工具事件携带所属会话和操作 ID（`turnId` 中的 `o_…`），不伪造模型轮次或人类确认。独立的宿主 custom 记录（`amira.tool-operations`，v1 start/execute/end）保存执行证据。start 保留请求参数；相关联的 execute 记录在执行器派发前持久保存最终授权参数；end 保存结果及取消状态。execute 不代表执行已完成，重新打开不会重放未完成操作。相比之下，`api.runCommand` 仅管理进程，**不执行工具权限检查**：先单独确认再调用 `runCommand`，不等同于 plan 模式拒绝、命令规则或工具拦截器。
 - 句柄提供 `id`、`key`、`name`、`cwd`、绑定的 `data: SessionData`、`history()`（当前完整分支的不可变快照，包含已被压缩替代的消息）、`status()`（state 和 busy）及 `events: AsyncIterable<AnyEvent>`。`OwnedConversation.events` 包含此会话及普通后代的事件，携带各自的 sessionId，不进入主对话总线。临时后代保留私有总线；扩展必须改用它们的 `ChildSession.events`。先订阅，再读取历史和状态快照。事件不重放；用 history 恢复保存的消息，按 session/turn/tool-call id 关联工具行。
 - 绑定的 `SessionData.append(key, data): void` 不提供持久写入确认。磁盘故障通过 `extension.error` 异步报告；`append()` 返回不代表已持久提交。如果决策证据要求持久提交，必须先提交到扩展自行控制的存储，再回答 `askUser` 问题。
 - `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。此 API 不提供删除；卸载或移除包后历史仍保留。
@@ -463,7 +467,7 @@ export default defineExtension((api) => {
 
 命令、skill 和输入处理器的 `openView()` 能力绑定到创建上下文时的会话。若延迟打开时焦点已在其他会话，或原主会话已被替换，则返回 `false`，不会接管当前对话记录或输入框。切换焦点只暂停待回答问题的编辑器，不会取消请求；返回时会恢复未完成答案、选择和光标位置。回答或取消请求会释放保存的编辑状态。
 
-全屏和内联切换均显示 `— design: <name> —` 或 `— main —`，使用独立会话名称，绝不显示原始 ID。内联切换不会将历史重新打印到终端滚动记录中。隐藏期间暂存的新输出可在返回时显示。全屏模式显示已聚焦会话保存的对话记录。
+全屏和内联切换均显示 `— <name> —` 或 `— main —`，使用独立会话名称，绝不显示原始 ID。内联切换不会将历史重新打印到终端滚动记录中。隐藏期间暂存的新输出可在返回时显示。全屏模式显示已聚焦会话保存的对话记录。
 
 `UiRequestOptions.sessionId?: string` 将 UI 请求关联到某个会话（默认关联宿主会话），用于展示和按会话取消审批，不改变执行归属或权限。取消审批只停止所关联的会话，绝不停止无关的主会话或已聚焦会话。所有 UI 请求类型在 RPC 实时/重放的 `ui.request` 事件和 `state.uiRequests` 中均保留此关联，包括请求更新；`ui.resolved` 和 `ui.progress` 在事件封装的 `sessionId` 中保留此关联。RPC 顶层的 `state.sessionId` 仍是主会话 ID。后代请求在元数据中保留子会话 ID；原生宿主会将其映射到所属会话以展示和取消审批，包括聚焦前已经等待回答的请求。将 runtime 提供的 `sessionId` 和 `signal` 转发给 `ctx.ui.ask`，让问题显示在对应会话中：
 
@@ -484,7 +488,7 @@ api.registerCommand({
 })
 ```
 
-自定义视图仍可展示独立会话，而不替换主输入框。从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能省略独立会话问题的 `sessionId`，也不能在无法展示问题时推断用户选择。会话接口、`api.conversations` 和 `ToolSession.restricted` 自 API 0.1.51 起提供，原生聚焦自 API 0.1.52 起提供；仍应先检测能力是否可用，让旧宿主能正常降级。
+自定义视图仍可展示独立会话，而不替换主输入框。从 `api.session()` 读取主会话状态，从独立句柄读取此会话的记录和状态。不能省略独立会话问题的 `sessionId`，也不能在无法展示问题时推断用户选择。会话接口、`api.conversations` 和 `ToolSession.restricted` 自 API 0.1.51 起提供，原生聚焦自 API 0.1.52 起提供；仍应先检测能力是否可用，让旧宿主能正常降级。`writeRoots`、`descendants` 和 `runTool` 需要支持它们的宿主。依赖新策略前必须要求相应宿主 API 版本：TypeScript 可选字段不等于能力检测，旧宿主在创建会话时可能忽略未知字段。
 
 ### 子 agent 控制
 

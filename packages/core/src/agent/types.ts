@@ -93,6 +93,8 @@ export interface AgentOptions {
   tools?: ToolRegistry
   /** Execution allowlist; does not alter the tool declarations offered to the model. */
   callableTools?: ReadonlySet<string>
+  /** Immutable file-tool destination ceiling, independent of permissions and rewind. */
+  writeRoots?: readonly string[]
   /** Per-provider and per-model choices, shared with sub-agents. */
   providerSettings?: Record<string, ProviderSettings>
   /** Upper bound on model calls per turn. Default 200. */

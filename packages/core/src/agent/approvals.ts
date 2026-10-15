@@ -56,7 +56,8 @@ interface ApprovalCall {
  *
  * - approve() builds the request and starts the wait synchronously, returning the wait's promise
  *   directly. The caller keeps the policy await, abort/dismissal handling, approval attribution
- *   and rejection at their original await sites, so no await or microtask boundary is added.
+ *   and rejection at their original await sites. Approval callbacks start synchronously;
+ *   cancellation settles the wait even if the callback never settles.
  * - askFromTool() shares the blocked count; askQuestions() forwards a commander's questions
  *   directly, with no wait, error conversion or promise wrapper.
  * - hasAsker says whether the session exposes askUser at all. permissionApprover never falls
@@ -125,6 +126,7 @@ export class ApprovalGate {
         `approval for ${request.name}`,
         () => approve(request, turn.signal),
         timing,
+        turn.signal,
       )
     } catch (err) {
       return {
@@ -169,28 +171,53 @@ export class ApprovalGate {
    * Waits for `wait` while the session shows as blocked (D44: with the number of calls waiting,
    * for approval or for an answer).
    */
-  async #waitBlocked<T>(
+  #waitBlocked<T>(
     turn: ApprovalTurn,
     reason: string,
     wait: () => Promise<T>,
     timing?: ApprovalTiming,
+    signal?: AbortSignal,
   ): Promise<T> {
-    if (timing) timing.startedAt = performance.now()
-    // Each turn has its own count: a wait of another turn (abandoned, or late) never touches it.
-    const entry = this.#blocked.get(turn) ?? { calls: 0 }
-    this.#blocked.set(turn, entry)
-    entry.calls++
-    // Only the current turn shows as blocked: a late wait of an ended turn must not mark the
-    // session blocked, since nothing of that turn would bring it back to working.
-    if (this.#deps.isCurrentTurn(turn) && !turn.signal.aborted) this.#deps.blocked(turn, reason, entry.calls)
-    try {
-      return await wait()
-    } finally {
-      if (timing) timing.endedAt = performance.now()
-      entry.calls--
-      // A wait that ends after its turn did (aborted, abandoned) must not wake the session.
-      const live = this.#deps.isCurrentTurn(turn) && !turn.signal.aborted
-      if (entry.calls === 0 && live) this.#deps.working(turn)
-    }
+    // Settle directly from the callback's promise, preserving the original wait's microtasks.
+    // A separate Promise.race wrapper would delay normal approval/status settlement.
+    return new Promise<T>((resolve, reject) => {
+      if (timing) timing.startedAt = performance.now()
+      // Each turn has its own count: a wait of another turn never touches it.
+      const entry = this.#blocked.get(turn) ?? { calls: 0 }
+      this.#blocked.set(turn, entry)
+      entry.calls++
+      if (this.#deps.isCurrentTurn(turn) && !turn.signal.aborted)
+        this.#deps.blocked(turn, reason, entry.calls)
+      let settled = false
+      const settle = (complete: () => void) => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener("abort", onAbort)
+        try {
+          if (timing) timing.endedAt = performance.now()
+          entry.calls--
+          const live = this.#deps.isCurrentTurn(turn) && !turn.signal.aborted
+          if (entry.calls === 0 && live) this.#deps.working(turn)
+          complete()
+        } catch (error) {
+          reject(error)
+        }
+      }
+      const onAbort = () => settle(() => reject(signal?.reason ?? new Error("approval aborted")))
+      if (signal?.aborted) {
+        onAbort()
+        return
+      }
+      signal?.addEventListener("abort", onAbort, { once: true })
+      try {
+        // Start synchronously; handlers also consume late answers/rejections after cancellation.
+        Promise.resolve(wait()).then(
+          (value) => settle(() => resolve(value)),
+          (error) => settle(() => reject(error)),
+        )
+      } catch (error) {
+        settle(() => reject(error))
+      }
+    })
   }
 }

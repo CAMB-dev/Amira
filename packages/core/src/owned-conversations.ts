@@ -8,6 +8,7 @@ import type {
   OwnedConversations,
   SpawnGroupOptions,
 } from "@amira/api"
+import { drainOwnedTools, runOwnedTool } from "./agent/owned-tool.ts"
 import { Agent } from "./agent.ts"
 import { checkAskAnswers } from "./ask-answers.ts"
 import { EventBus } from "./event-bus.ts"
@@ -26,6 +27,8 @@ import {
 } from "./owned-conversations-storage.ts"
 import { registerConversationScope, sessionScopeContains } from "./session-routing.ts"
 import { approveWithHost } from "./subagents/host-approval.ts"
+import { scopeAdmission } from "./subagents/lifecycle.ts"
+import { routeTreeToHuman } from "./subagents/question-routing.ts"
 import { AgentTree } from "./subagents.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 import { TraceRecorder } from "./trace.ts"
@@ -87,7 +90,7 @@ export class OwnedConversationManager {
         }
         const main = this.#opts.agent()
         const saved: SavedConversation = {
-          v: 1,
+          v: spec.writeRoots !== undefined || spec.descendants === "inherit" ? 2 : 1,
           owner,
           id,
           spec: { ...spec, model: spec.model ?? `${main.model.provider}/${main.model.id}` },
@@ -133,14 +136,16 @@ export class OwnedConversationManager {
         tree = new AgentTree({
           ai: this.#opts.ai,
           shared: this.#opts.tree,
-          restricted: true,
+          restricted: spec.descendants !== "inherit",
           sections: () => [],
         })
+        routeTreeToHuman(tree)
         const initialState = restoredConversationState(lease.store)
         const agent = new Agent({
           ai: this.#opts.ai,
           model,
           cwd: spec.cwd,
+          writeRoots: spec.writeRoots,
           systemPrompt: spec.systemPrompt,
           session: lease.store,
           ownedConversation: owner,
@@ -403,17 +408,22 @@ class Handle implements OwnedConversation {
       const result = await this.#agent.tree!.runRoot(
         this.#agent,
         () =>
-          this.#agent.prompt(
-            options?.images?.length
-              ? {
-                  role: "user",
-                  content: [...(text ? [{ type: "text" as const, text }] : []), ...options.images],
-                  ...(options.display ? { display: options.display } : {}),
-                }
-              : options?.display
-                ? userMessage(text, options.display)
-                : text,
-          ),
+          this.#agent
+            .prompt(
+              options?.images?.length
+                ? {
+                    role: "user",
+                    content: [...(text ? [{ type: "text" as const, text }] : []), ...options.images],
+                    ...(options.display ? { display: options.display } : {}),
+                  }
+                : options?.display
+                  ? userMessage(text, options.display)
+                  : text,
+            )
+            .then(async (result) => {
+              await drainOwnedTools(this.#agent)
+              return result
+            }),
         controller.signal,
       )
       this.#state = result.reason === "error" ? "error" : result.reason === "aborted" ? "stopped" : "idle"
@@ -431,9 +441,60 @@ class Handle implements OwnedConversation {
     await this.#running
   }
 
+  async runTool(
+    name: string,
+    args: Record<string, unknown>,
+    options?: Parameters<OwnedConversation["runTool"]>[2],
+  ): Promise<import("@amira/api").ToolResult> {
+    this.#check()
+    this.#executionReady()
+    if (this.#running || this.#agent.busy || this.#stopping) throw new Error("owned conversation is busy")
+    args = structuredClone(args)
+    const controller = new AbortController()
+    this.#abort = controller
+    const abort = () => {
+      controller.abort(options?.signal?.reason)
+      this.#agent.abort()
+    }
+    if (options?.signal?.aborted) abort()
+    else options?.signal?.addEventListener("abort", abort, { once: true })
+    const operation = this.#agent
+      .tree!.runRoot(
+        this.#agent,
+        () => runOwnedTool(this.#agent, name, args, { signal: controller.signal }),
+        controller.signal,
+      )
+      .then(({ result, aborted }) => {
+        this.#state = aborted ? "stopped" : result.isError ? "error" : "idle"
+        return result
+      })
+      .catch((error: unknown) => {
+        this.#state = controller.signal.aborted ? "stopped" : "error"
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Tool invocation failed: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+          isError: true,
+        }
+      })
+    this.#running = operation
+      .then(() => {})
+      .finally(() => {
+        options?.signal?.removeEventListener("abort", abort)
+        this.#running = undefined
+        this.#abort = undefined
+      })
+    await this.#running
+    return operation
+  }
+
   stop(reason = "owned conversation stopped"): Promise<void> {
     this.#check()
     if (this.#stopping) return this.#stopping
+    const resumeAdmission = scopeAdmission(this.#agent.tree!).suspend()
     this.#abort?.abort(new Error(reason))
     this.#agent.abort()
     this.#agent.tree?.abortAll(reason)
@@ -443,6 +504,7 @@ class Handle implements OwnedConversation {
       await this.#agent.tree?.waitForChildren()
       this.#state = "stopped"
     })().finally(() => {
+      resumeAdmission()
       this.#stopping = undefined
     })
     return this.#stopping
@@ -451,6 +513,7 @@ class Handle implements OwnedConversation {
   release(): Promise<void> {
     if (this.#release) return this.#release
     this.#released = true
+    scopeAdmission(this.#agent.tree!).suspend()
     this.#abort?.abort(new Error("owned conversation released"))
     this.#release = (async () => {
       try {

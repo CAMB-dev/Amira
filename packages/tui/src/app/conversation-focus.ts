@@ -221,7 +221,7 @@ export class ConversationFocus {
     if (fresh && this.deps.mode === "fullscreen") {
       entry.view.openSession({ id: conversation.id, resumed: true }, [...initialHistory], true)
     }
-    entry.view.activate(`— design: ${conversation.name.replace(/\p{Cc}/gu, " ")} —`)
+    entry.view.activate(`— ${conversation.name.replace(/\p{Cc}/gu, " ")} —`)
     if (fresh) {
       entry.view.start()
       void this.follow(entry)

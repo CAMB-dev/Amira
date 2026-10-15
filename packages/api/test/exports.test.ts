@@ -535,6 +535,35 @@ test("owned conversation types are public and the extension capability remains o
   expect(await runtime.askUser([], { sessionId: "owned", signal: new AbortController().signal })).toEqual([
     { selected: ["A"] },
   ])
+  const bounded: ConversationSpec = { ...spec, writeRoots: ["/workspace/notes"], descendants: "inherit" }
+  const spawn: SpawnOptions = { prompt: "Check notes", writeRoots: [] }
+  const runTool: OwnedConversation["runTool"] = async (name, args, options) => ({
+    content: [{ type: "text", text: `${name}: ${args.command}` }],
+    isError: options?.signal?.aborted ?? false,
+  })
+  expect({
+    writeRoots: bounded.writeRoots,
+    descendants: bounded.descendants,
+    childWriteRoots: spawn.writeRoots,
+    result: await runTool("bash", { command: "echo check" }, { signal: new AbortController().signal }),
+  }).toMatchInlineSnapshot(`
+    {
+      "childWriteRoots": [],
+      "descendants": "inherit",
+      "result": {
+        "content": [
+          {
+            "text": "bash: echo check",
+            "type": "text",
+          },
+        ],
+        "isError": false,
+      },
+      "writeRoots": [
+        "/workspace/notes",
+      ],
+    }
+  `)
   expect({ spec, state }).toMatchInlineSnapshot(`
     {
       "spec": {
