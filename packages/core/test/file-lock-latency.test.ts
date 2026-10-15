@@ -11,6 +11,7 @@ import {
   LATENCY_WORKER_READY,
   LATENCY_WORKER_READY_TIMEOUT_MS,
 } from "./file-lock-latency-timing.ts"
+import { waitForFileLockCondition, waitForFileLockWorkerExit } from "./file-lock-test-waits.ts"
 
 async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-lock-latency-"))
@@ -40,17 +41,20 @@ async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const ready = path.join(dir, LATENCY_WORKER_READY)
-    const deadline = performance.now() + LATENCY_WORKER_READY_TIMEOUT_MS
-    while (true) {
-      if (worker.exitCode !== null) {
-        throw new Error(
-          `latency worker readiness exited: exitCode=${worker.exitCode}, signalCode=${worker.signalCode}\nstderr:\n${await stderr}`,
-        )
-      }
-      if (performance.now() > deadline) throw new Error("latency worker readiness timed out")
-      if (fs.existsSync(ready)) break
-      await Bun.sleep(2)
-    }
+    await waitForFileLockCondition(
+      "latency worker readiness",
+      () => {
+        if (worker.exitCode !== null)
+          throw new Error(
+            `latency worker readiness exited: exitCode=${worker.exitCode}, signalCode=${worker.signalCode}`,
+          )
+        return fs.existsSync(ready)
+      },
+      LATENCY_WORKER_READY_TIMEOUT_MS,
+    ).catch(async (error) => {
+      if (worker.exitCode !== null) throw new Error(`${error.message}\nstderr:\n${await stderr}`)
+      throw error
+    })
     // The real reader is holding its handle and warmup is complete. Only now
     // start the original operation watchdog, then explicitly release the worker.
     await Promise.race([
@@ -79,7 +83,7 @@ async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
   } finally {
     clearTimeout(timer)
     if (worker.exitCode === null) worker.kill()
-    await worker.exited
+    await waitForFileLockWorkerExit(worker, "owned latency worker")
     fs.rmSync(dir, { recursive: true, force: true })
   }
 }

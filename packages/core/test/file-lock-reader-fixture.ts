@@ -1,5 +1,6 @@
 import * as fs from "node:fs"
 import path from "node:path"
+import { waitForFileLockWorkerExit } from "./file-lock-test-waits.ts"
 
 // Antivirus can stall a Windows spawn for 4-10s, especially under parallel load.
 // These setup/IPC deadlines only protect against hangs; the 100ms hold starts at go.
@@ -63,16 +64,6 @@ try {
   return { reader, ready, go, stderr, waitUntilReady }
 }
 
-export async function boundedExit(reader: Bun.Subprocess, label: string, ms = 2000): Promise<number> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      reader.exited,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} exit timed out`)), ms)
-      }),
-    ])
-  } finally {
-    clearTimeout(timer)
-  }
+export async function boundedExit(reader: Bun.Subprocess, label: string, ms = 30000): Promise<number> {
+  return waitForFileLockWorkerExit(reader, label, ms)
 }

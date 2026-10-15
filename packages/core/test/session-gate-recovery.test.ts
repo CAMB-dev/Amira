@@ -5,6 +5,7 @@ import path from "node:path"
 import { isProcessAlive } from "../src/file-lock.ts"
 import { deleteSession } from "../src/session-list.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
+import { waitForFileLockCondition, waitForFileLockWorkerExit } from "./file-lock-test-waits.ts"
 
 let dir: string
 let origin: SessionStore
@@ -20,7 +21,7 @@ afterEach(async () => {
   for (const worker of workers.splice(0)) await killWorker(worker)
   origin.release()
   fs.rmSync(dir, { recursive: true, force: true })
-})
+}, 150_000)
 
 function startWorker(mode: string): Bun.Subprocess<"ignore", "ignore", "pipe"> {
   const worker = Bun.spawn(
@@ -49,33 +50,31 @@ async function waitFor(
   worker: ReturnType<typeof startWorker>,
   marker: string,
   present = true,
-  deadline = Date.now() + 4000,
+  deadline = Date.now() + 30_000,
 ) {
-  while (fs.existsSync(path.join(dir, marker)) !== present) {
+  await waitForFileLockCondition(
+    `gate worker ${worker.pid}: ${path.join(dir, marker)} ${present ? "present" : "absent"}`,
+    () => {
+      if (fs.existsSync(path.join(dir, marker)) === present) return true
+      if (worker.exitCode !== null)
+        throw new Error(`gate worker ${worker.pid} exited (${worker.exitCode}) before ${marker}`)
+      return false
+    },
+    Math.max(0, deadline - Date.now()),
+  ).catch(async (error) => {
     if (worker.exitCode !== null)
-      throw new Error(`gate worker exited: ${await new Response(worker.stderr).text()}`)
-    if (Date.now() > deadline) throw new Error(`gate worker timed out: ${marker}`)
-    await Bun.sleep(10)
-  }
+      throw new Error(`${error.message}: ${await new Response(worker.stderr).text()}`)
+    throw error
+  })
 }
 async function killWorker(worker: ReturnType<typeof startWorker>) {
   if (worker.exitCode === null) worker.kill()
-  await Promise.race([
-    worker.exited,
-    Bun.sleep(2000).then(() => {
-      throw new Error("gate worker did not exit")
-    }),
-  ])
+  await waitForFileLockWorkerExit(worker, "gate worker cleanup")
 }
 async function exitBefore(worker: ReturnType<typeof startWorker>, deadline: number) {
-  return Promise.race([
-    worker.exited,
-    Bun.sleep(Math.max(0, deadline - Date.now())).then(() => {
-      throw new Error(`gate worker operation timed out waiting for exit: ${worker.pid}`)
-    }),
-  ])
+  return waitForFileLockWorkerExit(worker, "gate worker operation", Math.max(0, deadline - Date.now()))
 }
-async function abandonedGate(mode: string, deadline = Date.now() + 4000) {
+async function abandonedGate(mode: string, deadline = Date.now() + 30_000) {
   const worker = startWorker(mode)
   if (mode === "session-pause-gate-release" || mode === "session-pause-gate-retire") {
     await waitFor(worker, "acquired", true, deadline)
@@ -136,7 +135,7 @@ for (const mode of [
     expect(fs.existsSync(`${sessionLockFile(origin.file)}.lease-gate`)).toBe(false)
     expect(fs.existsSync(sessionLockFile(origin.file))).toBe(false)
     expect(fs.readdirSync(dir).sort()).toEqual(expected.sort())
-  }, 8000)
+  }, 210_000)
 }
 
 test("live gate blocks with an accurate stale-write-guard path and safe manual recovery guidance", async () => {
@@ -161,9 +160,9 @@ test("live gate blocks with an accurate stale-write-guard path and safe manual r
   fs.writeFileSync(path.join(dir, "continue"), "go")
   await waitFor(worker, "acquired")
   fs.writeFileSync(path.join(dir, "release"), "go")
-  expect(await worker.exited).toBe(0)
+  expect(await waitForFileLockWorkerExit(worker, "gate worker operation")).toBe(0)
   expect(await new Response(worker.stderr).text()).toBe("")
-}, 8000)
+}, 210_000)
 
 for (const fault of [undefined, "EPERM", "EBUSY", "EACCES"]) {
   test(`cross-process simultaneous dead-gate recoverers grant exactly one lease and preserve its live authority (${fault ?? "real OS"})`, async () => {
@@ -241,7 +240,7 @@ for (const barrier of ["session-pause-gate-proof", "session-pause-gate-recheck"]
         const lease = fs.readFileSync(file, "utf8")
         expect(Number.parseInt(lease, 10)).toBe(writer.pid)
         fs.writeFileSync(path.join(dir, "release"), "go")
-        expect(await writer.exited).toBe(0)
+        expect(await waitForFileLockWorkerExit(writer, "gate writer operation")).toBe(0)
         expect(await new Response(writer.stderr).text()).toBe("")
         // Below, verify that ordinary release retained the old nonce fence.
         for (const marker of ["paused", "continue", "acquired", "release"]) fs.rmSync(path.join(dir, marker))
@@ -256,7 +255,7 @@ for (const barrier of ["session-pause-gate-proof", "session-pause-gate-recheck"]
       const result = JSON.parse(fs.readFileSync(path.join(dir, `result-${delayed.pid}`), "utf8"))
       expect(result.held).toBe(false)
       expect(result.error).toContain("stale-write guard")
-      expect(await delayed.exited).toBe(0)
+      expect(await waitForFileLockWorkerExit(delayed, "delayed gate worker operation")).toBe(0)
       expect(await new Response(delayed.stderr).text()).toBe("")
       expect(fs.readFileSync(path.join(gate, "owner.json"), "utf8")).toBe(replacement)
       expect(fs.readFileSync(path.join(tombstone, "owner.json"), "utf8")).toBe(deadOwner)
@@ -269,10 +268,10 @@ for (const barrier of ["session-pause-gate-proof", "session-pause-gate-recheck"]
       expect(() => origin.claim()).toThrow("open in another Amira process")
       expect(fs.readFileSync(file, "utf8")).toBe(liveLease)
       fs.writeFileSync(path.join(dir, "release"), "go")
-      expect(await writer.exited).toBe(0)
+      expect(await waitForFileLockWorkerExit(writer, "gate writer operation")).toBe(0)
       expect(await new Response(writer.stderr).text()).toBe("")
       expect(origin.claim()).toBe(true)
-    }, 8000)
+    }, 210_000)
   }
 }
 
@@ -297,7 +296,7 @@ test("a killed reclaimer after deterministic retirement leaves a nonempty fence 
   expect(fs.existsSync(file)).toBe(false)
   expect(fs.existsSync(gate)).toBe(false)
   expect(fs.readFileSync(path.join(tombstone, "owner.json"), "utf8")).toBe(contents)
-}, 8000)
+}, 210_000)
 
 test("a killed cross-process gate reclaimer does not abandon another recovery mutex", async () => {
   await abandonedGate("session-pause-gate-create")
@@ -306,7 +305,7 @@ test("a killed cross-process gate reclaimer does not abandon another recovery mu
   await killWorker(worker)
   expect(isProcessAlive(worker.pid)).toBe(false)
   expect(origin.claim()).toBe(true)
-}, 8000)
+}, 210_000)
 
 test("a failed OS process probe is not proof to remove a dead-looking same-host gate", async () => {
   const worker = await abandonedGate("session-pause-gate-create")
@@ -323,7 +322,7 @@ test("a failed OS process probe is not proof to remove a dead-looking same-host 
     probe.mockRestore()
   }
   expect(origin.claim()).toBe(true)
-}, 8000)
+}, 210_000)
 
 for (const corruption of [
   "foreign",
@@ -382,7 +381,7 @@ for (const corruption of [
     ).toEqual(before)
     expect(fs.existsSync(sessionLockFile(origin.file))).toBe(false)
     expect(SessionStore.open(origin.file).entries).toHaveLength(1)
-  }, 8000)
+  }, 210_000)
 }
 
 for (const state of ["live", "unknown"]) {
@@ -409,12 +408,12 @@ for (const state of ["live", "unknown"]) {
     expect((error as Error).message).not.toContain("currently open")
     expect(fs.readFileSync(origin.file)).toEqual(before)
     expect(fs.existsSync(gate)).toBe(true)
-  }, 8000)
+  }, 210_000)
 }
 
 test("resume and deletion name an unverifiable persistent lease without suggesting removal of an absent guard", async () => {
   const worker = startWorker("crash-lease")
-  expect(await worker.exited).toBe(0)
+  expect(await waitForFileLockWorkerExit(worker, "gate worker operation")).toBe(0)
   expect(await new Response(worker.stderr).text()).toBe("")
   expect(isProcessAlive(worker.pid)).toBe(false)
   const lease = sessionLockFile(origin.file)
@@ -447,4 +446,4 @@ test("resume and deletion name an unverifiable persistent lease without suggesti
     expect(fs.readFileSync(lease, "utf8")).toBe(contents)
     expect(fs.readFileSync(origin.file)).toEqual(before)
   }
-}, 8000)
+}, 210_000)

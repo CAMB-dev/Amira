@@ -5,6 +5,7 @@ import path from "node:path"
 import { isProcessAlive, tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { aliasedDirectory } from "./file-lock-fixtures.ts"
+import { waitForFileLockWorkerExit, waitForFileLockWorkerReady } from "./file-lock-test-waits.ts"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -13,12 +14,7 @@ afterEach(() => {
 
 async function finishWorker(worker: Bun.Subprocess<"ignore", "ignore", "pipe">) {
   if (worker.exitCode === null) worker.kill()
-  await Promise.race([
-    worker.exited,
-    Bun.sleep(2000).then(() => {
-      throw new Error("filesystem lock worker did not exit")
-    }),
-  ])
+  await waitForFileLockWorkerExit(worker, "filesystem lock worker cleanup")
 }
 
 // This intentionally checks dependencies as well as behavior: session locks must not
@@ -64,19 +60,15 @@ for (const mode of ["no-native-fresh", "no-native-resume"]) {
       },
     )
     try {
-      await Promise.race([
-        worker.exited,
-        Bun.sleep(4000).then(() => {
-          throw new Error("no-native worker timed out")
-        }),
-      ])
+      await waitForFileLockWorkerReady(worker, dir, `SessionStore ${mode} worker`)
+      await waitForFileLockWorkerExit(worker, `SessionStore ${mode} operation`)
       expect(await new Response(worker.stderr).text()).toBe("")
       expect(worker.exitCode).toBe(0)
       expect(fs.readFileSync(path.join(dir, "survived"), "utf8")).toBe("unchanged")
     } finally {
       await finishWorker(worker)
     }
-  })
+  }, 95_000)
 }
 
 test("publication refuses an unknown empty gate that appears during private initialization", () => {
@@ -120,6 +112,7 @@ test("dead gate recovery retains exactly its nonempty nonce tombstone across 120
       file,
       dir,
       "crash-gate",
+      "ready-go",
     ],
     {
       env: Object.fromEntries(
@@ -131,12 +124,8 @@ test("dead gate recovery retains exactly its nonempty nonce tombstone across 120
     },
   )
   try {
-    await Promise.race([
-      worker.exited,
-      Bun.sleep(4000).then(() => {
-        throw new Error("crash-gate worker timed out")
-      }),
-    ])
+    await waitForFileLockWorkerReady(worker, dir, "crash-gate worker")
+    await waitForFileLockWorkerExit(worker, "crash-gate operation")
     expect(await new Response(worker.stderr).text()).toBe("")
     expect(worker.exitCode).toBe(0)
     expect(isProcessAlive(worker.pid)).toBe(false)
@@ -156,7 +145,7 @@ test("dead gate recovery retains exactly its nonempty nonce tombstone across 120
   } finally {
     await finishWorker(worker)
   }
-})
+}, 95_000)
 
 test("normal gate release validates its own nonce and never removes a replacement gate", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-filesystem-release-"))

@@ -1,11 +1,14 @@
 import { expect, spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
-import { takeFilesystemGate } from "../src/file-lock-gate.ts"
+import { pendingFileLockCleanup } from "../src/file-lock.ts"
+import { pendingGateCleanup, takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
+import { fileLockWorkerReady, waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 const [dir, phase, fault] = process.argv.slice(2)
 if (!dir || !phase || !fault) throw new Error("missing retirement worker arguments")
+await fileLockWorkerReady(dir)
 const warnings: string[] = []
 const warning = spyOn(process, "emitWarning").mockImplementation((message) => {
   warnings.push(String(message))
@@ -15,19 +18,12 @@ const file = sessionLockFile(store.file)
 const gate = `${file}.lease-gate`
 const rename = fs.renameSync
 let attempts = 0
-let started = 0
 let blocked = true
 let armed = phase !== "release"
 const hook = spyOn(fs, "renameSync").mockImplementation((...args) => {
   if (armed && args[0] === gate && String(args[1]).includes(".retired-")) {
     attempts++
-    started ||= Date.now()
-    const fail =
-      fault === "held"
-        ? Date.now() - started < 100
-        : fault === "pending" || fault === "permanent"
-          ? blocked
-          : attempts === 1
+    const fail = fault === "held" || fault === "pending" || fault === "permanent" ? blocked : attempts === 1
     if (fail)
       throw Object.assign(new Error("injected owner.json reader"), {
         code: fault.startsWith("E") ? fault : "EBUSY",
@@ -45,14 +41,17 @@ try {
   if (phase === "release") store.release()
   if (fault === "pending" || fault === "permanent") {
     // Deferred retries preserve the initialized exact owner without blocking claim/release.
-    await Bun.sleep(60)
+    await waitForFileLockCondition(`${phase} ${fault} deferred retirement attempt`, () => attempts > 1)
     expect(attempts).toBeGreaterThan(1)
     expect(attempts).toBeLessThan(12)
     const record = fs.readFileSync(path.join(gate, "owner.json"), "utf8")
     expect(JSON.parse(record).pid).toBe(process.pid)
     expect(warnings).toEqual([])
     if (fault === "permanent") {
-      await Bun.sleep(1200)
+      await waitForFileLockCondition(
+        `${phase} retirement exhausts its retry budget`,
+        () => warnings.length > 0,
+      )
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain(gate)
       expect(warnings[0]).toContain("EBUSY")
@@ -60,21 +59,30 @@ try {
       const count = attempts
       await Bun.sleep(250)
       expect(attempts).toBe(count)
-    } else await Bun.sleep(60)
+    } else {
+      await waitForFileLockCondition(`${phase} pending retirement keeps retrying`, () => attempts >= 3)
+    }
     blocked = false
     // A later operation retries only this process's release-requested owner.
     const next = takeFilesystemGate(path.join(dir, ".", path.basename(file)))
     expect(next).toBeDefined()
     next!()
   } else {
-    await Bun.sleep(200)
+    if (fault === "held") {
+      await waitForFileLockCondition(`${phase} held reader causes deferred retries`, () => attempts >= 3)
+      blocked = false
+    }
+    await waitForFileLockCondition(`${phase} ${fault} retires its gate`, () => !pendingGateCleanup(gate))
     expect(attempts).toBeGreaterThan(1)
     expect(warnings).toEqual([])
     expect(fs.existsSync(gate)).toBe(false)
   }
   hook.mockRestore()
   store.release()
-  await Bun.sleep(150)
+  await waitForFileLockCondition(
+    `${phase} ${fault} releases all owned cleanup`,
+    () => !pendingFileLockCleanup(file),
+  )
   expect(fs.readFileSync(store.file, "utf8")).toBe(firstDisk)
   expect(store.claim()).toBe(true)
   store.appendDisplay({ type: "display", level: "info", text: "complete second write" })

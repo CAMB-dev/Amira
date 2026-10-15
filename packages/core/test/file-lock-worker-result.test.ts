@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
+import { waitForFileLockCondition, waitForFileLockWorkerExit } from "./file-lock-test-waits.ts"
 
 for (const held of [true, false]) {
   test(`worker publishes a complete ${held ? "successful" : "failed"} claim result atomically`, async () => {
@@ -30,14 +31,17 @@ for (const held of [true, false]) {
         stderr: "pipe",
       },
     )
+    const stderr = new Response(worker.stderr).text()
     async function waitFor(marker: string) {
-      const deadline = Date.now() + 4000
-      while (!fs.existsSync(path.join(dir, marker))) {
+      await waitForFileLockCondition(`result worker ${worker.pid}: ${marker}`, () => {
+        if (fs.existsSync(path.join(dir, marker))) return true
         if (worker.exitCode !== null)
-          throw new Error(`result worker exited: ${await new Response(worker.stderr).text()}`)
-        if (Date.now() > deadline) throw new Error(`result worker timed out: ${marker}`)
-        await Bun.sleep(10)
-      }
+          throw new Error(`result worker exited before ${marker}: code=${worker.exitCode}`)
+        return false
+      }).catch(async (error) => {
+        if (worker.exitCode !== null) throw new Error(`${error.message}\nstderr:\n${await stderr}`)
+        throw error
+      })
     }
     const result = path.join(dir, `result-${worker.pid}`)
     try {
@@ -53,12 +57,12 @@ for (const held of [true, false]) {
       expect(published.held).toBe(held)
       if (!held) expect(published.error).toContain("older Amira build")
       fs.writeFileSync(path.join(dir, "release"), "go")
-      expect(await worker.exited).toBe(0)
-      expect(await new Response(worker.stderr).text()).toBe("")
+      expect(await waitForFileLockWorkerExit(worker, "result publication worker")).toBe(0)
+      expect(await stderr).toBe("")
     } finally {
       if (worker.exitCode === null) worker.kill()
-      await worker.exited
+      await waitForFileLockWorkerExit(worker, "owned result publication worker")
       fs.rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, 65000)
 }

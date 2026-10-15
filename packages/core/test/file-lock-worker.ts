@@ -3,11 +3,12 @@ import * as fs from "node:fs"
 import path from "node:path"
 import { type FileLock, tryFileLock } from "../src/file-lock.ts"
 import { filesystemGatePath } from "./file-lock-fixtures.ts"
+import { fileLockWorkerReady } from "./file-lock-test-waits.ts"
 
-const [file, dir, mode] = process.argv.slice(2)
+const [file, dir, mode, startup] = process.argv.slice(2)
 if (!file || !dir || !mode) throw new Error("missing file-lock worker arguments")
 const mark = (name: string) => fs.writeFileSync(path.join(dir, name), "ready")
-const wait = (name: string, timeoutMs = 5000) => {
+const wait = (name: string, timeoutMs = 30_000) => {
   const deadline = Date.now() + timeoutMs
   const pause = new Int32Array(new SharedArrayBuffer(4))
   while (!fs.existsSync(path.join(dir, name))) {
@@ -81,7 +82,8 @@ const proofHook =
               }
             } else {
               mark("paused-proof")
-              wait("continue-proof")
+              // The parent may start and replace two other Windows workers while paused.
+              wait("continue-proof", 120_000)
             }
           }
           throw error
@@ -94,7 +96,8 @@ const recheckHook =
         if (args[0] === gate && String(args[1]).startsWith(`${gate}.dead-`)) {
           // Both authoritative reads AND proof completed; pause before the rename itself.
           mark("paused-proof")
-          wait("continue-proof")
+          // The parent may start and replace two other Windows workers while paused.
+          wait("continue-proof", 120_000)
         }
         return rename(...args)
       })
@@ -162,10 +165,13 @@ const openHook =
       })
     : undefined
 
+// Opt in: legacy/dead-gate fixtures also use this worker without a startup rendezvous.
+if (startup === "ready-go") await fileLockWorkerReady(dir)
+
 if (contender) {
   mark(`ready-${process.pid}`)
   // Early workers must survive the startup watchdog for all their peers.
-  wait("contend", synchronizedRecovery ? 60_000 : 5000)
+  wait("contend", synchronizedRecovery ? 60_000 : 30_000)
 }
 let held: FileLock | undefined
 try {
@@ -208,7 +214,7 @@ if (!held) throw new Error("file-lock worker was not granted authority")
 if (mode === "crash-lease") process.exit(0)
 if (contender || delayedRecovery) {
   publishResult({ held: true })
-  wait("release", synchronizedRecovery ? 10_000 : 5000)
+  wait("release")
 } else {
   mark("acquired")
   wait("release")

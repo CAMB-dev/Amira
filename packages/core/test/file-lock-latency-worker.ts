@@ -9,6 +9,7 @@ import {
   inlineCleanupLatency,
   latencyWorkerReady,
 } from "./file-lock-latency-timing.ts"
+import { waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 const [dir, mode] = process.argv.slice(2)
 if (!dir || !mode) throw new Error("missing latency worker arguments")
@@ -137,8 +138,11 @@ if (mode === "claim") {
   }
 }
 // Exercise the automatic chains too: no synchronous wait is allowed in timer callbacks.
-await Bun.sleep(350)
 await timing.waitForSamples()
+await waitForFileLockCondition(
+  `${mode}: automatic gate retirement after the 100ms reader`,
+  () => !blocked && !fs.existsSync(gate),
+)
 const callbackDelays = await Promise.all(callbacks)
 console.log(`${mode}: inline/automatic callback maximum ${Math.max(...callbackDelays).toFixed(2)}ms`)
 timing.assertResponsive()
@@ -151,7 +155,10 @@ expect(attempts).toBeGreaterThan(1)
 expect(attempts).toBeLessThanOrEqual(8)
 expect(warnings).toEqual([])
 store.release()
-await Bun.sleep(150)
+await waitForFileLockCondition(
+  `${mode}: released lease and gate cleanup`,
+  () => !fs.existsSync(file) && !fs.existsSync(gate),
+)
 expect(fs.existsSync(file)).toBe(false)
 expect(fs.existsSync(gate)).toBe(false)
 expect(store.claim()).toBe(true)

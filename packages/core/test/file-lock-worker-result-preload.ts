@@ -13,10 +13,11 @@ spyOn(fs, "writeFileSync").mockImplementation((...args) => {
   const fd = fs.openSync(args[0], "wx")
   try {
     write(path.join(dir, "paused-result"), "ready")
-    const deadline = Date.now() + 5000
+    const deadline = performance.now() + 30000
     const pause = new Int32Array(new SharedArrayBuffer(4))
     while (!fs.existsSync(path.join(dir, "continue-result"))) {
-      if (Date.now() > deadline) throw new Error("result writer timed out")
+      if (performance.now() > deadline)
+        throw new Error(`result writer ${process.pid} timed out waiting for continue-result after 30000ms`)
       Atomics.wait(pause, 0, 0, 10)
     }
     return write(fd, args[1], args[2])

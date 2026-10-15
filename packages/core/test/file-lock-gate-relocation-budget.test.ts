@@ -8,6 +8,7 @@ import {
   relocateReleasedGateCleanup,
   takeFilesystemGate,
 } from "../src/file-lock-gate.ts"
+import { waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 function setup() {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(tmpdir(), "amira-gate-relocation-budget-")))
@@ -36,16 +37,22 @@ test("relocation preserves an exhausted automatic retry budget but permits expli
     }
     return rename(from, to)
   })
+  const schedule = spyOn(globalThis, "setTimeout")
   try {
     release()
-    const deadline = Date.now() + 3000
-    while (!warnings.length && Date.now() < deadline) await Bun.sleep(10)
+    await waitForFileLockCondition(
+      "relocation fixture exhausted automatic cleanup",
+      () => warnings.length > 0,
+    )
     expect(warnings).toHaveLength(1)
     expect(attempts).toBe(6)
+    schedule.mockClear()
     rename(before, after)
     relocateReleasedGateCleanup(before, after)
     expect(pendingOwnedGate(publicGate)).toBe(true)
-    await Bun.sleep(150)
+    // Exhaustion must not schedule another budget, rather than merely staying
+    // quiet for an arbitrary fraction of the retry chain.
+    expect(schedule).not.toHaveBeenCalled()
     expect(attempts).toBe(6)
     expect(warnings).toHaveLength(1)
     fault.mockRestore()
@@ -55,10 +62,11 @@ test("relocation preserves an exhausted automatic retry budget but permits expli
   } finally {
     fault.mockRestore()
     warning.mockRestore()
+    schedule.mockRestore()
     release()
     fs.rmSync(dir, { recursive: true, force: true })
   }
-})
+}, 35000)
 
 test("relocation merges destination registry records without letting a displaced owner delete a new gate", () => {
   const { dir, before, after, gate, publicGate, release } = setup()

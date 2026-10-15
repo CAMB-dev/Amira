@@ -5,7 +5,7 @@ import path from "node:path"
 import { boundedExit, READER_READY_TIMEOUT_MS, startGateReader } from "./file-lock-reader-fixture.ts"
 
 if (process.platform === "win32") {
-  const timeout = READER_READY_TIMEOUT_MS + 5000
+  const timeout = READER_READY_TIMEOUT_MS * 2 + 5000
   for (const startup of ["slow", "crash"] as const) {
     test(
       `Windows reader readiness diagnoses ${startup} startup separately from contention`,
