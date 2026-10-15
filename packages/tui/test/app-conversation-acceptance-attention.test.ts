@@ -122,9 +122,18 @@ for (const mode of ["inline", "fullscreen"] as const) {
           [120, 36],
           [60, 24],
         ]) {
+          // Old text can survive resize; wait for the new frame's caret and hit map.
+          const writes = s.terminal.writes.length
           s.screen.resize(cols!, rows!)
           s.terminal.setSize(cols!, rows!)
-          await Bun.sleep(30)
+          await waitFor(
+            () =>
+              s.terminal.writes.length > writes &&
+              s.live().includes("1 pending") &&
+              s.live().includes("f6 to answer") &&
+              (overlay !== "form" || s.screen.lines[s.screen.y]?.includes("Form draft") === true),
+            "resized attention overlay and form caret",
+          )
           expect(s.live()).toContain("1 pending")
           expect(s.live()).toContain("f6 to answer")
           if (overlay === "form") expect(s.screen.lines[s.screen.y]).toContain("Form draft")

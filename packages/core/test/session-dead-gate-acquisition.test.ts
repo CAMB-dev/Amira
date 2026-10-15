@@ -77,18 +77,13 @@ if (process.platform === "win32") {
     const f = await fixture()
     const mock = createMockDialect([])
     const ai = createAi({ dialects: [mock], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
-    const { reader, ready, go } = startGateReader(f.metadata, f.dir)
+    const { reader, go, stderr, waitUntilReady } = startGateReader(f.metadata, f.dir)
     const waits = spyOn(Atomics, "wait")
     let agent: Agent | undefined
     let pending: Agent | Promise<Agent> | undefined
     let constructed = false
     try {
-      const deadline = performance.now() + 3000
-      while (!fs.existsSync(ready)) {
-        if (reader.exitCode !== null || performance.now() > deadline)
-          throw new Error("reader readiness failed")
-        await Bun.sleep(2)
-      }
+      await waitUntilReady()
       const start = performance.now()
       const callback = new Promise<number>((resolve) =>
         setTimeout(() => resolve(performance.now() - start), 0),
@@ -109,7 +104,7 @@ if (process.platform === "win32") {
       console.log(`Dead gate reader: acquisition ${elapsed.toFixed(2)}ms, zero-delay ${zero.toFixed(2)}ms`)
       expect(elapsed).toBeGreaterThanOrEqual(75)
       expect(await boundedExit(reader, "dead gate reader")).toBe(0)
-      expect(await new Response(reader.stderr).text()).toBe("")
+      expect(await stderr).toBe("")
       expect(agent.messages).toEqual([userMessage("saved"), userMessage("current disk history")])
       expect(mock.requests).toHaveLength(0)
       expect(waits).not.toHaveBeenCalled()
@@ -126,7 +121,8 @@ if (process.platform === "win32") {
       waits.mockRestore()
       fs.rmSync(f.dir, { recursive: true, force: true })
     }
-  }, 7000)
+    // 15s reader startup plus the original 7s operation/cleanup watchdog.
+  }, 22000)
 }
 
 for (const code of ["EPERM", "EBUSY", "EACCES"]) {

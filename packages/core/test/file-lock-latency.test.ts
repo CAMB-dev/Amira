@@ -8,9 +8,11 @@ import {
   INLINE_LATENCY_RUNS,
   type InlineLatencySample,
 } from "./file-lock-latency-timing.ts"
+import { READER_READY_TIMEOUT_MS } from "./file-lock-reader-fixture.ts"
 
 const modes = ["claim", "release", "reclaim", ...(process.platform === "win32" ? ["windows-reader"] : [])]
 for (const mode of modes) {
+  const startupBudget = mode === "windows-reader" ? READER_READY_TIMEOUT_MS : 0
   test(
     `100ms gate reader keeps ${mode} inline and automatic cleanup responsive`,
     async () => {
@@ -49,7 +51,7 @@ for (const mode of modes) {
           await Promise.race([
             worker.exited,
             new Promise<never>((_, reject) => {
-              timer = setTimeout(() => reject(new Error("latency worker timed out")), 4000)
+              timer = setTimeout(() => reject(new Error("latency worker timed out")), startupBudget + 4000)
             }),
           ])
           const lines = (await stdout).split("\n")
@@ -79,8 +81,8 @@ for (const mode of modes) {
             ? ["release", "unlock"]
             : [mode]
       assertInlineResponsive(mode, samples, entries)
-      // Keep each worker's existing budget; the test now performs three fixtures.
+      // Only reader startup gets extra time; measured cleanup budgets are unchanged.
     },
-    7000 * INLINE_LATENCY_RUNS,
+    (startupBudget + 7000) * INLINE_LATENCY_RUNS,
   )
 }

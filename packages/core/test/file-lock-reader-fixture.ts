@@ -1,4 +1,9 @@
+import * as fs from "node:fs"
 import path from "node:path"
+
+// Loaded Windows runners may spend several seconds starting PowerShell/antivirus.
+// Setup is outside every measured lock interval; post-readiness budgets stay separate.
+export const READER_READY_TIMEOUT_MS = 15000
 
 /** Windows read-sharing without delete-sharing, with bounded ready/go IPC. No FFI. */
 export function startGateReader(metadata: string, dir: string) {
@@ -38,7 +43,22 @@ try {
       stderr: "pipe",
     },
   )
-  return { reader, ready, go }
+  const stderr = new Response(reader.stderr).text()
+  const waitUntilReady = async () => {
+    const deadline = performance.now() + READER_READY_TIMEOUT_MS
+    while (!fs.existsSync(ready)) {
+      if (reader.exitCode !== null || performance.now() > deadline) {
+        const reason = reader.exitCode === null ? "timed out" : "exited"
+        if (reader.exitCode === null) reader.kill()
+        await boundedExit(reader, "failed reader stop")
+        throw new Error(
+          `reader readiness ${reason}: exitCode=${reader.exitCode}, signalCode=${reader.signalCode}\nstderr:\n${await stderr}`,
+        )
+      }
+      await Bun.sleep(2)
+    }
+  }
+  return { reader, ready, go, stderr, waitUntilReady }
 }
 
 export async function boundedExit(reader: Bun.Subprocess, label: string, ms = 2000): Promise<number> {
