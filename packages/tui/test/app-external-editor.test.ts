@@ -48,13 +48,13 @@ async function editWith(
     })
     try {
       terminal.send("draft")
-      await waitFor(() => live().includes("│›draft"), "typed draft")
+      await waitFor(() => live().includes("│ › draft"), "typed draft")
       terminal.send("\x07")
       await waitFor(
-        () => /│›draft (visual|editor|git|notepad)/.test(live()) || live().includes("Cannot start"),
+        () => /│ › draft (visual|editor|git|notepad)/.test(live()) || live().includes("Cannot start"),
         "external editor result",
       )
-      expect(live()).toContain(`│›draft ${choice}`)
+      expect(live()).toContain(`│ › draft ${choice}`)
     } finally {
       terminal.send("\x03\x03")
       await exited

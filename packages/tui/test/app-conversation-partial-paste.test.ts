@@ -111,7 +111,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
           s.terminal.send(phase === "opening" ? "\x1b[200" : `${BEGIN}ORIGIN_PRIVATE\x1b[20`)
           if (phase === "already-timed-out") {
             await Bun.sleep(1600)
-            await waitFor(() => s.live().includes("│›ORIGIN_PRIVATE"), "timeout stayed on origin")
+            await waitFor(() => s.live().includes("│ › ORIGIN_PRIVATE"), "timeout stayed on origin")
           }
           if (origin === "main") expect(s.context().focusConversation?.(s.conversation)).toBe(true)
           else expect(s.context().unfocusConversation?.()).toBe(true)
@@ -145,7 +145,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await waitFor(() => s.live().includes("main idle"), "owned focus")
       s.terminal.send(`${BEGIN}ORIGIN`)
       await Bun.sleep(1600)
-      await waitFor(() => s.live().includes("│›ORIGIN"), "origin timeout delivery")
+      await waitFor(() => s.live().includes("│ › ORIGIN"), "origin timeout delivery")
       s.terminal.send(`\x1b[17~PRIVATE_TAIL${END}MAIN_SAFE\r`)
       await waitFor(() => userTexts(s.agent).length === 2, "new-owner input after closing marker")
       expect(userTexts(s.agent)).toEqual(["Main history", "MAIN_SAFE"])

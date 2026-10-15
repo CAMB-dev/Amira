@@ -27,7 +27,7 @@ exports[`width-100 fullscreen details frames: verb groups and sticky prompt whil
   0 fail
 
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│›Message Amira                                                                                    │
+│ › Message Amira                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                        mock/m1 · ask
  shift+tab mode  │  ctrl+o detail  │  ? keys"
@@ -60,7 +60,7 @@ exports[`width-100 fullscreen details frames: verb groups and sticky prompt whil
 └ Ran bun test  ✓ 412 pass (+1 line)
   ↓ 2 rows below · ctrl+end follows
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│›Message Amira                                                                                    │
+│ › Message Amira                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                        mock/m1 · ask
  shift+tab mode  │  ctrl+o detail  │  ? keys"

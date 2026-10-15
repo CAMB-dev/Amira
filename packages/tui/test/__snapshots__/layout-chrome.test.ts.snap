@@ -17,7 +17,7 @@ exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
 
 ⠋ Responding… 4.1s                                           1m20s  ⇣12.4k  ·  ~186 tok/s   esc stop
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
-│›Message Amira                                                                                    │
+│ › Message Amira                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                         claude-opus-5-5 (high) · ask"
 `;
@@ -40,7 +40,7 @@ exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
 
 ⠋ Responding…             1m20s  ⇣12.4k   esc stop
 ╭────────────────────────────────────────────────╮
-│›Message Amira                                  │
+│ › Message Amira                                │
 ╰────────────────────────────────────────────────╯
                       claude-opus-5-5 (high) · ask"
 `;

@@ -197,7 +197,7 @@ test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty",
   await idle()
   expect(history.entries.map((e) => e.text)).toEqual(["first message"])
   terminal.send("\x1b[A")
-  await waitFor(() => live().includes("│›first message"), "recalled")
+  await waitFor(() => live().includes("│ › first message"), "recalled")
   terminal.send("\x1b[B")
   await waitFor(() => live().includes("Message Amira"), "empty again")
   terminal.send("\x1b[A\r")
@@ -225,7 +225,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         content: [{ type: "text", text: "SKILL deploy BODY " }],
       })
       terminal.send("\x1b[A\x1b[A")
-      await waitFor(() => live().includes("│›$100 is the price"), "recalled prose")
+      await waitFor(() => live().includes("│ › $100 is the price"), "recalled prose")
       terminal.send("\r")
       await shows("Noted.")
       await idle()
@@ -247,7 +247,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     })
     try {
       terminal.send("\x1b[A")
-      await waitFor(() => live().includes("│›$removed-skill"), "recalled skill")
+      await waitFor(() => live().includes("│ › $removed-skill"), "recalled skill")
       expect(live()).not.toContain("no skill matches")
       terminal.send("\r")
       await Bun.sleep(50)
@@ -280,7 +280,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
     const UP = "\x1b[A"
     const DOWN = "\x1b[B"
     const shown = async (text: string, what: string) => {
-      await waitFor(() => live().includes(`│›${text}`), what)
+      await waitFor(() => live().includes(`│ › ${text}`), what)
       await Bun.sleep(20)
       // No list opened for the recalled text.
       expect(live()).not.toContain("esc close")
@@ -317,11 +317,11 @@ test("Enter runs a recalled command; Ctrl+R still puts a command in the editor w
     commands: testCommands([]),
   })
   terminal.send("\x1b[A\x1b[A")
-  await waitFor(() => live().includes("│›/status"), "recalled")
+  await waitFor(() => live().includes("│ › /status"), "recalled")
   terminal.send("\r")
   await shows("STATUS OK")
   terminal.send("\x12stat")
-  await waitFor(() => /│›\/status +│/.test(live()) && live().includes("search history"), "match")
+  await waitFor(() => /│ › \/status +│/.test(live()) && live().includes("search history"), "match")
   terminal.send("\r")
   await waitFor(() => !live().includes("search history") && live().includes("esc close"), "the list")
   terminal.send("\x03\x03")
@@ -358,13 +358,13 @@ test("Ctrl+R searches the history; Enter keeps the match in the editor to send o
   await waitFor(() => live().includes("search history"), "search line")
   expect(live()).toContain("esc cancel")
   terminal.send("deploy")
-  await waitFor(() => live().includes("│›deploy to prod"), "newest match")
+  await waitFor(() => live().includes("│ › deploy to prod"), "newest match")
   expect(live()).toContain("1 of 2")
   terminal.send("\x12")
-  await waitFor(() => live().includes("│›deploy to staging"), "older match")
+  await waitFor(() => live().includes("│ › deploy to staging"), "older match")
   terminal.send("\r")
   await waitFor(() => !live().includes("search history"), "search closed")
-  expect(live()).toContain("│›deploy to staging")
+  expect(live()).toContain("│ › deploy to staging")
   terminal.send("\r")
   await shows("on it")
   await idle()
@@ -378,9 +378,9 @@ test("Esc leaves the history search with the draft back", async () => {
   history.add(["old prompt"])
   const { terminal, live, exited } = await setup([], { promptHistory: history })
   terminal.send("my draft\x12old")
-  await waitFor(() => live().includes("│›old prompt"), "match")
+  await waitFor(() => live().includes("│ › old prompt"), "match")
   terminal.send("\x1b")
-  await waitFor(() => live().includes("│›my draft"), "draft back")
+  await waitFor(() => live().includes("│ › my draft"), "draft back")
   expect(live()).not.toContain("search history")
   terminal.send("\x03\x03")
   await exited
@@ -399,7 +399,7 @@ test("Ctrl+L clears the screen and draws the latest transcript and the live regi
   await waitFor(() => !live().includes("GARBAGE"), "redrawn")
   expect(live()).toContain("› hello")
   expect(live()).toContain("the answer")
-  expect(live()).toContain("│›draft")
+  expect(live()).toContain("│ › draft")
   expect(screen.lines[1]).toContain("Amira")
   terminal.send("\x03\x03")
   await exited
@@ -418,7 +418,7 @@ test("typing @ offers project files; Tab inserts the path and the message keeps 
     rows.findIndex((l) => l.startsWith("╰")),
   )
   terminal.send("\t")
-  await waitFor(() => live().includes("│›look at @src/format.ts"), "inserted")
+  await waitFor(() => live().includes("│ › look at @src/format.ts"), "inserted")
   expect(live()).not.toContain("tab/enter insert")
   terminal.send("please\r")
   await shows("read it")
@@ -440,10 +440,10 @@ test("typing @ while the project is still listed shows a status row at once, the
   })
   const { terminal, live, exited } = await setup([], { fileSource, cols: 60 })
   terminal.send("see @app")
-  // A: the indexing notice is content, inset two cells beside the shared marker gutter.
-  await waitFor(() => /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] indexing… 0 files$/m.test(live()), "status row")
+  // The indexing notice follows the framed composer's padded text column.
+  await waitFor(() => /^ {4}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] indexing… 0 files$/m.test(live()), "status row")
   // The input box took every key; the row is where the list goes, below the box.
-  expect(live()).toMatch(/^│›see @app.*│$/m)
+  expect(live()).toMatch(/^│ › see @app.*│$/m)
   const rows = live().split("\n")
   expect(rows.findIndex((l) => l.includes("indexing…"))).toBeGreaterThan(
     rows.findIndex((l) => l.startsWith("╰")),
@@ -457,7 +457,7 @@ test("typing @ while the project is still listed shows a status row at once, the
   await waitFor(() => !live().includes("indexing…"), "indexed")
   expect(live()).toMatch(/› src\/app\.ts/)
   terminal.send("\t")
-  await waitFor(() => live().includes("│›see @src/app.ts"), "inserted")
+  await waitFor(() => live().includes("│ › see @src/app.ts"), "inserted")
   terminal.send("\x03\x03")
   await exited
 })
@@ -643,18 +643,18 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   terminal.send("\x12\x1b[A")
   await Bun.sleep(30)
   expect(live()).not.toContain("search history")
-  expect(live()).not.toContain("│›old prompt")
+  expect(live()).not.toContain("│ › old prompt")
   terminal.send("\x06")
   await waitFor(() => live().includes("search history"), "search line")
   expect(live()).toContain("enter accept · ctrl+r older · ctrl+x cancel")
   terminal.send("\x18")
   await waitFor(() => !live().includes("search history"), "search closed")
   terminal.send("\x10")
-  await waitFor(() => live().includes("│›old prompt"), "recalled with Ctrl+P")
+  await waitFor(() => live().includes("│ › old prompt"), "recalled with Ctrl+P")
   terminal.send("\x03")
   terminal.send("@src")
   // The directory named as typed first, then its file.
-  await waitFor(() => live().includes("› src/\n  src/app.ts"), "file list")
+  await waitFor(() => live().includes("  › src/\n    src/app.ts"), "file list")
   expect(live()).toContain("tab/enter insert · ctrl+x close")
   terminal.send("\x18")
   await waitFor(() => !live().includes("src/app.ts"), "file list closed")

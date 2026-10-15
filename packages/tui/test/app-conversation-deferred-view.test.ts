@@ -42,7 +42,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
         s.terminal.send("/delayed\r/design\r")
         await waitFor(() => s.live().includes("main idle"), "owned focus while main command waits")
         s.terminal.send("OWNED_DRAFT")
-        await waitFor(() => s.live().includes("│›OWNED_DRAFT"), "owned draft")
+        await waitFor(() => s.live().includes("│ › OWNED_DRAFT"), "owned draft")
         gate.resolve()
         await waitFor(() => done, "delayed open finished")
         expect(opened).toBe(false)

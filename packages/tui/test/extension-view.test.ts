@@ -176,7 +176,7 @@ test("a command opens an extension's view over its data; it follows changes, run
 
   s.terminal.send(ESC)
   await waitFor(() => !s.screen.inAltScreen, "the inline UI")
-  expect(s.view()).toMatch(/^│›Message Amira +│$/m)
+  expect(s.view()).toMatch(/^│ › Message Amira +│$/m)
   expect(s.screen.altSwitches).toEqual([true, false])
 
   // A key can close the view too; opening it again shows it anew.

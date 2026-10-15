@@ -144,7 +144,7 @@ test("input status is right aligned below the intact rounded border", () => {
   ])
   const rows = box.render(80, plain)
   expect(rows[0]).toBe(`╭${"─".repeat(78)}╮`)
-  expect(stripAnsi(rows[1]!)).toMatch(/^│› +│$/)
+  expect(stripAnsi(rows[1]!)).toMatch(/^│ › +│$/)
   expect(rows[2]).toBe(`╰${"─".repeat(78)}╯`)
   expect(rows[3]).toBe(
     `${" ".repeat(80 - visibleWidth("claude-opus-5-5 (high) · ask"))}claude-opus-5-5 (high) · ask`,

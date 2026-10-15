@@ -98,9 +98,9 @@ test("prototype details: spaced status stats, fg2 stop key and focused input pal
     { id: "model", text: "claude-opus-5-5 (high) · ask", align: "right", tone: "accent", priority: 40 },
   ]).render(100, ctx)
   expect(input[0]).toContain("\x1b[38;2;86;86;86m")
-  expect(input[1]).toContain(bold(theme.accent("›")))
+  expect(input[1]).toContain(bold(theme.accent("› ")))
   expect(stripAnsi(input[2]!)).toBe(`╰${"─".repeat(98)}╯`)
-  expect(stripAnsi(input[1]!)).toMatch(/^│›Message Amira +│$/)
+  expect(stripAnsi(input[1]!)).toMatch(/^│ › Message Amira +│$/)
   expect(input[3]).toContain(theme.accent("claude-opus-5-5"))
   expect(input[3]).toContain(theme.muted(" (high)"))
   expect(input[3]).toContain(theme.muted("ask"))
