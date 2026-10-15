@@ -50,7 +50,7 @@ export interface PrintOptions {
   jsonCoalesce?: boolean
   /** Top-level shell jobs started during this run; print mode waits for them before exiting. */
   backgroundJobs?: PrintBackgroundJobs
-  /** Maximum time print mode waits for those jobs. Default 30 seconds. */
+  /** Maximum wait for ordinary jobs. Monitors keep their own timeout. Default 30 seconds. */
   backgroundJobTimeoutMs?: number
   /** Dialogs extensions open; print mode cannot answer them, so they are cancelled. */
   ui?: UiRequests
@@ -420,6 +420,7 @@ export async function runPrint(
         () => interrupted,
         io,
       )
+      if (jobs.failure) code = exitCode(jobs.failure)
     }
     if (code === 0 && jobs.timedOut && !interrupted) {
       // A follow-up turn may still be running: the note goes after it, as a turn of its own.
@@ -475,12 +476,13 @@ export async function runPrint(
 interface JobWait {
   waited: boolean
   timedOut: boolean
+  failure?: TurnResult
 }
 
 /**
  * Keeps the registry listener alive through the follow-up turn caused by a root job's notice.
- * The builtin job watcher delivers that notice with wake=false because interactive users see it;
- * print mode explicitly wakes the idle root so the model can handle it before the process exits.
+ * Print also drains queued terminal notices (including stops requested by a tool) so the model
+ * can handle them before the process exits. Monitors enforce their own, longer lifetime.
  */
 async function waitForBackgroundJobs(
   agent: Agent,
@@ -506,7 +508,13 @@ async function waitForBackgroundJobs(
   }
   const off = registry.subscribe(({ type, job }) => {
     if (type === "start") add(job)
-    if (type === "end" && rootIds.has(job.id) && !agent.busy && agent.waitingNotices) agent.wake()
+    if (
+      (type === "end" || (type === "output" && isMonitor(job))) &&
+      rootIds.has(job.id) &&
+      !agent.busy &&
+      agent.waitingNotices
+    )
+      agent.wake()
     wake()
   })
   const waitForChange = () => {
@@ -518,33 +526,56 @@ async function waitForBackgroundJobs(
   const waitMs = Math.max(1, Math.floor(timeoutMs))
   const deadline = Date.now() + waitMs
   let noted = false
+  let failure: TurnResult | undefined
+  const offTurn = agent.bus.subscribe((e) => {
+    // Match backgroundTurns: retryable notice failures keep waiting, terminal ones do not.
+    if (
+      e.type === "turn.end" &&
+      e.sessionId === agent.sessionId &&
+      e.data.reason !== "done" &&
+      !agent.noticeRetry
+    ) {
+      failure = { reason: e.data.reason, steps: e.data.steps, error: e.data.error }
+      wake()
+    }
+  })
   try {
-    while (!stop()) {
+    while (!stop() && !failure) {
       for (const job of registry.list()) add(job)
-      const live = registry
+      const running = registry
         .list()
-        .some((job) => rootIds.has(job.id) && (job.status === "starting" || job.status === "running"))
-      if (!live && !agent.busy && agent.waitingNotices) agent.wake()
+        .filter((job) => rootIds.has(job.id) && (job.status === "starting" || job.status === "running"))
+      const live = running.length > 0
+      const monitoring = running.some(isMonitor) && agent.expectedNotices > 0
+      // A monitor may deliver a notice asynchronously after its registry output event.
+      if ((!live || monitoring) && !agent.busy && agent.waitingNotices) agent.wake()
       if (!live && !agent.busy && !agent.expectedNotices && !agent.waitingNotices)
         return { waited: true, timedOut: false }
-      if (live && !noted) {
+      if (running.some((job) => !isMonitor(job)) && !noted) {
         noted = true
         io.stderr(`amira: waiting for top-level background jobs (up to ${waitMs} ms)\n`)
       }
       const left = deadline - Date.now()
-      if (left <= 0) {
+      // A live monitor's lifetime notice keeps its own deadline in charge. Once released,
+      // an unconfirmed process stop falls back to the ordinary print deadline.
+      if (left <= 0 && !monitoring) {
         if (live)
           io.stderr(
             `amira: timed out after ${waitMs} ms while top-level background jobs were still running; they will be stopped on exit\n`,
           )
         return { waited: true, timedOut: live }
       }
-      await Promise.race([waitForChange(), Bun.sleep(Math.min(20, left))])
+      await Promise.race([waitForChange(), Bun.sleep(left > 0 ? Math.min(20, left) : 20)])
     }
-    return { waited: true, timedOut: false }
+    return { waited: true, timedOut: false, ...(failure ? { failure } : {}) }
   } finally {
+    offTurn()
     off()
   }
+}
+
+function isMonitor(job: BackgroundJobInfo): boolean {
+  return job.kind === "monitor"
 }
 
 /**

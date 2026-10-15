@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import type {
   AgentStatusSource,
+  BackgroundJobChange,
+  BackgroundJobInfo,
+  BackgroundJobStartOptions,
   CommandContext,
   ConversationRuntime,
   ConversationSpec,
@@ -22,6 +25,7 @@ import type {
   ShimmerStyle,
   SpawnOptions,
   ThemeDefinition,
+  ToolContext,
   ToolLine,
   ToolResult,
   ToolResultMessage,
@@ -30,6 +34,40 @@ import type {
   UiRequestOptions,
   Usage,
 } from "../src/index.ts"
+
+test("monitor jobs add an optional kind to the public job contract", () => {
+  const start: BackgroundJobStartOptions = {
+    command: "watch",
+    argv: ["watch"],
+    cwd: "/work",
+    kind: "monitor",
+    onChange() {},
+  }
+  const output: Pick<BackgroundJobChange, "output"> = { output: "new chunk" }
+  const kind: BackgroundJobInfo["kind"] = start.kind
+  const ordinary: Pick<BackgroundJobInfo, "kind"> = {}
+  const context: Pick<ToolContext, "shellKind" | "expectNotice"> = {
+    shellKind: "bash",
+    expectNotice: () => ({ deliver() {}, cancel() {} }),
+  }
+  expect({
+    kind,
+    ordinary,
+    shell: context.shellKind,
+    notices: typeof context.expectNotice,
+    observer: typeof start.onChange,
+    output: output.output,
+  }).toMatchInlineSnapshot(`
+    {
+      "kind": "monitor",
+      "notices": "function",
+      "observer": "function",
+      "ordinary": {},
+      "output": "new chunk",
+      "shell": "bash",
+    }
+  `)
+})
 
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
@@ -187,6 +225,7 @@ test("the public API exports stay stable", async () => {
     "serverToolText",
     "serverToolView",
     "subagentStateText",
+    "subagentTranscriptText",
     "summarizeTrace",
     "textCells",
     "textResult",
@@ -196,6 +235,30 @@ test("the public API exports stay stable", async () => {
     "validateExtensionSetting",
     "withSection",
   ])
+})
+
+test("only the named transcript renderer is public, not its internal helpers", async () => {
+  const api = await import("../src/index.ts")
+  const internal = await import("@amira/api/internal/subagent-transcript")
+  expect(
+    Object.keys(internal)
+      .filter((name) => name in api)
+      .sort(),
+  ).toMatchInlineSnapshot(`
+    [
+      "subagentTranscriptText",
+    ]
+  `)
+  for (const name of [
+    "callKids",
+    "elapsed",
+    "usageText",
+    "subagentSummary",
+    "subagentOwnMessages",
+    "transcriptText",
+  ])
+    expect(name in api).toBe(false)
+  expect(api.subagentTranscriptText).toBe(internal.subagentTranscriptText)
 })
 
 test("the public display-state source contract handles clean stops and pauses without a version bump", async () => {

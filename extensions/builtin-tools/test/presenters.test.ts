@@ -50,6 +50,7 @@ test("every built-in presenter keeps its finished and running verbs next to its 
     job_output: ["Read", "Reading"],
     job_stop: ["Stopped", "Stopping"],
     job_list: ["Listed", "Listing"],
+    monitor: ["Monitored", "Starting monitor"],
     tool_search: ["Loaded", "Loading"],
   }
   expect(Object.keys(builtinPresenters).sort()).toEqual(Object.keys(expected).sort())

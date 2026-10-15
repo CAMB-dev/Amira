@@ -9,6 +9,7 @@ import {
   type SubagentInfo,
   serverToolView,
   subagentStateText,
+  subagentTranscriptText,
   DEFAULT_THEME_GLYPHS as symbols,
   type ToolCallView,
   type ToolResult,
@@ -21,7 +22,7 @@ import {
   type ViewRenderOptions,
   type ViewSegment,
 } from "@amira/api"
-import { callKids, elapsed, transcriptText, usageText } from "./agents-command.ts"
+import { callKids, elapsed, subagentOwnMessages, usageText } from "@amira/api/internal/subagent-transcript"
 
 interface SubagentData {
   sessionId: string
@@ -119,12 +120,7 @@ function transcriptLines(
   opts: ViewRenderOptions,
   started: (toolCallId: string) => { startedAt: number; partial?: ToolResult } | undefined,
 ): ViewLine[] {
-  const own = messages.slice(
-    Math.max(
-      0,
-      messages.findLastIndex((m) => m.role === "user"),
-    ),
-  )
+  const own = subagentOwnMessages(info, messages)
   const first = own[0]
   const task = first?.role === "user" ? (first.display?.text || blockText(first)).trim() : info.task
   const out: ViewLine[] = [
@@ -482,7 +478,7 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
             const list = session?.subagents() ?? []
             const info = list.find((s) => s.id === data.sessionId)
             if (!info) return
-            const text = transcriptText(info, session?.subagentMessages(info.id) ?? [], list)
+            const text = subagentTranscriptText(info, session?.subagentMessages(info.id) ?? [], list)
             view.close()
             view.print(text)
           },

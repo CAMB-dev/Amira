@@ -7,6 +7,7 @@ import { globTool } from "./glob.ts"
 import { grepTool } from "./grep.ts"
 import { jobListTool, jobOutputTool, jobStopTool, jobTools } from "./jobs.ts"
 import { registerJobs } from "./jobs-ui.ts"
+import { createMonitorTool, monitorTool } from "./monitor.ts"
 import { outputReadTool } from "./output-read.ts"
 import { builtinPresenters } from "./presenters.ts"
 import { readTool } from "./read.ts"
@@ -28,6 +29,7 @@ export {
   jobListTool,
   jobOutputTool,
   jobStopTool,
+  monitorTool,
   outputReadTool,
   powershellTool,
   readTool,
@@ -49,6 +51,7 @@ export const builtinTools = [
   outputReadTool,
   askUserTool,
   ...jobTools,
+  monitorTool,
 ]
 
 export default defineExtension(async (api) => {
@@ -56,7 +59,13 @@ export default defineExtension(async (api) => {
     builtinTools,
     () => api.session()?.info().shell ?? api.settings.shell,
   )
-  for (const tool of tools) api.registerTool(tool)
+  for (const tool of tools) {
+    api.registerTool(
+      tool.name === "monitor"
+        ? createMonitorTool(undefined, {}, () => api.session()?.info().shell ?? api.settings.shell)
+        : tool,
+    )
+  }
   for (const [name, presenter] of Object.entries(builtinPresenters)) api.registerToolRenderer(name, presenter)
   registerJobs(api)
   // Warm processes and Win32 bindings in the background after shell discovery.
