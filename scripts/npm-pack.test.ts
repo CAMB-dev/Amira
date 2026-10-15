@@ -261,24 +261,29 @@ for (const runtime of runtimes) {
       path.join(folder, "package.json"),
       JSON.stringify({ name: platform!.name, version: "1.0.0" }),
     )
-    await copyFile(
-      runtime.executable,
-      path.join(folder, "bin", process.platform === "win32" ? "amira.exe" : "amira"),
-    )
+    const executable = path.join(folder, "bin", process.platform === "win32" ? "amira.exe" : "amira")
+    if (process.platform === "win32") {
+      await copyFile(runtime.executable, executable)
+    } else {
+      // Test package lookup without requiring the host runtime to work after relocation.
+      await writeFile(executable, `#!/bin/sh\nexec '${runtime.executable.replaceAll("'", "'\\''")}' "$@"\n`, {
+        mode: 0o755,
+      })
+    }
     const found = await run([runtime.executable, fixture.launcher, fixture.script, "platform argument"])
-    expect(found.code).toBe(37)
+    expect(found.code, JSON.stringify(found)).toBe(37)
     expect(found.stdout).toContain('["platform argument"]')
     expect(found.stderr).toContain("fake stderr")
   })
 
-  test.skipIf(process.platform === "win32")(
-    `${runtime.name} launcher forwards termination signals and retains signal status`,
-    async () => {
+  test.skipIf(process.platform === "win32").each(["SIGTERM", "SIGHUP"] as const)(
+    `${runtime.name} launcher forwards %s and retains signal status`,
+    async (signal) => {
       const fixture = await launcherFixture()
       const script = path.join(fixture.directory, "signals.cjs")
       await writeFile(
         script,
-        'process.on("SIGTERM", () => { console.error("received SIGTERM"); process.exit(42) }); console.log("ready"); setInterval(() => {}, 1000)\n',
+        `process.on("${signal}", () => { console.error("received ${signal}"); process.exit(42) }); setImmediate(() => console.log("ready")); setInterval(() => {}, 1000)\n`,
       )
       const child = Bun.spawn([runtime.executable, fixture.launcher, script], {
         env: { ...process.env, AMIRA_BINARY: runtime.executable },
@@ -287,23 +292,30 @@ for (const runtime of runtimes) {
       })
       try {
         const reader = child.stdout.getReader()
-        const ready = await reader.read()
-        expect(new TextDecoder().decode(ready.value)).toContain("ready")
-        child.kill("SIGTERM")
-        expect(await child.exited).toBe(42)
-        expect(await new Response(child.stderr).text()).toContain("received SIGTERM")
+        let ready = ""
+        while (!ready.includes("ready\n")) {
+          const chunk = await reader.read()
+          if (chunk.done) break
+          ready += new TextDecoder().decode(chunk.value)
+        }
+        expect(ready).toContain("ready\n")
+        child.kill(signal)
+        const code = await child.exited
+        const stderr = await new Response(child.stderr).text()
+        expect(code, JSON.stringify({ signal: child.signalCode, stderr })).toBe(42)
+        expect(stderr).toContain(`received ${signal}`)
       } finally {
         child.kill("SIGKILL")
       }
       const selfSignal = path.join(fixture.directory, "self-signal.cjs")
-      await writeFile(selfSignal, 'process.kill(process.pid, "SIGTERM")\n')
+      await writeFile(selfSignal, `process.kill(process.pid, "${signal}")\n`)
       const signaled = Bun.spawn([runtime.executable, fixture.launcher, selfSignal], {
         env: { ...process.env, AMIRA_BINARY: runtime.executable },
         stdout: "ignore",
         stderr: "pipe",
       })
       await signaled.exited
-      expect(signaled.signalCode).toBe("SIGTERM")
+      expect(signaled.signalCode).toBe(signal)
     },
     10000,
   )
