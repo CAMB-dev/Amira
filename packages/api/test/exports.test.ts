@@ -72,7 +72,7 @@ test("monitor jobs add an optional kind to the public job contract", () => {
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
   const actual = Object.keys(api).sort()
-  expect(api.API_VERSION).toBe("0.1.54")
+  expect(api.API_VERSION).toBe("0.1.55")
   expect(actual).toEqual([
     "AGENT_STATUS_BADGES",
     "API_VERSION",
@@ -279,7 +279,7 @@ test("the public display-state source contract handles clean stops and pauses wi
         "paused",
       ],
       "terminal": "stopped",
-      "version": "0.1.54",
+      "version": "0.1.55",
     }
   `)
 })
@@ -461,7 +461,7 @@ test("the public TUI settings include optional margins without changing API_VERS
   const defaults: TuiSettings = { margin: DEFAULT_TUI_MARGIN, marginRows: DEFAULT_TUI_MARGIN_ROWS }
   const edgeToEdge: TuiSettings = { margin: 0, marginRows: 0 }
   const omitted: TuiSettings = {}
-  expect(API_VERSION).toBe("0.1.54")
+  expect(API_VERSION).toBe("0.1.55")
   expect(defaults).toEqual({ margin: 3, marginRows: 1 })
   expect(edgeToEdge).toEqual({ margin: 0, marginRows: 0 })
   expect(omitted).toEqual({})
