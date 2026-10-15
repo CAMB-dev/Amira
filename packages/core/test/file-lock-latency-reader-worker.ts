@@ -4,7 +4,11 @@ import path from "node:path"
 import { tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { filesystemGatePath } from "./file-lock-fixtures.ts"
-import { automaticCleanupLatency, inlineCleanupLatency } from "./file-lock-latency-timing.ts"
+import {
+  automaticCleanupLatency,
+  inlineCleanupLatency,
+  latencyWorkerReady,
+} from "./file-lock-latency-timing.ts"
 import { boundedExit, startGateReader } from "./file-lock-reader-fixture.ts"
 
 const [dir] = process.argv.slice(2)
@@ -61,6 +65,7 @@ spyOn(fs, "renameSync").mockImplementation((...args) => {
 const { reader, go, stderr, waitUntilReady } = startGateReader(metadata, dir)
 try {
   await waitUntilReady()
+  await latencyWorkerReady(dir)
   inlineTiming.measure("release", () => lease.release())
   expect(fs.readFileSync(file, "utf8")).toContain(String(process.pid))
   const before = performance.now()

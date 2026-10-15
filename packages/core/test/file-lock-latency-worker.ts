@@ -4,7 +4,11 @@ import path from "node:path"
 import { tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
-import { automaticCleanupLatency, inlineCleanupLatency } from "./file-lock-latency-timing.ts"
+import {
+  automaticCleanupLatency,
+  inlineCleanupLatency,
+  latencyWorkerReady,
+} from "./file-lock-latency-timing.ts"
 
 const [dir, mode] = process.argv.slice(2)
 if (!dir || !mode) throw new Error("missing latency worker arguments")
@@ -101,21 +105,23 @@ async function latency(action: () => void) {
   console.log(`${mode}: zero-delay callback ${elapsed.toFixed(2)}ms; gate attempts ${attempts}`)
 }
 if (mode === "claim") {
+  await latencyWorkerReady(dir)
   armed = true
   await latency(() => boundedAttempt("claim", () => expect(store.claim()).toBe(true)))
 } else {
   privateBlocked = mode === "reclaim"
   expect(store.claim()).toBe(true)
+  const unlock = mode === "reclaim" ? takeFilesystemGate(file) : undefined
+  if (mode === "reclaim") expect(unlock).toBeDefined()
+  await latencyWorkerReady(dir)
   armed = true
   if (mode === "release") await latency(() => boundedAttempt("release", () => store.release()))
   else {
-    const unlock = takeFilesystemGate(file)!
-    expect(unlock).toBeDefined()
     let before = 0
     let privateBefore = 0
     let acquired: ReturnType<typeof tryFileLock>
     await latency(() => {
-      boundedAttempt("unlock", unlock)
+      boundedAttempt("unlock", unlock!)
       boundedAttempt("release", () => store.release())
       before = attempts
       privateBefore = privateAttempts

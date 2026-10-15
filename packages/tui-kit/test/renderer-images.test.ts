@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import type { Component, RenderContext } from "../src/component.ts"
 import { findImageMarker, pendingImage, placeImage } from "../src/images/placement.ts"
 import type { ImageBlock } from "../src/images/types.ts"
@@ -84,19 +84,67 @@ test("at the bottom of the screen the image makes its rows first, so drawing it 
 })
 
 test("an image that fails, or takes longer than its time, is committed as its fallback", async () => {
-  const { screen, r } = setup()
-  r.commit([pendingImage(Promise.reject(new Error("404")), ["🖼\uFE0F gone"]), "a"])
-  await Bun.sleep(10)
-  r.render()
-  const slow = deferred<ImageBlock | undefined>()
-  r.commit([pendingImage(slow.promise, ["🖼\uFE0F slow"], 40), "b"])
-  expect(screen.lines.slice(0, 4)).toEqual(["🖼\uFE0F gone", "a", "🖼\uFE0F slow", "b"])
-  await Bun.sleep(100)
-  // Committed now: a live line added after it stays below it.
-  slow.resolve(sixel(2, 2))
-  await Bun.sleep(20)
-  expect(screen.images).toEqual([])
-  expect(screen.lines.slice(0, 5)).toEqual(["🖼\uFE0F gone", "a", "🖼\uFE0F slow", "b", "> live"])
+  let now = 5000
+  let nextTimer = 1
+  const scheduled = new Map<number, { at: number; callback: () => void }>()
+  const clock = spyOn(performance, "now").mockImplementation(() => now)
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms = 0) => {
+    const id = nextTimer++
+    scheduled.set(id, { at: now + ms, callback })
+    return id
+  }) as unknown as typeof setTimeout)
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation((id) => {
+    if (typeof id === "number") scheduled.delete(id)
+  })
+  function advance(ms: number) {
+    const until = now + ms
+    for (;;) {
+      const next = [...scheduled].sort((a, b) => a[1].at - b[1].at)[0]
+      if (!next || next[1].at > until) break
+      scheduled.delete(next[0])
+      now = next[1].at
+      next[1].callback()
+    }
+    now = until
+  }
+  const { screen, r, root } = setup()
+  try {
+    const failed = Promise.reject(new Error("404"))
+    const gone = pendingImage(failed, ["🖼\uFE0F gone"])
+    r.commit([gone, "a"])
+    await failed.catch(() => {})
+    advance(16)
+    expect(findImageMarker(gone)).toBeUndefined()
+
+    const slow = deferred<ImageBlock | undefined>()
+    const marker = pendingImage(slow.promise, ["🖼\uFE0F slow"], 40)
+    r.commit([marker, "b"])
+    expect(screen.lines.slice(0, 4)).toEqual(["🖼\uFE0F gone", "a", "🖼\uFE0F slow", "b"])
+    advance(39)
+    expect(findImageMarker(marker)).toBeDefined()
+    // Run the deadline wakeup and the frame it schedules before allowing the load to finish.
+    advance(2)
+    expect(findImageMarker(marker)).toBeUndefined()
+    root.lines.push("new live line")
+    r.render()
+    slow.resolve(sixel(2, 2))
+    await slow.promise
+    advance(16)
+    expect(screen.images).toEqual([])
+    expect(screen.lines.slice(0, 6)).toEqual([
+      "🖼\uFE0F gone",
+      "a",
+      "🖼\uFE0F slow",
+      "b",
+      "> live",
+      "new live line",
+    ])
+  } finally {
+    r.stop()
+    clear.mockRestore()
+    timers.mockRestore()
+    clock.mockRestore()
+  }
 })
 
 test("lines waiting that would not fit on the screen let the image go as its fallback", async () => {

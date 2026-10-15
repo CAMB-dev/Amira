@@ -59,6 +59,13 @@ if (mode.startsWith("no-native-")) {
   })
   const { tryFileLock } = await import("../src/file-lock.ts")
   const { takeFilesystemGate } = await import("../src/file-lock-gate.ts")
+  const waitUntil = async (ready: () => boolean, message: string, timeoutMs = 3000) => {
+    const deadline = Date.now() + timeoutMs
+    while (!ready()) {
+      if (Date.now() > deadline) throw new Error(message)
+      await Bun.sleep(10)
+    }
+  }
   const parent = path.join(dir, "parent")
   fs.mkdirSync(parent)
   const leasePath = path.join(parent, "session.lock")
@@ -67,6 +74,9 @@ if (mode.startsWith("no-native-")) {
   const lease = tryFileLock(leasePath, 60_000, undefined, true)!
   const unblock = takeFilesystemGate(leasePath)!
   if (!lease || !unblock) throw new Error("could not set up deferred release")
+  // Importing modules and constructing the lease/gate are setup, not deferred release.
+  fs.writeFileSync(path.join(dir, `ready-${process.pid}`), "ready")
+  await waitUntil(() => fs.existsSync(path.join(dir, "review-go")), "review worker never started", 30_000)
   lease.release()
   unblock()
   // A directory move keeps the retained inode/lease intact on Windows as well.
@@ -85,13 +95,21 @@ if (mode.startsWith("no-native-")) {
     return Reflect.apply(mkdtemp, fs, args)
   })
   const warnings: string[] = []
+  let cleanupAttempts = 0
+  let prematureWarning = false
   const warningHook = spyOn(process, "emitWarning").mockImplementation((message) => {
+    // The inline failure and five automatic retries must precede the final warning.
+    if (mode === "release-cleanup-error" && cleanupAttempts < 6) prematureWarning = true
     warnings.push(String(message))
   })
   const rename = fs.renameSync
+  let gateRecord: string | undefined
   const cleanupHook = spyOn(fs, "renameSync").mockImplementation((...args) => {
-    if (mode === "release-cleanup-error" && args[0] === gate)
+    if (mode === "release-cleanup-error" && args[0] === gate) {
+      cleanupAttempts++
+      if (gateRecord === undefined) gateRecord = fs.readFileSync(path.join(gate, "owner.json"), "utf8")
       throw new Error("injected gate retirement failure")
+    }
     return rename(...args)
   })
   if (mode === "release-replaced-parent") fs.writeFileSync(parent, "replacement parent")
@@ -99,13 +117,13 @@ if (mode.startsWith("no-native-")) {
     fs.mkdirSync(parent)
     fs.writeFileSync(leasePath, "unverifiable replacement")
   } else if (mode !== "release-missing-parent" && !filesystemFault) throw new Error(`unknown mode: ${mode}`)
-  await Bun.sleep(250)
-  let gateRecord: string | undefined
+  // Observe the actual close, not an assumed number of scheduled retry turns.
+  await waitUntil(() => closed, "retained lease descriptor leaked")
   if (mode === "release-cleanup-error") {
-    gateRecord = fs.readFileSync(path.join(gate, "owner.json"), "utf8")
-    if (JSON.parse(gateRecord).pid !== process.pid) throw new Error("lost pending gate owner")
-    if (warnings.length !== 0) throw new Error("premature cleanup warning")
-    await Bun.sleep(800)
+    if (gateRecord === undefined || JSON.parse(gateRecord).pid !== process.pid)
+      throw new Error("lost pending gate owner")
+    await waitUntil(() => warnings.length > 0, "missing informative final cleanup warning")
+    if (prematureWarning) throw new Error("premature cleanup warning")
     if (
       warnings.slice().length !== 1 ||
       !warnings[0]?.includes(gate) ||
