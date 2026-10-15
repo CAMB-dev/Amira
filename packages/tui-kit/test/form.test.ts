@@ -1,5 +1,6 @@
-// A/D deliberate oracles: readable form content starts at column 2; filters use a muted `filter:` label.
+// Deliberate layout oracles: right-aligned labels, a shared control column, and muted filter labels.
 import { describe, expect, test } from "bun:test"
+import { stripAnsi } from "../src/ansi.ts"
 import { CURSOR_MARKER } from "../src/component.ts"
 import {
   Form,
@@ -155,18 +156,19 @@ describe("Form", () => {
     })
     const ctx = { ...plain, rows: 40, glyphs: { ...defaultGlyphs, pointer: ">", separator: "|" } }
     const view = () => form.render(100, ctx).join("\n")
-    expect(view()).toContain("> Mode")
-    expect(view()).toContain("Alpha <> | First")
+    expect(view()).toMatch(/> +Mode +\[Alpha/)
+    expect(view()).toMatch(/Alpha +v\]/)
+    expect(view()).toContain("First")
     expect(view()).toContain("enter list | left/right change | tab/up/down move | ctrl+s save | esc cancel")
     form.handleInput(key("enter"))
     expect(view()).toContain("  > * Alpha")
     form.handleInput(key("escape"))
     form.handleInput(key("tab"))
-    expect(view()).toContain("> Tags")
+    expect(view()).toMatch(/> +Tags/)
     expect(view()).toContain("  > [ ] x")
     form.handleInput(key("tab"))
     form.setActionState("go", { running: true, text: "Fetching" })
-    expect(view()).toContain("> [ Fetch ]")
+    expect(view()).toMatch(/> +Fetch +\[ Fetch \]/)
     expect(view()).toContain("Fetching | esc stops it")
     form.setActionState("go", { running: false })
     form.handleInput(key("tab"))
@@ -241,7 +243,8 @@ describe("Form", () => {
     form.handleInput({ type: "paste", text: "sk-live-1234\n" })
     expect(form.values.key).toBe("sk-live-1234")
     expect(view()).not.toContain("sk-live")
-    expect(view()).toContain("************ 12 chars")
+    expect(view()).toContain("************")
+    expect(view()).toContain("12 chars")
   })
 
   test("a select opens with Enter, filters as you type, and Esc closes only the list", () => {
@@ -285,10 +288,10 @@ describe("Form", () => {
 
   test("filtered all/none and invert retain outside selections and report global counts", () => {
     const { form, view } = makeChecklist(undefined, ["model-b"])
-    expect(view()).toContain("Tags · selected 1/3")
+    expect(view()).toContain("Tags  selected 1/3")
     expect(view()).toContain("filter: ")
     type(form, "ALP")
-    expect(view()).toContain("Tags · selected 1/3 · 2 shown")
+    expect(view()).toContain("Tags  selected 1/3 · 2 shown")
     expect(view()).not.toContain("Beta")
     form.handleInput(key("a", { ctrl: true }))
     expect(form.values.tags).toEqual(["model-b", "model-a", "model-c"])
@@ -345,7 +348,7 @@ describe("Form", () => {
     form.handleInput(key("x", { ctrl: true }))
     expect(form.values.tags).toEqual(["model-b", "model-c"])
     form.handleInput(key("tab"))
-    expect(view()).toContain("Tags · selected 2/3")
+    expect(view()).toContain("Tags  selected 2/3")
     expect(view()).not.toContain("filter:")
   })
 
@@ -399,7 +402,8 @@ describe("Form", () => {
       theme: { ...plain.theme, muted: (s) => `\x1b[90m${s}\x1b[39m` },
     })
     const filter = lines.find((l) => l.includes(CURSOR_MARKER))!
-    expect(filter).toBe(`  \x1b[90mfilter:\x1b[39m ALP${CURSOR_MARKER}`)
+    expect(filter).toContain(`[\x1b[90mfilter:\x1b[39m ALP${CURSOR_MARKER}`)
+    expect(filter.endsWith("]")).toBe(true)
   })
 
   test("trailing subcolumns align independently across all filtered rows and scroll positions", () => {
@@ -452,7 +456,7 @@ describe("Form", () => {
       { value: "a", label: "Alpha", detail: ["128k", "$0.27/$1.10"] },
       { value: "b", label: "Wider context", detail: ["1,048,576", "$123.45/$678.90"] },
     ])
-    for (const width of [40, 32]) {
+    for (const width of [40, 36]) {
       const lines = form.render(width, plain)
       const alpha = lines.find((l) => l.includes("[ ] Alpha"))!
       const wider = lines.find((l) => l.includes("[ ] Wider context"))!
@@ -501,10 +505,10 @@ describe("Form", () => {
     expect(lines[1]).toBe("  Description")
     expect(lines.find((l) => l.includes("Connection"))).toMatch(/^ {2}/)
     expect(lines.find((l) => l.includes("Section help"))).toBe("  Section help")
-    expect(lines.find((l) => l.includes("Name"))).toBe("› Name")
+    expect(lines.find((l) => l.includes("Name"))).toStartWith("› Name  [")
   })
 
-  test("a singleton section matching its field label avoids duplication without hiding controls", () => {
+  test("section rules retain headings and field controls even when labels match", () => {
     const { form } = makeForm({
       title: "Settings",
       sections: [{ title: "Models", help: "Choose matching models" }],
@@ -520,8 +524,8 @@ describe("Form", () => {
       ],
     })
     const lines = form.render(60, plain)
-    expect(lines.filter((l) => l.includes("Models"))).toHaveLength(1)
-    expect(lines.join("\n")).toContain("› Models * · selected 0/1")
+    expect(lines.filter((l) => l.includes("Models"))).toHaveLength(2)
+    expect(lines.join("\n")).toContain("› Models *  selected 0/1")
     expect(lines.join("\n")).toContain("Choose matching models")
     expect(lines.join("\n")).toContain("[ ] a")
     expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
@@ -572,8 +576,8 @@ describe("Form", () => {
       expect(lines.some((l) => l.includes(CURSOR_MARKER))).toBe(true)
     }
     const narrow = form.render(16, { ...plain, rows: 40 }).join("\n")
-    expect(narrow).toContain("Lo…")
-    expect(narrow).toContain("Co…")
+    expect(narrow).toContain("Lon…")
+    expect(narrow).toContain("Con…")
     const empty = makeChecklist([])
     for (const width of [1, 4, 8, 12]) {
       for (const line of empty.form.render(width, { ...plain, rows: 40 }))
@@ -724,7 +728,7 @@ describe("Form", () => {
     while (form.focused !== "max") form.handleInput(key("tab"))
     const lines = form.render(40, { ...plain, rows })
     expect(lines.length).toBe(rows)
-    expect(lines.join("\n")).toContain("› Max")
+    expect(lines.join("\n")).toMatch(/› +Max +\[/)
     expect(lines.join("\n")).toContain("[ Save ]")
     expect(lines.join("\n")).toContain("↑")
     // Tiny: still a title, a body row and the buttons.
@@ -769,7 +773,7 @@ describe("Form", () => {
     expect(screen.cursorVisible).toBe(true)
     const row = screen.lines.findIndex((l) => l.includes("你好"))
     expect(screen.y).toBe(row)
-    expect(screen.x).toBe(2 + 4)
+    expect(screen.x).toBe(visibleWidth(screen.lines[row]!.slice(0, screen.lines[row]!.indexOf("你好"))) + 4)
     screen.resize(30, 10)
     term.setSize(30, 10)
     full.render()
@@ -781,4 +785,173 @@ describe("Form", () => {
     full.close()
     expect(screen.inAltScreen).toBe(false)
   })
+})
+
+test("labels align right, inputs share edges, and help/errors sit beneath inputs", () => {
+  const form = new Form({
+    title: "Layout",
+    fields: [
+      { id: "short", type: "text", label: "Name", help: "Name help" },
+      { id: "long", type: "text", label: "A label much longer than the cap allows" },
+      { id: "check", type: "checkbox", label: "Enabled" },
+      { id: "multi", type: "multiselect", label: "Models", options: [{ value: "one" }] },
+    ],
+    onSubmit: () => {},
+    onCancel: () => {},
+  })
+  form.setErrors({ short: "Fix name" })
+  const lines = form.render(80, { ...plain, rows: 40 })
+  const name = lines.find((line) => line.includes("Name  ["))!
+  const long = lines.find((line) => line.includes("A label much longer"))!
+  const checkbox = lines.find((line) => line.includes("Enabled"))!
+  expect(name.indexOf("[")).toBe(28)
+  expect(long.indexOf("[")).toBe(28)
+  expect(checkbox.indexOf("[ ]")).toBe(28)
+  expect(visibleWidth(name)).toBe(80)
+  expect(visibleWidth(long)).toBe(80)
+  expect(lines.find((line) => line.includes("Name help"))!.indexOf("Name help")).toBe(29)
+  expect(lines.find((line) => line.includes("Fix name"))!.indexOf("✗")).toBe(29)
+  for (let i = 0; i < 3; i++) form.handleInput(key("tab"))
+  expect(
+    form
+      .render(80, { ...plain, rows: 40 })
+      .find((line) => line.includes("[ ] one"))!
+      .indexOf("[ ]"),
+  ).toBe(28)
+  // 28 label/spacing cells + 2 input edges + 19 input cells no longer fit.
+  const narrow = form.render(49, { ...plain, rows: 40 })
+  expect(narrow.find((line) => line.includes("A label much longer"))).not.toContain("[")
+})
+
+test("collapsible sections have keyboard disclosures and invalid fields expand on Save", () => {
+  let saved = false
+  const form = new Form({
+    title: "Sections",
+    sections: [{ title: "Advanced", collapsed: true }],
+    fields: [{ id: "advanced", type: "text", label: "Endpoint", section: "Advanced", required: true }],
+    validate: (values): Record<string, string> => (values.advanced ? {} : { advanced: "is required" }),
+    onSubmit: () => {
+      saved = true
+    },
+    onCancel: () => {},
+  })
+  expect(form.render(80, plain).join("\n")).toContain("▸ Advanced")
+  expect(form.render(80, plain).join("\n")).not.toContain("Endpoint")
+  form.handleInput(key("right"))
+  expect(form.render(80, plain).join("\n")).toContain("▾ Advanced")
+  form.handleInput(key("tab"))
+  expect(form.focused).toBe("advanced")
+  form.handleInput(key("tab", { shift: true }))
+  form.handleInput(key("space"))
+  expect(form.render(80, plain).join("\n")).not.toContain("Endpoint")
+  form.handleInput(key("s", { ctrl: true }))
+  expect(saved).toBe(false)
+  expect(form.focused).toBe("advanced")
+  expect(form.render(80, plain).join("\n")).toContain("is required")
+})
+
+test("select group headings are not choices, remain searchable and retain keyboard selection", () => {
+  const form = new Form({
+    title: "Groups",
+    fields: [
+      {
+        id: "choice",
+        type: "select",
+        label: "Choice",
+        options: [
+          { value: "a", label: "Alpha", group: "Local" },
+          { value: "b", label: "Beta", group: "Cloud" },
+          { value: "c", label: "Gamma", group: "Cloud" },
+        ],
+      },
+    ],
+    onSubmit: () => {},
+    onCancel: () => {},
+  })
+  form.handleInput(key("enter"))
+  expect(form.render(80, plain).join("\n")).toContain("Local")
+  type(form, "Cloud")
+  const filtered = form.render(80, plain).join("\n")
+  expect(filtered).toContain("Cloud")
+  expect(filtered).not.toContain("Alpha\n")
+  expect(filtered).toContain("Beta")
+  form.handleInput(key("down"))
+  form.handleInput(key("enter"))
+  expect(form.values.choice).toBe("c")
+})
+
+test("form inputs use light and dark theme surfaces, while ASCII keeps explicit brackets", async () => {
+  const { createTheme } = await import("../src/style.ts")
+  for (const themeName of ["light", "dark"] as const) {
+    const theme = createTheme({ theme: themeName, colorDepth: "truecolor", env: {} })
+    const form = new Form({
+      title: "Appearance",
+      fields: [{ id: "name", type: "text", label: "Name" }],
+      values: { name: "Demo" },
+      onSubmit: () => {},
+      onCancel: () => {},
+    })
+    const row = form.render(60, { ...plain, color: true, theme }).find((line) => line.includes("Demo"))!
+    expect(row).toContain("\x1b[48;2;")
+    expect(row).toContain(theme.accent("probe").split("probe")[0]!)
+    form.handleInput(key("tab"))
+    expect(form.render(60, { ...plain, color: true, theme }).find((line) => line.includes("Demo"))).toContain(
+      theme.inputFg!("probe").split("probe")[0]!,
+    )
+    expect(stripAnsi(row)).not.toContain("[")
+    expect(visibleWidth(row)).toBe(60)
+    const ascii = form
+      .render(60, { ...plain, color: true, theme, glyphs: { ...defaultGlyphs, pointer: ">", rule: "-" } })
+      .find((line) => line.includes("Demo"))!
+    expect(stripAnsi(ascii)).toContain("[Demo")
+    expect(ascii).not.toContain("\x1b[48;2;")
+  }
+})
+
+test("live preview sits beside wide forms and below narrow forms", () => {
+  let previewValue = "first"
+  const form = new Form({
+    title: "Preview layout",
+    fields: [{ id: "name", type: "text", label: "Name" }],
+    preview: () => ["settings.json", `entry: ${previewValue}`, "key -> auth.json: ****"],
+    onSubmit: () => {},
+    onCancel: () => {},
+  })
+  const wide = form.render(120, { ...plain, rows: 36 })
+  expect(stripAnsi(wide.find((line) => line.includes("Name"))!)).toContain("| Preview")
+  expect(wide.some((line) => line.includes("| settings.json"))).toBe(true)
+  expect(wide.some((line) => line.includes("key -> auth.json: ****"))).toBe(true)
+  previewValue = "changed"
+  expect(form.render(120, { ...plain, rows: 36 }).join("\n")).toContain("entry: changed")
+  const narrow = form.render(80, { ...plain, rows: 36 })
+  expect(narrow.some((line) => line.includes("| Preview"))).toBe(false)
+  expect(narrow.findIndex((line) => line.includes("entry: changed"))).toBeGreaterThan(
+    narrow.findIndex((line) => line.includes("Name")),
+  )
+  expect(wide.every((line) => visibleWidth(line) <= 120)).toBe(true)
+})
+
+test.each([80, 120])("long previews can be scrolled with the keyboard at %s columns", (width) => {
+  const form = new Form({
+    title: "Scrollable preview",
+    fields: [{ id: "name", type: "text", label: "Name" }],
+    preview: () => [
+      "settings.json",
+      ...Array.from({ length: 70 }, (_, n) => `preview-line-${n}`),
+      "key -> auth.json",
+    ],
+    onSubmit: () => {},
+    onCancel: () => {},
+  })
+  const screen = () => form.render(width, { ...plain, rows: 24 }).join("\n")
+  screen()
+  form.handleInput(key("tab"))
+  expect(form.focused).toBe("preview")
+  expect(screen()).toContain("preview-line-0")
+  form.handleInput(key("pagedown"))
+  expect(screen()).toContain("preview-line-20")
+  form.handleInput(key("end"))
+  expect(screen()).toContain("preview-line-69")
+  form.handleInput(key("home"))
+  expect(screen()).toContain("preview-line-0")
 })

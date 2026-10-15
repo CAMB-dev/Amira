@@ -12,6 +12,7 @@ import type {
   UserMessage,
 } from "@amira/ai"
 import type { CommandOutputLevel, PrintOptions } from "./commands.ts"
+import type { FormActionResult } from "./form.ts"
 import type { Budget, ChildState, SpawnContext, SpawnGroupInfo, SubagentStatus } from "./subagents.ts"
 import type { ToolResult, ToolTraits } from "./tools.ts"
 import type { UiRequest } from "./ui.ts"
@@ -303,7 +304,13 @@ export interface EventMap {
   /** Frontend questions, including local dialogs; hidden means an overlay covers an answer. */
   "ui.waiting": { pending: number; hidden: boolean; change: "opened" | "resolved" | "visibility" }
   /** Progress of a form action (a button such as "Fetch models") running on the host. */
-  "ui.progress": { requestId: string; action: string; text: string }
+  "ui.progress": {
+    requestId: string
+    action: string
+    text: string
+    /** Filtered recovery updates for a failed asynchronous form submission. */
+    form?: { result: FormActionResult; errors: Record<string, string> }
+  }
   /** Text a slash command shows the user; `command` is its name, without the slash. */
   "command.output": { command: string; text: string; level: CommandOutputLevel } & PrintOptions
   /**

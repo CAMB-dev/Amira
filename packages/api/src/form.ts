@@ -13,6 +13,8 @@ export type FormValues = Record<string, FormValue>
 
 export interface FormOption {
   value: string
+  /** A non-selectable heading shared by related options; included in filtering. */
+  group?: string
   /** Shown instead of `value`. */
   label?: string
   /** A short muted note after the label, e.g. "128k context · $0.27/M in". */
@@ -170,6 +172,8 @@ export interface FormActionResult {
 
 export interface FormSection {
   title: string
+  /** When provided, enables a keyboard disclosure; true starts the section folded. */
+  collapsed?: boolean
   help?: string
   /**
    * Where a form is asked one field at a time, first ask whether to fill this section at all;
@@ -187,6 +191,14 @@ export interface FormSpec {
   sections?: FormSection[]
   /** Default "Save". */
   submitLabel?: string
+  /** Live host-side updates. Results cannot set secret or unknown fields. */
+  change?: (values: FormValues, previous: FormValues) => FormActionResult
+  /** Additional host-side visibility, e.g. consent needed only for the current endpoint. */
+  visible?: (fieldId: string, values: FormValues) => boolean
+  /** Computed display lines, never secrets. The callback stays on the host. */
+  preview?: (values: FormValues) => string[]
+  /** Runs before saving; an error result keeps the form open for recovery. */
+  beforeSubmit?: (ctx: FormActionContext) => Promise<FormActionResult | undefined>
   /** Checks the whole form; returns messages by field id. Runs where the form was asked. */
   validate?: (values: FormValues) => Record<string, string> | undefined
 }
@@ -263,11 +275,12 @@ export function formDefaults(form: { fields: readonly AnyField[] }): FormValues 
 
 /** Whether a field shows, given the values so far; a field it depends on must show too. */
 export function isFieldVisible(
-  form: { fields: readonly AnyField[] },
+  form: { fields: readonly AnyField[]; visible?: FormSpec["visible"] },
   field: AnyField,
   values: FormValues,
   seen = new Set<string>(),
 ): boolean {
+  if (form.visible && !form.visible(field.id, values)) return false
   if (!field.when) return true
   if (seen.has(field.id)) return false
   seen.add(field.id)
@@ -447,6 +460,32 @@ export async function runFormAction(
   }
 }
 
+/** Runs live updates on the host with the same result filtering as an action. */
+export function runFormChange(spec: FormSpec, values: FormValues, previous: FormValues): FormActionResult {
+  try {
+    return safeActionResult(spec, spec.change?.(values, previous) ?? {})
+  } catch (err) {
+    return { message: err instanceof Error ? err.message : String(err), tone: "error" }
+  }
+}
+
+/** Runs the final host check; error results block saving, without exposing callbacks. */
+export async function runFormBeforeSubmit(
+  spec: FormSpec,
+  values: FormValues,
+  ctx: Omit<FormActionContext, "values">,
+): Promise<FormActionResult> {
+  try {
+    if (ctx.signal.aborted) return { message: "Cancelled.", tone: "error" }
+    const result = await spec.beforeSubmit?.({ ...ctx, values })
+    if (ctx.signal.aborted) return { message: "Cancelled.", tone: "error" }
+    return safeActionResult(spec, result ?? {})
+  } catch (err) {
+    if (ctx.signal.aborted) return { message: "Cancelled.", tone: "error" }
+    return { message: err instanceof Error ? err.message : String(err), tone: "error" }
+  }
+}
+
 /** An action result without values for secret or unknown fields. */
 function safeActionResult(spec: FormSpec, r: FormActionResult): FormActionResult {
   const out: FormActionResult = { ...r }
@@ -470,7 +509,13 @@ export interface FormDialogs {
   select(title: string, options: string[], opts?: { signal?: AbortSignal }): Promise<string | undefined>
   input(
     title: string,
-    opts?: { signal?: AbortSignal; placeholder?: string; initial?: string; secret?: boolean },
+    opts?: {
+      signal?: AbortSignal
+      placeholder?: string
+      initial?: string
+      secret?: boolean
+      multiline?: boolean
+    },
   ): Promise<string | undefined>
 }
 
@@ -526,9 +571,9 @@ export async function runFormDialogs(
         signal: signal ?? new AbortController().signal,
         progress: () => {},
       })
-      if (r.values) Object.assign(values, r.values)
-      if (r.options) Object.assign(options, r.options)
-      if (r.message) note = r.tone === "error" ? `✗ ${r.message}` : r.message
+      const previous = structuredClone(values)
+      apply(r)
+      if (r.values) apply(runFormChange(spec, structuredClone(values), previous))
       continue
     }
     if (!(await ask(field, ""))) return undefined
@@ -549,11 +594,51 @@ export async function runFormDialogs(
       return undefined
     }
     const submit = spec.submitLabel ?? "Save"
-    const a = await ui.select(titled(`${spec.title}: ${submit}?`), [submit, "Cancel"], { signal })
+    const preview = spec.preview?.(checked.values) ?? []
+    const a = await ui.select(
+      titled([...preview, `${spec.title}: ${submit}?`].join("\n")),
+      [submit, "Cancel"],
+      { signal },
+    )
     if (a === undefined || a === "Cancel") return undefined
-    return checked.values
+    const before = { ...values }
+    const result = await runFormBeforeSubmit(spec, checked.values, {
+      signal: signal ?? new AbortController().signal,
+      progress: () => {},
+    })
+    if (signal?.aborted) return undefined
+    apply(result)
+    if (result.tone === "error") {
+      // Recovery controls may just have become visible. Re-ask those, and any values the
+      // host reset (e.g. Save anyway), so dialog users can fix a failed final check too.
+      const recovery = spec.fields.filter(
+        (f): f is Exclude<FormField, ActionField> =>
+          f.type !== "action" &&
+          isFieldVisible(spec, f, values) &&
+          (!isFieldVisible(spec, f, before) || Object.hasOwn(result.values ?? {}, f.id)),
+      )
+      const fix = await ui.select(titled(`${spec.title}: check failed`), ["Fix", "Cancel"], { signal })
+      if (fix !== "Fix") return undefined
+      const fields = recovery.length
+        ? recovery
+        : spec.fields.filter(
+            (f): f is Exclude<FormField, ActionField> =>
+              f.type !== "action" && isFieldVisible(spec, f, values),
+          )
+      for (const f of fields) if (!(await ask(f, ""))) return undefined
+      continue
+    }
+    const final = checkForm(spec, values, options)
+    if (Object.keys(final.errors).length) continue
+    return final.values
   }
   return undefined
+
+  function apply(result: FormActionResult): void {
+    if (result.values) Object.assign(values, result.values)
+    if (result.options) Object.assign(options, result.options)
+    if (result.message) note = result.tone === "error" ? `✗ ${result.message}` : result.message
+  }
 
   /** Asks one field until its answer passes; false when cancelled. */
   async function ask(field: Exclude<FormField, ActionField>, problem: string): Promise<boolean> {
@@ -566,9 +651,11 @@ export async function runFormDialogs(
       const checked = checkForm(spec, next, options)
       const error = checked.errors[field.id]
       if (!error) {
+        const previous = structuredClone(values)
         const v = checked.values[field.id]
         if (v === undefined) delete values[field.id]
         else values[field.id] = v
+        apply(runFormChange(spec, structuredClone(values), previous))
         return true
       }
       problem = `✗ ${error}`
@@ -592,7 +679,7 @@ async function askField(
   const title = () => titled(`${problem ? `${problem}\n` : ""}${spec.title} · ${field.label}${help}`)
   const current = values[field.id]
   const opts = (f: SelectField | MultiSelectField) => options[f.id] ?? f.options
-  const label = (o: FormOption) => o.label ?? o.value
+  const label = (o: FormOption) => `${o.group ? `${o.group} · ` : ""}${o.label ?? o.value}`
   switch (field.type) {
     case "text":
     case "textarea":
@@ -606,6 +693,7 @@ async function askField(
           : {}),
         ...(initial !== undefined && initial !== "" ? { initial } : {}),
         ...(field.type === "secret" ? { secret: true } : {}),
+        ...(field.type === "textarea" ? { multiline: true } : {}),
       })
       if (a === undefined) return CANCEL
       if (field.type === "number") return a.trim() ? a : undefined

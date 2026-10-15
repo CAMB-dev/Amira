@@ -219,6 +219,8 @@ test("the public API exports stay stable", async () => {
     "providerVendorLabel",
     "readCapped",
     "runFormAction",
+    "runFormBeforeSubmit",
+    "runFormChange",
     "runFormDialogs",
     "secretFieldIds",
     "sectionOf",

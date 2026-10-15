@@ -12,8 +12,12 @@ import {
   type FormOption,
   type FormSpec,
   type FormValues,
+  formDefaults,
+  isFieldVisible,
   type MarkdownRenderResult,
   runFormAction,
+  runFormBeforeSubmit,
+  runFormChange,
   runFormDialogs,
   type SelectChoice,
   type SelectSection,
@@ -70,6 +74,11 @@ interface Pending {
 
 interface FormState {
   spec: FormSpec
+  /** Private in-memory approval; never persisted or emitted. */
+  approved?: string
+  checking?: boolean
+  /** Filtered updates from a refused direct submission; no secret values. */
+  recovery?: FormValues
   /** Options actions have filled in since the form was asked, by field id. */
   options: Record<string, FormOption[]>
   /** Actions running now; aborted when the form closes. */
@@ -93,12 +102,15 @@ export class UiRequests {
   #bus: EventBus
   #sessionId: string
   #pending = new Map<string, Pending>()
+  #dialogForms = new Map<AbortController, string | undefined>()
   // Keep only IDs, for this service's lifetime: delayed/cloned events must stay settled.
   #settled = new Set<string>()
   #sourceLabels = new Map<string, string>()
   #seq = 0
   #settings: ((name: string) => ExtensionSettingsBackend | undefined) | undefined
   formMode: FormMode = "native"
+  /** Whether the frontend can call live form callbacks; otherwise those forms use dialogs. */
+  nativeFormCallbacks = true
   /**
    * Why no frontend can answer (e.g. "print mode"), set by a frontend that cancels every
    * dialog. Askers that can say so without asking (ask_user) read it; dialogs are still sent.
@@ -178,18 +190,35 @@ export class UiRequests {
 
   /** Asks a form: natively, or one field at a time in `dialogs` mode. */
   form(spec: FormSpec, opts: UiRequestOptions & { source?: string } = {}): Promise<FormValues | undefined> {
-    if (this.formMode === "dialogs") {
+    if (
+      this.formMode === "dialogs" ||
+      (!this.nativeFormCallbacks && (spec.change || spec.visible || spec.preview))
+    ) {
       const api = this.api(opts.source)
-      const signal = timeoutSignal(opts)
-      return runFormDialogs(
+      const upstream = timeoutSignal(opts)
+      const controller = new AbortController()
+      const onAbort = () => controller.abort(upstream?.reason)
+      if (upstream?.aborted) onAbort()
+      else upstream?.addEventListener("abort", onAbort, { once: true })
+      this.#dialogForms.set(controller, opts.source)
+      const operation = runFormDialogs(
         spec,
         {
           select: (title, options, dialogOpts) =>
             api.select(title, options, { ...dialogOpts, sessionId: opts.sessionId }),
           input: (title, dialogOpts) => api.input(title, { ...dialogOpts, sessionId: opts.sessionId }),
         },
-        signal ? { signal } : {},
+        { signal: controller.signal },
       )
+      const cancelled = new Promise<undefined>((resolve) => {
+        if (controller.signal.aborted) resolve(undefined)
+        else controller.signal.addEventListener("abort", () => resolve(undefined), { once: true })
+      })
+      return Promise.race([operation, cancelled]).finally(() => {
+        this.#dialogForms.delete(controller)
+        upstream?.removeEventListener("abort", onAbort)
+        controller.abort()
+      })
     }
     const form: FormState = { spec, options: {}, running: new Set() }
     return this.#ask({ kind: "form", ...toFormSchema(spec) }, opts, form) as Promise<FormValues | undefined>
@@ -270,8 +299,38 @@ export class UiRequests {
     }
     if (p.form) {
       if (typeof value !== "object" || Array.isArray(value)) return "value must be an object of field values"
-      const { values, errors } = checkForm(p.form.spec, value as Record<string, unknown>, p.form.options)
+      const { values, errors } = checkForm(
+        p.form.spec,
+        { ...p.form.recovery, ...(value as Record<string, unknown>) },
+        p.form.options,
+      )
       if (Object.keys(errors).length) return `invalid form values: ${describeFormErrors(p.form.spec, errors)}`
+      if (p.form.spec.beforeSubmit && p.form.approved !== JSON.stringify(values)) {
+        if (p.form.checking) return "form is being checked"
+        p.form.checking = true
+        void this.beforeSubmitForm(requestId, values).then((result) => {
+          if (this.#pending.get(requestId) !== p) return
+          p.form!.checking = false
+          const final = checkForm(p.form!.spec, { ...values, ...result.values }, p.form!.options)
+          if (result.tone === "error" || Object.keys(final.errors).length) {
+            p.form!.approved = undefined
+            p.form!.recovery = { ...p.form!.recovery, ...result.values }
+            this.#bus.emit(
+              "ui.progress",
+              {
+                requestId,
+                action: "save",
+                text: result.message ?? describeFormErrors(p.form!.spec, final.errors),
+                form: { result, errors: final.errors },
+              },
+              { sessionId: p.request.sessionId ?? this.#sessionId },
+            )
+            return
+          }
+          this.#settle(requestId, final.values)
+        })
+        return undefined
+      }
       this.#settle(requestId, values)
       return undefined
     }
@@ -327,6 +386,63 @@ export class UiRequests {
     const form = this.#pending.get(requestId)?.form
     if (!form) return undefined
     return checkForm(form.spec, values, form.options).errors
+  }
+
+  /** Runs live updates; only filtered display values/options leave the host. */
+  changeForm(requestId: string, values: FormValues, previous: FormValues): FormActionResult {
+    const form = this.#pending.get(requestId)?.form
+    if (!form) return {}
+    // Hidden defaults remain part of the draft: revealing them is not a user edit.
+    const result = runFormChange(form.spec, structuredClone(values), structuredClone(previous))
+    if (result.options) Object.assign(form.options, result.options)
+    return result
+  }
+
+  /** Only computed preview lines cross the backend boundary, never the callback. */
+  previewForm(requestId: string, values: FormValues): string[] {
+    const form = this.#pending.get(requestId)?.form
+    return form?.spec.preview?.(checkForm(toFormSchema(form.spec), values, form.options).values) ?? []
+  }
+
+  /** Final asynchronous check; tied to request cancellation like ordinary actions. */
+  async beforeSubmitForm(
+    requestId: string,
+    values: FormValues,
+    opts: { signal?: AbortSignal; onProgress?: (text: string) => void } = {},
+  ): Promise<FormActionResult> {
+    const form = this.#pending.get(requestId)?.form
+    if (!form) return { message: `no pending form "${requestId}"`, tone: "error" }
+    const controller = new AbortController()
+    const onAbort = () => controller.abort()
+    opts.signal?.addEventListener("abort", onAbort, { once: true })
+    if (opts.signal?.aborted) controller.abort()
+    form.running.add(controller)
+    try {
+      const result = await runFormBeforeSubmit(form.spec, checkForm(form.spec, values, form.options).values, {
+        signal: controller.signal,
+        progress: (text) => {
+          if (!controller.signal.aborted) opts.onProgress?.(text)
+        },
+      })
+      if (!controller.signal.aborted) {
+        if (result.options) Object.assign(form.options, result.options)
+        if (result.tone !== "error")
+          form.approved = JSON.stringify(
+            checkForm(form.spec, { ...values, ...result.values }, form.options).values,
+          )
+      }
+      return result
+    } finally {
+      form.running.delete(controller)
+      opts.signal?.removeEventListener("abort", onAbort)
+    }
+  }
+
+  /** Computes conditional presentation without sending host callbacks to a frontend. */
+  visibleForm(requestId: string, fieldId: string, values: FormValues): boolean {
+    const form = this.#pending.get(requestId)?.form
+    const field = form?.spec.fields.find((field) => field.id === fieldId)
+    return !!(form && field && isFieldVisible(form.spec, field, { ...formDefaults(form.spec), ...values }))
   }
 
   /** Eligible automatic actions of a pending form; readiness callbacks stay with the host. */
@@ -393,6 +509,8 @@ export class UiRequests {
 
   /** Cancels every dialog, or only those asked by one extension. */
   cancelAll(source?: string): void {
+    for (const [controller, owner] of this.#dialogForms)
+      if (source === undefined || owner === source) controller.abort()
     for (const [id, p] of this.#pending)
       if (source === undefined || p.request.source === source) this.cancel(id)
   }
@@ -415,7 +533,7 @@ export class UiRequests {
         return typeof answer === "object" ? answer.option : answer
       },
       choose: async (title, options, opts) => {
-        const { sections, descriptions, searchTexts, optionStatuses, live, ...rest } = opts
+        const { sections, descriptions, searchTexts, optionStatuses, live, initial, ...rest } = opts
         const problem = sectionProblem(options, sections)
         if (problem) throw new Error(`ui.choose: ${problem}`)
         const request = {
@@ -423,6 +541,7 @@ export class UiRequests {
           title,
           options: [...options],
           sections: structuredClone(sections),
+          ...(initial !== undefined ? { initial } : {}),
           ...(descriptions ? { descriptions: [...descriptions] } : {}),
           ...(searchTexts ? { searchTexts: [...searchTexts] } : {}),
           ...(optionStatuses ? { optionStatuses: [...optionStatuses] } : {}),

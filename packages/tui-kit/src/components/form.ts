@@ -1,11 +1,16 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
 import { type InputEvent, isSubmitKey, keyLabel, matchesKey } from "../keys.ts"
-import { bold, inverse, type Theme } from "../style.ts"
+import { bold } from "../style.ts"
 import { graphemes, truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { Editor } from "./editor.ts"
+import {
+  formButton as button,
+  type FormFieldState as FieldState,
+  renderFormField,
+  formToneStyle as toneStyle,
+} from "./form-field.ts"
 import { wrapFormHint } from "./form-hint.ts"
-import { renderFormList } from "./form-list.ts"
 import { LineInput } from "./line-input.ts"
 
 export { LineInput, type LineInputOptions } from "./line-input.ts"
@@ -19,6 +24,7 @@ export type FormInputValue = string | number | boolean | string[]
 
 export interface FormChoice {
   value: string
+  group?: string
   label?: string
   description?: string
   /** Right-aligned multiselect note, or independent trailing columns (rightmost dropped first). */
@@ -58,7 +64,7 @@ export interface FormOptions {
   title: string
   description?: string
   fields: FormFieldView[]
-  sections?: { title: string; help?: string }[]
+  sections?: { title: string; help?: string; collapsed?: boolean }[]
   /** Default "Save". */
   submitLabel?: string
   /** Starting values by field id. */
@@ -75,29 +81,14 @@ export interface FormOptions {
   onActionCancel?: (id: string) => void
   /** Warning lines above the buttons, e.g. dialogs waiting behind the form. */
   notice?: () => string[]
+  /** Computed display lines supplied by the host backend. */
+  preview?: () => string[]
 }
 
 interface ActionState {
   running: boolean
   text?: string
   tone?: FormStatusTone
-}
-
-interface FieldState {
-  def: FormFieldView
-  input?: LineInput
-  editor?: Editor
-  /** select: the chosen value; multiselect: the checked values; checkbox: on or off. */
-  value: FormInputValue
-  options: FormChoice[]
-  /** A select shows its list. */
-  open: boolean
-  /** Highlighted row of a select's list or a checklist. */
-  highlight: number
-  /** First row shown of a long list. */
-  top: number
-  filter: string
-  action?: ActionState
 }
 
 interface Span {
@@ -109,6 +100,7 @@ interface Span {
 
 const SUBMIT = "\0submit"
 const CANCEL = "\0cancel"
+const PREVIEW = "\0preview"
 const INDENT = "  "
 const pointer = (ctx: RenderContext) => ctx.glyphs?.pointer ?? defaultGlyphs.pointer ?? "›"
 const separator = (ctx: RenderContext) => ctx.glyphs?.separator ?? defaultGlyphs.separator ?? "·"
@@ -133,9 +125,15 @@ export class Form implements Component {
   private confirming = false
   private status: { text: string; tone: FormStatusTone } | undefined
   private top = 0
+  private hasPreview = false
+  private previewTop = 0
+  private previewLength = 0
+  private previewRows = 1
+  private collapsed = new Set<string>()
   private initial: string
 
   constructor(private opts: FormOptions) {
+    for (const section of opts.sections ?? []) if (section.collapsed) this.collapsed.add(section.title)
     const values = opts.values ?? {}
     this.fields = opts.fields.map((def) => this.makeField(def, values[def.id]))
     this.initial = JSON.stringify(this.values)
@@ -159,7 +157,13 @@ export class Form implements Component {
 
   /** The focused field's id, or "submit"/"cancel" for the buttons. */
   get focused(): string {
-    return this.focus === SUBMIT ? "submit" : this.focus === CANCEL ? "cancel" : this.focus
+    return this.focus === SUBMIT
+      ? "submit"
+      : this.focus === CANCEL
+        ? "cancel"
+        : this.focus === PREVIEW
+          ? "preview"
+          : this.focus
   }
 
   /** Waiting for the user to say whether to discard their changes. */
@@ -201,6 +205,7 @@ export class Form implements Component {
   setErrors(errors: Record<string, string>): void {
     this.submitted = true
     this.errors = errors
+    this.expandErrors()
     const first = this.order().find((id) => errors[id])
     if (first) this.focus = first
   }
@@ -233,6 +238,31 @@ export class Form implements Component {
       this.requestCancel()
       return true
     }
+    const section = this.opts.sections?.find(
+      (s) => sectionId(s.title) === this.focus && s.collapsed !== undefined,
+    )
+    if (
+      section &&
+      (matchesKey(e, "enter") || matchesKey(e, "space") || matchesKey(e, "left") || matchesKey(e, "right"))
+    ) {
+      const close = matchesKey(e, "left") || (!matchesKey(e, "right") && !this.collapsed.has(section.title))
+      if (close) this.collapsed.add(section.title)
+      else this.collapsed.delete(section.title)
+      return true
+    }
+    if (
+      this.focus === PREVIEW &&
+      (["up", "down", "pageup", "pagedown", "home", "end"] as const).some((name) => matchesKey(e, name))
+    ) {
+      const step = matchesKey(e, "pageup") || matchesKey(e, "pagedown") ? this.previewRows : 1
+      const next = matchesKey(e, "home")
+        ? 0
+        : matchesKey(e, "end")
+          ? this.previewLength - 1
+          : this.previewTop + (matchesKey(e, "up") || matchesKey(e, "pageup") ? -step : step)
+      this.previewTop = Math.max(0, Math.min(Math.max(0, this.previewLength - 1), next))
+      return true
+    }
     const f = this.field(this.focus)
     if (f && this.fieldInput(f, e)) {
       this.refreshErrors()
@@ -255,6 +285,8 @@ export class Form implements Component {
     const { theme } = ctx
     const chrome = chromeGlyphs(ctx.glyphs)
     const values = this.values
+    const preview = this.opts.preview?.() ?? []
+    this.hasPreview = preview.length > 0
     const order = this.order(values)
     if (!order.includes(this.focus)) {
       // The focused field was hidden by another's change: focus the next one that shows.
@@ -277,9 +309,13 @@ export class Form implements Component {
     if (1 + description.length + 1 + footer.length + 2 <= ctx.rows) header = [...header, ...description, rule]
     else if (1 + footer.length + 3 <= ctx.rows) header = [...header, rule]
     const bodyRows = Math.max(1, ctx.rows - header.length - footer.length)
-    const { lines, spans } = this.body(width, ctx, values)
+    this.previewRows = Math.max(1, bodyRows - 2)
+    const sideBySide = width >= 110 && preview.length > 0
+    const formWidth = sideBySide ? Math.floor(width * 0.58) : width
+    const { lines, spans } = this.body(formWidth, ctx, values, sideBySide ? [] : preview)
     const span = spans.get(this.focus)
-    if (span && span.end - span.start <= bodyRows) {
+    if (span && this.focus === PREVIEW && !sideBySide) this.top = span.start + this.previewTop
+    else if (span && span.end - span.start <= bodyRows) {
       if (span.start < this.top) this.top = span.start
       else if (span.end > this.top + bodyRows) this.top = span.end - bodyRows
     } else if (span) {
@@ -301,6 +337,34 @@ export class Form implements Component {
         const hint = theme.muted(truncateToWidth(` ${more.join("")} more`, width))
         const room = width - visibleWidth(hint)
         body[row] = truncateToWidth(body[row]!, Math.max(0, room)) + hint
+      }
+    }
+    if (sideBySide) {
+      const previewWidth = width - formWidth - 3
+      const previewLines = preview.slice(0, -1).flatMap((line) => wrapText(line, previewWidth))
+      this.previewLength = previewLines.length
+      this.previewTop = Math.max(0, Math.min(this.previewTop, Math.max(0, previewLines.length - 1)))
+      const keyLines = wrapText(preview.at(-1) ?? "", previewWidth)
+      const room = Math.max(0, bodyRows - keyLines.length - 2)
+      const start = Math.min(this.previewTop, Math.max(0, previewLines.length - room))
+      const title =
+        this.focus === PREVIEW
+          ? theme.accent(bold(`Preview (${chrome.arrowUp}${chrome.arrowDown} scroll)`))
+          : bold("Preview")
+      const visible = [title, ...previewLines.slice(start, start + room)]
+      if (previewLines.length > room)
+        visible.push(
+          theme.muted(
+            `${start > 0 ? chrome.arrowUp : ""}${start + room < previewLines.length ? chrome.arrowDown : ""} Tab to Preview ${separator(ctx)} PgUp/PgDn scroll`,
+          ),
+        )
+      else visible.push("")
+      while (visible.length + keyLines.length < bodyRows) visible.push("")
+      visible.push(...keyLines)
+      for (let row = 0; row < body.length; row++) {
+        const left = truncateToWidth(body[row] ?? "", formWidth)
+        body[row] =
+          `${left}${" ".repeat(Math.max(0, formWidth - visibleWidth(left)))} ${theme.border("|")} ${theme.muted(visible[row] ?? "")}`
       }
     }
     return [...header, ...body, ...footer].slice(0, Math.max(1, ctx.rows))
@@ -382,7 +446,19 @@ export class Form implements Component {
 
   /** Focus order: the fields that show, then the buttons. */
   private order(values = this.values): string[] {
-    return [...this.shown(values).map((f) => f.def.id), SUBMIT, CANCEL]
+    const order: string[] = []
+    let previous: string | undefined
+    for (const f of this.shown(values)) {
+      const section = f.def.section
+      if (
+        section !== previous &&
+        this.opts.sections?.some((s) => s.title === section && s.collapsed !== undefined)
+      )
+        order.push(sectionId(section!))
+      previous = section
+      if (!section || !this.collapsed.has(section)) order.push(f.def.id)
+    }
+    return [...order, ...(this.hasPreview ? [PREVIEW] : []), SUBMIT, CANCEL]
   }
 
   private move(step: number): void {
@@ -416,6 +492,7 @@ export class Form implements Component {
     this.leave()
     this.submitted = true
     this.refreshErrors()
+    this.expandErrors()
     const bad = this.order().filter((id) => this.errors[id])
     if (bad.length) {
       this.focus = bad[0]!
@@ -423,6 +500,11 @@ export class Form implements Component {
     }
     this.setStatus(undefined)
     this.opts.onSubmit(this.values)
+  }
+
+  private expandErrors(): void {
+    for (const f of this.fields)
+      if (this.errors[f.def.id] && f.def.section) this.collapsed.delete(f.def.section)
   }
 
   private requestCancel(): void {
@@ -591,7 +673,7 @@ export class Form implements Component {
   private filtered(f: FieldState): FormChoice[] {
     const q = f.filter.toLowerCase()
     if (!q) return f.options
-    return f.options.filter((o) => `${o.value} ${o.label ?? ""}`.toLowerCase().includes(q))
+    return f.options.filter((o) => `${o.value} ${o.label ?? ""} ${o.group ?? ""}`.toLowerCase().includes(q))
   }
 
   /** A checklist's rows: its options, then checked values that are no options, filtered. */
@@ -601,201 +683,95 @@ export class Form implements Component {
       .map((value) => ({ value }))
     const all: FormChoice[] = [...f.options, ...extra]
     const q = filter.toLowerCase()
-    return q ? all.filter((o) => `${o.value} ${o.label ?? ""}`.toLowerCase().includes(q)) : all
+    return q
+      ? all.filter((o) => `${o.value} ${o.label ?? ""} ${o.group ?? ""}`.toLowerCase().includes(q))
+      : all
   }
 
   private body(
     width: number,
     ctx: RenderContext,
     values: Record<string, FormInputValue>,
+    preview: string[],
   ): { lines: string[]; spans: Map<string, Span> } {
     const { theme } = ctx
     const chrome = chromeGlyphs(ctx.glyphs)
     const lines: string[] = []
     const spans = new Map<string, Span>()
-    const inner = Math.max(4, width - INDENT.length)
-    let section: string | undefined
     const shown = this.shown(values)
+    const labelWidth = Math.min(
+      24,
+      Math.max(0, ...shown.map((f) => visibleWidth(f.def.label) + (f.def.required ? 2 : 0))),
+    )
+    const stacked = width - labelWidth - 6 < 20
+    const column = stacked ? Math.min(2, Math.max(0, width - 3)) : labelWidth + 4
+    let section: string | undefined
     for (const f of shown) {
       const start = lines.length
       if (f.def.section !== section) {
         section = f.def.section
         if (section) {
           if (lines.length) lines.push("")
-          // A one-field section can use the field's own label, retaining its focus and status.
-          const redundant =
-            f.def.label === section && shown.filter((f) => f.def.section === section).length === 1
-          if (!redundant)
-            lines.push(truncateToWidth(INDENT + bold(truncateToWidth(section, inner, chrome.more)), width))
-          const help = this.opts.sections?.find((s) => s.title === section)?.help
-          if (help)
-            for (const l of wrapText(help, inner)) lines.push(truncateToWidth(INDENT + theme.muted(l), width))
+          const def = this.opts.sections?.find((s) => s.title === section)
+          const id = sectionId(section)
+          const disclosure =
+            def?.collapsed !== undefined
+              ? `${this.collapsed.has(section) ? chrome.disclosureClosed : chrome.disclosureOpen} `
+              : ""
+          const focused = this.focus === id
+          const title = truncateToWidth(`${disclosure}${section}`, Math.max(1, width - 4), chrome.more)
+          const rule = (ctx.glyphs?.rule ?? "─").repeat(Math.max(0, width - visibleWidth(title) - 3))
+          lines.push(
+            `${focused ? theme.accent(ctx.color ? bold(pointer(ctx)) : pointer(ctx)) : " "} ${focused ? theme.accent(bold(title)) : bold(title)} ${theme.border(rule)}`,
+          )
+          if (!this.collapsed.has(section) && def?.help)
+            for (const line of wrapText(def.help, Math.max(1, width - 2)))
+              lines.push(INDENT + theme.muted(line))
+          lines.push("")
+          spans.set(id, { start, end: lines.length, active: start + (start ? 1 : 0) })
         }
       }
-      // The section heading scrolls into view with its first field.
+      if (section && this.collapsed.has(section)) continue
       const at = lines.length
-      const { lines: own, active } = this.fieldLines(f, width, inner, ctx)
-      lines.push(...own)
-      spans.set(f.def.id, { start, end: lines.length, active: at + active })
+      const own = renderFormField(
+        f,
+        width,
+        column,
+        stacked,
+        ctx,
+        this.focus === f.def.id,
+        this.shownError(f.def.id),
+        {
+          filtered: this.filtered(f),
+          checklist: f.def.type === "multiselect" ? this.checklistRows(f) : [],
+          total: f.def.type === "multiselect" ? this.checklistRows(f, "").length : 0,
+        },
+      )
+      lines.push(...own.lines)
+      spans.set(f.def.id, { start, end: lines.length, active: at + own.active })
     }
+    const previewStart = lines.length
+    if (preview.length) {
+      lines.push(
+        "",
+        this.focus === PREVIEW
+          ? `${theme.accent(pointer(ctx))} ${theme.accent(bold("Preview"))}`
+          : INDENT + bold("Preview"),
+      )
+      for (const line of preview)
+        for (const wrapped of wrapText(line, Math.max(1, width - 2)))
+          lines.push(INDENT + theme.muted(wrapped))
+    }
+    if (preview.length) this.previewLength = lines.length - previewStart - 1
+    spans.set(PREVIEW, {
+      start: previewStart,
+      end: lines.length,
+      active: preview.length
+        ? previewStart + 1 + Math.min(this.previewTop, Math.max(0, this.previewLength - 1))
+        : Math.max(0, lines.length - 1),
+    })
+    spans.set(SUBMIT, { start: previewStart, end: lines.length, active: Math.max(0, lines.length - 1) })
     return { lines, spans }
-  }
-
-  /** A field's lines, and which of them has the caret or the highlight. */
-  private fieldLines(
-    f: FieldState,
-    width: number,
-    inner: number,
-    ctx: RenderContext,
-  ): { lines: string[]; active: number } {
-    const { theme } = ctx
-    const chrome = chromeGlyphs(ctx.glyphs)
-    let active = 0
-    const focused = this.focus === f.def.id
-    const mark = focused ? theme.accent(pointer(ctx)) : " "
-    const name = focused ? theme.accent(f.def.label) : f.def.label
-    const star = f.def.required ? theme.muted(" *") : ""
-    const out: string[] = []
-    const label = (prefix = "", room = width) =>
-      truncateToWidth(`${mark} ${prefix}${name}${star}`, room, chrome.more)
-    switch (f.def.type) {
-      case "text":
-      case "secret":
-      case "number": {
-        out.push(label())
-        const empty = !f.input!.value
-        const placeholder = f.def.placeholder ?? (focused ? "" : "(empty)")
-        let line = f.input!.render(inner, theme, { focused, placeholder, more: chrome.more })
-        if (f.def.type === "secret" && !empty)
-          line += theme.muted(` ${graphemes(f.input!.value).length} chars`)
-        active = out.length
-        out.push(INDENT + line)
-        break
-      }
-      case "textarea": {
-        out.push(label())
-        const editor = f.editor!
-        editor.focused = focused
-        const rows = editor.render(inner, ctx)
-        active =
-          out.length +
-          Math.max(
-            0,
-            rows.findIndex((l) => l.includes(CURSOR_MARKER)),
-          )
-        for (const l of rows) out.push(INDENT + l)
-        break
-      }
-      case "select": {
-        out.push(label())
-        const chosen = f.options.find((o) => o.value === f.value)
-        const text = chosen ? (chosen.label ?? chosen.value) : String(f.value || "(none)")
-        const desc = chosen?.description ? theme.muted(` ${separator(ctx)} ${chosen.description}`) : ""
-        const arrows = focused ? theme.muted(` ${f.open ? chrome.selectOpen : chrome.selectChange}`) : ""
-        out.push(
-          truncateToWidth(
-            `${INDENT}${focused ? theme.accent(text) : text}${arrows}${desc}`,
-            width,
-            chrome.more,
-          ),
-        )
-        if (f.open) {
-          if (f.filter)
-            out.push(truncateToWidth(`${INDENT}${theme.muted("filter:")} ${f.filter}${CURSOR_MARKER}`, width))
-          const list = this.filtered(f)
-          if (!list.length) out.push(INDENT + theme.muted("no match"))
-          const rows = renderFormList(f, list, width, ctx, (o) => o.value === f.value)
-          active = out.length + Math.max(0, f.highlight - f.top)
-          out.push(...rows)
-        }
-        break
-      }
-      case "multiselect": {
-        const checked = f.value as string[]
-        const total = this.checklistRows(f, "").length
-        const rows = this.checklistRows(f)
-        const count = theme.muted(
-          ` ${separator(ctx)} selected ${checked.length}/${total}${f.filter ? ` ${separator(ctx)} ${rows.length} shown` : ""}`,
-        )
-        const labelRoom = Math.max(2, width - visibleWidth(count))
-        out.push(truncateToWidth(`${label("", labelRoom)}${count}`, width, chrome.more))
-        if (!focused) {
-          const names = checked.join(", ")
-          out.push(
-            truncateToWidth(
-              checked.length
-                ? `${INDENT}${checked.length} selected: ${names}`
-                : INDENT + theme.muted(f.options.length ? "none selected" : "(no options yet)"),
-              width,
-              chrome.more,
-            ),
-          )
-          break
-        }
-        const typed = f.filter.trim()
-        const adds = f.def.allowCustom && typed && !rows.some((r) => r.value === typed)
-        const filter = truncateToWidth(
-          `${INDENT}${theme.muted("filter:")} ${f.filter}`,
-          Math.max(0, width - 1),
-          chrome.more,
-        )
-        active = out.length
-        out.push(
-          filter +
-            CURSOR_MARKER +
-            (adds
-              ? theme.muted(
-                  truncateToWidth(
-                    `  ${keyLabel({ name: "enter" })} adds it`,
-                    Math.max(0, width - visibleWidth(filter)),
-                    chrome.more,
-                  ),
-                )
-              : ""),
-        )
-        if (!rows.length) {
-          out.push(
-            truncateToWidth(
-              INDENT + theme.muted(f.filter ? "no match" : "(no options yet)"),
-              width,
-              chrome.more,
-            ),
-          )
-        } else {
-          const list = renderFormList(f, rows, width, ctx, (o) => checked.includes(o.value), true)
-          active = out.length + (f.highlight - f.top)
-          out.push(...list)
-        }
-        break
-      }
-      case "checkbox":
-        out.push(label(`${f.value ? "[x]" : "[ ]"} `))
-        break
-      case "action": {
-        const a = f.action ?? { running: false }
-        out.push(truncateToWidth(`${mark} ${button(f.def.label, focused, ctx)}`, width, chrome.more))
-        if (a.running) {
-          out.push(
-            truncateToWidth(
-              INDENT +
-                theme.muted(
-                  `${chrome.more} ${a.text ?? "working"} ${separator(ctx)} ${keyLabel({ name: "escape" })} stops it`,
-                ),
-              width,
-              chrome.more,
-            ),
-          )
-        } else if (a.text) {
-          const style = toneStyle(theme, a.tone)
-          for (const l of wrapText(a.text, inner)) out.push(INDENT + style(l))
-        }
-        break
-      }
-    }
-    if (f.def.help) for (const l of wrapText(f.def.help, inner)) out.push(INDENT + theme.muted(l))
-    const error = this.shownError(f.def.id)
-    if (error) for (const l of wrapText(`${chrome.error} ${error}`, inner)) out.push(INDENT + theme.error(l))
-    return { lines: out, active }
   }
 
   private footer(width: number, ctx: RenderContext): string[] {
@@ -858,7 +834,12 @@ export class Form implements Component {
     const vertical = pair(arrows.arrowUp, arrows.arrowDown)
     const horizontal = pair(arrows.arrowLeft, arrows.arrowRight)
     const common = `${tab}/${vertical} move ${sep} ${save} save ${sep} ${esc} cancel`
-    if (!f) return `${enter} press ${sep} ${common}`
+    if (this.focus === PREVIEW)
+      return `${vertical}/PgUp/PgDn scroll preview ${sep} ${tab} move ${sep} ${save} save ${sep} ${esc} cancel`
+    if (!f)
+      return this.focus.startsWith("\0section:")
+        ? `${enter}/${space} expand or collapse ${sep} ${horizontal} open/close ${sep} ${common}`
+        : `${enter} press ${sep} ${common}`
     switch (f.def.type) {
       case "select":
         return f.open
@@ -880,20 +861,6 @@ export class Form implements Component {
   }
 }
 
-function button(label: string, focused: boolean, ctx: RenderContext): string {
-  const text = `[ ${label} ]`
-  return focused ? ctx.theme.accent(ctx.color ? inverse(text) : text) : text
-}
-
-function toneStyle(theme: Theme, tone: FormStatusTone | undefined) {
-  switch (tone) {
-    case "success":
-      return theme.success
-    case "warning":
-      return theme.warning
-    case "error":
-      return theme.error
-    default:
-      return theme.text
-  }
+function sectionId(title: string): string {
+  return `\0section:${title}`
 }

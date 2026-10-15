@@ -419,6 +419,42 @@ test("unknown keys are left out of the result, so they are really ignored", () =
   })
 })
 
+test.each(["auth", "env", "none"] as const)(
+  "provider key source %s survives schema validation and conversion",
+  (keySource) => {
+    const entry = {
+      dialect: "openai-chat",
+      baseUrl: "http://mine",
+      apiKeyEnvFallbacks: ["ALT"],
+      keySource,
+    }
+    const validated = validateSettings({ providers: { mine: entry } }, "f")
+    expect(validated.warnings).toEqual([])
+    expect(validated.settings.providers?.mine).toEqual(entry)
+    expect(providersFromSettings(validated.settings.providers)).toEqual([{ id: "mine", ...entry }])
+  },
+)
+
+test("provider key source only accepts supported modes", () => {
+  for (const keySource of ["stored", "", false, null, 0]) {
+    expect(() => validateSettings({ providers: { mine: { keySource } } }, "f")).toThrow(
+      "providers.mine.keySource",
+    )
+  }
+})
+
+test("project files cannot change a provider's selected key source", () => {
+  put(userFile(), {
+    providers: { mine: { dialect: "openai-chat", baseUrl: "http://mine", keySource: "none" } },
+  })
+  put(projectFile(), { providers: { mine: { keySource: "env" } } })
+  put(localFile(), { providers: { mine: { keySource: "auth" } } })
+  const loaded = loadSettings({ cwd, home })
+  expect(loaded.settings.providers?.mine?.keySource).toBe("none")
+  expect(loaded.warnings).toHaveLength(2)
+  for (const warning of loaded.warnings) expect(warning).toContain('"providers.mine.keySource" is ignored')
+})
+
 test("prototype keys are refused and never merged", () => {
   const evil = JSON.parse('{"__proto__": {"shell": "zsh"}, "tools": {"constructor": {"x": 1}}}')
   const merged = deepMerge<Record<string, unknown>>({ a: 1 }, evil)

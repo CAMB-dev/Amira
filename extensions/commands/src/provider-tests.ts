@@ -19,6 +19,10 @@ function configuration(draft: ProviderDraft, keyHint: string | undefined): strin
     draft.keySource,
     draft.keySource === "env" ? draft.apiKeyEnv : undefined,
     draft.models,
+    Object.keys(draft.headers ?? {}).length ? draft.headers : undefined,
+    draft.apiKeyEnvFallbacks?.length ? draft.apiKeyEnvFallbacks : undefined,
+    Object.keys(draft.compat ?? {}).length ? draft.compat : undefined,
+    Object.keys(draft.modelOverrides ?? {}).length ? draft.modelOverrides : undefined,
     defaults?.contextWindow,
     defaults?.maxOutput,
     defaults?.thinking ?? false,
@@ -86,9 +90,9 @@ export class ProviderConnectionTests {
           throw error
         }
       },
-      save: async (draft) => {
+      save: async (draft, opts) => {
         const normalized = normalizedDraft(draft)
-        const result = await admin.save(normalized)
+        const result = await admin.save(normalized, opts)
         if (normalized.apiKey) this.invalidate(draft.id)
         return result
       },

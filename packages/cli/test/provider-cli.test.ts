@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "b
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import type { FormSpec } from "@amira/api"
+import { type FormSpec, runFormDialogs } from "@amira/api"
 import { UsageError } from "../src/args.ts"
 import type { CatalogCacheOptions } from "../src/catalog.ts"
 import { lineDialogs, runProviderAdminCommand } from "../src/provider-cli.ts"
@@ -52,6 +52,11 @@ const catalogOptions = (): CatalogCacheOptions => ({
 })
 
 const KEY = "sk-cli-typed-12345678"
+const probeFetch = Object.assign(
+  async () =>
+    Response.json({ choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] }),
+  { preconnect: () => {} },
+)
 
 function io() {
   const out = { stdout: "", stderr: "" }
@@ -83,21 +88,23 @@ test("provider add from piped stdin asks field by field and saves", async () => 
     catalog: catalogOptions(),
     env: {},
     interactive: false,
+    fetch: probeFetch,
     readLine: script([
-      "custom", // vendor
-      "", // protocol
+      "", // Vendor: Custom
       "ds-test", // id
-      "", // dialect: the first, openai-chat
+      "", // protocol
       "https://api.deepseek.com",
-      "", // key: stored in auth.json
+      "", // key source: auth.json
       KEY,
-      "2", // Fetch models? No
+      "2", // no fetch
       "2", // Models: Add values…
       "deepseek-chat deepseek-reasoner",
       "1", // Done
-      "", // Defaults: no
-      "", // Test connection? No
-      "1", // Save
+      "", // no defaults
+      "", // no advanced
+      "2", // consent to potentially billed test
+      "", // no manual test
+      "1", // Save (automatic test)
     ]),
   })
   expect(seen.stderr).toContain("Fetch models?\n  1) Yes\n  2) No")
@@ -430,7 +437,7 @@ test("line-by-line forms keep the suggested suffix for a duplicate vendor id", a
   expect(
     await runProviderAdminCommand(["add", "deepseek"], {
       ...opts,
-      readLine: script(["", "", "", "3", "2", "1", "", "", "1"]),
+      readLine: script(["", "", "", "", "3", "2", "1", "", "", "", "1"]),
     }),
   ).toBe(0)
   expect(Object.keys(settings().providers)).toEqual(["deepseek", "deepseek-2"])
@@ -450,19 +457,19 @@ test("the terminal starts with a filterable vendor list including Custom", async
       interactive: true,
       runForm: async (spec) => {
         shown.push(spec)
-        return shown.length === 1 ? { vendor: "deepseek" } : undefined
+        return undefined
       },
     }),
   ).toBe(1)
-  expect(shown[0]?.title).toBe("Choose a vendor")
+  expect(shown[0]?.title).toBe("Add a provider")
   const list = shown[0]?.fields[0]
   if (list?.type !== "select") throw new Error("expected a filterable select")
-  expect(list.options).toContainEqual({ value: "deepseek", label: "DeepSeek (deepseek)" })
-  expect(list.options).toContainEqual({ value: "", label: "Custom (choose a protocol)" })
-  expect(shown[1]?.title).toBe("Add a provider")
-  expect(shown[1]?.fields.find((f) => f.id === "baseUrl")).toMatchObject({
-    default: "https://api.deepseek.com",
-  })
+  expect(list.options).toContainEqual(
+    expect.objectContaining({ value: "deepseek", label: "DeepSeek (deepseek)", group: "Popular" }),
+  )
+  expect(list.options).toContainEqual(expect.objectContaining({ label: expect.stringContaining("Custom") }))
+  expect(shown).toHaveLength(1)
+  expect(shown[0]?.fields.find((f) => f.id === "dialect")).toMatchObject({ type: "select" })
 })
 
 test("vendor forms suggest a free id and select only the name of a set environment variable", async () => {
@@ -505,7 +512,7 @@ test("vendor forms suggest a free id and select only the name of a set environme
   expect(JSON.stringify(shown) + seen.stdout + seen.stderr).not.toContain(KEY)
 })
 
-test("vendor picker supports piped ids and lists close matches before retrying", async () => {
+test("piped setup chooses the vendor inside the form and shows a masked final preview", async () => {
   const { io: out, out: seen } = io()
   expect(
     await runProviderAdminCommand(["add"], {
@@ -516,23 +523,23 @@ test("vendor picker supports piped ids and lists close matches before retrying",
       env: {},
       interactive: false,
       readLine: script([
-        "deepsek",
-        "deepseek", // vendor retry
+        "Popular · DeepSeek (deepseek)",
         "",
         "",
-        "", // prefilled id, protocol, endpoint
-        "3", // no key
-        "2", // no fetch
-        "1", // models: done
+        "", // vendor, ID, protocol, endpoint
+        "3",
+        "2",
+        "1", // no key, no fetch, models done
         "",
         "",
-        "1", // no defaults, no test, save
+        "",
+        "1", // skip defaults/advanced/manual test, save
       ]),
     }),
   ).toBe(0)
   expect(seen.stderr).toContain("DeepSeek (deepseek)")
-  expect(seen.stderr).toContain("Unusual (unusual) — pick the protocol yourself")
-  expect(seen.stderr).toContain("Close matches: deepseek")
+  expect(seen.stderr).toContain("settings.json")
+  expect(seen.stderr).toContain("auth.json")
   expect(settings().providers.deepseek.baseUrl).toBe("https://api.deepseek.com")
 })
 
@@ -595,7 +602,7 @@ test("a missing catalog refreshes from the tiny fixture without network access",
   expect(seen.stderr).toContain("Loading vendors from models.dev…")
 })
 
-test("an offline missing catalog falls straight into Custom with one note", async () => {
+test("a missing catalog opens Custom without waiting for a network request", async () => {
   rmSync(path.join(home, "cache"), { recursive: true })
   let calls = 0
   const { io: out, out: seen } = io()
@@ -616,11 +623,9 @@ test("an offline missing catalog falls straight into Custom with one note", asyn
       readLine: script([undefined]),
     }),
   ).toBe(1)
-  expect(calls).toBe(1)
-  expect(seen.stderr).toContain("Vendor catalog unavailable; choose a custom provider.")
-  expect(seen.stderr).toContain("Which protocol does the provider speak?")
-  expect(seen.stderr).not.toContain("Choose a vendor")
-  expect(seen.stderr.split("Loading vendors from models.dev…")).toHaveLength(2)
+  expect(calls).toBe(0)
+  expect(seen.stderr).toContain("Vendor")
+  expect(seen.stderr).not.toContain("Loading vendors from models.dev…")
 })
 
 test.each([false, true])(
@@ -719,5 +724,80 @@ test.each([
       ),
     ).toBe(0)
     expect(settings().providers[id!].baseUrl).toBe("https://resolved.example/v1")
+  },
+)
+
+test("non-TTY textarea consumes multiple header lines before asking for fallbacks", async () => {
+  const { io: output, out } = io()
+  const values = await runFormDialogs(
+    {
+      title: "Advanced provider settings",
+      fields: [
+        { id: "headers", type: "textarea", label: "Request headers" },
+        { id: "fallbacks", type: "text", label: "Fallback variables", pattern: "[A-Z_]+" },
+      ],
+    },
+    lineDialogs(output, script(["X-One=1", "X-Two=2", ".", "BACKUP_KEY", "Save"])),
+  )
+  expect(values).toEqual({ headers: "X-One=1\nX-Two=2", fallbacks: "BACKUP_KEY" })
+  expect(out.stderr).toContain("'.' alone")
+})
+
+test("line-mode multiline fields can keep, clear, escape dots, and cancel without consuming later answers", async () => {
+  const { io: output } = io()
+  expect(
+    await lineDialogs(output, script(["."])).input("Headers", { multiline: true, initial: "X-Old=old" }),
+  ).toBe("X-Old=old")
+  expect(
+    await lineDialogs(output, script(["", "."])).input("Headers", { multiline: true, initial: "X-Old=old" }),
+  ).toBe("")
+  expect(await lineDialogs(output, script(["..", "."])).input("Notes", { multiline: true })).toBe(".")
+  expect(
+    await lineDialogs(output, script(["X-One=1", undefined])).input("Headers", { multiline: true }),
+  ).toBeUndefined()
+})
+
+test.each(["none", "env"] as const)(
+  "non-TTY provider setup round-trips headers and fallback-only variables (%s)",
+  async (source) => {
+    const { io: output, out } = io()
+    const code = await runProviderAdminCommand(["add", "openai-chat"], {
+      io: output,
+      home,
+      cwd,
+      catalog: catalogOptions(),
+      env: { BACKUP_ONE: "fake-env-key" },
+      interactive: false,
+      readLine: script([
+        "",
+        "cli-advanced",
+        "",
+        "https://example.test/v1", // vendor, ID, protocol, URL
+        source === "env" ? "2" : "3", // environment or no key
+        ...(source === "env" ? [""] : []), // primary intentionally blank; Advanced supplies fallbacks
+        "2",
+        "1",
+        "1",
+        "2", // no fetch, models Done, defaults No, Advanced Yes
+        "X-One=1",
+        "X-Two=2",
+        ".", // multiline request headers
+        "BACKUP_ONE BACKUP_TWO",
+        "1",
+        "1",
+        ".", // fallbacks, default compat, keep empty fast map
+        "1",
+        "1", // no manual test; confirm final preview
+      ]),
+    })
+    expect(code).toBe(0)
+    expect(settings().providers["cli-advanced"]).toMatchObject({
+      keySource: source,
+      headers: { "X-One": "1", "X-Two": "2" },
+      apiKeyEnvFallbacks: ["BACKUP_ONE", "BACKUP_TWO"],
+    })
+    expect(settings().providers["cli-advanced"]).not.toHaveProperty("apiKeyEnv")
+    expect(out.stderr).toContain("settings.json")
+    expect(out.stderr).not.toContain("fake-env-key")
   },
 )

@@ -8,15 +8,12 @@ import {
   type ProviderFormInitial,
   providerFormSpec,
   providerVendorInitial,
-  providerVendorLabel,
 } from "@amira/api"
 import { table } from "./format.ts"
 import { ProviderConnectionTests } from "./provider-tests.ts"
 
 const USAGE = "usage: /provider [add [<vendor|protocol>] | edit <id> | remove <id> | key <id>]"
-const CUSTOM = "Custom (choose a protocol)"
 const ADD = "+ Add provider"
-const CATALOG_UNAVAILABLE = "Provider catalog unavailable; choose a protocol to add a custom provider."
 const NONE = "No providers configured — add one with /provider add"
 
 const SUBCOMMANDS: Record<string, string> = {
@@ -37,9 +34,6 @@ function admin(ctx: Ctx): ProviderAdmin {
   if (!a) throw new Error("this host cannot change providers")
   return a
 }
-
-/** "openai-chat — OpenAI-compatible chat completions (…)", as the protocol picker shows it. */
-const protocolLabel = (d: string) => (DIALECT_NOTES[d] ? `${d} — ${DIALECT_NOTES[d]}` : d)
 
 /**
  * /provider: list configured providers, add one from a catalog vendor or a custom protocol,
@@ -73,12 +67,20 @@ export function providerCommand(): CommandDefinition {
       if (!sub) return ctx.frontend === "tui" ? manage(ctx, tests) : list(ctx)
       if (rest.length || !Object.hasOwn(SUBCOMMANDS, sub)) throw new Error(USAGE)
       const tracked = () => tests.wrap(ctx.session.info().id, admin(ctx))
-      if (sub === "add") return add(ctx, id, tracked())
+      if (sub === "add") {
+        const saved = await add(ctx, id, tracked())
+        if (saved && ctx.frontend === "tui") await manage(ctx, tests, saved)
+        return
+      }
       if (ctx.session.providers().length === 0) throw new Error(NONE)
       if (!id) throw new Error(`usage: /provider ${sub} <id>; providers: ${ids(ctx)}`)
       if (!ctx.session.providers().some((p) => p.id === id))
         throw new Error(`no provider "${id}"; providers: ${ids(ctx)}`)
-      if (sub === "edit") return edit(ctx, id, tracked())
+      if (sub === "edit") {
+        const saved = await edit(ctx, id, tracked())
+        if (saved && ctx.frontend === "tui") await manage(ctx, tests, saved)
+        return
+      }
       if (sub === "remove") return remove(ctx, id, tracked())
       return setKey(ctx, id, tracked())
     },
@@ -110,7 +112,11 @@ function list(ctx: CommandContext) {
 }
 
 /** The management page is TUI-only; print and RPC keep the original table. */
-async function manage(ctx: CommandContext, tests: ProviderConnectionTests) {
+async function manage(
+  ctx: CommandContext,
+  tests: ProviderConnectionTests,
+  highlight?: string,
+): Promise<void> {
   const sessionId = ctx.session.info().id
   const a = tests.wrap(sessionId, admin(ctx))
   const providers = ctx.session.providers()
@@ -132,19 +138,38 @@ async function manage(ctx: CommandContext, tests: ProviderConnectionTests) {
       ...(providers.length ? [{ at: 1, title: "Configured", choose: "manage" }] : []),
     ],
     descriptions: ["Configure a provider and its models", ...descriptions],
+    ...(highlight ? { initial: highlight } : {}),
     signal: ctx.signal,
   })
   if (!picked) return
-  if (picked.option === ADD) return add(ctx, undefined, a)
+  if (picked.option === ADD) {
+    const saved = await add(ctx, undefined, a)
+    if (saved) await manage(ctx, tests, saved)
+    return
+  }
   const id = picked.option
   const action = await ctx.ui.select(
     `Manage provider ${id}`,
-    ["Edit", "Set key", "Test connection", "Remove"],
+    ["Use a model from it", "Edit", "Set key", "Test connection", "Remove"],
     {
       signal: ctx.signal,
     },
   )
-  if (action === "Edit") return edit(ctx, id, a)
+  if (action === "Use a model from it") {
+    const models = ctx.session.models().filter((model) => model.startsWith(`${id}/`))
+    if (!models.length) {
+      ctx.print(`No models configured; add one with /provider edit ${id}.`)
+      return
+    }
+    const model = await ctx.ui.select(`Model from ${id}`, models, { signal: ctx.signal })
+    if (model) ctx.session.setModel(model)
+    return
+  }
+  if (action === "Edit") {
+    const saved = await edit(ctx, id, a)
+    if (saved) await manage(ctx, tests, saved)
+    return
+  }
   if (action === "Set key") return setKey(ctx, id, a)
   if (action === "Remove") return remove(ctx, id, a)
   if (action === "Test connection") return testConnection(ctx, id, a)
@@ -159,9 +184,11 @@ async function testConnection(ctx: CommandContext, id: string, a: ProviderAdmin)
   }
   const model = await ctx.ui.select(`Test connection for ${id}`, draft.models, { signal: ctx.signal })
   if (!model) return
+  const cost = a.describeModels(draft, [model])[0]?.cost
+  const free = cost !== undefined && cost.input === 0 && cost.output === 0
   const ok = await ctx.ui.confirm(
     `Test ${id}/${model}?`,
-    "Sends one tiny request to this model. The provider may charge for it.",
+    `Sends one tiny request to this model.${free ? "" : " The provider may charge for it."}`,
     { signal: ctx.signal },
   )
   if (!ok) return
@@ -175,67 +202,32 @@ async function testConnection(ctx: CommandContext, id: string, a: ProviderAdmin)
   }
 }
 
-/** Picks a vendor unless a protocol is given; Custom keeps the protocol-first flow. */
+/** Explicit arguments prefill the same one-page form; vendor and protocol stay editable. */
 async function add(ctx: CommandContext, choice: string | undefined, a: ProviderAdmin) {
   const dialects = a.dialects()
   let initial: ProviderFormInitial = {}
-  let custom = true
   if (choice !== undefined && dialects.includes(choice)) {
     initial.dialect = choice
-  } else {
+  } else if (choice !== undefined) {
     const vendors =
-      (await a.vendors?.({
-        onLoading: () => ctx.print("Loading vendors from models.dev…"),
-      })) ?? []
-    if (choice !== undefined) {
-      if (!vendors.length) {
-        throw new Error(
-          `Vendor catalog unavailable (offline?); cannot look up "${choice}". Choose a protocol instead: ${dialects.join(", ")}`,
-        )
-      }
-      const vendor = vendors.find((v) => v.id === choice)
-      if (!vendor) {
-        throw new Error(`unknown vendor or protocol "${choice}"; protocols: ${dialects.join(", ")}`)
-      }
-      initial = providerVendorInitial(a, vendor)
-      custom = false
-    } else if (vendors.length) {
-      const labels = vendors.map(providerVendorLabel)
-      const picked = await ctx.ui.select("Which provider do you want to add?", [...labels, CUSTOM], {
-        signal: ctx.signal,
-      })
-      if (picked === undefined) {
-        ctx.print("Cancelled; nothing was saved.")
-        return
-      }
-      if (picked !== CUSTOM) {
-        const vendor = vendors[labels.indexOf(picked)]
-        if (!vendor) throw new Error(USAGE)
-        initial = providerVendorInitial(a, vendor)
-        custom = false
-      }
-    } else {
-      ctx.print(CATALOG_UNAVAILABLE)
+      (await a.vendors?.({ onLoading: () => ctx.print("Loading vendors from models.dev…") })) ?? []
+    if (!vendors.length) {
+      throw new Error(
+        `Vendor catalog unavailable (offline?); cannot look up "${choice}". Choose a protocol instead: ${dialects.join(", ")}`,
+      )
     }
-  }
-  if (custom && initial.dialect === undefined) {
-    const labels = dialects.map(protocolLabel)
-    const picked = await ctx.ui.select("Which protocol does the provider speak?", labels, {
-      signal: ctx.signal,
-    })
-    if (picked === undefined) {
-      ctx.print("Cancelled; nothing was saved.")
-      return
-    }
-    initial.dialect = dialects[labels.indexOf(picked)]
-    if (initial.dialect === undefined) throw new Error(`${USAGE}; protocols: ${dialects.join(", ")}`)
+    const vendor = vendors.find((v) => v.id === choice)
+    if (!vendor) throw new Error(`unknown vendor or protocol "${choice}"; protocols: ${dialects.join(", ")}`)
+    initial = providerVendorInitial(a, vendor)
   }
   const values = await ctx.ui.form(providerFormSpec(a, undefined, initial), { signal: ctx.signal })
   if (!values) {
     ctx.print("Cancelled; nothing was saved.")
     return
   }
-  ctx.print(await a.save(draftFromValues(values, undefined, initial.catalogId)))
+  const draft = draftFromValues(values, undefined, initial.catalogId)
+  ctx.print(await a.save(draft))
+  return draft.id
 }
 
 async function edit(ctx: CommandContext, id: string, a: ProviderAdmin) {
@@ -246,7 +238,8 @@ async function edit(ctx: CommandContext, id: string, a: ProviderAdmin) {
     ctx.print("Cancelled; nothing was changed.")
     return
   }
-  ctx.print(await a.save(draftFromValues(values, id, existing.catalogId)))
+  ctx.print(await a.save(draftFromValues(values, id, existing.catalogId, existing)))
+  return id
 }
 
 async function remove(ctx: CommandContext, id: string, a: ProviderAdmin) {

@@ -38,6 +38,8 @@ export interface ProviderCliOptions {
   readLine?: ReadLine
   /** Replaces the admin built from the settings; for tests. */
   admin?: ProviderAdmin
+  /** Provider probes; injectable for offline tests. */
+  fetch?: typeof fetch
   /** Catalog download options; tests supply a fake fetch. */
   catalog?: CatalogCacheOptions
 }
@@ -168,15 +170,14 @@ export async function runProviderAdminCommand(
     const home = opts.home ?? amiraHome()
     const { admin, model } = opts.admin
       ? { admin: opts.admin, model: undefined }
-      : await adminFor(home, opts.cwd ?? process.cwd(), opts.env ?? process.env, io, opts.catalog)
+      : await adminFor(home, opts.cwd ?? process.cwd(), opts.env ?? process.env, io, opts.catalog, opts.fetch)
     if (added) {
       if (added.flags.keyStdin && !added.protocol) {
         throw new UsageError(
           `--key-stdin needs a supported vendor, or a protocol with --id and --base-url\n\n${USAGE}`,
         )
       }
-      const initial = await providerChoice(admin, added.protocol, ask, io, readLine, interactive)
-      if (!initial) return cancelled(io)
+      const initial = await providerChoice(admin, added.protocol, io)
       const complete = draftFromFlags(undefined, added.flags, initial)
       if (added.flags.keyStdin && !complete) {
         throw new UsageError(
@@ -204,7 +205,9 @@ export async function runProviderAdminCommand(
           apiKey = (await readLine(""))?.trim()
           if (!apiKey) throw new UsageError("--key-stdin: no key on stdin")
         }
-        io.stdout(`${await admin.save({ ...complete, ...(apiKey ? { apiKey } : {}) })}\n`)
+        io.stdout(
+          `${await admin.save({ ...complete, ...(apiKey ? { apiKey } : {}) }, { persistKeySource: false })}\n`,
+        )
         return 0
       }
       const start = formInitial(undefined, added.flags, initial)
@@ -219,7 +222,7 @@ export async function runProviderAdminCommand(
       const existing = admin.draft(pid)!
       const values = await ask(providerFormSpec(admin, existing))
       if (!values) return cancelled(io)
-      io.stdout(`${await admin.save(draftFromValues(values, pid, existing.catalogId))}\n`)
+      io.stdout(`${await admin.save(draftFromValues(values, pid, existing.catalogId, existing))}\n`)
       return 0
     }
     if (sub === "remove") {
@@ -281,6 +284,7 @@ async function adminFor(
   env: Record<string, string | undefined>,
   io: PrintIO,
   catalogOptions?: CatalogCacheOptions,
+  providerFetch?: typeof fetch,
 ): Promise<{ admin: ProviderAdmin; model?: string }> {
   const { settings } = loadSettings({ cwd, home })
   const { keys, warnings } = loadAuth(authFile(home))
@@ -297,7 +301,13 @@ async function adminFor(
     ...(catalog ? { catalog } : {}),
   })
   // Outside a session no model is in use; the configured one's provider is only warned about.
-  const admin = createProviderAdmin({ ai, home, env, ...(catalogOptions ? { catalog: catalogOptions } : {}) })
+  const admin = createProviderAdmin({
+    ai,
+    home,
+    env,
+    ...(catalogOptions ? { catalog: catalogOptions } : {}),
+    ...(providerFetch ? { fetch: providerFetch } : {}),
+  })
   return { admin, ...(settings.model ? { model: settings.model } : {}) }
 }
 
@@ -324,6 +334,19 @@ export function lineDialogs(io: PrintIO, readLine: ReadLine): FormDialogs {
       // Line mode cannot mask; say so rather than echo a key unannounced.
       if (o?.secret && process.stdin.isTTY)
         io.stderr("(what you type is shown; use a terminal for the masked form)\n")
+      if (o?.multiline) {
+        io.stderr(
+          "Enter one line at a time; '.' alone finishes, '..' enters a literal dot. Finish immediately to keep the current value.\n",
+        )
+        const lines: string[] = []
+        for (;;) {
+          if (o.signal?.aborted) return undefined
+          const line = await readLine("> ")
+          if (line === undefined) return undefined
+          if (line === ".") return lines.length ? lines.join("\n") : (o.initial ?? "")
+          lines.push(line === ".." ? "." : line)
+        }
+      }
       const a = await readLine("> ")
       if (a === undefined) return undefined
       return a === "" && o?.initial ? o.initial : a

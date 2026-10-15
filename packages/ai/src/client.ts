@@ -57,6 +57,10 @@ export interface AiOptions {
 
 type CredentialSource = "explicit" | "env" | "stored" | "none"
 
+// Probes create another Ai from providerEndpoint; its headers are already resolved, and
+// an environment value may itself contain literal ${...} that must not be expanded again.
+const resolvedHeaderSets = new WeakSet<Record<string, string>>()
+
 export interface Ai {
   /** Resolves "provider/model" (the model id may itself contain slashes). */
   model(ref: string): ModelInfo
@@ -120,9 +124,13 @@ export function createAi(opts: AiOptions = {}): Ai {
   const storedKeys: Record<string, string> = Object.assign(Object.create(null), opts.apiKeys)
 
   const credentialOf = (p: ProviderConfig): { source: CredentialSource; apiKey: string | undefined } => {
+    if (p.keySource === "none") return { source: "none", apiKey: undefined }
     if (p.apiKey !== undefined) return { source: "explicit", apiKey: p.apiKey.trim() || undefined }
-    const fromEnv = keyFromEnv(p, env)
-    if (fromEnv !== undefined) return { source: "env", apiKey: fromEnv }
+    if (p.keySource !== "auth") {
+      const fromEnv = keyFromEnv(p, env)
+      if (fromEnv !== undefined) return { source: "env", apiKey: fromEnv }
+      if (p.keySource === "env") return { source: "none", apiKey: undefined }
+    }
     const stored = storedKeys[p.id]?.trim() || undefined
     return { source: stored ? "stored" : "none", apiKey: stored }
   }
@@ -131,10 +139,11 @@ export function createAi(opts: AiOptions = {}): Ai {
     return {
       baseUrl: p.baseUrl,
       ...(apiKey ? { apiKey } : {}),
-      ...(p.headers ? { headers: p.headers } : {}),
+      ...(p.headers ? { headers: headersFromEnv(p.headers, env) } : {}),
     }
   }
-  const hasKey = (p: ProviderConfig) => !p.apiKeyEnv || Boolean(credentialOf(p).apiKey)
+  const hasKey = (p: ProviderConfig) =>
+    p.keySource === "none" || !p.apiKeyEnv || Boolean(credentialOf(p).apiKey)
 
   const unknownProvider = (id: string) => {
     const ids = [...providers.keys()]
@@ -151,7 +160,7 @@ export function createAi(opts: AiOptions = {}): Ai {
   /** What a dialect needs to reach the provider, or why no request can be sent. */
   const contextOf = (p: ProviderConfig, signal: AbortSignal): DialectContext | string => {
     const endpoint = endpointOf(p)
-    if (p.apiKeyEnv && !endpoint.apiKey) {
+    if (p.keySource !== "none" && p.apiKeyEnv && !endpoint.apiKey) {
       const names = [p.apiKeyEnv, ...(p.apiKeyEnvFallbacks ?? [])].join(" or ")
       return `${names} is not set; export it to use provider ${p.id}`
     }
@@ -443,6 +452,24 @@ export function createAi(opts: AiOptions = {}): Ai {
     },
     removeProvider: (id) => void providers.delete(id),
   }
+}
+
+function headersFromEnv(
+  headers: Record<string, string>,
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  if (resolvedHeaderSets.has(headers)) return headers
+  const resolved = Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [
+      name,
+      value.replace(
+        /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+        (_match, variable: string, fallback?: string) => env[variable] || fallback || "",
+      ),
+    ]),
+  )
+  resolvedHeaderSets.add(resolved)
+  return resolved
 }
 
 function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>): string | undefined {

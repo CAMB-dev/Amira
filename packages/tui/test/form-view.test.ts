@@ -1,9 +1,10 @@
 // A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import { type AnyEvent, defineTool, type FormSpec, textResult } from "@amira/api"
+import { type AnyEvent, defineTool, type FormSpec, type FormValues, textResult } from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
 import { FakeTerminal, key, textKey } from "@amira/tui-kit"
+import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { FormView, runFormScreen, specFormBackend } from "../src/form-view.ts"
@@ -229,4 +230,128 @@ test("FormView with a spec backend reports refused values and aborts actions on 
   view.close()
   expect(aborted).toBe(true)
   expect(closed).toBe(1)
+})
+
+test("form view applies live updates and previews, blocks failed checks, and lets the user recover", async () => {
+  const changes: string[] = []
+  let saved: FormValues | undefined
+  const spec: FormSpec = {
+    title: "Live",
+    fields: [
+      { id: "name", type: "text", label: "Name" },
+      { id: "summary", type: "text", label: "Summary" },
+      { id: "saveAnyway", type: "checkbox", label: "Save anyway" },
+    ],
+    change: (values, previous) => {
+      changes.push(`${previous.name}->${values.name}`)
+      return values.name !== previous.name ? { values: { summary: `For ${values.name}` } } : {}
+    },
+    preview: (values) => [`Will save: ${values.summary}`],
+    beforeSubmit: async ({ values, progress }) => {
+      progress("Checking connection")
+      return values.saveAnyway ? {} : { message: "Connection failed. Fix it or save anyway.", tone: "error" }
+    },
+  }
+  const view = new FormView(
+    specFormBackend(spec, (values) => {
+      saved = values
+    }),
+    { requestRender: () => {}, onClose: () => {} },
+  )
+  view.handleInput(textKey("A"))
+  expect(changes).toEqual(["->A"])
+  expect(view.form.values.summary).toBe("For A")
+  expect(view.render(80, plain).join("\n")).toContain("Will save: For A")
+  view.handleInput(key("s", { ctrl: true }))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(saved).toBeUndefined()
+  expect(view.closed).toBe(false)
+  expect(view.render(80, plain).join("\n")).toContain("Connection failed")
+  view.handleInput(key("tab"))
+  view.handleInput(key("tab"))
+  view.handleInput(key("space"))
+  view.handleInput(key("s", { ctrl: true }))
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(saved).toEqual({ name: "A", summary: "For A", saveAnyway: true })
+  expect(view.closed).toBe(true)
+})
+
+test.each(["n", "y"])(
+  "requesting discard during beforeSubmit invalidates the pending Save (answer: %s)",
+  async (answer) => {
+    const pending: Array<{ signal: AbortSignal; finish: () => void }> = []
+    const answers: Array<FormValues | undefined> = []
+    const view = new FormView(
+      specFormBackend(
+        {
+          title: "Discard race",
+          fields: [{ id: "name", type: "text", label: "Name" }],
+          beforeSubmit: ({ signal }) =>
+            new Promise((resolve) => pending.push({ signal, finish: () => resolve({}) })),
+        },
+        (values) => answers.push(values),
+      ),
+      { requestRender: () => {}, onClose: () => {} },
+    )
+    view.handleInput(textKey("A"))
+    expect(view.form.dirty).toBe(true)
+    view.handleInput(key("s", { ctrl: true }))
+    expect(pending).toHaveLength(1)
+    view.handleInput(key("escape"))
+    expect(view.form.confirmingCancel).toBe(true)
+    pending[0]!.finish()
+    await Bun.sleep(0)
+    expect(answers).toEqual([])
+    expect(view.closed).toBe(false)
+    expect(view.form.confirmingCancel).toBe(true)
+    expect(pending[0]!.signal.aborted).toBe(true)
+    view.handleInput(textKey(answer))
+    await Bun.sleep(0)
+    if (answer === "y") {
+      expect(answers).toEqual([undefined])
+      expect(view.closed).toBe(true)
+    } else {
+      expect(answers).toEqual([])
+      expect(view.closed).toBe(false)
+      view.handleInput(key("s", { ctrl: true }))
+      expect(pending).toHaveLength(2)
+      pending[1]!.finish()
+      await Bun.sleep(0)
+      expect(answers).toEqual([{ name: "A" }])
+      expect(view.closed).toBe(true)
+    }
+  },
+)
+
+test("editing during beforeSubmit aborts the stale check and a later Save can finish", async () => {
+  const pending: Array<{ signal: AbortSignal; finish: () => void }> = []
+  let saved: FormValues | undefined
+  const view = new FormView(
+    specFormBackend(
+      {
+        title: "Race",
+        fields: [{ id: "name", type: "text", label: "Name" }],
+        beforeSubmit: ({ signal }) =>
+          new Promise((resolve) => pending.push({ signal, finish: () => resolve({}) })),
+      },
+      (values) => {
+        saved = values
+      },
+    ),
+    { requestRender: () => {}, onClose: () => {} },
+  )
+  view.handleInput(textKey("A"))
+  view.handleInput(key("s", { ctrl: true }))
+  expect(pending).toHaveLength(1)
+  view.handleInput(textKey("B"))
+  expect(pending[0]!.signal.aborted).toBe(true)
+  view.handleInput(key("s", { ctrl: true }))
+  expect(pending).toHaveLength(2)
+  pending[0]!.finish()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(view.closed).toBe(false)
+  expect(saved).toBeUndefined()
+  pending[1]!.finish()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(saved).toEqual({ name: "AB" })
 })

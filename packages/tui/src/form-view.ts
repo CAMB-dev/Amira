@@ -11,6 +11,8 @@ import {
   formDefaults,
   isFieldVisible,
   runFormAction,
+  runFormBeforeSubmit,
+  runFormChange,
   toFormSchema,
 } from "@amira/api"
 import type { UiRequests } from "@amira/core"
@@ -36,6 +38,13 @@ export interface FormBackend {
   schema: FormSchema
   /** Problems by field id; empty when the values may be submitted. */
   validate(values: FormValues): Record<string, string>
+  change?(values: FormValues, previous: FormValues): FormActionResult
+  visible?(fieldId: string, values: FormValues): boolean
+  preview?(values: FormValues): string[]
+  beforeSubmit?(
+    values: FormValues,
+    opts: { signal: AbortSignal; onProgress: (text: string) => void },
+  ): Promise<FormActionResult>
   /** Eligible automatic actions; readiness checks remain on the host. */
   autoActions?(values: FormValues): string[]
   runAction(
@@ -57,6 +66,10 @@ export function uiFormBackend(ui: UiRequests, request: FormRequest): FormBackend
     schema,
     validate: (values) => ui.validateForm(requestId, values) ?? {},
     autoActions: (values) => ui.autoFormActions(requestId, values),
+    change: (values, previous) => ui.changeForm(requestId, values, previous),
+    visible: (fieldId, values) => ui.visibleForm(requestId, fieldId, values),
+    preview: (values) => ui.previewForm(requestId, values),
+    beforeSubmit: (values, opts) => ui.beforeSubmitForm(requestId, values, opts),
     runAction: (id, values, opts) => ui.runFormAction(requestId, id, values, opts),
     submit: (values) => ui.respond(requestId, values),
     cancel: () => void ui.cancel(requestId),
@@ -70,6 +83,25 @@ export function specFormBackend(spec: FormSpec, done: (values: FormValues | unde
     schema: toFormSchema(spec),
     validate: (values) => checkForm(spec, values, options).errors,
     autoActions: (values) => autoFormActions(spec, values, options),
+    change: (values, previous) => {
+      // Change tracking needs the complete frontend snapshots, including hidden defaults.
+      const result = runFormChange(spec, values, previous)
+      if (result.options) Object.assign(options, result.options)
+      return result
+    },
+    visible: (fieldId, values) => {
+      const field = spec.fields.find((field) => field.id === fieldId)
+      return !!field && isFieldVisible(spec, field, values)
+    },
+    preview: (values) => spec.preview?.(checkForm(toFormSchema(spec), values, options).values) ?? [],
+    beforeSubmit: async (values, opts) => {
+      const result = await runFormBeforeSubmit(spec, checkForm(spec, values, options).values, {
+        signal: opts.signal,
+        progress: opts.onProgress,
+      })
+      if (!opts.signal.aborted && result.options) Object.assign(options, result.options)
+      return result
+    },
     runAction: async (id, values, opts) => {
       const current = checkForm(spec, values, options).values
       const r = await runFormAction(spec, id, current, { signal: opts.signal, progress: opts.onProgress })
@@ -107,6 +139,7 @@ export class FormView implements Component {
   #automatic = new Map<string, { key: string; attempted: boolean }>()
   #confirmed: FormValues
   #closed = false
+  #submitting: AbortController | undefined
 
   constructor(backend: FormBackend, opts: FormViewOptions) {
     this.#backend = backend
@@ -121,7 +154,9 @@ export class FormView implements Component {
       ...(schema.sections ? { sections: schema.sections } : {}),
       ...(schema.submitLabel !== undefined ? { submitLabel: schema.submitLabel } : {}),
       values: this.#confirmed,
-      visible: (f, values) => isFieldVisible(schema, byId.get(f.id)!, values as FormValues),
+      visible: (f, values) =>
+        backend.visible?.(f.id, values as FormValues) ??
+        isFieldVisible(schema, byId.get(f.id)!, values as FormValues),
       validate: (values) => backend.validate(values as FormValues),
       onSubmit: (values) => this.#submit(values),
       onCancel: () => {
@@ -129,7 +164,11 @@ export class FormView implements Component {
         backend.cancel()
       },
       onAction: (id, values) => this.#run(id, values),
-      onActionCancel: (id) => this.#running.get(id)?.controller.abort(),
+      onActionCancel: (id) => {
+        this.#abortSubmit()
+        this.#running.get(id)?.controller.abort()
+      },
+      preview: () => backend.preview?.(this.form.values as FormValues) ?? [],
       notice: () => {
         const titles = opts.waiting?.() ?? []
         if (!titles.length) return []
@@ -149,6 +188,7 @@ export class FormView implements Component {
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    this.#abortSubmit()
     for (const { controller } of this.#running.values()) controller.abort()
     this.#running.clear()
     this.#automatic.clear()
@@ -158,7 +198,14 @@ export class FormView implements Component {
 
   handleInput(e: InputEvent): boolean {
     if (this.#closed) return false
+    const previous = this.form.values as FormValues
     const handled = this.form.handleInput(e)
+    if (this.form.confirmingCancel) this.#abortSubmit()
+    const values = this.form.values as FormValues
+    if (JSON.stringify(values) !== JSON.stringify(previous)) {
+      this.#abortSubmit()
+      this.#apply(this.#backend.change?.(values, previous) ?? {})
+    }
     this.#syncAutomatic()
     return handled
   }
@@ -167,7 +214,58 @@ export class FormView implements Component {
     return this.form.render(width, ctx)
   }
 
+  #apply(result: FormActionResult, showMessage = true): void {
+    for (const [id, options] of Object.entries(result.options ?? {})) this.form.setOptions(id, options)
+    if (result.values) this.form.setValues(result.values)
+    if (showMessage && result.message !== undefined) this.form.setStatus(result.message, result.tone)
+  }
+
+  #abortSubmit(): void {
+    this.#submitting?.abort()
+    this.#submitting = undefined
+  }
+
   #submit(values: Record<string, FormInputValue>) {
+    if (this.#submitting) {
+      this.form.setStatus("Checking before saving…")
+      return
+    }
+    if (!this.#backend.beforeSubmit) {
+      this.#finishSubmit(values)
+      return
+    }
+    const controller = new AbortController()
+    this.#submitting = controller
+    this.form.setStatus("Checking before saving…")
+    this.#opts.requestRender()
+    void this.#backend
+      .beforeSubmit(values as FormValues, {
+        signal: controller.signal,
+        onProgress: (text) => {
+          if (this.#closed || controller.signal.aborted) return
+          this.form.setStatus(text)
+          this.#opts.requestRender()
+        },
+      })
+      .catch(
+        (error): FormActionResult => ({
+          message: error instanceof Error ? error.message : String(error),
+          tone: "error",
+        }),
+      )
+      .then((result) => {
+        if (this.#submitting !== controller) return
+        this.#submitting = undefined
+        if (this.#closed || controller.signal.aborted || this.form.confirmingCancel) return
+        this.#apply(result)
+        if (result.tone !== "error") this.#finishSubmit(this.form.values)
+        else this.#syncAutomatic()
+        this.#opts.requestRender()
+      })
+  }
+
+  #finishSubmit(values: Record<string, FormInputValue>): void {
+    if (this.#closed || this.form.confirmingCancel) return
     const problem = this.#backend.submit(values as FormValues)
     if (problem === undefined) {
       this.close()
@@ -266,8 +364,12 @@ export class FormView implements Component {
           this.#syncAutomatic()
           return
         }
-        for (const [field, options] of Object.entries(r.options ?? {})) this.form.setOptions(field, options)
-        if (r.values) this.form.setValues(r.values)
+        if (r.values || r.options) this.#abortSubmit()
+        const previous = this.form.values as FormValues
+        this.#apply(r, false)
+        const values = this.form.values as FormValues
+        if (JSON.stringify(previous) !== JSON.stringify(values))
+          this.#apply(this.#backend.change?.(values, previous) ?? {})
         this.form.setActionState(id, {
           running: false,
           ...(r.message !== undefined ? { text: r.message } : {}),
