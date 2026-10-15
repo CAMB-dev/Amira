@@ -16,21 +16,26 @@ pid, terminal = pty.fork()
 if pid == 0:
     os.execv(sys.argv[1], sys.argv[1:4])
 
+
+def read_output():
+    try:
+        return os.read(terminal, 4096)
+    except OSError as error:
+        if error.errno == errno.EIO:
+            return b""
+        raise
+
+
 output = b""
 try:
     while b"ready" not in output:
-        chunk = os.read(terminal, 4096)
+        chunk = read_output()
         assert chunk, output
         output += chunk
     # The terminal driver sends this to BOTH the launcher and its child.
     os.write(terminal, {"SIGINT": b"\x03", "SIGQUIT": b"\x1c"}[sys.argv[4]])
     while True:
-        try:
-            chunk = os.read(terminal, 4096)
-        except OSError as error:
-            if error.errno == errno.EIO:
-                break
-            raise
+        chunk = read_output()
         if not chunk:
             break
         output += chunk

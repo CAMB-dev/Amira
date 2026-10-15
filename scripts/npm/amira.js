@@ -27,7 +27,7 @@ if (!binary) {
   }
 }
 
-const child = spawn(binary, process.argv.slice(2), { stdio: "inherit" })
+let child
 // Console interrupts already reach the child. Windows child.kill("SIGINT") would
 // terminate it outright; POSIX terminal delivery would otherwise happen twice.
 const consoleSignals = process.platform === "win32" ? ["SIGINT", "SIGBREAK"] : ["SIGINT", "SIGQUIT"]
@@ -37,7 +37,7 @@ const signals = ["SIGTERM", "SIGHUP", ...consoleSignals]
 const handlers = new Map()
 for (const signal of signals) {
   const handler = () => {
-    if (!ignoreConsole || !consoleSignals.includes(signal)) child.kill(signal)
+    if (!ignoreConsole || !consoleSignals.includes(signal)) child?.kill(signal)
   }
   handlers.set(signal, handler)
   process.on(signal, handler)
@@ -47,6 +47,8 @@ function cleanup() {
   for (const [signal, handler] of handlers) process.removeListener(signal, handler)
 }
 
+// Install console ignore handlers before spawning: terminal delivery can race with spawn.
+child = spawn(binary, process.argv.slice(2), { stdio: "inherit" })
 child.on("error", (error) => {
   cleanup()
   console.error(`Amira could not start ${binary}: ${error.message}. Download a binary: ${releases}`)
@@ -56,6 +58,11 @@ child.on("exit", (code, signal) => {
   cleanup()
   if (signal) {
     // Preserve signal termination for shells and parent processes, rather than reporting success.
+    if (process.platform !== "win32") {
+      const status = 128 + require("node:os").constants.signals[signal]
+      // Give the re-raised signal time to terminate us before falling back to an exit code.
+      setTimeout(() => process.exit(status), 100)
+    }
     process.kill(process.pid, signal)
   } else {
     process.exitCode = code === null ? 1 : code
