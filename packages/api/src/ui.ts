@@ -224,6 +224,8 @@ export interface UiApi {
     options: string[],
     opts: UiRequestOptions & {
       sections: SelectSection[]
+      /** Option to highlight initially, for example after returning from an edit. */
+      initial?: string
       descriptions?: string[]
       searchTexts?: string[]
       optionStatuses?: (AgentStatusState | undefined)[]

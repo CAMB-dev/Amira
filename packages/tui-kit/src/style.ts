@@ -231,6 +231,9 @@ export const monoTheme: Theme = {
  * blank rows). Components draw without them as before.
  */
 export interface SurfaceTokens {
+  /** Filled form controls: explicit foreground so light surfaces never inherit white text. */
+  inputBg: StyleFn
+  inputFg: StyleFn
   /** Behind the user's messages, the width of the screen. */
   userBg: StyleFn
   /** Behind fenced code blocks. */
@@ -262,6 +265,8 @@ export function surfaceTheme(
           ? [254, 194, 224, 157, 217]
           : [242, 65, 131, 71, 167]
     return {
+      inputBg: bg256(user),
+      inputFg: background === "light" ? black : white,
       userBg: bg256(user),
       diffAddedBg: bg256(added),
       diffRemovedBg: bg256(removed),
@@ -283,6 +288,8 @@ export function surfaceTheme(
     return sgr(quantize(surfaces[name], depth, fallback, true, hint), 49)
   }
   return {
+    inputBg: bg("userBg", background === "light" ? 47 : 40),
+    inputFg: sgr(quantize(palette.fg, depth, background === "light" ? 30 : 37), 39),
     userBg: bg("userBg", background === "light" ? 47 : 40),
     codeBg: bg("codeBg", background === "light" ? 47 : 40),
     diffAddedBg: bg("diffAddedBg", 42),

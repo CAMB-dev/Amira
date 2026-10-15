@@ -88,6 +88,7 @@ async function setup(
     providers?: Listed
     admin?: Partial<ProviderAdmin>
     sessionId?: () => string
+    afterSave?: boolean
   } = {},
 ) {
   const bus = new EventBus()
@@ -101,7 +102,10 @@ async function setup(
   const agent = new Agent({ ai, model: ai.model("mock/m"), cwd: "/work", bus })
   const { admin, calls, drafts } = fakeAdmin()
   Object.assign(admin, opts.admin)
+  const selectedModels: string[] = []
   const control = {
+    models: () => ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner", "mock/m"],
+    setModel: (model: string) => selectedModels.push(model),
     info: () => ({
       id: opts.sessionId?.() ?? "s1",
       cwd: "/work",
@@ -123,11 +127,18 @@ async function setup(
       const respond = (value: unknown) => {
         if (value === undefined) ext.ui.cancel(e.data.requestId)
         else {
-          const problem = ext.ui.respond(e.data.requestId, value)
+          // Native client fixtures explicitly consent to the Save-time probe.
+          const problem = ext.ui.respond(
+            e.data.requestId,
+            e.data.kind === "form" ? { testConsent: true, ...(value as object) } : value,
+          )
           if (problem) throw new Error(problem)
         }
       }
-      const v = answer(e.data)
+      const v =
+        e.data.kind === "select" && e.data.title === "Providers" && e.data.initial && !opts.afterSave
+          ? undefined
+          : answer(e.data)
       if (v instanceof Promise) return v.then(respond)
       respond(v)
     },
@@ -140,73 +151,48 @@ async function setup(
     await bus.flush()
     return { ...r, text: r.output.join("\n") }
   }
-  return { run, calls, drafts, asked, host, events, bus, ui: ext.ui }
+  return { run, calls, drafts, asked, host, events, bus, selectedModels, ui: ext.ui }
 }
 
-test("/provider add falls back to the protocol picker when the catalog is unavailable", async () => {
-  const { run, asked, drafts, calls } = await setup((r) => {
-    if (r.kind === "select") return r.options[1]
-    if (r.kind === "form") {
-      return {
-        id: "ds-test",
-        dialect: "anthropic-messages",
-        baseUrl: "https://api.deepseek.com/",
-        keySource: "auth",
-        apiKey: "sk-typed-123456789",
-        models: ["deepseek-chat", "my-own"],
-        contextWindow: 32000,
-      }
-    }
-    return undefined
-  })
-  const r = await run("/provider add")
-  expect(r.ok).toBe(true)
-  // An empty catalog uses the existing custom protocol flow.
-  expect(asked[0]).toMatchObject({
-    kind: "select",
-    title: "Which protocol does the provider speak?",
-    options: [
-      "openai-chat — OpenAI-compatible chat completions (most providers, local servers)",
-      "anthropic-messages — Anthropic Messages API",
-    ],
-  })
-  const form = asked[1] as Extract<Request, { kind: "form" }>
+test("/provider add opens one form immediately with editable vendor and protocol", async () => {
+  let loads = 0
+  const { run, asked, drafts } = await setup(
+    (r) =>
+      r.kind === "form"
+        ? {
+            id: "ds-test",
+            dialect: "anthropic-messages",
+            baseUrl: "https://api.deepseek.com/",
+            keySource: "auth",
+            apiKey: "sk-typed-123456789",
+            models: ["deepseek-chat", "my-own"],
+            contextWindow: 32000,
+          }
+        : undefined,
+    {
+      admin: {
+        vendors: async () => {
+          loads++
+          return []
+        },
+      },
+    },
+  )
+  const result = await run("/provider add")
+  expect(result.ok).toBe(true)
+  expect(loads).toBe(0)
+  const form = asked[0] as Extract<Request, { kind: "form" }>
   expect(form.title).toBe("Add a provider")
-  const dialect = form.fields.find((f) => f.id === "dialect") as Record<string, unknown>
-  expect(dialect.default).toBe("anthropic-messages")
-  const baseUrl = form.fields.find((f) => f.id === "baseUrl") as Record<string, unknown>
-  expect(baseUrl.placeholder).toBe("https://api.example.com/v1")
-  expect("default" in baseUrl).toBe(false)
-  expect(form.fields.map((f) => f.id)).toEqual([
-    "id",
-    "dialect",
-    "baseUrl",
-    "keySource",
-    "apiKey",
-    "apiKeyEnv",
-    "fetchModels",
-    "models",
-    "contextWindow",
-    "maxOutput",
-    "thinking",
-    "images",
-    "promptCache",
-    "testConnection",
-  ])
-  // Nothing went out on its own: no fetch, no test.
-  expect(calls).toEqual(["save ds-test"])
-  expect(drafts[0]).toEqual({
+  expect(form.fields[0]).toMatchObject({ id: "vendor", type: "select" })
+  expect(form.fields.find((f) => f.id === "dialect")).toMatchObject({ type: "select" })
+  expect(drafts[0]).toMatchObject({
     id: "ds-test",
     dialect: "anthropic-messages",
     baseUrl: "https://api.deepseek.com",
-    keySource: "auth",
-    apiKey: "sk-typed-123456789",
     models: ["deepseek-chat", "my-own"],
-    defaults: { contextWindow: 32000, thinking: false, images: false, promptCache: false },
   })
-  expect(r.text).toBe(
-    'Provider catalog unavailable; choose a protocol to add a custom provider.\nSaved provider "ds-test".',
-  )
+  expect(asked.at(-1)).toMatchObject({ title: "Providers", initial: "ds-test" })
+  expect(result.text).toBe('Saved provider "ds-test".')
 })
 
 test("/provider add <protocol> skips the question; an unknown one or a cancel saves nothing", async () => {
@@ -214,7 +200,7 @@ test("/provider add <protocol> skips the question; an unknown one or a cancel sa
     r.kind === "form" ? { id: "x", baseUrl: "http://x", keySource: "none" } : undefined,
   )
   expect((await direct.run("/provider add anthropic-messages")).ok).toBe(true)
-  expect(direct.asked.map((a) => a.kind)).toEqual(["form"])
+  expect(direct.asked.map((a) => a.kind)).toEqual(["form", "select"])
   const form = direct.asked[0] as Extract<Request, { kind: "form" }>
   expect((form.fields.find((f) => f.id === "dialect") as Record<string, unknown>).default).toBe(
     "anthropic-messages",
@@ -228,9 +214,7 @@ test("/provider add <protocol> skips the question; an unknown one or a cancel sa
   expect(unknown.asked).toEqual([])
 
   const cancelled = await setup(() => undefined)
-  expect((await cancelled.run("/provider add")).text).toBe(
-    "Provider catalog unavailable; choose a protocol to add a custom provider.\nCancelled; nothing was saved.",
-  )
+  expect((await cancelled.run("/provider add")).text).toBe("Cancelled; nothing was saved.")
   expect(cancelled.calls).toEqual([])
 })
 
@@ -245,16 +229,13 @@ const VENDORS: ProviderVendor[] = [
   { id: "unsupported", name: "Unsupported vendor", env: ["OTHER_API_KEY"] },
 ]
 
-test("/provider add picks a vendor and saves its catalog identity after renaming", async () => {
+test("an explicit vendor prefills the single form and preserves catalog identity after renaming", async () => {
   let loads = 0
-  const { run, asked, drafts, calls } = await setup(
-    (r) => {
-      if (r.kind === "select") return r.options[0]
-      if (r.kind === "form") return { id: "my-deepseek", models: ["deepseek-chat"] }
-      return undefined
-    },
+  const { run, asked, drafts } = await setup(
+    (r) => (r.kind === "form" ? { id: "my-deepseek", models: ["deepseek-chat"] } : undefined),
     {
       admin: {
+        cachedVendors: () => VENDORS,
         vendors: async () => {
           loads++
           return VENDORS
@@ -263,34 +244,17 @@ test("/provider add picks a vendor and saves its catalog identity after renaming
       },
     },
   )
-  expect((await run("/provider add")).text).toBe('Saved provider "my-deepseek".')
+  expect((await run("/provider add deepseek")).text).toBe('Saved provider "my-deepseek".')
   expect(loads).toBe(1)
-  expect(asked[0]).toMatchObject({
-    kind: "select",
-    title: "Which provider do you want to add?",
-    options: [
-      "DeepSeek (deepseek)",
-      "Unsupported vendor (unsupported) — pick the protocol yourself",
-      "Custom (choose a protocol)",
-    ],
-  })
-  const form = asked[1] as Extract<Request, { kind: "form" }>
-  const fields = Object.fromEntries(form.fields.map((f) => [f.id, f as Record<string, unknown>]))
-  expect(fields.id!.default).toBe("deepseek-2")
-  expect(fields.dialect!.default).toBe("openai-chat")
-  expect(fields.baseUrl!.default).toBe("https://api.deepseek.com")
-  expect(fields.keySource!.default).toBe("env")
-  expect(fields.apiKeyEnv!.default).toBe("ALTERNATE_KEY")
-  expect(fields.catalogId).toBeUndefined()
+  const form = asked[0] as Extract<Request, { kind: "form" }>
+  expect(form.fields.find((f) => f.id === "id")).toMatchObject({ default: "deepseek-2" })
+  expect(form.fields.find((f) => f.id === "apiKeyEnv")).toMatchObject({ default: "ALTERNATE_KEY" })
   expect(drafts[0]).toMatchObject({
     id: "my-deepseek",
     catalogId: "deepseek",
-    dialect: "openai-chat",
-    baseUrl: "https://api.deepseek.com",
     keySource: "env",
     apiKeyEnv: "ALTERNATE_KEY",
   })
-  expect(calls).toEqual(["save my-deepseek"])
 })
 
 test("an unavailable catalog explains positional vendor lookup failures", async () => {
@@ -317,7 +281,7 @@ test("loading vendors is printed while the catalog request is still pending", as
       },
     },
   })
-  const running = session.run("/provider add")
+  const running = session.run("/provider add deepseek")
   await started.promise
   try {
     await session.bus.flush()
@@ -343,7 +307,7 @@ test("an explicit vendor skips the picker and an unsupported vendor opens the fu
     { admin: { vendors: async () => VENDORS } },
   )
   expect((await run("/provider add unsupported")).ok).toBe(true)
-  expect(asked.map((r) => r.kind)).toEqual(["form"])
+  expect(asked.map((r) => r.kind)).toEqual(["form", "select"])
   const form = asked[0] as Extract<Request, { kind: "form" }>
   const fields = Object.fromEntries(form.fields.map((f) => [f.id, f as Record<string, unknown>]))
   expect(fields.id!.default).toBe("unsupported")
@@ -352,27 +316,27 @@ test("an explicit vendor skips the picker and an unsupported vendor opens the fu
   expect(fields.keySource!.default).toBe("auth")
   expect(fields.apiKeyEnv!.default).toBe("OTHER_API_KEY")
   expect(drafts[0]).toMatchObject({ id: "unsupported", dialect: "anthropic-messages" })
-  expect(drafts[0]!.catalogId).toBeUndefined()
+  expect(drafts[0]!.catalogId).toBe("unsupported")
 })
 
-test("Custom keeps the prior protocol picker and cancelling the vendor picker saves nothing", async () => {
+test("Custom keeps protocol editable in the form and cancelling saves nothing", async () => {
   const custom = await setup(
-    (r) => {
-      if (r.kind === "select") {
-        return r.title === "Which provider do you want to add?" ? r.options.at(-1) : r.options[1]
-      }
-      if (r.kind === "form") return { id: "custom", baseUrl: "http://localhost:1234", keySource: "none" }
-      return undefined
-    },
-    { admin: { vendors: async () => VENDORS } },
+    (r) =>
+      r.kind === "form"
+        ? {
+            id: "custom",
+            dialect: "anthropic-messages",
+            baseUrl: "http://localhost:1234",
+            keySource: "none",
+          }
+        : undefined,
+    { admin: { cachedVendors: () => VENDORS } },
   )
   expect((await custom.run("/provider add")).ok).toBe(true)
-  expect(custom.asked.map((r) => r.kind)).toEqual(["select", "select", "form"])
-  expect(custom.asked[1]!.title).toBe("Which protocol does the provider speak?")
+  expect(custom.asked.map((r) => r.kind)).toEqual(["form", "select"])
   expect(custom.drafts[0]).toMatchObject({ dialect: "anthropic-messages", keySource: "none" })
-  expect(custom.drafts[0]!.catalogId).toBeUndefined()
-
-  const cancelled = await setup(() => undefined, { admin: { vendors: async () => VENDORS } })
+  expect(custom.drafts[0]!.catalogId).toBe(false)
+  const cancelled = await setup(() => undefined)
   expect((await cancelled.run("/provider add")).text).toBe("Cancelled; nothing was saved.")
   expect(cancelled.asked).toHaveLength(1)
   expect(cancelled.calls).toEqual([])
@@ -393,14 +357,14 @@ test("an explicit protocol wins a vendor-id clash without fetching the catalog",
   )
   expect((await run("/provider add openai-chat")).ok).toBe(true)
   expect(loads).toBe(0)
-  expect(asked.map((r) => r.kind)).toEqual(["form"])
-  expect(drafts[0]!.catalogId).toBeUndefined()
+  expect(asked.map((r) => r.kind)).toEqual(["form", "select"])
+  expect(drafts[0]!.catalogId).toBe(false)
 })
 
-test("older admins without vendors fall back to the protocol picker", async () => {
+test("older admins without vendors open a Custom form without a network wait", async () => {
   const { run, asked } = await setup(() => undefined, { admin: { vendors: undefined } })
-  expect((await run("/provider add")).text).toContain("Provider catalog unavailable")
-  expect(asked[0]!.title).toBe("Which protocol does the provider speak?")
+  expect((await run("/provider add")).text).toBe("Cancelled; nothing was saved.")
+  expect(asked[0]).toMatchObject({ kind: "form", title: "Add a provider" })
 })
 
 test("/provider edit preserves catalog identity, including explicit opt-out", async () => {
@@ -508,7 +472,7 @@ test("the empty management page offers Add and Escape cancels without changing p
   expect(session.calls).toEqual([])
 })
 
-test("management Add reuses the protocol picker and provider form", async () => {
+test("management Add opens the single provider form and returns with the saved id highlighted", async () => {
   const session = await setup(
     (r) => {
       if (r.kind === "select") return r.options[0]
@@ -517,35 +481,17 @@ test("management Add reuses the protocol picker and provider form", async () => 
     },
     { providers: [] },
   )
-  expect((await session.run("/provider")).text).toBe(
-    'Provider catalog unavailable; choose a protocol to add a custom provider.\nSaved provider "new".',
-  )
-  expect(session.asked.map((r) => r.title)).toEqual([
-    "Providers",
-    "Which protocol does the provider speak?",
-    "Add a provider",
-  ])
+  expect((await session.run("/provider")).text).toBe('Saved provider "new".')
+  expect(session.asked.map((r) => r.title)).toEqual(["Providers", "Add a provider", "Providers"])
+  expect(session.asked.at(-1)).toMatchObject({ initial: "new" })
   expect(session.calls).toEqual(["save new"])
-  expect(session.drafts[0]).toMatchObject({ id: "new", dialect: "openai-chat", keySource: "none" })
 })
 
-test("Escape in management Add at the vendor, protocol, or form stage saves nothing", async () => {
-  for (const stop of ["vendor", "protocol", "form"]) {
-    const session = await setup(
-      (r) => {
-        if (r.kind !== "select") return undefined
-        if (r.title === "Providers") return "+ Add provider"
-        if (r.title === "Which provider do you want to add?") {
-          return stop === "vendor" ? undefined : "Custom (choose a protocol)"
-        }
-        return stop === "protocol" ? undefined : r.options[0]
-      },
-      { admin: { vendors: async () => VENDORS } },
-    )
-    expect((await session.run("/provider")).text).toBe("Cancelled; nothing was saved.")
-    expect(session.calls).toEqual([])
-    expect(session.asked).toHaveLength(stop === "vendor" ? 2 : stop === "protocol" ? 3 : 4)
-  }
+test("Escape in management Add saves nothing", async () => {
+  const session = await setup((r) => (r.kind === "select" ? "+ Add provider" : undefined))
+  expect((await session.run("/provider")).text).toBe("Cancelled; nothing was saved.")
+  expect(session.asked).toHaveLength(2)
+  expect(session.calls).toEqual([])
 })
 
 test("management Edit and Set key reuse existing forms and masked input", async () => {
@@ -559,11 +505,11 @@ test("management Edit and Set key reuse existing forms and masked input", async 
     expect((await session.run("/provider")).ok).toBe(true)
     expect(session.asked[1]).toMatchObject({
       title: "Manage provider deepseek",
-      options: ["Edit", "Set key", "Test connection", "Remove"],
+      options: ["Use a model from it", "Edit", "Set key", "Test connection", "Remove"],
     })
     if (action === "Edit") {
       expect(session.asked[2]).toMatchObject({ kind: "form", title: "Edit provider deepseek" })
-      expect(session.calls).toEqual(["save deepseek"])
+      expect(session.calls).toEqual(["test deepseek-chat", "save deepseek"])
       expect(session.drafts[0]).toMatchObject({
         id: "deepseek",
         models: ["deepseek-chat"],
@@ -786,9 +732,11 @@ test("Edit-form connection tests replace the management result only for the save
           return request.title.startsWith("Manage") ? "Test connection" : request.options[0]
         }
         if (request.kind === "form")
-          return session.ui.runFormAction(request.requestId, "testConnection", changed).then((result) => {
-            action = result
-          })
+          return session.ui
+            .runFormAction(request.requestId, "testConnection", { ...changed, testConsent: true })
+            .then((result) => {
+              action = result
+            })
         return request.kind === "confirm" ? true : undefined
       },
       {
@@ -803,7 +751,12 @@ test("Edit-form connection tests replace the management result only for the save
     )
     await session.run("/provider")
     await session.run("/provider edit deepseek")
-    expect(action).toEqual({ message: "Edit failed", tone: "error" })
+    expect(action).toEqual({
+      message:
+        "Connection test failed. Fix the protocol, base URL, key or model and retry, or select Save anyway.",
+      tone: "error",
+      values: { saveAnyway: false },
+    })
     expect(session.drafts).toEqual([])
     await session.run("/provider")
     const status = JSON.stringify(session.asked.at(-1))
@@ -825,10 +778,12 @@ test.each(["", "   "])(
           return request.options[0]
         }
         if (request.kind === "form")
-          return session.ui.runFormAction(request.requestId, "testConnection", { apiKey }).then((result) => {
-            action = result
-            return { apiKey }
-          })
+          return session.ui
+            .runFormAction(request.requestId, "testConnection", { apiKey, testConsent: true })
+            .then((result) => {
+              action = result
+              return { apiKey }
+            })
         return request.kind === "confirm" ? true : undefined
       },
       {
@@ -846,7 +801,7 @@ test.each(["", "   "])(
     )
     expect((await session.run("/provider")).text).toBe("Saved key passed")
     expect((await session.run("/provider")).text).toBe('Saved provider "deepseek".')
-    expect(action).toEqual({ message: "Saved key passed", tone: "success" })
+    expect(action).toEqual({ message: "Connection test passed.", tone: "success" })
     expect(tested).toHaveLength(2)
     for (const draft of tested) expect(draft).not.toHaveProperty("apiKey")
     expect(session.drafts).toHaveLength(1)
@@ -975,7 +930,10 @@ test("the form refuses an id that exists and a base URL that is no URL", async (
     { value: "deepseek-new" },
   ])
   const tested = await ext.ui.runFormAction(id, "testConnection", {})
-  expect(tested).toEqual({ message: "Pick or type a model first.", tone: "warning" })
+  expect(tested).toEqual({
+    message: "No model selected. Add a model to test, or save without a connection test.",
+    tone: "warning",
+  })
   ext.ui.cancel(id)
   expect(await pending).toBeUndefined()
 })
@@ -995,6 +953,7 @@ test("step by step, fetching models is offered first and the connection test def
       if (r.title.includes("· Models")) {
         return r.options.includes("[ ] deepseek-chat") ? "[ ] deepseek-chat" : "Done"
       }
+      if (r.title.includes("potentially billed")) return "Yes"
       // Every other question takes its default, the first option.
       return r.options[0]
     },
@@ -1007,7 +966,7 @@ test("step by step, fetching models is offered first and the connection test def
   )
   expect(titles.find((t) => t.startsWith("Fetch models?"))).toContain("[Yes|No]")
   expect(titles.find((t) => t.startsWith("Test connection?"))).toContain("[No|Yes]")
-  expect(calls).toEqual(["list https://api.deepseek.com key=typed", "save ds-test"])
+  expect(calls).toEqual(["list https://api.deepseek.com key=typed", "test deepseek-chat", "save ds-test"])
   expect(drafts[0]).toMatchObject({ id: "ds-test", keySource: "auth", models: ["deepseek-chat"] })
   const secret = asked.find((a) => a.kind === "input" && a.secret)
   expect(secret).toBeDefined()
@@ -1093,4 +1052,25 @@ test("draftFromValues trims the base URL and keeps only the key of the chosen so
     }),
   ).toMatchObject({ baseUrl: "https://h/v1", keySource: "env", apiKeyEnv: "V" })
   expect("apiKey" in draftFromValues({ keySource: "env", apiKey: "k" })).toBe(false)
+})
+
+test("after saving, the manage page highlights the provider and opens its filtered model picker", async () => {
+  const session = await setup(
+    (r) => {
+      if (r.kind === "form") return { baseUrl: "https://api.deepseek.com/v1" }
+      if (r.kind !== "select") return undefined
+      if (r.title === "Providers") return "deepseek"
+      if (r.title.startsWith("Manage")) return "Use a model from it"
+      if (r.title === "Model from deepseek") return r.options[1]
+      return undefined
+    },
+    { afterSave: true },
+  )
+  expect((await session.run("/provider edit deepseek")).ok).toBe(true)
+  expect(session.asked[1]).toMatchObject({ title: "Providers", initial: "deepseek" })
+  expect(session.asked[3]).toMatchObject({
+    title: "Model from deepseek",
+    options: ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
+  })
+  expect(session.selectedModels).toEqual(["deepseek/deepseek-reasoner"])
 })

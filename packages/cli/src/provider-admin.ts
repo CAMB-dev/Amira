@@ -4,6 +4,7 @@ import {
   BUILTIN_DIALECTS,
   type CatalogModel,
   catalogProviderId,
+  createAi,
   host,
   LISTABLE_DIALECTS,
   listModels,
@@ -15,16 +16,24 @@ import {
   testConnection,
   vendorPreset,
 } from "@amira/ai"
-import type { ProviderAdmin, ProviderDraft, ProviderModelInfo, ProviderSettings } from "@amira/api"
+import type {
+  ModelSettings,
+  ProviderAdmin,
+  ProviderDraft,
+  ProviderModelInfo,
+  ProviderSettings,
+} from "@amira/api"
 import {
   amiraHome,
   authFile,
+  deepMerge,
   loadAuth,
   providersFromSettings,
   readJsonFile,
   restrictToCurrentUser,
   setAuthKey,
   updateProviderInSettings,
+  validateSettings,
 } from "@amira/core"
 import { type CatalogCacheOptions, refreshCatalog } from "./catalog.ts"
 import { USER_AGENT } from "./user-agent.ts"
@@ -85,6 +94,18 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     return raw?.providers?.[id]
   }
   const config = (id: string) => ai.providers().find((p) => p.id === id)
+  const vendorList = (catalog: ModelCatalog | undefined) =>
+    (catalog?.vendors?.() ?? [])
+      .map((v) => ({
+        id: v.id,
+        name: v.name,
+        env: [...v.env],
+        ...(catalog?.list ? { models: catalog.list(v.id) } : {}),
+        ...(v.api?.includes("${") ? { baseUrl: v.api.trim().replace(/\/+$/, "") } : {}),
+        ...vendorPreset(v),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+  const cachedVendors = () => vendorList(ai.catalog?.())
   let vendorRefresh: Promise<ModelCatalog | undefined> | undefined
   const vendors = async (request: { onLoading?: () => void } = {}) => {
     let catalog = ai.catalog?.()
@@ -102,15 +123,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         catalog = refreshed
       }
     }
-    return (catalog?.vendors?.() ?? [])
-      .map((v) => ({
-        id: v.id,
-        name: v.name,
-        env: v.env,
-        ...(v.api?.includes("${") ? { baseUrl: v.api.trim().replace(/\/+$/, "") } : {}),
-        ...vendorPreset(v),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    return vendorList(catalog)
   }
 
   const checkPlaceholders = (baseUrl: string) => {
@@ -132,33 +145,54 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     const typed = d.apiKey?.trim()
     if (d.keySource === "auth" && typed) return typed
     const current = config(d.id)
-    const sameEnv = current && (d.apiKeyEnv || undefined) === (current.apiKeyEnv || undefined)
-    if (d.keySource === "env" && !sameEnv) return keyFromEnv(d)
+    const samePrimary = current && (d.apiKeyEnv || undefined) === (current.apiKeyEnv || undefined)
+    const selectedEnv = {
+      apiKeyEnv: d.apiKeyEnv,
+      apiKeyEnvFallbacks: d.apiKeyEnvFallbacks ?? (samePrimary ? current.apiKeyEnvFallbacks : undefined),
+    }
+    const sameEnv =
+      samePrimary &&
+      JSON.stringify(selectedEnv.apiKeyEnvFallbacks ?? []) ===
+        JSON.stringify(current.apiKeyEnvFallbacks ?? [])
+    if (d.keySource === "env" && !sameEnv) return keyFromEnv(selectedEnv)
     if (current) {
       const live = ai.providerEndpoint(d.id)
       const source = live.credentialSource
       if (
         (d.keySource === "auth" && (source === "explicit" || source === "stored")) ||
-        (d.keySource === "env" && sameEnv && (source === "env" || source === "none"))
+        (d.keySource === "env" &&
+          sameEnv &&
+          (source === "env" ||
+            (source === "none" && current.keySource !== "auth" && current.keySource !== "none")))
       )
         return live.apiKey
     }
     if (d.keySource === "env") {
       // Choosing environment authentication must not silently test an auth.json fallback.
-      return keyFromEnv(sameEnv ? current : d)
+      return keyFromEnv(selectedEnv)
     }
     return storedKeys()[d.id]?.trim() || undefined
   }
   const endpoint = (d: ProviderDraft): ProbeEndpoint => {
-    checkPlaceholders(d.baseUrl)
+    check(d)
     const current = config(d.id)
     const key = keyFor(d)
+    const headers = d.headers ?? current?.headers
+    const compat = d.compat ?? current?.compat
     return {
       dialect: d.dialect,
       baseUrl: d.baseUrl,
       ...(key ? { apiKey: key } : {}),
-      ...(current?.headers ? { headers: current.headers } : {}),
-      ...(current?.compat ? { compat: current.compat } : {}),
+      ...(headers
+        ? {
+            // Resolve through Ai so probes and ordinary requests share single-pass expansion.
+            headers: createAi({
+              env,
+              providers: [{ id: d.id, dialect: d.dialect, baseUrl: d.baseUrl, headers }],
+            }).providerEndpoint(d.id).headers,
+          }
+        : {}),
+      ...(compat ? { compat } : {}),
     }
   }
 
@@ -220,14 +254,27 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     }
     if (url.protocol !== "http:" && url.protocol !== "https:")
       throw new Error("the base URL must be http or https")
-    if (d.keySource === "env" && !ENV.test(d.apiKeyEnv ?? "")) {
+    if (d.keySource === "env" && !(d.apiKeyEnv ? ENV.test(d.apiKeyEnv) : d.apiKeyEnvFallbacks?.length)) {
       throw new Error("the environment variable name must be letters, digits and _")
     }
+    validateSettings({ providers: { [d.id]: entryFor({}, d, undefined) } }, settingsFile)
+  }
+
+  const preview = (d: ProviderDraft): ProviderSettings => {
+    check(d)
+    const { catalogId } = catalogFor(d, d.models)
+    const display = structuredClone(
+      entryFor(userEntry(d.id) ?? {}, d, catalogId && catalogId !== d.id ? catalogId : undefined),
+    )
+    omitInlineKeys(display)
+    return display
   }
 
   return {
     dialects: () => dialectIds(ai),
     vendors,
+    cachedVendors,
+    preview,
     exists: (id) => config(id) !== undefined,
     draft: (id) => {
       const p = config(id)
@@ -237,9 +284,14 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       const keySource =
         source === "explicit" || source === "stored"
           ? "auth"
-          : source === "env" || p.apiKeyEnv
-            ? "env"
-            : "none"
+          : (p.keySource ??
+            (source === "env" || p.apiKeyEnv || p.apiKeyEnvFallbacks?.length ? "env" : "none"))
+      const raw = userEntry(id)
+      const headers = raw?.headers ?? p.headers
+      const compat = raw?.compat ?? p.compat
+      const modelOverrides = Object.fromEntries(
+        (raw?.models ?? p.models ?? []).flatMap((m) => (m.id ? [[m.id, structuredClone(m)]] : [])),
+      )
       const d = p.defaultModel
       const defaults: NonNullable<ProviderDraft["defaults"]> = {
         ...(d?.contextWindow ? { contextWindow: d.contextWindow } : {}),
@@ -255,6 +307,10 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         ...(p.catalogId !== undefined ? { catalogId: p.catalogId } : {}),
         keySource,
         ...(p.apiKeyEnv ? { apiKeyEnv: p.apiKeyEnv } : {}),
+        ...(p.apiKeyEnvFallbacks ? { apiKeyEnvFallbacks: [...p.apiKeyEnvFallbacks] } : {}),
+        ...(headers ? { headers: { ...headers } } : {}),
+        ...(compat ? { compat: { ...compat } } : {}),
+        ...(Object.keys(modelOverrides).length ? { modelOverrides } : {}),
         models: (p.models ?? []).flatMap((m) => (m.id ? [m.id] : [])),
         defaults,
       }
@@ -265,18 +321,28 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     },
     envIsSet: (name) => Boolean(env[name]),
     listModels: async (d, signal) => {
+      const ep = endpoint(d)
       try {
-        const listed = await listModels(endpoint(d), {
+        const listed = await listModels(ep, {
           userAgent: USER_AGENT,
           ...(opts.fetch ? { fetch: opts.fetch } : {}),
           ...(signal ? { signal } : {}),
         })
         return describe(d, listed)
       } catch (err) {
-        if (err instanceof ProbeError && err.kind === "auth" && !keyFor(d)) {
-          throw new Error(`${err.message}; no key was sent: enter one first`)
+        const message = probeDiagnostic(
+          ep,
+          err instanceof Error ? err.message : String(err),
+          err instanceof ProbeError ? err.kind : undefined,
+          err instanceof ProbeError ? err.status : undefined,
+        )
+        if (err instanceof ProbeError) {
+          if (err.kind === "auth" && !ep.apiKey && !hasCustomHeaders(ep)) {
+            throw new Error(`${message}; no key was sent: enter one first`)
+          }
+          throw new ProbeError(message, err.kind, err.status)
         }
-        throw err
+        throw new Error(message)
       }
     },
     describeModels: (d, ids) =>
@@ -285,19 +351,33 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         ids.map((id) => ({ id })),
       ),
     test: async (d, model, signal) => {
-      const r = await testConnection(endpoint(d), model, {
-        userAgent: USER_AGENT,
-        ...(opts.fetch ? { fetch: opts.fetch } : {}),
-        ...(signal ? { signal } : {}),
-      })
-      return { ok: r.ok, latencyMs: r.latencyMs, message: r.message }
+      const ep = endpoint(d)
+      try {
+        const r = await testConnection(ep, model, {
+          userAgent: USER_AGENT,
+          ...(opts.fetch ? { fetch: opts.fetch } : {}),
+          ...(signal ? { signal } : {}),
+        })
+        return {
+          ok: r.ok,
+          latencyMs: r.latencyMs,
+          message: r.ok ? r.message : probeDiagnostic(ep, r.message, r.failure, r.status),
+        }
+      } catch (err) {
+        throw new Error(probeDiagnostic(ep, err instanceof Error ? err.message : String(err)))
+      }
     },
-    save: async (d) => {
+    save: async (d, saveOptions = {}) => {
       const apiKey = d.apiKey?.trim()
       check(d)
       const { catalogId } = catalogFor(d, d.models)
       const { after } = updateProviderInSettings(settingsFile, d.id, (cur) =>
-        entryFor(cur ?? {}, d, catalogId && catalogId !== d.id ? catalogId : undefined),
+        entryFor(
+          cur ?? {},
+          d,
+          catalogId && catalogId !== d.id ? catalogId : undefined,
+          saveOptions.persistKeySource ?? true,
+        ),
       )
       const lines = [`Saved provider "${d.id}" (${d.dialect}, ${d.baseUrl}) to ${settingsFile}.`]
       if (catalogId && catalogId !== d.id && catalogId !== catalogProviderId({ id: d.id })) {
@@ -327,9 +407,13 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         lines.push("Key: none.")
       }
       const [live] = providersFromSettings({ [d.id]: after ?? {} })
-      if (live) ai.registerProvider(d.keySource === "auth" ? { ...live, apiKey: key ?? "" } : live)
-      // A provider switched away from auth.json must not keep using the stored key meanwhile.
-      if (d.keySource !== "auth") ai.setStoredKey?.(d.id, undefined)
+      if (live) {
+        ai.registerProvider(
+          d.keySource === "env" ? live : { ...live, keySource: d.keySource, ...(key ? { apiKey: key } : {}) },
+        )
+      }
+      // Keep the chosen live credential, including when an explicit empty key blocked a stored one.
+      if (d.keySource !== "auth" || !key) ai.setStoredKey?.(d.id, undefined)
       const inUse = opts.currentProvider?.() === d.id
       const infos = describe(
         d,
@@ -372,7 +456,19 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       if (!apiKey.trim()) throw new Error("the key is empty")
       setAuthKey(keysFile, id, apiKey.trim())
       const warning = await restrict(keysFile)
-      ai.registerProvider({ ...p, apiKey: apiKey.trim() })
+      if (p.keySource === "none" && userEntry(id)?.keySource === "none") {
+        updateProviderInSettings(settingsFile, id, (cur) => {
+          if (!cur) return cur
+          const next = { ...cur }
+          next.keySource = "auth"
+          return next
+        })
+      }
+      ai.registerProvider({
+        ...p,
+        ...(p.keySource === "none" ? { keySource: "auth" } : {}),
+        apiKey: apiKey.trim(),
+      })
       ai.setStoredKey?.(id, apiKey.trim())
       const lines = [`Stored a key for "${id}" in ${keysFile} (${keyHint(apiKey.trim())}); in use now.`]
       if (p.apiKeyEnv && env[p.apiKeyEnv]) {
@@ -381,6 +477,51 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       if (warning) lines.push(`Warning: ${warning}.`)
       return lines.join("\n")
     },
+  }
+}
+
+/** Remove legacy inline secrets only from the display clone; unknown disk settings still roundtrip. */
+function omitInlineKeys(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) omitInlineKeys(item)
+  } else if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      if (key.toLowerCase() === "apikey") delete (value as Record<string, unknown>)[key]
+      else omitInlineKeys(item)
+    }
+  }
+}
+
+function hasCustomHeaders(ep: ProbeEndpoint): boolean {
+  return Object.values(ep.headers ?? {}).some(Boolean)
+}
+
+/** Custom headers can carry arbitrary secrets; never display untrusted provider or transport text. */
+function probeDiagnostic(
+  ep: ProbeEndpoint,
+  message: string,
+  failure?: ProbeError["kind"],
+  status?: number,
+): string {
+  if (!hasCustomHeaders(ep)) return message
+  const where = host(ep.baseUrl)
+  switch (failure) {
+    case "auth":
+      return `authentication was rejected by ${where} (HTTP ${status}); check the API key or custom authentication headers`
+    case "not_found":
+      return `HTTP 404 from ${where}: check the base URL and model id`
+    case "network":
+      return `cannot reach ${where}: check the connection and base URL`
+    case "timeout":
+      return `no answer from ${where}: the request timed out`
+    case "aborted":
+      return "cancelled"
+    case "unsupported":
+      return `listing models is not supported for dialect "${ep.dialect}"; type the model ids instead`
+    case "format":
+      return `unexpected response from ${where}: check the base URL and model id`
+    default:
+      return `${status === undefined ? "request failed" : `HTTP ${status}`} from ${where}: check the provider settings`
   }
 }
 
@@ -398,15 +539,32 @@ function withoutKey(p: ProviderConfig): ProviderConfig {
 }
 
 /** The settings entry for a draft, over what the entry had: unknown keys and model overrides stay. */
-function entryFor(cur: ProviderSettings, d: ProviderDraft, catalogId: string | undefined): ProviderSettings {
+function entryFor(
+  cur: ProviderSettings,
+  d: ProviderDraft,
+  catalogId: string | undefined,
+  persistKeySource = true,
+): ProviderSettings {
   const next: ProviderSettings = { ...cur, dialect: d.dialect, baseUrl: d.baseUrl }
-  if (d.keySource === "env") next.apiKeyEnv = d.apiKeyEnv!
-  else {
-    delete next.apiKeyEnv
-    delete next.apiKeyEnvFallbacks
-  }
+  if (d.keySource === "env" && d.apiKeyEnv) next.apiKeyEnv = d.apiKeyEnv
+  else delete next.apiKeyEnv
+  if (d.apiKeyEnvFallbacks !== undefined) next.apiKeyEnvFallbacks = [...d.apiKeyEnvFallbacks]
+  // Explicit selections survive restart independently of stored keys and fallback-list length.
+  // Only the flags-only caller opts into the legacy settings shape.
+  if (persistKeySource || cur.keySource !== undefined) next.keySource = d.keySource
+  if (d.headers !== undefined) next.headers = { ...d.headers }
+  if (d.compat !== undefined) next.compat = { ...d.compat }
   const old = new Map((cur.models ?? []).flatMap((m) => (m.id ? [[m.id, m] as const] : [])))
-  const models: ModelOverrides[] = d.models.map((id) => old.get(id) ?? { id })
+  const models: ModelSettings[] = d.models.map((id) => {
+    const override = d.modelOverrides?.[id]
+    const model = deepMerge(old.get(id) ?? {}, { ...override, id })
+    if (override !== undefined) {
+      // A fast entry removed in the form restores the catalog/default, not the old override.
+      if (override.fast !== undefined) model.fast = structuredClone(override.fast)
+      else delete model.fast
+    }
+    return model
+  })
   if (models.length) next.models = models
   else delete next.models
   if (d.catalogId === false) next.catalogId = false
@@ -421,10 +579,12 @@ function entryFor(cur: ProviderSettings, d: ProviderDraft, catalogId: string | u
     else delete caps[cap]
   }
   const defaultModel: ModelOverrides = { ...cur.defaultModel }
-  for (const k of ["contextWindow", "maxOutput"] as const) {
-    const v = d.defaults?.[k]
-    if (v) defaultModel[k] = v
-    else delete defaultModel[k]
+  if (d.defaults !== undefined) {
+    for (const k of ["contextWindow", "maxOutput"] as const) {
+      const v = d.defaults[k]
+      if (v !== undefined) defaultModel[k] = v
+      else delete defaultModel[k]
+    }
   }
   if (Object.keys(caps).length) defaultModel.caps = caps
   else delete defaultModel.caps

@@ -116,7 +116,7 @@ function addSettingLayers(
 }
 
 /** Provider keys that decide where requests and API keys go. */
-const ENDPOINT_KEYS = ["baseUrl", "apiKeyEnv", "apiKeyEnvFallbacks", "headers"] as const
+const ENDPOINT_KEYS = ["baseUrl", "apiKeyEnv", "apiKeyEnvFallbacks", "keySource", "headers"] as const
 
 /**
  * A project file travels with the repository, so it must not choose where requests and

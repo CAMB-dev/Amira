@@ -86,6 +86,53 @@ test("the key comes from the variable, then its fallbacks, then the stored keys"
   expect(await auth({})).toBe("MAIN or ALT is not set; export it to use provider p")
 })
 
+test.each([
+  { keySource: "auth" as const, expected: "stored", source: "stored" },
+  { keySource: "auth" as const, apiKey: "explicit", expected: "explicit", source: "explicit" },
+  { keySource: "auth" as const, apiKey: "", expected: undefined, source: "explicit" },
+  { keySource: "env" as const, expected: "fallback", source: "env" },
+  { keySource: "none" as const, expected: undefined, source: "none" },
+  { keySource: "none" as const, apiKey: "explicit", expected: undefined, source: "none" },
+  { keySource: undefined, expected: "fallback", source: "env" },
+])("selected key source controls retained variables: $keySource / $source", async (selection) => {
+  const seen: Seen = {}
+  const ai = createAi({
+    providers: [
+      {
+        id: "p",
+        dialect: "openai-chat",
+        baseUrl: "http://p",
+        apiKeyEnv: "MAIN",
+        apiKeyEnvFallbacks: ["ALT"],
+        keySource: selection.keySource,
+        ...("apiKey" in selection ? { apiKey: selection.apiKey } : {}),
+      },
+    ],
+    env: { ALT: "fallback" },
+    apiKeys: { p: "stored" },
+    fetch: fakeFetch(() => sseResponse([]), seen),
+  })
+  expect(ai.providerEndpoint("p").apiKey).toBe(selection.expected)
+  expect(ai.credentialSource?.("p")).toBe(selection.source)
+  if (selection.keySource === "none") expect(ai.hasKey("p")).toBe(true)
+  await events(ai.stream(req("p")))
+  expect(seen.headers?.authorization).toBe(selection.expected ? `Bearer ${selection.expected}` : undefined)
+  if (selection.keySource === "none") expect(seen.url).toBeDefined()
+})
+
+test("explicit environment mode does not fall through to a stored key", () => {
+  const ai = createAi({
+    providers: [
+      { id: "p", dialect: "openai-chat", baseUrl: "http://p", keySource: "env", apiKeyEnv: "MAIN" },
+    ],
+    env: {},
+    apiKeys: { p: "stored" },
+  })
+  expect(ai.providerEndpoint("p").apiKey).toBeUndefined()
+  expect(ai.credentialSource?.("p")).toBe("none")
+  expect(ai.hasKey("p")).toBe(false)
+})
+
 test("no provider is built in: only the configured ones exist", () => {
   const empty = createAi()
   expect(empty.providers()).toEqual([])

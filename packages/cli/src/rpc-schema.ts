@@ -420,7 +420,15 @@ const EVENT_DATA: Partial<Record<keyof EventMap, Schema>> = {
     { focused: bool },
     "Whether the user's frontend has focus (from the TUI's terminal, or an rpc client's ui.focus); sent when it changes.",
   ),
-  "ui.progress": obj({ requestId: str, action: str, text: str }),
+  "ui.progress": obj({
+    requestId: str,
+    action: str,
+    text: str,
+    "form?": obj({
+      result: ref("FormActionResult"),
+      errors: { type: "object", additionalProperties: str },
+    }),
+  }),
   "ui.waiting": obj({ pending: num, hidden: bool, change: strings("opened", "resolved", "visibility") }),
   "model.changed": obj({ from: modelRef, to: modelRef }),
   "thinking.changed": obj(
@@ -769,7 +777,7 @@ export function rpcSchema(): Schema {
             title: str,
             "description?": str,
             fields: arrayOf(ref("FormField")),
-            "sections?": arrayOf(obj({ title: str, "help?": str, "optional?": bool })),
+            "sections?": arrayOf(obj({ title: str, "help?": str, "optional?": bool, "collapsed?": bool })),
             "submitLabel?": str,
           },
           "A form; answer with an object of values by field id. Run its action fields with ui.action.",
@@ -832,6 +840,7 @@ export function rpcSchema(): Schema {
       ),
       FormOption: obj({
         value: str,
+        "group?": str,
         "label?": str,
         "description?": str,
         "detail?": oneOf(str, arrayOf(str)),

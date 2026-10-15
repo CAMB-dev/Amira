@@ -37,6 +37,7 @@ export function renderFormList(
   ctx: RenderContext,
   on: (o: FormChoice) => boolean,
   boxes = false,
+  indent = INDENT,
 ): string[] {
   const { theme } = ctx
   const chrome = chromeGlyphs(ctx.glyphs)
@@ -45,7 +46,7 @@ export function renderFormList(
   if (state.highlight < state.top) state.top = state.highlight
   if (state.highlight >= state.top + LIST_ROWS) state.top = state.highlight - LIST_ROWS + 1
   state.top = Math.max(0, Math.min(state.top, rows.length - LIST_ROWS))
-  const available = Math.max(0, width - visibleWidth(`${INDENT}${pointer} [ ] `))
+  const available = Math.max(0, width - visibleWidth(`${indent}${pointer} [ ] `))
   const gap = available >= 6 ? 2 : 1
   const subcolumns = boxes && rows.some((o) => Array.isArray(o.detail))
   const widths = subcolumns ? columnWidths(rows, available, gap) : []
@@ -60,41 +61,49 @@ export function renderFormList(
           Math.max(0, Math.floor((available - gap) / 2)),
         )
       : 0
-  const out = rows.slice(state.top, state.top + LIST_ROWS).map((o, j) => {
-    const hl = state.top + j === state.highlight
-    const box = boxes ? `${on(o) ? "[x]" : "[ ]"} ` : on(o) ? `${chrome.optionSelected} ` : "  "
-    const prefix = `${INDENT}${hl ? `${pointer} ` : "  "}${box}`
-    const desc = o.description ? theme.muted(`  ${o.description}`) : ""
-    if (widths.length) {
-      const labelWidth = Math.max(0, width - visibleWidth(prefix) - widths.reduce((n, w) => n + w + gap, 0))
-      const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, chrome.more)
-      const label = hl ? theme.accent(prefix + name) : prefix + name
-      const detail = columns(o.detail)
-      if (!detail.slice(0, widths.length).some(Boolean)) return label
-      const notes = widths
-        .map((size, i) => {
-          const text = truncateToWidth(detail[i] ?? "", size)
-          return " ".repeat(Math.max(0, size - visibleWidth(text))) + text
-        })
-        .join(" ".repeat(gap))
-      return label + " ".repeat(Math.max(0, labelWidth - visibleWidth(name)) + gap) + theme.muted(notes)
+  const out = rows.slice(state.top, state.top + LIST_ROWS).flatMap((o, j) => {
+    const heading =
+      o.group && (j === 0 || rows[state.top + j - 1]?.group !== o.group)
+        ? [truncateToWidth(`${indent}  ${theme.muted(o.group)}`, width, chrome.more)]
+        : []
+    return [...heading, renderRow()]
+
+    function renderRow(): string {
+      const hl = state.top + j === state.highlight
+      const box = boxes ? `${on(o) ? "[x]" : "[ ]"} ` : on(o) ? `${chrome.optionSelected} ` : "  "
+      const prefix = `${indent}${hl ? `${pointer} ` : "  "}${box}`
+      const desc = o.description ? theme.muted(`  ${o.description}`) : ""
+      if (widths.length) {
+        const labelWidth = Math.max(0, width - visibleWidth(prefix) - widths.reduce((n, w) => n + w + gap, 0))
+        const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, chrome.more)
+        const label = hl ? theme.accent(prefix + name) : prefix + name
+        const detail = columns(o.detail)
+        if (!detail.slice(0, widths.length).some(Boolean)) return label
+        const notes = widths
+          .map((size, i) => {
+            const text = truncateToWidth(detail[i] ?? "", size)
+            return " ".repeat(Math.max(0, size - visibleWidth(text))) + text
+          })
+          .join(" ".repeat(gap))
+        return label + " ".repeat(Math.max(0, labelWidth - visibleWidth(name)) + gap) + theme.muted(notes)
+      }
+      if (detailWidth && typeof o.detail === "string" && o.detail) {
+        const labelWidth = Math.max(0, width - visibleWidth(prefix) - detailWidth - gap)
+        const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, chrome.more)
+        const detail = truncateToWidth(o.detail, detailWidth, chrome.more)
+        const padding = Math.max(0, width - visibleWidth(prefix + name + detail))
+        return `${hl ? theme.accent(prefix + name) : prefix + name}${" ".repeat(padding)}${theme.muted(detail)}`
+      }
+      return truncateToWidth(
+        `${indent}${hl ? theme.accent(`${pointer} ${box}${o.label ?? o.value}`) : `  ${box}${o.label ?? o.value}`}${desc}`,
+        width,
+        chrome.more,
+      )
     }
-    if (detailWidth && typeof o.detail === "string" && o.detail) {
-      const labelWidth = Math.max(0, width - visibleWidth(prefix) - detailWidth - gap)
-      const name = truncateToWidth(`${o.label ?? o.value}${desc}`, labelWidth, chrome.more)
-      const detail = truncateToWidth(o.detail, detailWidth, chrome.more)
-      const padding = Math.max(0, width - visibleWidth(prefix + name + detail))
-      return `${hl ? theme.accent(prefix + name) : prefix + name}${" ".repeat(padding)}${theme.muted(detail)}`
-    }
-    return truncateToWidth(
-      `${INDENT}${hl ? theme.accent(`${pointer} ${box}${o.label ?? o.value}`) : `  ${box}${o.label ?? o.value}`}${desc}`,
-      width,
-      chrome.more,
-    )
   })
   if (rows.length > LIST_ROWS)
     out.push(
-      truncateToWidth(INDENT + theme.muted(`  ${state.highlight + 1}/${rows.length}`), width, chrome.more),
+      truncateToWidth(indent + theme.muted(`  ${state.highlight + 1}/${rows.length}`), width, chrome.more),
     )
   return out
 }

@@ -106,6 +106,8 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     })
   const io = opts.io ?? stdio(() => exitNow(0))
   const ui = session.ui ?? new UiRequests(agent.bus, { sessionId: agent.sessionId })
+  // JSONL has actions and direct submission, but no live change/visibility/preview callbacks.
+  ui.nativeFormCallbacks = false
   const nonInteractive = session.nonInteractive === true || session.ui === undefined
   let lastTurn: LastTurn | undefined
   const prepareAgent = (a: Agent) => {

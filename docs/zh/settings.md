@@ -185,6 +185,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `providers.<id>.baseUrl` | `string` | 必填 | 请求发送到的地址。 | 是 |
 | `providers.<id>.apiKeyEnv` | `string` | 无 | 存放 API 密钥的环境变量名（不是密钥本身）。环境变量中没有密钥时，使用 `auth.json` 中保存的密钥。 | 是 |
 | `providers.<id>.apiKeyEnvFallbacks` | `string[]` | 无 | `apiKeyEnv` 未设置或为空时，按顺序尝试的环境变量。 | 是 |
+| `providers.<id>.keySource` | `"auth" \| "env" \| "none"` | 无 | `"auth"` 读取 `auth.json`；`"env"` 只使用 `apiKeyEnv` 和 `apiKeyEnvFallbacks`；`"none"` 不查找 API 密钥。省略时保留旧版行为：先尝试环境变量，再读取 `auth.json`。 | 是 |
 | `providers.<id>.headers` | `Record<string, string>` | 无 | 每个请求附带的额外 HTTP 请求头。 | 是 |
 | `providers.<id>.compat.maxTokensField` | `"max_tokens" \| "max_completion_tokens"` | `"max_tokens"` | `openai-chat`：携带输出 token 上限的字段。 |  |
 | `providers.<id>.compat.webSearch` | `boolean` | 仅在 api.openai.com、Azure OpenAI、api.anthropic.com 和 generativelanguage.googleapis.com 上开启 | `openai-responses`、`anthropic-messages`、`google-gemini`：使用 provider 托管的网页搜索，此时模型不再获得 `web_search` 工具（`web_fetch` 保留）。同时带有 Amira 的工具时，Gemini 需要 Gemini 3 模型。模型的 `caps.webSearch` 优先；`web.nativeSearch: false` 会全局关闭它。 |  |

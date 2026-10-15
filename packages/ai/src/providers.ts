@@ -32,6 +32,8 @@ export interface ProviderConfig {
   apiKeyEnv?: string
   /** Variables tried in order when apiKeyEnv is unset. */
   apiKeyEnvFallbacks?: string[]
+  /** Selects stored, environment or no key; omitted keeps environment-then-stored resolution. */
+  keySource?: "auth" | "env" | "none"
   apiKey?: string
   headers?: Record<string, string>
   compat?: ProviderCompat

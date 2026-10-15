@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test"
-import type {
-  AgentStatusState,
-  AnyEvent,
-  EventEnvelope,
-  FormActionResult,
-  FormSpec,
-  FormValues,
+import {
+  type AgentStatusState,
+  type AnyEvent,
+  type EventEnvelope,
+  type FormActionResult,
+  type FormSpec,
+  type FormValues,
+  formDefaults,
+  type ProviderAdmin,
+  providerFormSpec,
+  providerVendorInitial,
 } from "@amira/api"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
@@ -80,9 +84,9 @@ test("choose sends sections and takes a key of the option's section, or the opti
     { at: 0, choose: "open", keys: [{ key: "p", label: "print" }] },
     { at: 1, title: "Worktrees" },
   ]
-  const first = api.choose("Pick", ["a", "b"], { sections })
+  const first = api.choose("Pick", ["a", "b"], { sections, initial: "b" })
   const req = await next()
-  expect(req.data).toMatchObject({ kind: "select", options: ["a", "b"], sections })
+  expect(req.data).toMatchObject({ kind: "select", options: ["a", "b"], sections, initial: "b" })
   // p is a key of a's section only.
   expect(ui.respond(req.data.requestId, { option: "b", key: "p" })).toContain("keys of the option's section")
   expect(ui.respond(req.data.requestId, { option: "a", key: "p" })).toBeUndefined()
@@ -563,4 +567,166 @@ test("a confirm takes always and other text only when it offers them", async () 
   const api = ui.api().confirm("Sure?")
   ui.respond((await next()).data.requestId, true)
   expect(await api).toBe(true)
+})
+
+test("live form transport keeps callbacks and secrets on the host and checks direct responses before saving", async () => {
+  const { ui, next, events, bus } = setup()
+  let checks = 0
+  const spec: FormSpec = {
+    title: "Live",
+    fields: [
+      { type: "text", id: "name", label: "Name" },
+      { type: "secret", id: "key", label: "Key" },
+      { type: "checkbox", id: "saveAnyway", label: "Save anyway" },
+    ],
+    change: (values, previous) => ({
+      values: { name: `${previous.name}:${values.name}`, key: "unsafe", unknown: "unsafe" },
+    }),
+    preview: (values) => [`Save ${values.name}`],
+    beforeSubmit: async ({ values }) => {
+      checks++
+      return values.saveAnyway
+        ? {}
+        : { tone: "error", message: "Check failed", values: { key: "unsafe", saveAnyway: false } }
+    },
+  }
+  const answer = ui.form(spec)
+  const request = (await next()).data
+  const id = request.requestId
+  expect(ui.changeForm(id, { name: "new", key: "PRIVATE" }, { name: "old" })).toEqual({
+    values: { name: "old:new" },
+  })
+  expect(ui.previewForm(id, { name: "demo", key: "PRIVATE" })).toEqual(["Save demo"])
+  expect(await ui.beforeSubmitForm(id, { name: "demo", key: "PRIVATE" })).toEqual({
+    tone: "error",
+    message: "Check failed",
+    values: { saveAnyway: false },
+  })
+  ui.respond(id, { name: "demo", key: "PRIVATE", saveAnyway: false })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(ui.requestState(id)).toBe("pending")
+  ui.respond(id, { name: "demo", key: "PRIVATE", saveAnyway: true })
+  expect(await answer).toEqual({ name: "demo", key: "PRIVATE", saveAnyway: true })
+  expect(checks).toBe(3)
+  await bus.flush()
+  expect(JSON.stringify(events)).not.toContain("PRIVATE")
+  expect(JSON.stringify(request)).not.toMatch(/beforeSubmit|preview|change/)
+})
+
+test("direct form responses publish and retain filtered recovery updates and validation errors", async () => {
+  const { ui, next, bus, events } = setup()
+  let attempts = 0
+  const answer = ui.form({
+    title: "Recovery",
+    fields: [
+      { type: "secret", id: "key", label: "Key" },
+      { type: "checkbox", id: "recover", label: "Show recovery" },
+      { type: "text", id: "fix", label: "Fix", when: { field: "recover", is: true }, required: true },
+    ],
+    beforeSubmit: async () =>
+      ++attempts === 1
+        ? { tone: "error", message: "Fix the settings", values: { recover: true, key: "must-not-publish" } }
+        : undefined,
+  })
+  const id = (await next()).data.requestId
+  expect(ui.respond(id, { key: "typed-secret" })).toBeUndefined()
+  await Bun.sleep(0)
+  await bus.flush()
+  const progress = events.find((event) => event.type === "ui.progress")
+  expect(progress).toMatchObject({
+    data: { form: { result: { values: { recover: true } }, errors: { fix: "is required" } } },
+  })
+  expect(JSON.stringify(events)).not.toContain("typed-secret")
+  expect(JSON.stringify(events)).not.toContain("must-not-publish")
+  expect(ui.respond(id, {})).toContain("Fix: is required")
+  expect(ui.respond(id, { fix: "corrected" })).toBeUndefined()
+  expect(await answer).toMatchObject({ recover: true, fix: "corrected" })
+})
+
+test("hosted provider auth-to-env reveal does not mark the hidden environment default as touched", async () => {
+  const { ui, next } = setup()
+  const vendors = [
+    { id: "first", name: "First", env: ["FIRST_KEY"], dialect: "openai-chat", baseUrl: "https://first.test" },
+    {
+      id: "second",
+      name: "Second",
+      env: ["SECOND_KEY"],
+      dialect: "openai-chat",
+      baseUrl: "https://second.test",
+    },
+  ]
+  const admin: ProviderAdmin = {
+    cachedVendors: () => vendors,
+    dialects: () => ["openai-chat"],
+    exists: () => false,
+    draft: () => undefined,
+    storedKeyHint: () => undefined,
+    envIsSet: () => false,
+    listModels: async () => [],
+    describeModels: (_draft, ids) => ids.map((id) => ({ id, inCatalog: false })),
+    test: async () => ({ ok: true, latencyMs: 1, message: "unused" }),
+    save: async () => "unused",
+    remove: async () => "unused",
+    setKey: async () => "unused",
+  }
+  const spec = providerFormSpec(admin, undefined, providerVendorInitial(admin, vendors[0]!))
+  const answer = ui.form(spec)
+  const id = (await next()).data.requestId
+  const previous = formDefaults(spec)
+  expect(previous).toMatchObject({ vendor: "first", keySource: "auth", apiKeyEnv: "FIRST_KEY" })
+  expect(ui.visibleForm(id, "apiKeyEnv", previous)).toBe(false)
+  const revealed = { ...previous, keySource: "env" }
+  const reveal = ui.changeForm(id, revealed, previous)
+  const current = { ...revealed, ...reveal.values }
+  expect(ui.visibleForm(id, "apiKeyEnv", current)).toBe(true)
+  const changed = ui.changeForm(id, { ...current, vendor: "second" }, current)
+  expect(changed.values).toMatchObject({
+    apiKeyEnv: "SECOND_KEY",
+    id: "second",
+    baseUrl: "https://second.test",
+  })
+  ui.cancel(id)
+  expect(await answer).toBeUndefined()
+})
+
+test.each(["change", "visible", "preview"] as const)(
+  "frontends without native callbacks use dialogs for %s even in native mode",
+  async (callback) => {
+    const { ui, next } = setup()
+    ui.nativeFormCallbacks = false
+    ui.formMode = "native"
+    const spec: FormSpec = { title: "Callback form", fields: [{ type: "text", id: "name", label: "Name" }] }
+    if (callback === "change") spec.change = () => ({})
+    else if (callback === "visible") spec.visible = () => true
+    else spec.preview = () => ["Preview"]
+    const answer = ui.form(spec)
+    const request = (await next()).data
+    expect(request.kind).toBe("input")
+    ui.cancel(request.requestId)
+    expect(await answer).toBeUndefined()
+  },
+)
+
+test("frontends without live callbacks keep static and beforeSubmit-only forms native", async () => {
+  const { ui, next } = setup()
+  ui.nativeFormCallbacks = false
+  const spec: FormSpec = { title: "Static", fields: [{ type: "text", id: "name", label: "Name" }] }
+  const first = ui.form(spec)
+  const request = (await next()).data
+  expect(request.kind).toBe("form")
+  ui.respond(request.requestId, { name: "first" })
+  expect(await first).toEqual({ name: "first" })
+  let checks = 0
+  const second = ui.form({
+    ...spec,
+    beforeSubmit: async () => {
+      checks++
+      return undefined
+    },
+  })
+  const checked = (await next()).data
+  expect(checked.kind).toBe("form")
+  ui.respond(checked.requestId, { name: "second" })
+  expect(await second).toEqual({ name: "second" })
+  expect(checks).toBe(1)
 })

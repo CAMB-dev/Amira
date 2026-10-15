@@ -184,6 +184,7 @@ const provider = object(
     baseUrl: string,
     apiKeyEnv: string,
     apiKeyEnvFallbacks: list(string),
+    keySource: oneOf("auth", "env", "none"),
     headers: record(string),
     catalogId: expect("a string or false", (v) => typeof v === "string" || v === false),
     compat: object({

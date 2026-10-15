@@ -341,3 +341,80 @@ test("patterns ignore the spaces a pasted line brings", () => {
   const s: FormSpec = { title: "t", fields: [{ type: "text", id: "v", label: "v", pattern: "[A-Z_]+" }] }
   expect(checkForm(s, { v: "DEEPSEEK_API_KEY " }).errors).toEqual({})
 })
+
+test("live callbacks stay host-side and cannot update secret or unknown fields", async () => {
+  const { runFormChange, runFormBeforeSubmit } = await import("../src/form.ts")
+  const form: FormSpec = {
+    title: "Live",
+    sections: [{ title: "Advanced", collapsed: true }],
+    fields: [
+      { id: "name", type: "text", label: "Name" },
+      { id: "key", type: "secret", label: "Key" },
+      { id: "choice", type: "select", label: "Choice", options: [{ value: "a", group: "Known" }] },
+    ],
+    change: (values, previous) => ({
+      values: { name: `${previous.name}:${values.name}`, key: "SECRET", unknown: "bad" },
+      options: { choice: [{ value: "b", group: "Discovered" }], name: [{ value: "bad" }] },
+    }),
+    preview: (values) => [`Name: ${values.name}`],
+    beforeSubmit: async () => ({
+      tone: "error",
+      message: "Fix the connection",
+      values: { key: "SECRET", name: "fix" },
+    }),
+  }
+  const schema = toFormSchema(form)
+  expect(Object.keys(schema)).not.toContain("change")
+  expect(Object.keys(schema)).not.toContain("preview")
+  expect(Object.keys(schema)).not.toContain("beforeSubmit")
+  expect(schema.sections).toEqual([{ title: "Advanced", collapsed: true }])
+  expect(runFormChange(form, { name: "new" }, { name: "old" })).toEqual({
+    values: { name: "old:new" },
+    options: { choice: [{ value: "b", group: "Discovered" }] },
+  })
+  expect(
+    await runFormBeforeSubmit(
+      form,
+      { name: "new" },
+      { signal: new AbortController().signal, progress: () => {} },
+    ),
+  ).toEqual({ tone: "error", message: "Fix the connection", values: { name: "fix" } })
+})
+
+test("dialogs apply changes, preview the final values and re-ask recovery controls after a failed save", async () => {
+  const changes: string[] = []
+  let checks = 0
+  const form: FormSpec = {
+    title: "Live",
+    fields: [
+      { type: "text", id: "name", label: "Name" },
+      { type: "text", id: "derived", label: "Derived" },
+      { type: "checkbox", id: "failed", label: "Failed" },
+      { type: "checkbox", id: "saveAnyway", label: "Save anyway", when: { field: "failed", is: true } },
+    ],
+    change: (values, previous) => {
+      changes.push(`${previous.name}->${values.name}`)
+      return values.name !== previous.name ? { values: { derived: `${values.name}-derived` } } : {}
+    },
+    preview: (values) => [`Will save ${values.name}/${values.derived}`],
+    beforeSubmit: async ({ values }) => {
+      checks++
+      return values.saveAnyway
+        ? {}
+        : { tone: "error", message: "Connection failed", values: { failed: true, saveAnyway: false } }
+    },
+  }
+  const { ui, asked } = scripted(["demo", "demo-derived", "No", "Save", "Fix", "Yes", "Yes", "Save"])
+  expect(await runFormDialogs(form, ui)).toEqual({
+    name: "demo",
+    derived: "demo-derived",
+    failed: true,
+    saveAnyway: true,
+  })
+  expect(changes[0]).toBe("->demo")
+  expect(checks).toBe(2)
+  expect(asked.some((title) => title.includes("Will save demo/demo-derived\nLive: Save?"))).toBe(true)
+  expect(asked.some((title) => title.includes("Connection failed\nLive: check failed [Fix|Cancel]"))).toBe(
+    true,
+  )
+})

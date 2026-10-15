@@ -1,3 +1,5 @@
+import type { ModelSettings, ProviderSettings } from "./settings.ts"
+
 /** Where a provider's API key comes from. */
 export type ProviderKeySource = "auth" | "env" | "none"
 
@@ -8,12 +10,14 @@ export interface ProviderVendor {
   env: string[]
   dialect?: string
   baseUrl?: string
+  /** Model ids available in the cached catalog. */
+  models?: string[]
 }
 
 /** A provider as `/provider add` and `/provider edit` fill it in. */
 export interface ProviderDraft {
   id: string
-  /** Catalog vendor id when different from `id`; false disables catalog matching. */
+  /** Catalog identity; an explicit own id resets a prior override, false disables matching. */
   catalogId?: string | false
   dialect: string
   baseUrl: string
@@ -23,6 +27,18 @@ export interface ProviderDraft {
   apiKey?: string
   /** keySource env: the variable holding the key. */
   apiKeyEnv?: string
+  /** Variables tried in order when the primary variable is unset; omitted keeps existing fallbacks. */
+  apiKeyEnvFallbacks?: string[]
+  /** Custom request headers; omitted keeps existing headers. */
+  headers?: Record<string, string>
+  /** Protocol compatibility settings; omitted keeps existing settings. */
+  compat?: ProviderSettings["compat"]
+  /**
+   * Per-model settings by model id. Unrelated overrides are retained; an included model's
+   * `fast` replaces its old descriptor (omitting `fast` restores catalog/default behavior).
+   * Omitting modelOverrides keeps every existing override.
+   */
+  modelOverrides?: Record<string, ModelSettings>
   /** Model ids to offer (e.g. in /model completion). */
   models: string[]
   /** Used for models the catalog does not describe. */
@@ -62,6 +78,10 @@ export interface ProviderTestResult {
 export interface ProviderAdmin {
   /** Catalog vendors; the host fetches once if missing. onLoading runs before that fetch starts. */
   vendors?(opts?: { onLoading?: () => void }): Promise<ProviderVendor[]>
+  /** Vendors already in memory; never fetches or waits for the catalog. */
+  cachedVendors?(): ProviderVendor[]
+  /** The exact settings entry save would write, including retained unknown keys, without an API key. */
+  preview?(draft: ProviderDraft): ProviderSettings
   /** The dialects (protocols) providers can speak. */
   dialects(): string[]
   /** A provider configured now. */
@@ -78,8 +98,8 @@ export interface ProviderAdmin {
   describeModels(draft: ProviderDraft, ids: string[]): ProviderModelInfo[]
   /** Sends one tiny request to `model`. */
   test(draft: ProviderDraft, model: string, signal?: AbortSignal): Promise<ProviderTestResult>
-  /** Writes the provider to the user settings (and its key to auth.json) and makes it usable at once. */
-  save(draft: ProviderDraft): Promise<string>
+  /** Writes settings and credentials. persistKeySource defaults to true; false preserves legacy flags-only output. */
+  save(draft: ProviderDraft, opts?: { persistKeySource?: boolean }): Promise<string>
   /** Removes the provider from the user settings, and its stored key when asked. */
   remove(id: string, opts: { removeKey: boolean }): Promise<string>
   /** Stores a new key for the provider in auth.json and uses it at once. */

@@ -53,6 +53,8 @@ export interface ProviderSettings {
   apiKeyEnv?: string
   /** Variables tried in order when apiKeyEnv is unset. */
   apiKeyEnvFallbacks?: string[]
+  /** Selects stored, environment or no key; omitted keeps environment-then-auth.json resolution. */
+  keySource?: "auth" | "env" | "none"
   headers?: Record<string, string>
   compat?: ProviderCompat
   /** The model catalog's (models.dev) id for this provider, or false to not use the catalog (D51). */
@@ -77,7 +79,7 @@ export interface Settings {
   thinking?: ReasoningEffort | "default"
   /** Prefer each supported model's faster serving tier. Default false. */
   fastMode?: boolean
-  /** baseUrl, apiKeyEnv, apiKeyEnvFallbacks and headers are only taken from the user file. */
+  /** baseUrl, apiKeyEnv, apiKeyEnvFallbacks, keySource and headers are only taken from the user file. */
   providers?: Record<string, ProviderSettings>
   /** Which shell tools the model gets on Windows (D68). */
   shell?: ShellMode

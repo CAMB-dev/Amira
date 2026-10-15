@@ -185,6 +185,7 @@ Amira に組み込みのプロバイダーはありません。各エントリ�
 | `providers.<id>.baseUrl` | `string` | 必須 | リクエストの送信先エンドポイントです。 | はい |
 | `providers.<id>.apiKeyEnv` | `string` | なし | API キーを格納する環境変数の名前です。キーそのものではありません。環境変数にキーがなければ、`auth.json` に保存したキーを使用します。 | はい |
 | `providers.<id>.apiKeyEnvFallbacks` | `string[]` | なし | `apiKeyEnv` が未設定または空の場合に、順番に試す環境変数です。 | はい |
+| `providers.<id>.keySource` | `"auth" \| "env" \| "none"` | なし | `"auth"` は `auth.json` を読み、`"env"` は `apiKeyEnv` と `apiKeyEnvFallbacks` のみを使います。`"none"` は API キーの検索を無効にします。省略すると従来どおり、環境変数、次に `auth.json` の順に試します。 | はい |
 | `providers.<id>.headers` | `Record<string, string>` | なし | すべてのリクエストに付ける追加の HTTP ヘッダーです。 | はい |
 | `providers.<id>.compat.maxTokensField` | `"max_tokens" \| "max_completion_tokens"` | `"max_tokens"` | `openai-chat` で出力トークン数の上限を送るフィールドです。 |  |
 | `providers.<id>.compat.webSearch` | `boolean` | api.openai.com、Azure OpenAI、api.anthropic.com、generativelanguage.googleapis.com でのみ有効 | `openai-responses`、`anthropic-messages`、`google-gemini` で、プロバイダーが提供するホスト型 Web 検索を有効にします。この場合、モデルに `web_search` ツールは提供されません（`web_fetch` は引き続き使えます）。Amira のツールと併用する場合、Gemini には Gemini 3 モデルが必要です。モデルの `caps.webSearch` が優先され、`web.nativeSearch: false` はすべてのモデルで無効にします。 |  |

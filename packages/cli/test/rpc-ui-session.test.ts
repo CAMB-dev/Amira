@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
-import type { AnyEvent, Extension, UiApi } from "@amira/api"
+import type { AnyEvent, Extension, ProviderAdmin, ProviderDraft, UiApi } from "@amira/api"
+import { CommandHost } from "@amira/core"
+import { providerCommand } from "../../../extensions/commands/src/provider-command.ts"
+import { createCommandHost } from "../src/control.ts"
 import { runRpc } from "../src/rpc.ts"
 import { createSession } from "../src/session.ts"
 
@@ -39,7 +42,7 @@ function channel() {
   }
 }
 
-async function setup(extension?: Extension, replay = false) {
+async function setup(extension?: Extension, replay = false, providerAdmin?: ProviderAdmin) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "amira-rpc-ui-session-"))
   const home = path.join(dir, "home")
   await mkdir(home)
@@ -81,8 +84,17 @@ async function setup(extension?: Extension, replay = false) {
   const input = channel()
   const out: Line[] = []
   const ready = Promise.withResolvers<void>()
+  const commands = providerAdmin
+    ? new CommandHost({
+        agent: session.agent,
+        bus: session.agent.bus,
+        registry: session.host.commands,
+        ui: session.host.ui,
+        control: { ...createCommandHost({ session, cwd: dir, home }).control, providerAdmin },
+      })
+    : undefined
   const done = runRpc(
-    { agent: session.agent, ai, ui: session.host.ui },
+    { agent: session.agent, ai, ui: session.host.ui, commands },
     {
       pending: replay ? pending : undefined,
       onReady: () => ready.resolve(),
@@ -255,3 +267,131 @@ test("RPC settings-save errors and successful retry preserve display association
   expect(resolved.data).toEqual({ requestId: request.data.requestId, cancelled: false })
   expect((await rpc.call({ cmd: "state" })).uiRequests).toEqual([])
 })
+
+for (const keySource of ["auth", "env"] as const) {
+  test(`RPC provider add preserves vendor callbacks and masked confirmation with ${keySource} credentials`, async () => {
+    const drafts: ProviderDraft[] = []
+    const tested: ProviderDraft[] = []
+    const vendor = {
+      id: "anthropic",
+      name: "Anthropic",
+      dialect: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      env: ["ANTHROPIC_API_KEY"],
+      models: ["claude-test"],
+    }
+    const admin: ProviderAdmin = {
+      cachedVendors: () => [vendor],
+      vendors: async () => [vendor],
+      dialects: () => ["openai-chat", "anthropic-messages"],
+      exists: () => false,
+      draft: () => undefined,
+      storedKeyHint: () => undefined,
+      envIsSet: () => keySource === "env",
+      listModels: async () => {
+        throw new Error("Fetching was declined")
+      },
+      describeModels: (_draft, ids) =>
+        ids.map((id) => ({ id, inCatalog: true, cost: { input: 1, output: 2 } })),
+      preview: (draft) => ({
+        dialect: draft.dialect,
+        baseUrl: draft.baseUrl,
+        headers: { "X-Private": "HEADER_PRIVATE" },
+        ...(draft.apiKeyEnv ? { apiKeyEnv: draft.apiKeyEnv } : {}),
+        models: draft.models.map((id) => ({ id })),
+      }),
+      test: async (draft) => {
+        tested.push(draft)
+        return { ok: true, latencyMs: 1, message: "Connection checked" }
+      },
+      save: async (draft) => {
+        drafts.push(draft)
+        return `Saved provider "${draft.id}".`
+      },
+      remove: async () => "unused",
+      setKey: async () => "unused",
+    }
+    const rpc = await setup(
+      (api) => {
+        api.registerCommand(providerCommand())
+      },
+      false,
+      admin,
+    )
+    if (keySource === "env") {
+      // Native preference cannot bypass the transport's missing callback support.
+      expect((await rpc.call({ cmd: "ui.configure", forms: "native" })).ok).toBe(true)
+    }
+    const running = rpc.call({ cmd: "command.run", text: "/provider add" })
+    let index = 0
+    const requests: Line[] = []
+    for (;;) {
+      await rpc.until(() => rpc.out.filter((line) => line.type === "ui.request").length > index)
+      const request = rpc.out.filter((line) => line.type === "ui.request")[index++]!.data
+      requests.push(request)
+      expect(request.kind).not.toBe("form")
+      let value: unknown
+      if (request.title.includes(" · Vendor")) {
+        value = request.options.find((option: string) => option.includes("Anthropic (anthropic)"))
+        expect(value).toBeDefined()
+      } else if (request.title.includes(" · Id")) {
+        expect(request.initial).toBe("anthropic")
+        value = request.initial
+      } else if (request.title.includes(" · Protocol")) {
+        expect(request.options[0]).toContain("anthropic-messages")
+        value = request.options[0]
+      } else if (request.title.includes(" · Base URL")) {
+        expect(request.initial).toBe(vendor.baseUrl)
+        value = request.initial
+      } else if (request.title.includes(" · Key source")) {
+        expect(request.options[0]).toBe(keySource === "auth" ? "auth.json" : "Environment variable")
+        value = request.options[0]
+      } else if (request.title.includes(" · API key")) {
+        expect(keySource).toBe("auth")
+        expect(request.secret).toBe(true)
+        value = "TYPED_PRIVATE_KEY"
+      } else if (request.title.includes(" · Environment variable")) {
+        expect(keySource).toBe("env")
+        expect(request.initial).toBe("ANTHROPIC_API_KEY")
+        value = request.initial
+      } else if (request.title.startsWith("Fetch models?")) value = "No"
+      else if (request.title.includes(" · Models")) {
+        expect(request.options.some((option: string) => option.startsWith("[x] claude-test"))).toBe(true)
+        value = "Done"
+      } else if (request.title.includes(": set these now?")) value = "No"
+      else if (request.title.includes(" · Allow a potentially billed connection test")) value = "Yes"
+      else if (request.title.startsWith("Test connection?")) value = "No"
+      else {
+        expect(request.options).toEqual(["Save", "Cancel"])
+        expect(request.title).toContain("settings.json")
+        expect(request.title).toContain('"anthropic"')
+        expect(request.title).toContain('"X-Private": "••••"')
+        expect(request.title).toContain('"claude-test"')
+        expect(request.title).toContain(keySource === "auth" ? "•••• (new key)" : "auth.json: unchanged")
+        expect(drafts).toEqual([])
+        value = "Save"
+      }
+      expect((await rpc.call({ cmd: "ui.respond", requestId: request.requestId, value })).ok).toBe(true)
+      if (request.options?.[0] === "Save") break
+    }
+    expect((await running).ok).toBe(true)
+    expect(drafts).toHaveLength(1)
+    expect(drafts[0]).toMatchObject({
+      id: "anthropic",
+      catalogId: "anthropic",
+      dialect: "anthropic-messages",
+      baseUrl: vendor.baseUrl,
+      keySource,
+      models: ["claude-test"],
+      ...(keySource === "auth" ? { apiKey: "TYPED_PRIVATE_KEY" } : { apiKeyEnv: "ANTHROPIC_API_KEY" }),
+    })
+    expect(tested).toHaveLength(1)
+    expect(
+      requests.some((request) => request.title.includes(" · Allow a potentially billed connection test")),
+    ).toBe(true)
+    expect(requests.some((request) => request.title.includes(" · Allow unencrypted HTTP"))).toBe(false)
+    expect(requests.some((request) => request.title.includes(" · Save anyway"))).toBe(false)
+    expect(JSON.stringify(rpc.out)).not.toContain("TYPED_PRIVATE_KEY")
+    expect(JSON.stringify(rpc.out)).not.toContain("HEADER_PRIVATE")
+  })
+}

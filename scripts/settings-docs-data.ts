@@ -289,6 +289,13 @@ export const annotations: Record<string, Annotation> = {
     ja: "`apiKeyEnv` が未設定または空の場合に、順番に試す環境変数です。",
     userOnly: true,
   },
+  "providers.<id>.keySource": {
+    default: none,
+    en: '`"auth"` reads `auth.json`; `"env"` uses only `apiKeyEnv` and `apiKeyEnvFallbacks`; `"none"` disables API-key lookup. Omit to keep legacy behavior: try environment variables, then `auth.json`.',
+    zh: '`"auth"` 读取 `auth.json`；`"env"` 只使用 `apiKeyEnv` 和 `apiKeyEnvFallbacks`；`"none"` 不查找 API 密钥。省略时保留旧版行为：先尝试环境变量，再读取 `auth.json`。',
+    ja: '`"auth"` は `auth.json` を読み、`"env"` は `apiKeyEnv` と `apiKeyEnvFallbacks` のみを使います。`"none"` は API キーの検索を無効にします。省略すると従来どおり、環境変数、次に `auth.json` の順に試します。',
+    userOnly: true,
+  },
   "providers.<id>.headers": {
     default: none,
     en: "Extra HTTP headers sent with every request.",

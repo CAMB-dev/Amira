@@ -5,7 +5,10 @@ import {
   checkForm,
   type FormValues,
   formDefaults,
+  isFieldVisible,
   runFormAction,
+  runFormChange,
+  runFormDialogs,
   toFormSchema,
 } from "../src/form.ts"
 import {
@@ -15,6 +18,7 @@ import {
   providerVendorLabel,
 } from "../src/provider-form.ts"
 import type { ProviderAdmin, ProviderDraft, ProviderVendor } from "../src/providers.ts"
+import type { ModelSettings } from "../src/settings.ts"
 
 const VENDOR: ProviderVendor = {
   id: "vendor",
@@ -206,7 +210,7 @@ test.each([
   })
   expect(autoFormActions(form, {})).toEqual(ready ? ["fetchModels"] : [])
   expect(form.fields.find((field) => field.id === "baseUrl")).toMatchObject({
-    help: "Non-loopback HTTP would send the key unencrypted. Use Fetch models manually.",
+    help: "Remote HTTP sends credentials unencrypted. Use HTTPS or explicitly allow HTTP below.",
   })
   expect(seen).toEqual([])
 })
@@ -246,6 +250,9 @@ test("fetch is automatic on add or initially empty edit, while connection tests 
       "keySource",
       "apiKey",
       "apiKeyEnv",
+      "httpConsent",
+      "headers",
+      "apiKeyEnvFallbacks",
       { field: "id", when: { keySource: "auth", apiKey: "" } },
     ])
     expect(autoFormActions(form, { apiKey: "typed-key", models: ["picked-later"] })).toEqual(["fetchModels"])
@@ -279,7 +286,7 @@ test("fetch results name the provider as list source and models.dev as metadata 
     signal: new AbortController().signal,
     progress: (text) => progress.push(text),
   })
-  expect(progress).toEqual([`asking ${VENDOR.baseUrl}…`])
+  expect(progress).toEqual(["asking the provider…"])
   expect(result.message).toBe("2 models listed · models.dev details for 1.")
   expect(result.options?.models?.map((option) => option.value)).toEqual(["known", "custom"])
   expect(seen).toHaveLength(1)
@@ -319,8 +326,8 @@ test.each([
   }
 })
 
-test("draft conversion stores only distinct catalog ids and preserves explicit opt-out", () => {
-  expect(draftFromValues({ id: " vendor " }, undefined, "vendor").catalogId).toBeUndefined()
+test("draft conversion preserves explicit catalog identity and opt-out", () => {
+  expect(draftFromValues({ id: " vendor " }, undefined, "vendor").catalogId).toBe("vendor")
   expect(draftFromValues({ id: "renamed" }, undefined, "vendor").catalogId).toBe("vendor")
   expect(draftFromValues({}, "existing", false).catalogId).toBe(false)
   expect(draftFromValues({ id: "x", catalogId: "not-editable" }).catalogId).toBeUndefined()
@@ -392,7 +399,7 @@ test("model info columns carry limits and catalog prices for initial and fetched
   const result = await runFormAction(
     form,
     "fetchModels",
-    {},
+    { baseUrl: VENDOR.baseUrl! },
     {
       signal: new AbortController().signal,
       progress: () => {},
@@ -413,7 +420,7 @@ test("a form connection test resolving after cancellation reports cancellation, 
   const result = await runFormAction(
     providerFormSpec(admin),
     "testConnection",
-    { models: ["m"] },
+    { models: ["m"], baseUrl: VENDOR.baseUrl!, testConsent: true },
     {
       signal: controller.signal,
       progress: () => {},
@@ -439,4 +446,665 @@ test("Edit credential guidance keeps the live key instead of implying a disk rel
     expect(field.placeholder).not.toContain("keep the stored key")
     expect("default" in field).toBe(false)
   }
+})
+
+function actionContext(values: FormValues, signal = new AbortController().signal) {
+  return { values, signal, progress: () => {} }
+}
+
+const READY_VALUES: FormValues = {
+  id: "new-provider",
+  dialect: "openai-chat",
+  baseUrl: "https://api.example/v1",
+  keySource: "none",
+  models: ["first", "second"],
+}
+
+test("one-page vendor choices use only the cache and keep curated Popular order before All vendors", () => {
+  const { admin } = fakeAdmin()
+  admin.vendors = async () => {
+    throw new Error("must not fetch")
+  }
+  admin.cachedVendors = () => [
+    VENDOR,
+    { ...VENDOR, id: "openai", name: "OpenAI", models: ["cached-model"] },
+    { ...VENDOR, id: "anthropic", name: "Anthropic" },
+    { ...VENDOR, id: "groq", name: "Groq" },
+    { ...VENDOR, id: "deepseek", name: "DeepSeek" },
+  ]
+  const form = providerFormSpec(admin)
+  expect(form.fields[0]).toMatchObject({ type: "select", id: "vendor" })
+  const field = form.fields[0]
+  if (field?.type !== "select") throw new Error("Missing vendor select")
+  expect(field.options.map(({ value, group }) => [value, group])).toEqual([
+    ["anthropic", "Popular"],
+    ["openai", "Popular"],
+    ["deepseek", "Popular"],
+    ["groq", "Popular"],
+    ["vendor", "All vendors"],
+    ["__custom__", "All vendors"],
+  ])
+  expect(field.options.at(-1)?.label).toBe("Custom (choose protocol)")
+  expect(form.sections?.find((section) => section.title === "Advanced")).toMatchObject({ collapsed: true })
+  const previous = formDefaults(form)
+  const result = form.change?.({ ...previous, vendor: "openai" }, previous)
+  expect(result?.values).toMatchObject({
+    id: "openai",
+    dialect: VENDOR.dialect,
+    baseUrl: VENDOR.baseUrl,
+    keySource: "env",
+    apiKeyEnv: "ALTERNATE_KEY",
+    models: ["cached-model"],
+  })
+  expect(result?.options?.models).toEqual([{ value: "cached-model" }])
+})
+
+test("vendor changes preserve custom IDs, edited fields, and fields changed back to their old default", () => {
+  const { admin } = fakeAdmin()
+  admin.cachedVendors = () => [
+    VENDOR,
+    {
+      ...VENDOR,
+      id: "other",
+      dialect: "anthropic-messages",
+      baseUrl: "https://other.example",
+      models: ["other-model"],
+    },
+  ]
+  const form = providerFormSpec(admin)
+  let previous = formDefaults(form)
+  const choose = (patch: FormValues) => {
+    const values = { ...previous, ...patch }
+    const updates = form.change?.(values, previous).values
+    previous = { ...values, ...updates }
+  }
+  choose({ vendor: "vendor" })
+  choose({ id: "personal-id", dialect: "anthropic-messages", models: ["custom/model"] })
+  choose({ dialect: "openai-chat" })
+  choose({ vendor: "other" })
+  expect(previous).toMatchObject({
+    id: "personal-id",
+    dialect: "openai-chat",
+    models: ["custom/model"],
+    baseUrl: "https://other.example",
+  })
+  expect(draftFromValues(previous).catalogId).toBe("other")
+})
+
+test("explicit initial flags survive vendor changes and edit IDs cannot be changed", () => {
+  const { admin } = fakeAdmin()
+  admin.cachedVendors = () => [VENDOR]
+  const form = providerFormSpec(admin, undefined, { id: "flag-id", baseUrl: "https://flag.example" })
+  const previous = formDefaults(form)
+  const result = form.change?.({ ...previous, vendor: "vendor" }, previous)
+  expect(result?.values).not.toHaveProperty("id")
+  expect(result?.values).not.toHaveProperty("baseUrl")
+  const existing = { ...draftFromValues(READY_VALUES), id: "fixed" }
+  const editing = providerFormSpec(admin, existing)
+  expect(editing.fields.some((field) => field.id === "id")).toBe(false)
+  expect(draftFromValues({ ...READY_VALUES, id: "injected" }, existing.id, undefined, existing).id).toBe(
+    "fixed",
+  )
+})
+
+test("advanced headers, fallback variables and fast descriptors round trip without losing unknown model settings", () => {
+  const { admin } = fakeAdmin()
+  const overrides: Record<string, ModelSettings & { futureSetting: { preserve: boolean } }> = {
+    first: { id: "first", contextWindow: 99999, fast: false, futureSetting: { preserve: true } },
+  }
+  const existing: ProviderDraft = { ...draftFromValues(READY_VALUES), modelOverrides: overrides }
+  const form = providerFormSpec(admin, existing)
+  const values = {
+    ...formDefaults(form),
+    headers: "Authorization=Bearer literal-secret\nX-Team=${TEAM}",
+    apiKeyEnvFallbacks: "KEY_A, KEY_B",
+    modelFast:
+      '{"first":{"kind":"service-tier","value":"priority","textOnly":true,"responseHeader":"x-tier"}}',
+    compat_maxTokensField: "max_completion_tokens",
+    compat_streamUsage: "false",
+  }
+  const checked = checkForm(form, values)
+  expect(checked.errors).toEqual({})
+  const draft = draftFromValues(checked.values, existing.id, existing.catalogId, existing)
+  expect(draft.headers).toEqual({ Authorization: "Bearer literal-secret", "X-Team": "${TEAM}" })
+  expect(draft.apiKeyEnvFallbacks).toEqual(["KEY_A", "KEY_B"])
+  expect(draft.compat).toEqual({ maxTokensField: "max_completion_tokens", streamUsage: false })
+  expect(draft.modelOverrides?.first).toMatchObject({
+    contextWindow: 99999,
+    futureSetting: { preserve: true },
+    fast: { kind: "service-tier", value: "priority", textOnly: true, responseHeader: "x-tier" },
+  })
+  const cleared = draftFromValues({ ...checked.values, modelFast: "{}" }, existing.id, undefined, existing)
+  expect(cleared.modelOverrides?.first).not.toHaveProperty("fast")
+  expect(cleared.modelOverrides?.first).toHaveProperty("futureSetting")
+  expect(existing.modelOverrides?.first?.fast).toBe(false)
+})
+
+test.each([
+  '{"m":true}',
+  '{"m":{"kind":"service-tier"}}',
+  '{"m":{"kind":"anthropic-speed","value":"priority"}}',
+  '{"m":{"kind":"service-tier","value":"priority","extra":true}}',
+  '{"m":{"kind":"service-tier","value":"priority","textOnly":"yes"}}',
+  "[false]",
+  "null",
+  "{",
+])("invalid fast descriptor %s fails validation without breaking live changes", (modelFast) => {
+  const { admin } = fakeAdmin()
+  const form = providerFormSpec(admin)
+  const previous = formDefaults(form)
+  expect(checkForm(form, { ...READY_VALUES, modelFast }).errors).toHaveProperty("modelFast")
+  expect(() => form.change?.({ ...previous, modelFast }, previous)).not.toThrow()
+  expect(autoFormActions(form, { ...READY_VALUES, modelFast })).toEqual([])
+})
+
+test("compatibility controls preserve unrendered and unrelated options and can clear rendered compat", () => {
+  const { admin } = fakeAdmin()
+  const existing: ProviderDraft = {
+    ...draftFromValues(READY_VALUES),
+    compat: { maxTokensField: "max_completion_tokens", streamUsage: false, webSearch: true },
+  }
+  const form = providerFormSpec(admin, existing)
+  const unchanged = checkForm(form, formDefaults(form)).values
+  expect(draftFromValues(unchanged, existing.id, undefined, existing).compat).toEqual(existing.compat)
+  const values = checkForm(form, { ...formDefaults(form), dialect: "anthropic-messages" }).values
+  expect(values).not.toHaveProperty("compat_streamUsage")
+  expect(values).not.toHaveProperty("compat_maxTokensField")
+  expect(values).toHaveProperty("compat_thinking")
+  expect(draftFromValues(values, existing.id, undefined, existing).compat).toEqual(existing.compat)
+  const cleared = draftFromValues({ ...values, compat_webSearch: "" }, existing.id, undefined, existing)
+  expect(cleared.compat).toEqual({ maxTokensField: "max_completion_tokens", streamUsage: false })
+})
+
+test("live preview uses persistence preview and masks keys, literal headers, and URL credentials", () => {
+  const { admin } = fakeAdmin()
+  let previewed: ProviderDraft | undefined
+  admin.preview = (draft) => {
+    previewed = draft
+    return {
+      dialect: draft.dialect,
+      baseUrl: "https://user:password@api.example/v1?api_key=query-secret",
+      headers: { Authorization: "Bearer header-secret", "X-Env": "${HEADER_KEY}" },
+      models: [{ id: "first", contextWindow: 12345 }],
+    }
+  }
+  const form = providerFormSpec(admin)
+  const preview =
+    form.preview?.({ ...READY_VALUES, keySource: "auth", apiKey: "auth-secret" }).join("\n") ?? ""
+  expect(previewed?.apiKey).toBe("auth-secret")
+  for (const secret of ["auth-secret", "password", "query-secret", "header-secret"])
+    expect(preview).not.toContain(secret)
+  expect(preview).toContain("${HEADER_KEY}")
+  expect(preview).toContain("12345")
+  expect(preview).toContain("key → auth.json: new-provider →")
+  expect(preview).toContain("new key")
+})
+
+test("manual and automatic remote HTTP fetching requires explicit consent, and fetched options retain custom IDs", async () => {
+  const { admin } = fakeAdmin()
+  const calls: ProviderDraft[] = []
+  admin.listModels = async (draft) => {
+    calls.push(draft)
+    return [{ id: "listed", inCatalog: false }]
+  }
+  const form = providerFormSpec(admin)
+  const values = { ...READY_VALUES, baseUrl: "http://remote.example/v1", models: ["custom"] }
+  expect(autoFormActions(form, values)).toEqual([])
+  expect((await runFormAction(form, "fetchModels", values, actionContext(values))).tone).toBe("error")
+  expect(calls).toEqual([])
+  expect(autoFormActions(form, { ...values, httpConsent: true })).toEqual(["fetchModels"])
+  const allowed = { ...values, httpConsent: true }
+  const result = await runFormAction(form, "fetchModels", allowed, actionContext(allowed))
+  expect(calls).toHaveLength(1)
+  expect(result.options?.models?.map((option) => option.value)).toEqual(["listed", "custom"])
+  expect(result.values).toBeUndefined()
+})
+
+test.each([undefined, { input: 1, output: 2 }])(
+  "save requires explicit consent for unknown or paid cost %j",
+  async (cost) => {
+    const { admin } = fakeAdmin()
+    let calls = 0
+    admin.describeModels = (_, ids) => ids.map((id) => ({ id, inCatalog: !!cost, ...(cost ? { cost } : {}) }))
+    admin.test = async (_, model) => {
+      calls++
+      expect(model).toBe("first")
+      return { ok: true, latencyMs: 1, message: "OK" }
+    }
+    const form = providerFormSpec(admin)
+    expect((await form.beforeSubmit?.(actionContext(READY_VALUES)))?.tone).toBe("error")
+    expect(calls).toBe(0)
+    const allowed = { ...READY_VALUES, testConsent: true }
+    expect((await form.beforeSubmit?.(actionContext(allowed)))?.tone).toBe("success")
+    expect(calls).toBe(1)
+    expect(await form.beforeSubmit?.(actionContext(allowed))).toBeUndefined()
+    expect(calls).toBe(1)
+  },
+)
+
+test("known-free tests need no billing consent; empty-model saves send no requests", async () => {
+  const { admin } = fakeAdmin()
+  let calls = 0
+  admin.describeModels = (_, ids) => ids.map((id) => ({ id, inCatalog: true, cost: { input: 0, output: 0 } }))
+  admin.test = async () => {
+    calls++
+    return { ok: true, latencyMs: 1, message: "OK" }
+  }
+  const form = providerFormSpec(admin)
+  expect((await form.beforeSubmit?.(actionContext(READY_VALUES)))?.tone).toBe("success")
+  expect(calls).toBe(1)
+  expect(await form.beforeSubmit?.(actionContext({ ...READY_VALUES, models: [] }))).toBeUndefined()
+  expect(calls).toBe(1)
+})
+
+test("failed probes block save with fix guidance until Save anyway; changing inputs revokes consent and failure override", async () => {
+  const { admin } = fakeAdmin()
+  let calls = 0
+  admin.test = async () => {
+    calls++
+    return { ok: false, latencyMs: 1, message: "failure" }
+  }
+  const form = providerFormSpec(admin)
+  const values = { ...formDefaults(form), ...READY_VALUES, testConsent: true }
+  const failure = await form.beforeSubmit?.(actionContext(values))
+  expect(failure).toMatchObject({ tone: "error" })
+  expect(failure?.message).toContain("Fix")
+  expect((await form.beforeSubmit?.(actionContext(values)))?.tone).toBe("error")
+  expect(calls).toBe(1)
+  const override = { ...values, saveAnyway: true, httpConsent: true }
+  expect(await form.beforeSubmit?.(actionContext(override))).toBeUndefined()
+  const changed = { ...override, baseUrl: "https://changed.example/v1" }
+  const updates = form.change?.(changed, override).values
+  expect(updates).toMatchObject({ testConsent: false, httpConsent: false, saveAnyway: false })
+  expect((await form.beforeSubmit?.(actionContext({ ...changed, ...updates })))?.tone).toBe("error")
+  expect(calls).toBe(1)
+})
+
+test("save-time cancellation blocks persistence, and a late test cannot validate changed inputs", async () => {
+  const { admin } = fakeAdmin()
+  const controller = new AbortController()
+  admin.test = async () => {
+    controller.abort()
+    return { ok: true, latencyMs: 1, message: "OK" }
+  }
+  const form = providerFormSpec(admin)
+  const values = { ...formDefaults(form), ...READY_VALUES, testConsent: true }
+  expect(await form.beforeSubmit?.(actionContext(values, controller.signal))).toEqual({
+    message: "Cancelled. Nothing was saved.",
+    tone: "error",
+  })
+  admin.test = async () => {
+    form.change?.({ ...values, baseUrl: "https://changed.example" }, values)
+    return { ok: true, latencyMs: 1, message: "OK" }
+  }
+  expect((await form.beforeSubmit?.(actionContext(values)))?.message).toContain("Inputs changed")
+})
+
+test("incomplete persistence previews stay safe and malformed endpoints never start model requests", async () => {
+  const { admin } = fakeAdmin()
+  admin.preview = () => {
+    throw new Error("unsafe raw diagnostic")
+  }
+  let calls = 0
+  admin.listModels = async () => {
+    calls++
+    return []
+  }
+  const form = providerFormSpec(admin)
+  expect(form.preview?.({})).toEqual(["Complete valid provider details to preview settings."])
+  expect(
+    (
+      await runFormAction(
+        form,
+        "fetchModels",
+        { ...READY_VALUES, baseUrl: "ftp://remote.example" },
+        actionContext({}),
+      )
+    ).tone,
+  ).toBe("error")
+  expect(calls).toBe(0)
+})
+
+test("automatic fetch can use a configured fallback environment variable", () => {
+  const { admin } = fakeAdmin()
+  const form = providerFormSpec(admin)
+  expect(
+    autoFormActions(form, {
+      ...READY_VALUES,
+      keySource: "env",
+      apiKeyEnv: "UNSET_KEY",
+      apiKeyEnvFallbacks: "ALTERNATE_KEY",
+    }),
+  ).toEqual(["fetchModels"])
+})
+
+test("Provider and API key fields stay in their own contiguous sections", () => {
+  const { admin } = fakeAdmin()
+  const fields = providerFormSpec(admin).fields
+  expect(fields.slice(0, 9).map(({ id, section }) => [id, section])).toEqual([
+    ["vendor", "Provider"],
+    ["id", "Provider"],
+    ["dialect", "Provider"],
+    ["baseUrl", "Provider"],
+    ["httpConsent", "Provider"],
+    ["keySource", "API key"],
+    ["apiKey", "API key"],
+    ["apiKeyEnv", "API key"],
+    ["fetchModels", "Models"],
+  ])
+})
+
+test("dialog-normalized hidden key fields do not count as edits during vendor changes", () => {
+  const { admin } = fakeAdmin()
+  admin.cachedVendors = () => [VENDOR]
+  const form = providerFormSpec(admin)
+  const previous = formDefaults(form)
+  const values = checkForm(form, { ...previous, vendor: VENDOR.id }).values
+  expect(values).not.toHaveProperty("apiKeyEnv")
+  const result = runFormChange(form, values, previous)
+  expect(result.values).toMatchObject({ keySource: "env", apiKeyEnv: "ALTERNATE_KEY" })
+  const populated = { ...previous, ...values, ...result.values }
+  const switchAuth = { ...populated, keySource: "auth" }
+  runFormChange(form, checkForm(form, switchAuth).values, populated)
+  const custom = runFormChange(
+    form,
+    checkForm(form, { ...switchAuth, vendor: "__custom__" }).values,
+    switchAuth,
+  )
+  expect(custom.values).toHaveProperty("apiKeyEnv", "")
+})
+
+test("only relevant request changes revoke consent and cached connection results", async () => {
+  const { admin } = fakeAdmin()
+  let calls = 0
+  admin.test = async () => {
+    calls++
+    return { ok: true, latencyMs: 1, message: "OK" }
+  }
+  const form = providerFormSpec(admin)
+  const previous = {
+    ...formDefaults(form),
+    ...READY_VALUES,
+    httpConsent: true,
+    testConsent: true,
+    saveAnyway: true,
+  }
+  await form.beforeSubmit?.(actionContext(previous))
+  const unrelated = {
+    ...previous,
+    contextWindow: 12345,
+    maxOutput: 1000,
+    thinking: true,
+    models: ["first", "different-second"],
+    modelFast: '{"first":false}',
+    apiKeyEnv: "HIDDEN_UNUSED_KEY",
+  }
+  const updates = runFormChange(form, unrelated, previous).values
+  expect(updates).not.toHaveProperty("httpConsent")
+  expect(updates).not.toHaveProperty("testConsent")
+  expect(updates).not.toHaveProperty("saveAnyway")
+  expect(await form.beforeSubmit?.(actionContext(unrelated))).toBeUndefined()
+  expect(calls).toBe(1)
+  const modelChange = runFormChange(form, { ...unrelated, models: ["other"] }, unrelated).values
+  expect(modelChange).toMatchObject({ testConsent: false, saveAnyway: false })
+  expect(modelChange).not.toHaveProperty("httpConsent")
+  const endpointChange = runFormChange(form, { ...unrelated, headers: "X-Test=value" }, unrelated).values
+  expect(endpointChange).toMatchObject({ httpConsent: false, testConsent: false, saveAnyway: false })
+})
+
+test("a prechecked Save anyway cannot bypass the first failed test", async () => {
+  const { admin } = fakeAdmin()
+  admin.test = async () => ({ ok: false, latencyMs: 1, message: "failed" })
+  const form = providerFormSpec(admin)
+  const values = { ...READY_VALUES, testConsent: true, saveAnyway: true }
+  const result = await form.beforeSubmit?.(actionContext(values))
+  expect(result).toMatchObject({ tone: "error", values: { saveAnyway: false } })
+  expect((await form.beforeSubmit?.(actionContext({ ...values, ...result?.values })))?.tone).toBe("error")
+  expect(await form.beforeSubmit?.(actionContext(values))).toBeUndefined()
+})
+
+test("consent controls appear only for remote HTTP and paid models, and recovery only after failure", async () => {
+  const { admin } = fakeAdmin()
+  admin.describeModels = (_draft, ids) =>
+    ids.map((id) => ({ id, inCatalog: true, cost: { input: id === "free" ? 0 : 1, output: 0 } }))
+  admin.test = async () => ({ ok: false, latencyMs: 1, message: "Failed" })
+  const form = providerFormSpec(admin, undefined, {
+    id: "mine",
+    dialect: "openai-chat",
+    baseUrl: "https://example.test",
+    keySource: "none",
+    models: ["free"],
+  })
+  const values = formDefaults(form)
+  const visible = (id: string, input = values) =>
+    isFieldVisible(form, form.fields.find((field) => field.id === id)!, input)
+  expect(visible("httpConsent")).toBe(false)
+  expect(visible("testConsent")).toBe(false)
+  expect(visible("saveAnyway")).toBe(false)
+  expect(visible("httpConsent", { ...values, baseUrl: "http://remote.test" })).toBe(true)
+  expect(visible("httpConsent", { ...values, baseUrl: "http://127.0.0.1:8080" })).toBe(false)
+  const paid = { ...values, models: ["paid"], testConsent: true }
+  expect(visible("testConsent", paid)).toBe(true)
+  expect((await form.beforeSubmit!(actionContext(paid)))?.tone).toBe("error")
+  expect(visible("saveAnyway", paid)).toBe(true)
+})
+
+test.each([false, "other"])("selecting the provider's own vendor replaces prior identity %j", (catalogId) => {
+  const { admin } = fakeAdmin()
+  admin.cachedVendors = () => [VENDOR]
+  const existing = { ...draftFromValues(READY_VALUES), id: VENDOR.id, catalogId }
+  const form = providerFormSpec(admin, existing)
+  const previous = formDefaults(form)
+  const values = { ...previous, vendor: VENDOR.id }
+  const updates = runFormChange(form, values, previous).values
+  expect(draftFromValues({ ...values, ...updates }, existing.id, catalogId, existing).catalogId).toBe(
+    VENDOR.id,
+  )
+})
+
+test("revealing an untouched environment name does not pin it across vendor changes", () => {
+  const { admin } = fakeAdmin()
+  admin.envIsSet = () => false
+  admin.cachedVendors = () => [VENDOR, { ...VENDOR, id: "other", env: ["OTHER_KEY"] }]
+  const form = providerFormSpec(admin)
+  let previous = formDefaults(form)
+  const change = (patch: FormValues) => {
+    const values = { ...previous, ...patch }
+    previous = { ...values, ...runFormChange(form, values, previous).values }
+  }
+  change({ vendor: VENDOR.id })
+  expect(previous).toMatchObject({ keySource: "auth", apiKeyEnv: "VENDOR_API_KEY" })
+  change({ keySource: "env" })
+  change({ vendor: "other" })
+  expect(previous.apiKeyEnv).toBe("OTHER_KEY")
+  change({ apiKeyEnv: "PERSONAL_KEY" })
+  change({ vendor: VENDOR.id })
+  expect(previous.apiKeyEnv).toBe("PERSONAL_KEY")
+})
+
+test("fallback-only credentials can be entered through the actual dialog flow", async () => {
+  const { admin } = fakeAdmin()
+  const form = providerFormSpec(admin, undefined, {
+    id: "fallback-only",
+    baseUrl: "https://api.example/v1",
+    keySource: "env",
+  })
+  const questions: string[] = []
+  let primaryQuestions = 0
+  const values = await runFormDialogs(form, {
+    select: async (title, options) => {
+      questions.push(title)
+      if (title.startsWith("Advanced:")) return "Yes"
+      if (title.includes("Fetch models?") || title.startsWith("Defaults for")) return "No"
+      if (title.includes(" · Models")) return "Done"
+      return options[0]
+    },
+    input: async (title, opts) => {
+      questions.push(title)
+      if (title.includes(" · Environment variable")) {
+        // A repeat means the user cannot reach Advanced; cancel instead of looping forever.
+        return ++primaryQuestions === 1 ? "" : undefined
+      }
+      if (title.includes(" · Fallback key environment variables")) return "ALTERNATE_KEY"
+      return opts?.initial ?? ""
+    },
+  })
+  expect(primaryQuestions).toBe(1)
+  expect(questions.some((title) => title.startsWith("Advanced:"))).toBe(true)
+  expect(values).toMatchObject({ keySource: "env", apiKeyEnv: "", apiKeyEnvFallbacks: "ALTERNATE_KEY" })
+  expect(checkForm(form, { ...values, apiKeyEnvFallbacks: "" }).errors).toHaveProperty("apiKeyEnvFallbacks")
+  expect(checkForm(form, { ...values, apiKeyEnv: "BAD-NAME" }).errors).toHaveProperty("apiKeyEnv")
+})
+
+test.each([true, false])(
+  "preview recursively masks legacy apiKey with persistence preview %j",
+  (persisted) => {
+    const { admin } = fakeAdmin()
+    const overrides = {
+      first: { id: "first", apiKey: "legacy-model-secret", future: [{ apiKey: "nested-secret", keep: 7 }] },
+    }
+    const entry = {
+      apiKey: "legacy-provider-secret",
+      dialect: "openai-chat",
+      models: Object.values(overrides),
+      future: { apiKey: "future-secret", keep: true },
+    }
+    if (persisted) admin.preview = () => entry
+    const existing = { ...draftFromValues(READY_VALUES), modelOverrides: overrides }
+    const form = providerFormSpec(admin, existing)
+    const preview = form.preview?.(formDefaults(form)).join("\n") ?? ""
+    for (const secret of ["legacy-provider-secret", "legacy-model-secret", "nested-secret", "future-secret"])
+      expect(preview).not.toContain(secret)
+    expect(preview).toContain('"keep": 7')
+    expect(existing.modelOverrides?.first).toEqual(overrides.first)
+    expect(entry.apiKey).toBe("legacy-provider-secret")
+  },
+)
+
+test.each(["none", "manual", "save"])(
+  "Save shares a pending manual probe with independent %s cancellation",
+  async (cancel) => {
+    const { admin } = fakeAdmin()
+    let calls = 0
+    const releases: (() => void)[] = []
+    let requestSignal: AbortSignal | undefined
+    admin.test = async (_draft, _model, signal) => {
+      calls++
+      requestSignal = signal
+      await new Promise<void>((resolve) => {
+        releases.push(resolve)
+      })
+      return { ok: true, latencyMs: 1, message: "OK" }
+    }
+    const form = providerFormSpec(admin)
+    const values = { ...READY_VALUES, testConsent: true }
+    const manual = new AbortController()
+    const save = new AbortController()
+    const testResult = runFormAction(form, "testConnection", values, actionContext(values, manual.signal))
+    const saveResult = form.beforeSubmit!(actionContext(values, save.signal))
+    if (cancel === "manual") {
+      manual.abort()
+      expect((await testResult)?.tone).toBe("warning")
+    }
+    if (cancel === "save") {
+      save.abort()
+      expect((await saveResult)?.tone).toBe("error")
+    }
+    const callsWhilePending = calls
+    const requestAborted = requestSignal?.aborted
+    for (const release of releases) release()
+    const results = await Promise.all([testResult, saveResult])
+    expect(callsWhilePending).toBe(1)
+    expect(requestAborted).toBe(false)
+    expect(results[0]?.tone).toBe(cancel === "manual" ? "warning" : "success")
+    expect(results[1]?.tone).toBe(cancel === "save" ? "error" : "success")
+    expect(await form.beforeSubmit!(actionContext(values))).toBeUndefined()
+    expect(calls).toBe(1)
+  },
+)
+
+test("a shared pending probe cannot validate changed inputs, even after returning to the old values", async () => {
+  const { admin } = fakeAdmin()
+  let release = () => {}
+  let calls = 0
+  admin.test = async () => {
+    calls++
+    if (calls === 1)
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    return { ok: true, latencyMs: 1, message: "OK" }
+  }
+  const form = providerFormSpec(admin)
+  const values = { ...READY_VALUES, testConsent: true }
+  const manual = runFormAction(form, "testConnection", values, actionContext(values))
+  const save = form.beforeSubmit!(actionContext(values))
+  const changed = { ...values, baseUrl: "https://changed.example" }
+  runFormChange(form, changed, values)
+  runFormChange(form, values, changed)
+  release()
+  const results = await Promise.all([manual, save])
+  for (const result of results)
+    expect(result).toMatchObject({ tone: "error", message: expect.stringContaining("Inputs changed") })
+  expect(calls).toBe(1)
+  expect((await form.beforeSubmit!(actionContext(values)))?.tone).toBe("success")
+  expect(calls).toBe(2)
+})
+
+test("cancelling every probe caller aborts the request without caching a late result", async () => {
+  const { admin } = fakeAdmin()
+  let calls = 0
+  let release = () => {}
+  let requestSignal: AbortSignal | undefined
+  admin.test = async (_draft, _model, signal) => {
+    calls++
+    requestSignal = signal
+    if (calls === 1)
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    return { ok: true, latencyMs: 1, message: "OK" }
+  }
+  const form = providerFormSpec(admin)
+  const values = { ...READY_VALUES, testConsent: true }
+  const manual = new AbortController()
+  const save = new AbortController()
+  const testResult = runFormAction(form, "testConnection", values, actionContext(values, manual.signal))
+  const saveResult = form.beforeSubmit!(actionContext(values, save.signal))
+  manual.abort()
+  save.abort()
+  const results = await Promise.all([testResult, saveResult])
+  expect(calls).toBe(1)
+  expect(requestSignal?.aborted).toBe(true)
+  expect(results.map((result) => result?.tone)).toEqual(["warning", "error"])
+  release()
+  expect((await form.beforeSubmit!(actionContext(values)))?.tone).toBe("success")
+  expect(calls).toBe(2)
+})
+
+test("Save awaits the current manual retest rather than an older successful cached test", async () => {
+  const { admin } = fakeAdmin()
+  const gate = Promise.withResolvers<void>()
+  let calls = 0
+  admin.test = async () => {
+    if (++calls === 1) return { ok: true, latencyMs: 1, message: "old success" }
+    await gate.promise
+    return { ok: false, latencyMs: 1, message: "new failure" }
+  }
+  const form = providerFormSpec(admin)
+  const values = { ...READY_VALUES, testConsent: true }
+  await runFormAction(form, "testConnection", values, actionContext(values))
+  const manual = runFormAction(form, "testConnection", values, actionContext(values))
+  let settled = false
+  const save = form.beforeSubmit!(actionContext(values)).then((result) => {
+    settled = true
+    return result
+  })
+  await Bun.sleep(0)
+  const savedBeforeRetest = settled
+  gate.resolve()
+  const results = await Promise.all([manual, save])
+  expect(savedBeforeRetest).toBe(false)
+  expect(calls).toBe(2)
+  expect(results.map((result) => result?.tone)).toEqual(["error", "error"])
 })

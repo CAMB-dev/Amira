@@ -185,6 +185,7 @@ Amira has no built-in providers: an entry needs `dialect` and `baseUrl`, and `ba
 | `providers.<id>.baseUrl` | `string` | required | The endpoint requests go to. | Yes |
 | `providers.<id>.apiKeyEnv` | `string` | none | Environment variable holding the API key (its name, not the key). Without a key in the environment, the key stored in `auth.json` is used. | Yes |
 | `providers.<id>.apiKeyEnvFallbacks` | `string[]` | none | Variables tried in order when `apiKeyEnv` is unset or empty. | Yes |
+| `providers.<id>.keySource` | `"auth" \| "env" \| "none"` | none | `"auth"` reads `auth.json`; `"env"` uses only `apiKeyEnv` and `apiKeyEnvFallbacks`; `"none"` disables API-key lookup. Omit to keep legacy behavior: try environment variables, then `auth.json`. | Yes |
 | `providers.<id>.headers` | `Record<string, string>` | none | Extra HTTP headers sent with every request. | Yes |
 | `providers.<id>.compat.maxTokensField` | `"max_tokens" \| "max_completion_tokens"` | `"max_tokens"` | `openai-chat`: the field that carries the output token limit. |  |
 | `providers.<id>.compat.webSearch` | `boolean` | on only at api.openai.com, Azure OpenAI, api.anthropic.com and generativelanguage.googleapis.com | `openai-responses`, `anthropic-messages`, `google-gemini`: offer the provider's hosted web search; the model then does not get the `web_search` tool (`web_fetch` stays). With Amira's tools, Gemini needs a Gemini 3 model. A model's `caps.webSearch` wins; `web.nativeSearch: false` turns it off everywhere. |  |

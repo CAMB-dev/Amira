@@ -6,6 +6,7 @@ import {
   type ProviderDraft,
   type ProviderFormInitial,
   type ProviderModelInfo,
+  type ProviderTestResult,
   providerFormSpec,
 } from "@amira/api"
 import { EventBus, UiRequests } from "@amira/core"
@@ -53,7 +54,11 @@ function setup(
   const ui = new UiRequests(new EventBus())
   let saved: unknown
   let answer: Promise<unknown> | undefined
-  if (opts.hosted) answer = ui.form(spec)
+  if (opts.hosted)
+    answer = ui.form(spec).then((values) => {
+      saved = values
+      return values
+    })
   const request = ui.pending[0]
   if (opts.hosted && request?.kind !== "form") throw new Error("expected a form request")
   const backend =
@@ -67,9 +72,10 @@ function setup(
   const screen = () => view.render(120, { ...plain, rows: 100 }).join("\n")
   const focus = (id: string) => {
     const ids = spec.fields.filter((f) => isFieldVisible(spec, f, view.form.values)).map((f) => f.id)
-    for (let i = 0; i < ids.length + 2 && view.form.focused !== id; i++) {
-      const before = ids.indexOf(view.form.focused)
-      view.handleInput(key("tab", { shift: before < 0 || before > ids.indexOf(id) }))
+    if (view.form.focused !== id) {
+      const steps = ids.length + (spec.sections?.length ?? 0) + 2
+      for (let i = 0; i < steps; i++) view.handleInput(key("tab", { shift: true }))
+      for (let i = 0; i < steps && view.form.focused !== id; i++) view.handleInput(key("tab"))
     }
     expect(view.form.focused).toBe(id)
   }
@@ -146,6 +152,69 @@ test.each([false, true])(
   },
 )
 
+test.each([false, true])(
+  "vendor keyboard changes update an untouched environment name but preserve a typed one (hosted: %s)",
+  async (hosted) => {
+    for (const custom of [false, true]) {
+      const form = setup({
+        hosted,
+        initial: {
+          id: "anthropic",
+          catalogId: "anthropic",
+          dialect: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com/v1",
+          keySource: "auth",
+          apiKeyEnv: "ANTHROPIC_API_KEY",
+        },
+        admin: {
+          cachedVendors: () => [
+            {
+              id: "anthropic",
+              name: "Anthropic",
+              dialect: "anthropic-messages",
+              baseUrl: "https://api.anthropic.com/v1",
+              env: ["ANTHROPIC_API_KEY"],
+            },
+            {
+              id: "openai",
+              name: "OpenAI",
+              dialect: "openai-chat",
+              baseUrl: "https://api.openai.com/v1",
+              env: ["OPENAI_API_KEY"],
+            },
+          ],
+        },
+      })
+      try {
+        expect(form.view.form.values.keySource).toBe("auth")
+        form.focus("keySource")
+        form.view.handleInput(key("enter"))
+        form.type("Environment")
+        form.view.handleInput(key("enter"))
+        expect(form.view.form.values.keySource).toBe("env")
+        expect(form.view.form.values.apiKeyEnv).toBe("ANTHROPIC_API_KEY")
+        if (custom) {
+          form.focus("apiKeyEnv")
+          form.view.handleInput(key("u", { ctrl: true }))
+          form.type("MY_PROVIDER_KEY")
+        }
+        // Do not focus or edit the environment name in the untouched case.
+        form.focus("vendor")
+        form.view.handleInput(key("enter"))
+        form.type("OpenAI")
+        form.view.handleInput(key("enter"))
+        expect(form.view.form.values.vendor).toBe("openai")
+        expect(form.view.form.values.baseUrl).toBe("https://api.openai.com/v1")
+        expect(form.view.form.values.apiKeyEnv).toBe(custom ? "MY_PROVIDER_KEY" : "OPENAI_API_KEY")
+        expect(form.view.form.values.keySource).toBe("env")
+        expect(form.calls).toEqual([])
+      } finally {
+        await form.close()
+      }
+    }
+  },
+)
+
 test("a typed auth key fetches only after leaving the key field; changing the URL refetches", async () => {
   const form = setup({ initial: { keySource: "auth" } })
   try {
@@ -214,7 +283,7 @@ test.each(["auth", "env"] as const)("existing %s credentials allow an automatic 
   }
 })
 
-test("remote HTTP warns about plaintext keys and keeps fetching manual", async () => {
+test("remote HTTP requires consent before manual or automatic requests", async () => {
   const form = setup({
     initial: { baseUrl: "http://remote.example/v1", keySource: "env", apiKeyEnv: "SET_KEY" },
     admin: { envIsSet: (name) => name === "SET_KEY" },
@@ -222,10 +291,14 @@ test("remote HTTP warns about plaintext keys and keeps fetching manual", async (
   try {
     await tick()
     expect(form.calls).toEqual([])
-    expect(form.screen()).toContain("Non-loopback HTTP would send the key unencrypted.")
+    expect(form.screen()).toContain("Remote HTTP sends credentials")
     form.focus("fetchModels")
     form.view.handleInput(key("enter"))
-    await waitFor(() => form.screen().includes("models listed"), "manual HTTP fetch")
+    await tick()
+    expect(form.calls).toEqual([])
+    form.focus("httpConsent")
+    form.view.handleInput(key("space"))
+    await waitFor(() => form.screen().includes("models listed"), "consented HTTP fetch")
     expect(form.calls).toHaveLength(1)
     expect(form.calls[0]?.signal?.aborted).toBe(false)
     expect(form.calls[0]?.draft.baseUrl).toBe("http://remote.example/v1")
@@ -284,7 +357,8 @@ test.each([false, true])(
     })
     try {
       await waitFor(() => pending.length === 1, "first pending request")
-      expect(form.screen()).toContain("asking https://provider.example/v1")
+      expect(form.screen()).toContain("asking")
+      expect(form.screen()).toContain("https://provider.example/v1")
       form.focus("baseUrl")
       form.view.handleInput(key("u", { ctrl: true }))
       form.type("https://new.example/v1")
@@ -413,7 +487,10 @@ test("a failed automatic fetch appears once inline; custom models and manual ref
     await waitFor(() => form.screen().includes("models listed"), "manual retry")
     expect(form.calls).toHaveLength(2)
     expect(form.view.form.values.models).toEqual(["custom-model"])
+    form.focus("testConsent")
+    form.view.handleInput(key("space"))
     form.view.handleInput(key("s", { ctrl: true }))
+    await waitFor(() => form.saved() !== undefined, "tested save")
     expect(form.saved()).toMatchObject({ models: ["custom-model"] })
   } finally {
     await form.close()
@@ -461,12 +538,121 @@ test("provider form clears the failed-save summary after correcting Id and fetch
     expect(form.screen()).not.toContain("use lower-case letters")
     form.focus("models")
     form.view.handleInput(key("space"))
+    form.focus("testConsent")
+    form.view.handleInput(key("space"))
     form.view.handleInput(key("s", { ctrl: true }))
+    await waitFor(() => form.saved() !== undefined, "tested corrected save")
     expect(form.saved()).toMatchObject({ id: "ui-walk-demo", models: ["served-model"] })
   } finally {
     await form.close()
   }
 })
+
+for (const hosted of [false, true]) {
+  test.each([false, true])(
+    `Save awaits the running paid manual test without another request (hosted: ${hosted}, passes: %s)`,
+    async (ok) => {
+      const pending = Promise.withResolvers<ProviderTestResult>()
+      const signals: Array<AbortSignal | undefined> = []
+      const form = setup({
+        hosted,
+        initial: { models: ["paid-model"] },
+        admin: {
+          describeModels: (_draft, ids) =>
+            ids.map((id) => ({ id, inCatalog: true, cost: { input: 1, output: 2 } })),
+          test: async (_draft, _model, signal) => {
+            signals.push(signal)
+            return pending.promise
+          },
+        },
+      })
+      try {
+        await waitFor(() => form.screen().includes("models listed"), "automatic model list")
+        form.focus("testConsent")
+        form.view.handleInput(key("space"))
+        form.focus("testConnection")
+        form.view.handleInput(key("enter"))
+        await waitFor(() => signals.length === 1, "manual paid connection test")
+        form.view.handleInput(key("s", { ctrl: true }))
+        await tick()
+        expect(signals).toHaveLength(1)
+        expect(form.saved()).toBeUndefined()
+        expect(form.view.closed).toBe(false)
+        expect(signals[0]?.aborted).toBe(false)
+        // Repeated Save must also keep waiting for the same billed request.
+        form.view.handleInput(key("s", { ctrl: true }))
+        await tick()
+        expect(signals).toHaveLength(1)
+        pending.resolve({ ok, latencyMs: 1, message: ok ? "OK" : "Unavailable" })
+        if (!ok) {
+          await waitFor(() => form.screen().includes("Connection test failed"), "failed shared test")
+          expect(form.saved()).toBeUndefined()
+          expect(form.view.closed).toBe(false)
+          form.focus("saveAnyway")
+          form.view.handleInput(key("space"))
+          form.view.handleInput(key("s", { ctrl: true }))
+        }
+        await waitFor(() => form.view.closed, "saved after the shared test result")
+        expect(form.saved()).toMatchObject({ models: ["paid-model"] })
+        expect(signals).toHaveLength(1)
+      } finally {
+        pending.resolve({ ok: false, latencyMs: 0, message: "Stopped" })
+        await form.close()
+      }
+    },
+  )
+
+  test(`Escape on the running manual test cancels the waiting Save (hosted: ${hosted})`, async () => {
+    const pending: ReturnType<typeof Promise.withResolvers<ProviderTestResult>>[] = []
+    const signals: Array<AbortSignal | undefined> = []
+    const form = setup({
+      hosted,
+      initial: { models: ["paid-model"] },
+      admin: {
+        describeModels: (_draft, ids) =>
+          ids.map((id) => ({ id, inCatalog: true, cost: { input: 1, output: 2 } })),
+        test: async (_draft, _model, signal) => {
+          const next = Promise.withResolvers<ProviderTestResult>()
+          signals.push(signal)
+          pending.push(next)
+          return next.promise
+        },
+      },
+    })
+    try {
+      await waitFor(() => form.screen().includes("models listed"), "automatic model list")
+      form.focus("testConsent")
+      form.view.handleInput(key("space"))
+      form.focus("testConnection")
+      form.view.handleInput(key("enter"))
+      await waitFor(() => pending.length === 1, "manual paid connection test")
+      form.view.handleInput(key("s", { ctrl: true }))
+      await tick()
+      expect(pending).toHaveLength(1)
+      form.view.handleInput(key("escape"))
+      await tick()
+      expect(signals[0]?.aborted).toBe(true)
+      expect(form.view.form.confirmingCancel).toBe(false)
+      expect(form.view.closed).toBe(false)
+      pending[0]!.resolve({ ok: true, latencyMs: 1, message: "Late success" })
+      await tick()
+      expect(form.saved()).toBeUndefined()
+      expect(form.view.closed).toBe(false)
+      expect(pending).toHaveLength(1)
+      // Only an explicit new Save may retry and eventually close the form.
+      form.view.handleInput(key("s", { ctrl: true }))
+      await waitFor(() => pending.length === 2, "new connection test after cancellation")
+      expect(form.saved()).toBeUndefined()
+      pending[1]!.resolve({ ok: true, latencyMs: 1, message: "OK" })
+      await waitFor(() => form.view.closed, "saved after the new test")
+      expect(form.saved()).toMatchObject({ models: ["paid-model"] })
+      expect(pending).toHaveLength(2)
+    } finally {
+      for (const p of pending) p.resolve({ ok: false, latencyMs: 0, message: "Stopped" })
+      await form.close()
+    }
+  })
+}
 
 test("provider form has one credential label and one concise model metadata line", async () => {
   const form = setup({ initial: { keySource: "auth" } })
@@ -477,7 +663,7 @@ test("provider form has one credential label and one concise model metadata line
     await waitFor(() => form.calls.length === 1 && form.screen().includes("models.dev"), "model metadata")
     await tick()
     const screen = stripAnsi(form.screen())
-    expect(screen.split("\n").filter((line) => line.trim() === "API key")).toHaveLength(1)
+    expect(screen.split("\n").filter((line) => /^\s*API key\s+─/.test(line))).toHaveLength(1)
     expect(screen).toContain("***********")
     expect(screen).not.toContain("fake-secret")
     expect(screen).toContain("Shown masked, never logged.")
