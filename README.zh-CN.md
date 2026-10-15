@@ -6,7 +6,19 @@ Amira 是用 TypeScript 和 Bun 开发的轻量终端编程 agent。它可以读
 
 > 项目仍在开发中。
 
-## 从源码安装
+## 安装
+
+使用以下任意一个包管理器安装预构建的可执行文件（npm/pnpm 启动器需要 Node.js ≥18；不需要安装 Bun）：
+
+```sh
+npm i -g amira
+pnpm add -g amira
+bun add -g amira
+```
+
+也可以从 [GitHub Releases](https://github.com/CAMB-dev/Amira/releases) 下载压缩包。支持的平台、校验值、签名 manifest 和升级命令见[安装与验证](docs/zh/install.md)。
+
+### 从源码安装
 
 先安装 [Bun](https://bun.sh)，然后在本仓库的本地副本中执行：
 

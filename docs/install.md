@@ -1,6 +1,6 @@
 # Install
 
-[Documentation](../README.md)
+[简体中文](zh/install.md) · [日本語](ja/install.md) · [Documentation](../README.md)
 
 ## Package managers
 

@@ -6,9 +6,9 @@
 
 ```sh
 bun install --frozen-lockfile
-bun run build                       # 当前平台和架构
+bun run build                       # Current platform and architecture
 bun run build --target bun-windows-x64
-bun run build:all                   # 全部七个目标
+bun run build:all                   # All seven targets
 bun run build:all --version 0.1.0-nightly.20261011 --channel next
 ```
 
@@ -45,6 +45,18 @@ CI 在推送到 `main` 和提交 pull request 时运行，使用 Ubuntu、Window
 
 Nightly 工作流每天 **UTC 18:00** 运行，也可在 GitHub Actions 中手动触发。如果 `main` 自上一个 nightly 以来没有新提交，则跳过。三个平台通过相同检查后，由一个 runner 交叉编译全部七个目标，渠道为 `next`。独立的本机 runner 校验并解压压缩包，在不安装 Bun 的情况下对 Windows x64、Linux x64（两者均包含 baseline）和 macOS ARM64 进行冒烟测试。由于 `macos-13` 已于 2025 年 12 月退役，macOS x64 冒烟测试被跳过；当前工作流也没有 Linux ARM64 本机冒烟 runner。
 
-Nightly 可从 [GitHub Releases](https://github.com/CAMB-dev/Amira/releases) 下载。它们是标签为 `v<version>-nightly.<YYYYMMDD>` 的预发布版本；标签已存在时追加数字后缀。发布说明列出自上一个 nightly 以来的提交。每次发布包含全部压缩包和 `SHA256SUMS`：先将资源上传到草稿，再正式发布，已发布版本不会被覆盖或修改。仅保留最新的 **14 个 nightly 预发布版本**，更早的 nightly 及其标签会被删除，非 nightly 版本不受影响。
+Nightly 可从 [GitHub Releases](https://github.com/CAMB-dev/Amira/releases) 下载。它们是标签为 `v<X.Y.Z>-nightly.<YYYYMMDD>` 的预发布版本；标签已存在时追加数字后缀。基础版本会去掉 CLI 源码版本中的 RC 后缀：`1.2.3-rc.1` 仍会生成 `v1.2.3-nightly.<YYYYMMDD>`，因此发现已有版本和执行保留策略时使用相同的标签格式。发布说明列出自上一个 nightly 以来的提交。每次发布包含全部压缩包和 `SHA256SUMS`：先将资源上传到草稿，再正式发布，已发布版本不会被覆盖或修改。仅保留最新的 **14 个 nightly 预发布版本**，更早的 nightly 及其标签会被删除，非 nightly 版本不受影响。
 
-签名 manifest、安装脚本、npm 包装器和 `amira update` 不属于本次发布批次。
+## 稳定版标签发布与 npm
+
+标签发布工作流增加了签名 manifest 和分平台的 npm 包。支持的平台、验证方法和维护者检查清单见[安装与发布配置](install.md)。Nightly 工作流仍然只提供压缩包。安装脚本和 `amira update` 留待后续批次实现。
+
+执行 `build:all` 后，为全部五个平台包和启动器生成暂存目录：
+
+```sh
+bun scripts/npm-pack.ts
+cd dist/npm/amira
+npm pack --dry-run --ignore-scripts
+```
+
+进行本地打包冒烟测试时，先构建对应的 npm 目标（x64 平台使用 `bun-windows-x64-baseline` 或 `bun-linux-x64-baseline`），再将该目标传给 `bun scripts/npm-pack.ts --target <target>`。暂存过程从 `dist/build.json` 读取版本、渠道和目标，因此不会悄悄包含先前构建留下的旧二进制文件。生成的包包含 LICENSE 和必须保留的 NOTICE 归属声明。暂存过程仅替换生成的 `dist/npm/` 子目录，不会发布任何内容。
