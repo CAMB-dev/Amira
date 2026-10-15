@@ -1,20 +1,10 @@
 import { createHash } from "node:crypto"
-import { chmod, mkdir, readdir, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import pkg from "../packages/cli/package.json" with { type: "json" }
+import { type Target, targets, validateBuildMetadata } from "./build-metadata.ts"
 
-// Confirmed against Bun 1.4.2's CompileTarget union; do not silently accept other targets.
-export const targets = [
-  "bun-windows-x64",
-  "bun-windows-x64-baseline",
-  "bun-linux-x64",
-  "bun-linux-x64-baseline",
-  "bun-linux-arm64",
-  "bun-darwin-x64",
-  "bun-darwin-arm64",
-] as const satisfies readonly Bun.Build.CompileTarget[]
-
-type Target = (typeof targets)[number]
+export { targets } from "./build-metadata.ts"
 
 export function buildOptions(argv: string[]) {
   let target = `bun-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`
@@ -37,11 +27,7 @@ export function buildOptions(argv: string[]) {
     if (flag === "--channel") channel = value
   }
   if (!targets.includes(target as Target)) throw new Error(`Unsupported target: ${target}`)
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
-    throw new Error(`Invalid version: ${version}`)
-  }
-  if (channel !== "stable" && channel !== "next") throw new Error(`Invalid channel: ${channel}`)
-  return { targets: all ? [...targets] : [target as Target], version, channel }
+  return validateBuildMetadata({ targets: all ? [...targets] : [target], version, channel })
 }
 
 async function command(argv: string[], env?: Record<string, string>) {
@@ -83,6 +69,8 @@ async function build(argv: string[]) {
   const options = buildOptions(argv)
   process.chdir(path.resolve(import.meta.dir, ".."))
   await mkdir("dist", { recursive: true })
+  // A failed rebuild must not let staging label partially replaced binaries with old metadata.
+  await rm("dist/build.json", { force: true })
   for (const target of options.targets) {
     const windows = target.startsWith("bun-windows-")
     const directory = path.join("dist", `amira-${target}`)
@@ -136,6 +124,8 @@ async function build(argv: string[]) {
     sums.push(`${digest}  ${name}\n`)
   }
   await writeFile("dist/SHA256SUMS", sums.join(""))
+  // Consumers must use this build's version/targets, not infer them from the source checkout.
+  await writeFile("dist/build.json", `${JSON.stringify(options, null, 2)}\n`)
 }
 
 if (import.meta.main) await build(process.argv.slice(2))

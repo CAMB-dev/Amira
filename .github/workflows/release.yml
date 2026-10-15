@@ -1,0 +1,420 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Validate and stage only; select an existing release tag, never a branch
+        type: boolean
+        default: true
+        required: true
+
+permissions:
+  contents: read
+
+# Retry the same tag serially. Never cancel in the middle of an upload or npm publication.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Validate tag and source version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+      version: ${{ steps.plan.outputs.version }}
+      channel: ${{ steps.plan.outputs.channel }}
+      dry-run: ${{ steps.plan.outputs.dry-run }}
+      published: ${{ steps.plan.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Reject non-release tags and mismatched versions before doing work
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
+        run: |
+          test "$GITHUB_REF_TYPE" = tag || { echo 'Select an existing release tag, not a branch.' >&2; exit 1; }
+          TAG="$GITHUB_REF_NAME"
+          VERSION=$(bun scripts/version-sync.ts check "$TAG")
+          CHANNEL=stable
+          if [[ "$VERSION" == *-rc.* ]]; then CHANNEL=next; fi
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          PUBLISHED=$(TAG="$TAG" python3 - <<'PY'
+          import json, os
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'releases.json')) as file:
+              releases = [release for page in json.load(file) for release in page]
+          print(str(any(r['tag_name'] == os.environ['TAG'] and not r['draft'] for r in releases)).lower())
+          PY
+          )
+          {
+            echo "tag=$TAG"
+            echo "sha=$(git rev-parse HEAD)"
+            echo "version=$VERSION"
+            echo "channel=$CHANNEL"
+            echo "dry-run=$DRY_RUN"
+            echo "published=$PUBLISHED"
+          } >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Check (${{ matrix.os }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Install terminal rendering fonts (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+
+  build:
+    name: Build or recover immutable release artifacts
+    needs: [plan, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Build all seven targets
+        if: needs.plan.outputs.published != 'true'
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: bun run build:all --version "$VERSION" --channel "$CHANNEL"
+      - name: Recover published bytes for npm retries, never rebuild or mutate them
+        if: needs.plan.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          mkdir -p dist
+          gh release download "$TAG" --dir dist --pattern '*.zip' --pattern '*.tar.gz' \
+            --pattern SHA256SUMS --pattern manifest.json --pattern manifest.json.sig
+      - name: Sign new manifests or verify immutable published manifests
+        env:
+          SIGNING_KEY: ${{ secrets.AMIRA_RELEASE_ED25519_KEY }}
+          DRY_RUN: ${{ needs.plan.outputs.dry-run }}
+          PUBLISHED: ${{ needs.plan.outputs.published }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: |
+          if [[ -z "$SIGNING_KEY" && ( "$DRY_RUN" != true || "$PUBLISHED" == true ) ]]; then
+            echo 'AMIRA_RELEASE_ED25519_KEY (Ed25519 PKCS8 PEM) is required.' >&2
+            exit 1
+          fi
+          if [[ "$PUBLISHED" == true ]]; then
+            bun scripts/sign-manifest.ts verify --key-env SIGNING_KEY
+            cp dist/manifest.json "$RUNNER_TEMP/published-manifest.json"
+            # Regenerate from the downloaded archives to verify metadata, every hash and every target.
+            bun scripts/sign-manifest.ts generate --version "$VERSION" --channel "$CHANNEL" --target all
+            cmp dist/manifest.json "$RUNNER_TEMP/published-manifest.json"
+            # npm staging reads only validated build metadata, including on a retry.
+            bun -e '
+              const m = await Bun.file("dist/manifest.json").json()
+              await Bun.write("dist/build.json", JSON.stringify({
+                version: m.version, channel: m.channel, targets: m.artifacts.map(a => a.target)
+              }))
+            '
+          else
+            bun scripts/sign-manifest.ts generate
+            # Only the public key leaves the signing process; private keys stay in memory.
+            if [[ -n "$SIGNING_KEY" ]]; then
+              bun scripts/sign-manifest.ts sign --key-env SIGNING_KEY > "$RUNNER_TEMP/release-public.pem"
+            else
+              bun scripts/sign-manifest.ts sign --ephemeral true > "$RUNNER_TEMP/release-public.pem"
+            fi
+            bun scripts/sign-manifest.ts verify --public-key "$RUNNER_TEMP/release-public.pem"
+          fi
+          (cd dist && sha256sum --check SHA256SUMS)
+      - name: Restore native files when resuming a published release
+        if: needs.plan.outputs.published == 'true'
+        run: |
+          for archive in dist/*.tar.gz; do
+            mkdir -p "${archive%.tar.gz}"
+            tar -xzf "$archive" -C "${archive%.tar.gz}"
+          done
+          for archive in dist/*.zip; do
+            mkdir -p "${archive%.zip}"
+            unzip -q "$archive" -d "${archive%.zip}"
+          done
+      - name: Stage every platform package and main package before any publication
+        run: bun scripts/npm-pack.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-archives
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/manifest.json
+            dist/manifest.json.sig
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-npm
+          path: dist/npm
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  smoke:
+    name: Native archive smoke (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: bun-linux-x64 bun-linux-x64-baseline
+            exe: amira
+          - os: windows-latest
+            targets: bun-windows-x64 bun-windows-x64-baseline
+            exe: amira.exe
+          - os: macos-latest
+            targets: bun-darwin-arm64
+            exe: amira
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-archives
+          path: dist
+      - name: Verify checksums and smoke-test extracted archives (no Bun installation)
+        env:
+          TARGETS: ${{ matrix.targets }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          # macOS runners ship python3 only, Windows runners python only.
+          py=$(command -v python3 || command -v python)
+          "$py" - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          for line in Path("dist/SHA256SUMS").read_text().splitlines():
+              digest, name = line.split(maxsplit=1)
+              file = Path("dist") / name.lstrip("*")
+              assert hashlib.sha256(file.read_bytes()).hexdigest() == digest, file
+          PY
+          for target in $TARGETS; do
+            mkdir -p "smoke/$target"
+            if [[ "$target" == bun-windows-* ]]; then
+              # Git Bash on Windows runners has no unzip.
+              "$py" -m zipfile -e "dist/amira-$target.zip" "smoke/$target"
+            else
+              tar -xzf "dist/amira-$target.tar.gz" -C "smoke/$target"
+            fi
+            exe=$(find "smoke/$target" -type f -name "$EXE")
+            test -n "$exe"
+            "$exe" --version
+            "$exe" --self-check
+          done
+      - name: Record targets without a native smoke runner
+        if: runner.os == 'macOS'
+        run: |
+          echo 'darwin-x64 smoke skipped: macos-13 retired in December 2025. linux-arm64 smoke skipped: this workflow has no Linux ARM64 runner.' >> "$GITHUB_STEP_SUMMARY"
+
+  npm-dry-run:
+    name: Validate npm publication without publishing
+    needs: [plan, build, smoke]
+    if: needs.plan.outputs.dry-run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-npm
+          path: dist/npm
+      - name: Install the same npm used for publication
+        run: npm install --global npm@11.6.2 --registry=https://registry.npmjs.org
+      - name: Dry-run every platform package, then the main package (no credentials)
+        env:
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: |
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/dry-run.npmrc"
+          printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
+          DIST_TAG=latest
+          if [[ "$CHANNEL" == next ]]; then DIST_TAG=next; fi
+          for directory in dist/npm/amira-* dist/npm/amira; do
+            find "$directory" -type f -name amira -exec chmod 755 {} +
+            npm publish "./$directory" --dry-run --provenance --access public --tag "$DIST_TAG" --ignore-scripts --offline
+          done
+
+  publish:
+    name: Publish GitHub release once
+    needs: [plan, build, smoke]
+    if: needs.plan.outputs.dry-run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-archives
+          path: dist
+      - name: Verify an existing release or upload all assets to a draft and publish once
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
+          python3 - <<'PY'
+          import json, os, subprocess
+          from scripts.release_policy import verify_tag_commit
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'releases.json')) as file:
+              releases = [release for page in json.load(file) for release in page]
+          matches = [r for r in releases if r['tag_name'] == os.environ['TAG']]
+          published = [r for r in matches if not r['draft']]
+          if published:
+              verify_tag_commit(os.environ['GITHUB_REPOSITORY'], os.environ['TAG'], os.environ['SHA'])
+              # Never edit or upload to an already published (possibly immutable) release.
+              subprocess.run(['gh', 'release', 'download', os.environ['TAG'], '--dir', 'existing',
+                              '--pattern', 'manifest.json', '--pattern', 'manifest.json.sig', '--pattern', 'SHA256SUMS'], check=True)
+              for name in ['manifest.json', 'manifest.json.sig', 'SHA256SUMS']:
+                  subprocess.run(['cmp', f'dist/{name}', f'existing/{name}'], check=True)
+              print('Published release verified; leaving it untouched.')
+          else:
+              for release in matches:
+                  subprocess.run(['gh', 'api', '-X', 'DELETE',
+                                  f"repos/{os.environ['GITHUB_REPOSITORY']}/releases/{release['id']}"], check=True)
+              args = ['gh', 'release', 'create', os.environ['TAG'], '--verify-tag', '--target', os.environ['SHA'],
+                      '--draft', '--title', os.environ['TAG'], '--generate-notes']
+              if os.environ['CHANNEL'] == 'next':
+                  args += ['--prerelease', '--latest=false']
+              # Resolve and peel the remote ref, not --verify-tag's existence-only check.
+              verify_tag_commit(os.environ['GITHUB_REPOSITORY'], os.environ['TAG'], os.environ['SHA'])
+              subprocess.run(args, check=True)
+              from pathlib import Path
+              assets = sorted(str(p) for p in Path('dist').iterdir() if p.is_file())
+              subprocess.run(['gh', 'release', 'upload', os.environ['TAG'], *assets], check=True)
+              # The only edit occurs while still a draft. No --clobber, no tag deletion.
+              args = ['gh', 'release', 'edit', os.environ['TAG'], '--draft=false']
+              if os.environ['CHANNEL'] == 'stable':
+                  args += ['--latest']
+              # Recheck after upload; protected tags must also forbid updates/deletions.
+              verify_tag_commit(os.environ['GITHUB_REPOSITORY'], os.environ['TAG'], os.environ['SHA'])
+              subprocess.run(args, check=True)
+          PY
+
+  npm:
+    name: Publish platform packages first, main package last
+    needs: [plan, publish]
+    if: needs.plan.outputs.dry-run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-npm
+          path: dist/npm
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11.6.2 --registry=https://registry.npmjs.org
+      - name: Publish missing immutable versions using OIDC or an explicit token fallback
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: |
+          umask 077
+          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/release.npmrc"
+          trap 'rm -f "$NPM_CONFIG_USERCONFIG"' EXIT
+          printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
+          DIST_TAG=latest
+          if [[ "$CHANNEL" == next ]]; then DIST_TAG=next; fi
+          export DIST_TAG
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          from urllib.parse import quote
+          packages = []
+          for manifest in Path('dist/npm').glob('*/package.json'):
+              pkg = json.loads(manifest.read_text())
+              assert pkg['version'] == os.environ['VERSION'], manifest
+              packages.append((pkg['name'], manifest.parent))
+          assert packages and sum(name == 'amira' for name, _ in packages) == 1
+          # Every optional platform dependency must be published before the main wrapper.
+          packages.sort(key=lambda item: (item[0] == 'amira', item[0]))
+          for name, directory in packages:
+              url = f"https://registry.npmjs.org/{quote(name, safe='')}/{quote(os.environ['VERSION'], safe='')}"
+              # No npm credentials, token, or authorization headers in existence checks.
+              status = subprocess.check_output(['curl', '-q', '--silent', '--show-error', '--output', '/dev/null',
+                                                '--write-out', '%{http_code}', url], text=True).strip()
+              if status == '200':
+                  print(f'{name}@{os.environ["VERSION"]} already exists; skipping', flush=True)
+                  continue
+              if status != '404':
+                  raise RuntimeError(f'Public registry lookup failed for {name}: HTTP {status}')
+              # Artifact transport drops mode bits; the platform executable must remain executable.
+              for binary in directory.rglob('amira'):
+                  if binary.is_file():
+                      binary.chmod(0o755)
+              args = ['npm', 'publish', str(directory.resolve()), '--provenance', '--access', 'public',
+                      '--tag', os.environ['DIST_TAG']]
+              # Prefer trusted publishing even if a fallback token is configured.
+              result = subprocess.run(args, capture_output=True, text=True)
+              print(result.stdout, end='')
+              print(result.stderr, end='', file=sys.stderr)
+              if result.returncode:
+                  if not os.environ.get('NPM_TOKEN') or not any(
+                      code in result.stderr for code in ['ENEEDAUTH', 'E401', 'E403', 'E404']
+                  ):
+                      result.check_returncode()
+                  config = Path(os.environ['NPM_CONFIG_USERCONFIG'])
+                  try:
+                      config.write_text('registry=https://registry.npmjs.org/\n'
+                                        '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n')
+                      subprocess.run(args, check=True)
+                  finally:
+                      config.write_text('registry=https://registry.npmjs.org/\n')
+          PY
