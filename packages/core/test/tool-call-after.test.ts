@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AnyEvent, defineTool, type InterceptorMap, textResult } from "@amira/api"
-import { Agent } from "../src/agent.ts"
+import { Agent, type AgentOptions } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 
-function setup(steps: MockStep[]) {
+function setup(steps: MockStep[], options: Pick<AgentOptions, "writeRoots"> = {}) {
   const mock = createMockDialect(steps)
   const ai = createAi({
     dialects: [mock],
@@ -14,7 +14,14 @@ function setup(steps: MockStep[]) {
   const bus = new EventBus()
   const events: AnyEvent[] = []
   bus.subscribe((e) => void events.push(e))
-  const agent = new Agent({ ai, model: ai.model("mock/test"), cwd: process.cwd(), systemPrompt: "sys", bus })
+  const agent = new Agent({
+    ai,
+    model: ai.model("mock/test"),
+    cwd: process.cwd(),
+    systemPrompt: "sys",
+    bus,
+    ...options,
+  })
   return { agent, mock, bus, events }
 }
 
@@ -61,6 +68,47 @@ test("tool.call.after can change a result: the model, the history and tool.execu
     result: { content: [{ text: "done 1" }, { text: "lint: ok" }], details: { n: 1 } },
   })
 })
+
+for (const [inPlace, bounded] of [
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+]) {
+  test(`${bounded ? "bounded" : "unbounded"} model calls retain ${inPlace ? "in-place" : "replacement"} after-interceptor recovery of execution errors`, async () => {
+    const { agent, mock, bus, events } = setup(
+      [{ toolCalls: [{ name: "failure", args: {}, id: "recover" }] }, { text: "recovered" }],
+      bounded ? { writeRoots: [] } : {},
+    )
+    agent.tools.register(
+      defineTool({
+        name: "failure",
+        description: "",
+        parameters: {},
+        execute: async () => textResult("execution failed", true),
+      }),
+      "test",
+    )
+    agent.interceptors.add("tool.call.after", (value) => {
+      if (inPlace) {
+        value.result.isError = false
+        return { action: "modify", value }
+      }
+      return { action: "modify", value: { ...value, result: textResult("recovered by interceptor") } }
+    })
+    try {
+      await agent.prompt("Recover the result")
+      await bus.flush()
+      expect(agent.messages.find((message) => message.role === "toolResult")?.isError).toBe(false)
+      expect(mock.requests[1]?.messages.find((message) => message.role === "toolResult")?.isError).toBe(false)
+      expect(
+        events.flatMap((event) => (event.type === "tool.execute.end" ? [!!event.data.result.isError] : [])),
+      ).toEqual([false])
+    } finally {
+      await agent.dispose()
+    }
+  })
+}
 
 test("a rejected call starts, goes through tool.call.after, then ends, once each", async () => {
   const { agent, bus, events } = setup([

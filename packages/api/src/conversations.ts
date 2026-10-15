@@ -1,7 +1,7 @@
 import type { ImageBlock, Message, MessageDisplay } from "@amira/ai"
 import type { AnyEvent } from "./events.ts"
 import type { SpawnGroup, SpawnGroupOptions } from "./subagents.ts"
-import type { SessionData, ToolDefinition } from "./tools.ts"
+import type { SessionData, ToolDefinition, ToolResult } from "./tools.ts"
 import type { AskAnswer, AskQuestion } from "./ui.ts"
 
 /** Immutable, persisted identity and execution ceiling of an extension-owned conversation. */
@@ -15,6 +15,10 @@ export interface ConversationSpec {
   systemPrompt: string
   /** Required, fail-closed execution allowlist; reopening cannot widen it. */
   callableTools: string[]
+  /** Absolute file-tool write ceiling; omitted is unbounded, [] denies file writes. Immutable. */
+  writeRoots?: string[]
+  /** Defaults to research (same cwd, no shell); inherit keeps ceilings with normal child execution. */
+  descendants?: "research" | "inherit"
 }
 
 /** Executable capabilities are rebound on every reopen, never serialized. */
@@ -80,6 +84,17 @@ export interface OwnedConversation {
       display?: MessageDisplay
     },
   ): Promise<void>
+  /**
+   * Invokes a persisted callable tool while idle, with this conversation's cwd and policy.
+   * Uses the model tool path (including approval), without a provider request or model messages.
+   * Concurrent send/tool operations and initialization-time execution are rejected.
+   * Tool denials, failures and cancellation return an error result. stop/release cancel and drain.
+   */
+  runTool(
+    name: string,
+    args: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToolResult>
   /** Cancels work, questions and descendants; a later explicit send can continue. */
   stop(reason?: string): Promise<void>
   /** Stops, awaits cleanup and relinquishes the lease. Idempotent; history is retained. */

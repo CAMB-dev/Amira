@@ -254,6 +254,9 @@ test("frontends can focus an owned conversation without changing the main sessio
       async *[Symbol.asyncIterator]() {},
     },
     send: async () => {},
+    runTool: async () => {
+      throw new Error("fixture does not execute")
+    },
     stop: async () => {},
     release: async () => {},
     createGroup: () => {

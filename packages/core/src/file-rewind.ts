@@ -49,6 +49,7 @@ interface InPlace {
 export type FileJournalEntry =
   | {
       type: "file_mutation"
+      /** Branch anchor: a user message or an owner-invoked tool's start record. */
       messageId: string
       sessionId: string
       toolCallId: string
@@ -162,8 +163,14 @@ export class FileRewind {
           "An interrupted file restore must finish before file tools can write; rewind to the same message again, or rewind the conversation only to abandon it if it has conflicts",
         )
       if (!this.enabled) return await write()
-      const message = this.store.branch().findLast((e) => e.type === "message" && e.message.role === "user")
-      if (!message) throw new Error("Cannot capture file changes without a stored user message")
+      const anchor = this.store.branch().findLast((entry) => {
+        if (entry.type === "message" && entry.message.role === "user") return true
+        if (entry.type !== "custom" || entry.ext !== "amira.tool-operations") return false
+        const operation = entry.data as { v?: unknown; phase?: unknown } | null
+        return operation?.v === 1 && operation.phase === "start"
+      })
+      if (!anchor)
+        throw new Error("Cannot capture file changes without a stored user message or tool operation")
       const files: FileImage[] = []
       const seen = new Set<string>()
       try {
@@ -189,7 +196,7 @@ export class FileRewind {
         throw new Error(`File rewind capture failed; write refused: ${(error as Error).message}`)
       }
       // Failure here must propagate, unlike best-effort conversation persistence.
-      const id = this.store.appendDurable({ type: "file_mutation", messageId: message.id, ...source, files })
+      const id = this.store.appendDurable({ type: "file_mutation", messageId: anchor.id, ...source, files })
       try {
         const nested = captureAfter
           ? ((async (nestedChanges: FileMutation[], nestedWrite: () => Promise<void>) => {

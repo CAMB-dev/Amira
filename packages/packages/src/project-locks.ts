@@ -95,7 +95,11 @@ function sessionCwd(file: string): string | undefined {
       if (end >= 0) break
     }
     const header = JSON.parse(Buffer.concat(chunks).toString("utf8"))
-    if (header?.type === "session" && typeof header.cwd === "string" && path.isAbsolute(header.cwd))
+    if (
+      (header?.type === "session" || (header?.type === "session-policy" && header.v === 2)) &&
+      typeof header.cwd === "string" &&
+      path.isAbsolute(header.cwd)
+    )
       return header.cwd
   } catch {
   } finally {

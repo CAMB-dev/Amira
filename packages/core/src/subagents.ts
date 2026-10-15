@@ -25,6 +25,7 @@ import { Agent, type TurnResult } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions } from "./context.ts"
 import { EventBus } from "./event-bus.ts"
+import { intersectWriteRoots } from "./permissions/write-roots.ts"
 import { addNonInteractive, type PromptSection, setSection } from "./prompt.ts"
 import { registerSessionScope } from "./session-routing.ts"
 import { SessionStore } from "./session-store.ts"
@@ -34,8 +35,9 @@ import { ParentConsultant, parseParentAnswers } from "./subagents/consult-parent
 import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
 import { followChild, metaOf, parentMeta } from "./subagents/events.ts"
 import { finalText, forkHistory } from "./subagents/fork.ts"
-import { approveWithHost } from "./subagents/host-approval.ts"
+import { SpawnError, scopeAdmission } from "./subagents/lifecycle.ts"
 import { overlaps } from "./subagents/paths.ts"
+import { childQuestionRouting, hasHumanRouting } from "./subagents/question-routing.ts"
 import { runRoot } from "./subagents/root.ts"
 import { Admission } from "./subagents/scheduler.ts"
 import { standardSections } from "./subagents/sections.ts"
@@ -51,16 +53,13 @@ import { ToolRegistry } from "./tool-registry.ts"
 import { toolTraits } from "./tool-traits.ts"
 
 export type { SpawnedSubagent }
-export { forkHistory, parseParentAnswers, usageTokens }
-
-/** spawn refused: too deep, budget spent, a group's limit reached or an unknown model. */
-export class SpawnError extends Error {}
+export { forkHistory, parseParentAnswers, SpawnError, usageTokens }
 
 export interface AgentTreeOptions {
   ai: Ai
   /** Reuse host admission and accounting, but keep children, groups and teardown independent. */
   shared?: AgentTree
-  /** Research-only descendants: no shell tools, worktrees or parent-model questions. */
+  /** Research-only descendants: no shell tools or worktrees, and human question routing. */
   restricted?: boolean
   /** Deepest a sub-agent may be (D15). See DEFAULT_SUBAGENT_MAX_DEPTH. */
   maxDepth?: number
@@ -98,6 +97,7 @@ interface SpawnSetup {
   deny: Set<string>
   spec: ResultSpec | undefined
   store: SessionStore | undefined
+  writeRoots: readonly string[] | undefined
   maxTurns: number | undefined
 }
 
@@ -119,12 +119,12 @@ export class AgentTree {
   #scopes: Set<AgentTree>
   /** Root turns belong to this scope, including those waiting for admission. */
   #roots = new Set<AbortController>()
-  #released = false
   #live = new Map<string, Child>()
   /** Every child this tree started, finished ones too, in spawn order. */
   #spawned = new Map<string, Child | SpawnedSubagent>()
   #admission: Admission
   #consultant: ParentConsultant
+  #directHuman: boolean
   #groups = new Map<string, Group>()
   /** Ended sub-agents whose dispose is still running, by session id. */
   #disposals = new Map<string, { parent: string; done: Promise<void> }>()
@@ -139,6 +139,8 @@ export class AgentTree {
         opts.maxParallelTools ?? (opts.shared ? opts.shared.#opts.maxParallelTools : undefined),
     }
     this.restricted = opts.restricted === true || opts.shared?.restricted === true
+    this.#directHuman =
+      this.restricted || (opts.shared ? opts.shared.#directHuman || hasHumanRouting(opts.shared) : false)
     this.maxDepth = Math.max(0, opts.maxDepth ?? opts.shared?.maxDepth ?? DEFAULT_SUBAGENT_MAX_DEPTH)
     this.maxConcurrent =
       opts.shared?.maxConcurrent ?? Math.max(1, opts.maxConcurrent ?? DEFAULT_SUBAGENT_MAX_CONCURRENT)
@@ -169,20 +171,21 @@ export class AgentTree {
 
   /** Runs an independently owned root turn inside host admission, without registering a child. */
   runRoot<T>(agent: Agent, task: () => Promise<T>, signal: AbortSignal): Promise<T> {
-    if (this.#released) return Promise.reject(new SpawnError("the agent tree scope has been released"))
-    return runRoot({
-      agent,
-      task,
-      signal,
-      admission: this.#admission,
-      roots: this.#roots,
-      spent: () => this.#ledger.exceeded,
-    })
+    return scopeAdmission(this).runRoot(agent.sessionId, signal, () =>
+      runRoot({
+        agent,
+        task,
+        signal,
+        admission: this.#admission,
+        roots: this.#roots,
+        spent: () => this.#ledger.exceeded,
+      }),
+    )
   }
 
   /** Unregisters a disposed scope from shared-budget cancellation. Does not affect its siblings. */
   releaseScope(): void {
-    this.#released = true
+    scopeAdmission(this).release()
     this.#scopes.delete(this)
   }
 
@@ -261,7 +264,7 @@ export class AgentTree {
    * is cut down to that; a parent that is itself in a group makes the new one part of it.
    */
   createGroup(parent: Agent, opts: SpawnGroupOptions, defaults: { toolCallId?: string } = {}): SpawnGroup {
-    if (this.#released) throw new SpawnError("the agent tree scope has been released")
+    scopeAdmission(this).check(parent.sessionId)
     if (this.#ledger.exceeded)
       throw new SpawnError(`the agent tree's budget is spent (${this.#ledger.exceeded})`)
     const outer = this.#live.get(parent.sessionId)?.groups[0]
@@ -271,7 +274,7 @@ export class AgentTree {
       const n = opts[key]
       if (n !== undefined) limits[key] = Math.max(1, Math.floor(n))
     }
-    const budget = this.#carve(opts.budget)
+    const budget = this.#ledger.carve(opts.budget)
     if (budget) limits.budget = budget
     const name = opts.name.replace(/\s+/g, " ").trim() || "group"
     const ephemeral = this.#live.get(parent.sessionId)?.ephemeral === true
@@ -279,11 +282,6 @@ export class AgentTree {
     this.#groups.set(group.id, group)
     parent.bus.emit("group.start", { group: group.info() }, metaOf(parent))
     return group
-  }
-
-  /** A group's budget within what the tree has left. */
-  #carve(asked: Budget | undefined): Budget | undefined {
-    return this.#ledger.carve(asked)
   }
 
   spawn(parent: Agent, opts: SpawnOptions, group?: Group): ChildSession {
@@ -296,7 +294,7 @@ export class AgentTree {
   }
 
   #validateSpawn(parent: Agent, opts: SpawnOptions, group: Group | undefined): SpawnSetup {
-    if (this.#released) throw new SpawnError("the agent tree scope has been released")
+    scopeAdmission(this).check(parent.sessionId)
     if (this.#ledger.exceeded)
       throw new SpawnError(`the agent tree's budget is spent (${this.#ledger.exceeded})`)
     const depth = parent.depth + 1
@@ -355,6 +353,7 @@ export class AgentTree {
       ? { schema: opts.schema, wrapped: !isObjectSchema(opts.schema), strikes: 0 }
       : undefined
     if (spec) base = setSection(base, "result", resultInstructions())
+    const writeRoots = intersectWriteRoots(parent.writeRoots, opts.writeRoots)
     const store =
       parent.session && !ephemeral
         ? SessionStore.create({
@@ -362,6 +361,7 @@ export class AgentTree {
             parent: parent.sessionId,
             dir: path.join(path.dirname(parent.session.file), "subagents"),
             owned: parent.session.header.owned,
+            writeRoots,
           })
         : undefined
     const turnLimits = [opts.maxTurns, ...groups.map((g) => g.limits.maxTurnsPerAgent)].filter(
@@ -382,6 +382,7 @@ export class AgentTree {
       deny,
       spec,
       store,
+      writeRoots,
       maxTurns,
     }
   }
@@ -415,6 +416,7 @@ export class AgentTree {
       ...(ephemeral ? { outputsReadOnly: true } : {}),
       bus: ephemeral && !this.#live.get(parent.sessionId)?.ephemeral ? new EventBus() : parent.bus,
       ...(callableTools ? { callableTools } : {}),
+      writeRoots: setup.writeRoots,
       interceptors: parent.interceptors,
       tools: ToolRegistry.view(
         parent.tools,
@@ -436,14 +438,7 @@ export class AgentTree {
       // the policy's questions skip the parent's model and go to the user (Agent).
       permissions: parent.permissions,
       ...(parent.permissionApprover ? { permissionApprover: parent.permissionApprover } : {}),
-      approve: (request, signal) =>
-        this.restricted
-          ? approveWithHost(parent, request, signal)
-          : this.#consultant.approve(parent, request, signal),
-      ask: (request, signal) =>
-        this.restricted
-          ? parent.askQuestions(request, signal)
-          : this.#consultant.ask(parent, request, signal),
+      ...childQuestionRouting(parent, this.#consultant, this.#directHuman || hasHumanRouting(this)),
       ...(this.#opts.compaction ? { compaction: this.#opts.compaction } : {}),
       ...(this.#opts.context ? { context: this.#opts.context } : {}),
       ...(this.#opts.maxParallelTools ? { maxParallelTools: this.#opts.maxParallelTools } : {}),
@@ -649,7 +644,7 @@ export class AgentTree {
     for (const child of [...this.#live.values()]) this.abortChild(child, reason)
   }
 
-  /** Aborts the children of one agent without disturbing its siblings. */
+  /** Aborts one agent's children without ending the parent or disturbing its siblings. */
   abortChildren(parentSessionId: string, reason: string): void {
     for (const g of [...this.#groups.values()]) {
       if (g.parent.sessionId === parentSessionId) this.endGroup(g, reason)
@@ -684,6 +679,7 @@ export class AgentTree {
   abortChild(child: Child, reason: string): void {
     if (!this.#live.has(child.id) || child.abortReason) return
     child.abortReason = reason
+    scopeAdmission(this).closeParent(child.id)
     if (child.started) {
       child.agent.abort()
       child.waiting?.()
@@ -699,6 +695,7 @@ export class AgentTree {
     // A paused one runs its turn to the end first: it is working again, and screens hear so.
     if (child.resume()) this.#admission.admit()
     child.stopReason = reason
+    scopeAdmission(this).closeParent(child.id)
     if (child.started) {
       child.waiting?.()
       return
@@ -828,6 +825,7 @@ export class AgentTree {
 
   #finish(child: Child, r: Pick<SubagentResult, "status" | "error" | "steps" | "durationMs">) {
     if (!this.#live.delete(child.id)) return
+    scopeAdmission(this).closeParent(child.id)
     child.waiting = undefined
     child.agent.cancelNoticeRetry()
     // Messages sent to it that never reached its model: the sender learns which.

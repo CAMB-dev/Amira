@@ -5,6 +5,20 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 const F6 = "\x1b[17~"
 
 for (const mode of ["fullscreen", "inline"] as const) {
+  test(`${mode}: focus chrome uses a non-design conversation name`, async () => {
+    const s = await focusFixture(mode, undefined, undefined, {}, "Acceptance · fixture")
+    try {
+      s.terminal.send("/design\r")
+      await waitFor(() => s.live().includes("Acceptance · fixture"), "named focus")
+      expect(s.all()).not.toContain("— design:")
+      if (mode === "inline") expect(s.all()).toContain("— Acceptance · fixture —")
+    } finally {
+      s.context()?.unfocusConversation?.()
+      await s.conversation.release()
+      await closeImageApp(s)
+    }
+  })
+
   test(`${mode}: native focus routes input, recalls scoped history and returns with F6`, async () => {
     const s = await focusFixture(mode)
     try {
@@ -15,7 +29,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
         expect(s.live()).toContain("Design history")
         expect(s.live()).not.toContain("Main history")
       } else {
-        expect(s.all()).toContain("— design: Design · fixture —")
+        expect(s.all()).toContain("— Design · fixture —")
         expect(s.all()).not.toContain("Design history")
       }
       s.terminal.send(`${paste("Design prompt")}\r`)

@@ -1,6 +1,6 @@
 // Owns the per-call state shared by tool execution and approval timing.
 import type { ToolCallBlock, ToolResultMessage } from "@amira/ai"
-import type { ToolApproval, ToolDefinition } from "@amira/api"
+import type { ToolApproval, ToolDefinition, ToolResult } from "@amira/api"
 import type { ApprovalTiming } from "./approvals.ts"
 
 /**
@@ -11,6 +11,8 @@ export interface CallRun {
   call: ToolCallBlock
   tool?: ToolDefinition
   writtenPaths?: string[]
+  /** A non-overridable execution ceiling, not an executor failure an interceptor may recover. */
+  ceilingDenied?: boolean
   /** tool.execute.start has been emitted. */
   started: boolean
   /** The batch recorded this call's result; later updates and results from it are dropped. */
@@ -18,6 +20,8 @@ export interface CallRun {
   /** The call has its result (tool.call.after may still be running on it). */
   returned?: boolean
   result?: ToolResultMessage
+  /** Live output, including non-persisted details, for owner-bound invocation. */
+  output?: ToolResult
   /** Who approved it, when it needed approval. */
   approval?: ToolApproval
   /** Per-call approval timing, including a still-pending wait at abandonment. */

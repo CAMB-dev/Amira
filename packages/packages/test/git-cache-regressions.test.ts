@@ -76,6 +76,19 @@ test("cache regression: prune protects locks beneath all session and trust paths
   expect(existsSync(unused)).toBe(false)
 })
 
+test("cache regression: policy-bearing session headers retain their project locks", () => {
+  const project = path.join(dir, "bounded-session-project")
+  const url = "https://example.test/bounded-session"
+  pin(project, url)
+  const sessions = path.join(home, "sessions", "project-key", "subagents")
+  mkdirSync(sessions, { recursive: true })
+  writeFileSync(
+    path.join(sessions, "s_bounded.jsonl"),
+    `${JSON.stringify({ type: "session-policy", v: 2, cwd: project, writeRoots: [] })}\n`,
+  )
+  expect(gitUrlsInUse({ home, cwd })).toContain(url)
+})
+
 test("cache regression: dry-run lists candidates without deleting caches or stale clones", () => {
   const used = "https://example.test/used"
   const unused = "https://example.test/unused"

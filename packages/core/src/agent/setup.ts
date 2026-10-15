@@ -10,6 +10,7 @@ import type { EventBus } from "../event-bus.ts"
 import { FILE_REWIND_COVERAGE, type FileRewind } from "../file-rewind.ts"
 import type { InterceptorRegistry } from "../interceptors.ts"
 import type { SessionStore } from "../session-store.ts"
+import { bindGroupSignal } from "../subagents/child.ts"
 import type { PauseGate } from "../subagents/pause.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
 import type { ApprovalGate } from "./approvals.ts"
@@ -236,10 +237,19 @@ export function callToolSession(
   }
   if (spawn && createGroup) {
     props.spawn = {
-      value: (o: Parameters<typeof spawn>[0]) => spawn({ ...o, toolCallId: o.toolCallId ?? toolCallId }),
+      value: (o: Parameters<typeof spawn>[0]) => {
+        turn.signal.throwIfAborted()
+        return spawn({ ...o, toolCallId: o.toolCallId ?? toolCallId })
+      },
       enumerable: true,
     }
-    props.createGroup = { value: createGroup, enumerable: true }
+    props.createGroup = {
+      value: (o: Parameters<typeof createGroup>[0]) => {
+        turn.signal.throwIfAborted()
+        return bindGroupSignal(createGroup(o), turn.signal)
+      },
+      enumerable: true,
+    }
   }
   return Object.keys(props).length ? (Object.create(base, props) as ToolSession) : base
 }

@@ -215,6 +215,11 @@ export function createConversationEvents(
         else if (!turnShowedOutput) view.notice("info", "No reply")
         break
       case "status.changed":
+        // Owner-invoked tools have no synthetic model turn to start/end the activity clock.
+        if (e.turnId?.startsWith("o_")) {
+          if (e.data.status === "idle") activity.turnEnded()
+          else if (!activity.working) activity.turnStarted(() => {})
+        }
         activity.setRetrying(statusRetryLabel(e.data))
         break
       case "compact.start":

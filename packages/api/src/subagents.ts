@@ -37,6 +37,8 @@ export interface SpawnOptions {
    * This cannot make a mainOnly tool callable by a child.
    */
   callableTools?: string[]
+  /** Absolute file-tool write roots, intersected with the inherited ceiling; [] denies writes. */
+  writeRoots?: string[]
   /**
    * A private, in-memory child: no session file, parent sub-agent entry, public listing or
    * main-bus transcript events. Its ChildSession.events still stream. Implies persistent,

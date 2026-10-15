@@ -193,6 +193,14 @@ export class Child implements ChildSession {
   }
 }
 
+const groupSignals = new WeakMap<SpawnGroup, AbortSignal>()
+
+/** A tool-created group retains the creating turn's cancellation even after later turns start. */
+export function bindGroupSignal(group: SpawnGroup, signal: AbortSignal): SpawnGroup {
+  groupSignals.set(group, signal)
+  return group
+}
+
 /** A spawn group (SpawnGroup): limits and usage of the children started through it. */
 export class Group implements SpawnGroup {
   readonly id = `g_${crypto.randomUUID().slice(0, 8)}`
@@ -236,6 +244,7 @@ export class Group implements SpawnGroup {
   }
 
   spawn(opts: SpawnOptions): ChildSession {
+    groupSignals.get(this)?.throwIfAborted()
     const toolCallId = opts.toolCallId ?? this.defaults.toolCallId
     return this.tree.spawn(this.parent, { ...opts, ...(toolCallId ? { toolCallId } : {}) }, this)
   }

@@ -13,10 +13,11 @@ import {
 } from "node:fs"
 import path from "node:path"
 import type { ConversationSpec } from "@amira/api"
+import { validateWriteRoots } from "./permissions/write-roots.ts"
 import { SessionInUseError, SessionStore } from "./session-store.ts"
 
 export interface SavedConversation {
-  v: 1
+  v: 1 | 2
   owner: string
   id: string
   spec: ConversationSpec & { model: string }
@@ -51,6 +52,22 @@ export function ownedDirectory(home: string, owner: string): string {
 
 export function validateSpec(value: ConversationSpec): ConversationSpec {
   if (!value || typeof value !== "object") throw new Error("invalid conversation spec")
+  if (
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "key",
+          "name",
+          "cwd",
+          "model",
+          "systemPrompt",
+          "callableTools",
+          "writeRoots",
+          "descendants",
+        ].includes(key),
+    )
+  )
+    throw new Error("unknown conversation policy")
   for (const field of ["key", "name", "cwd", "systemPrompt"] as const) {
     if (
       typeof value[field] !== "string" ||
@@ -70,6 +87,13 @@ export function validateSpec(value: ConversationSpec): ConversationSpec {
   ) {
     throw new Error("conversation spec requires a callableTools allowlist")
   }
+  if (
+    value.descendants !== undefined &&
+    value.descendants !== "research" &&
+    value.descendants !== "inherit"
+  ) {
+    throw new Error("invalid conversation spec descendants")
+  }
   return {
     key: value.key,
     name: value.name,
@@ -77,6 +101,8 @@ export function validateSpec(value: ConversationSpec): ConversationSpec {
     ...(value.model !== undefined ? { model: value.model } : {}),
     systemPrompt: value.systemPrompt,
     callableTools: [...new Set(value.callableTools)].sort(),
+    ...(value.writeRoots !== undefined ? { writeRoots: [...validateWriteRoots(value.writeRoots)!] } : {}),
+    descendants: value.descendants ?? "research",
   }
 }
 
@@ -97,10 +123,21 @@ export function readOwned(home: string, owner: string, id: string): SavedConvers
     if (!identity) throw new Error("invalid conversation ownership record")
     saved = { ...identity, id }
   }
-  if (saved.v !== 1 || saved.owner !== owner || saved.id !== id || ownedId(owner, saved.spec?.key) !== id) {
+  if (
+    (saved.v !== 1 && saved.v !== 2) ||
+    saved.owner !== owner ||
+    saved.id !== id ||
+    ownedId(owner, saved.spec?.key) !== id
+  ) {
     throw new Error("invalid conversation ownership record")
   }
+  if (Object.keys(saved).some((key) => !["v", "owner", "id", "spec", "runtimeTools"].includes(key)))
+    throw new Error("unknown persisted conversation policy")
   const spec = validateSpec(saved.spec)
+  if (saved.v === 1 && (spec.writeRoots !== undefined || spec.descendants === "inherit"))
+    throw new Error("conversation policy requires metadata version 2")
+  if (JSON.stringify(saved.spec.writeRoots) !== JSON.stringify(spec.writeRoots))
+    throw new Error("persisted writeRoots changed identity")
   if (
     !spec.model ||
     !Array.isArray(saved.runtimeTools) ||
@@ -156,6 +193,7 @@ export async function claimOwned(
         store.header.cwd !== cwd ||
         !stored ||
         stored.owner !== owner ||
+        stored.v !== saved.v ||
         JSON.stringify(validateSpec(stored.spec)) !== JSON.stringify(validateSpec(spec)) ||
         JSON.stringify(stored.runtimeTools) !== JSON.stringify(saved.runtimeTools)
       )

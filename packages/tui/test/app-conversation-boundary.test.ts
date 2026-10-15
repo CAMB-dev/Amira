@@ -7,7 +7,7 @@ const F6 = "\x1b[17~"
 for (const mode of ["inline", "fullscreen"] as const) {
   test(`${mode}: context focus and F6 place named boundaries ahead of hidden conversation output`, async () => {
     const s = await focusFixture(mode)
-    const design = "— design: Design · fixture —"
+    const design = "— Design · fixture —"
     try {
       s.terminal.send("/design\r")
       await waitFor(() => s.live().includes("main idle"), "owned focus")

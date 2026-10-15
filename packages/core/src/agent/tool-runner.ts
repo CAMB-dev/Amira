@@ -12,7 +12,8 @@ import type {
 import type { FileRewind } from "../file-rewind.ts"
 import type { InterceptorRegistry } from "../interceptors.ts"
 import type { Permissions } from "../permissions/policy.ts"
-import { writtenPaths } from "../permissions/protected.ts"
+import { withWrittenPathsCheck, writtenPaths } from "../permissions/protected.ts"
+import type { WritePathCheck, WriteRootPolicy } from "../permissions/write-roots.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
 import { toolTraits } from "../tool-traits.ts"
 import { checkArgs } from "../validate-args.ts"
@@ -38,6 +39,7 @@ interface ToolRunnerDeps {
   allowsTool: (tool: ToolDefinition) => boolean
   /** Execution policy, independent of the model-visible declarations. */
   callableTools?: ReadonlySet<string>
+  writePolicy?: WriteRootPolicy
   isSubAgent?: boolean
   /** Read when building each call's context; Agent replaces the controller after a steer. */
   steerSignal: () => AbortSignal | undefined
@@ -50,11 +52,20 @@ interface ToolRunnerDeps {
   emit: Emit
 }
 
+interface ToolRunOptions {
+  /** Bound invocations preserve execution failures independently of presentation interceptors. */
+  preserveErrors?: boolean
+  /** Durable final-argument evidence, immediately before actual executor dispatch. */
+  beforeExecute?: (call: ToolCallBlock, args: Record<string, unknown>) => void
+}
+
 /** Runs one session's tool batches; history and turn ownership stay with the caller. */
 export class ToolRunner {
   #deps: ToolRunnerDeps
   /** The definition that executed a call, kept when a tool is later disabled or replaced. */
   #callTools = new WeakMap<ToolCallBlock, ToolDefinition>()
+  /** Physical calls, including output persistence, outlive abort-grace result settlement. */
+  #pending = new Set<Promise<unknown>>()
 
   constructor(deps: ToolRunnerDeps) {
     this.#deps = deps
@@ -74,7 +85,8 @@ export class ToolRunner {
   async run(
     turn: Turn,
     calls: ToolCallBlock[],
-    settle: (results: ToolResultMessage[]) => void,
+    settle: (results: ToolResultMessage[], outputs: ToolResult[]) => void,
+    options: ToolRunOptions = {},
   ): Promise<void> {
     const runs: CallRun[] = calls.map((call) => ({ call, started: false, finished: false }))
     try {
@@ -95,18 +107,25 @@ export class ToolRunner {
         if (turn.signal.aborted) break
 
         const task: Promise<void> = (async () => {
-          const r = await this.#runTool(turn, run, runs, async (authorizedTool, args) => {
-            if (serial || turn.signal.aborted || run.finished) return
-            // Reserve only authorized calls, using the arguments their gates approved.
-            // Async gates may clear out of order; do not stall unrelated keys behind them.
-            const key = concurrencyKey(authorizedTool, { ...call, args }, this.#deps.cwd)
-            if (key === undefined) return
-            const before = lastByKey.get(key)
-            lastByKey.set(key, task)
-            if (before) await this.#untilDoneOrAbandoned(turn.signal, before)
-          })
+          const r = await this.#runTool(
+            turn,
+            run,
+            runs,
+            async (authorizedTool, args) => {
+              if (serial || turn.signal.aborted || run.finished) return
+              // Reserve only authorized calls, using the arguments their gates approved.
+              // Async gates may clear out of order; do not stall unrelated keys behind them.
+              const key = concurrencyKey(authorizedTool, { ...call, args }, this.#deps.cwd)
+              if (key === undefined) return
+              const before = lastByKey.get(key)
+              lastByKey.set(key, task)
+              if (before) await this.#untilDoneOrAbandoned(turn.signal, before)
+            },
+            options,
+          )
           if (!run.finished) run.result = r
         })().finally(() => running.delete(task))
+        this.#track(task)
         running.add(task)
         started.push(task)
         if (serial) await this.#untilDoneOrAbandoned(turn.signal, task)
@@ -122,8 +141,27 @@ export class ToolRunner {
         run.finished = true
       }
       const results = runs.map((run) => run.result!)
-      settle(results)
+      settle(
+        results,
+        runs.map((run) => run.output ?? { content: run.result!.content, isError: true }),
+      )
     }
+  }
+
+  /** Ownership includes journal cleanup and output persistence after an executor returns. */
+  async drain(): Promise<void> {
+    while (this.#pending.size) await Promise.allSettled([...this.#pending])
+  }
+
+  #track<T>(work: Promise<T>): Promise<T> {
+    this.#pending.add(work)
+    const clear = () => this.#pending.delete(work)
+    void work.then(clear, clear)
+    return work
+  }
+
+  #execute<T>(work: () => Promise<T>): Promise<T> {
+    return this.#track(Promise.resolve().then(work))
   }
 
   /** Waits for the batch, but after an abort gives tools only abortGraceMs to stop. */
@@ -151,6 +189,7 @@ export class ToolRunner {
     run: CallRun,
     batch: readonly CallRun[],
     waitForKey: (tool: ToolDefinition, args: Record<string, unknown>) => Promise<void>,
+    options: ToolRunOptions,
   ): Promise<ToolResultMessage> {
     const call = run.call
     // Every outcome goes through tool.call.after (skipped once the turn is interrupted), then
@@ -161,17 +200,32 @@ export class ToolRunner {
       durationMs: number,
       rejected?: ToolRejection,
     ): Promise<ToolResultMessage> => {
+      const failed = !!first.isError
       run.returned = true
       if (rejected) this.#emitToolStart(turn, run, args)
       const result = await this.#deps.keepLarge(
         call,
         await this.#afterTool(turn, run, batch, args, first, rejected),
       )
-      if (!run.finished) this.#emitToolEnd(turn, run, result, durationMs, rejected, run.approval)
+      // Model calls retain interceptor recovery; direct owned checks cannot report false success.
+      if (run.ceilingDenied || (options.preserveErrors && (rejected || failed || turn.signal.aborted)))
+        result.isError = true
+      if (!run.finished) {
+        run.output = result
+        this.#emitToolEnd(turn, run, result, durationMs, rejected, run.approval)
+      }
       return resultMessage(call, result, rejected)
     }
     const reject = (rejected: ToolRejection, text: string, args = call.args) =>
       finish(args, { content: [{ type: "text", text }], isError: true }, 0, rejected)
+    const ceilingCheck = <T>(check: () => T): T => {
+      try {
+        return check()
+      } catch (error) {
+        run.ceilingDenied = true
+        throw error
+      }
+    }
     try {
       const bad = invalidArgs(call.args)
       if (bad !== undefined) {
@@ -197,6 +251,7 @@ export class ToolRunner {
         (this.#deps.isSubAgent && tool.mainOnly) ||
         (this.#deps.callableTools && !this.#deps.callableTools.has(call.name))
       ) {
+        run.ceilingDenied = true
         return await reject("blocked", `Tool "${call.name}" is not callable in this session.`)
       }
       const gate = await this.#deps.interceptors.run(
@@ -209,10 +264,46 @@ export class ToolRunner {
           ? await reject("aborted", "Aborted by the user before this tool ran.")
           : await reject("blocked", `Tool call blocked: ${gate.reason}`)
       }
-      const args = gate.value.args
-      // The core policy decides on the arguments the tool will get, whatever the interceptors
-      // made of them; no extension can take it away.
-      const policy = await this.#deps.permissions.check(tool, args, this.#deps.cwd, registration?.dataOwner)
+      const args = copyArgs(gate.value.args)
+      // Every report must clear the ceiling before any approval, including interceptor asks.
+      const writeChecks: WritePathCheck[] = []
+      let firstPaths: readonly string[] | undefined
+      const { policy, paths } = await withWrittenPathsCheck(
+        args,
+        (reported) => {
+          const ceiling = this.#deps.writePolicy
+          if (!ceiling || (!toolTraits(tool)?.writesFiles && !tool.getWrittenPaths && reported === undefined))
+            return
+          ceilingCheck(() => {
+            writeChecks.push(ceiling.check(this.#deps.cwd, reported))
+            // A later report cannot change the paths on which protected-file permissions decided.
+            if (
+              firstPaths &&
+              (reported!.length !== firstPaths.length || reported!.some((p, i) => p !== firstPaths![i]))
+            )
+              throw new Error("File write ceiling: write-path report changed during authorization")
+            firstPaths ??= Object.freeze([...reported!])
+            Object.freeze(reported)
+          })
+        },
+        async () => {
+          await this.#deps.writePolicy?.tool(tool, args, this.#deps.cwd)
+          // Permissions still decides on the tool's final arguments and registration owner.
+          const policy = await this.#deps.permissions.check(
+            tool,
+            args,
+            this.#deps.cwd,
+            registration?.dataOwner,
+          )
+          // Bookkeeping must not introduce an unchecked report after approval.
+          const paths = await writtenPaths(tool, args, this.#deps.cwd)
+          return { policy, paths }
+        },
+      )
+      const recheckWrites = () =>
+        ceilingCheck(() => {
+          for (const check of writeChecks) check()
+        })
       if (turn.signal.aborted)
         return await reject("aborted", "Aborted by the user before this tool ran.", args)
       if (policy.decision === "deny") return await reject("blocked", refusedText(policy), args)
@@ -221,7 +312,7 @@ export class ToolRunner {
         run.approvalTiming = {}
         const verdict = await this.#deps.approvals.approve(
           turn,
-          { id: call.id, name: call.name, args },
+          { id: call.id, name: call.name, args: copyArgs(args) },
           policy,
           gate.ask,
           run.approvalTiming,
@@ -241,7 +332,6 @@ export class ToolRunner {
       await waitForKey(tool, args)
       if (turn.signal.aborted || run.finished)
         return await reject("aborted", "Aborted by the user before this tool ran.", args)
-      const paths = await writtenPaths(tool, args, this.#deps.cwd)
       if (paths !== undefined) run.writtenPaths = paths
 
       // Listeners get a copy: the arguments the policy checked are the ones the tool runs with.
@@ -249,12 +339,47 @@ export class ToolRunner {
       // Let frontends draw "running <tool>" first: a tool may block the event loop for a while
       // (spawning a process can stall for seconds on some Windows machines).
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      if (turn.signal.aborted || run.finished)
+        return await reject("aborted", "Aborted by the user before this tool ran.", args)
       if (!this.#deps.tools.isEnabled(tool))
         return await reject("blocked", `Tool "${call.name}" is disabled by host policy.`, args)
+      recheckWrites?.()
       const started = performance.now()
       let result: ToolResult
+      let executionClosed = false
+      const assertActive = () => {
+        if (turn.signal.aborted || run.finished || executionClosed)
+          throw new Error("Tool execution was aborted or its mutation capability was revoked")
+      }
       try {
-        const mutateFiles: MutateFiles | undefined = this.#deps.fileRewind
+        // Installed even without a rewind journal. Recheck after journal awaits, immediately
+        // before mutation; a report is not authority to mutate an additional destination.
+        const guardMutation =
+          (mutation?: MutateFiles): MutateFiles =>
+          async (changes, write) => {
+            assertActive()
+            recheckWrites()
+            const recheckChanges = ceilingCheck(() =>
+              this.#deps.writePolicy?.check(
+                this.#deps.cwd,
+                changes.map((c) => c.path),
+              ),
+            )
+            const guardedWrite = async () => {
+              assertActive()
+              recheckWrites()
+              ceilingCheck(() => recheckChanges?.())
+              const commits = ceilingCheck(() =>
+                writeChecks.map((check) => check.mutation(changes.map((change) => change.path))),
+              )
+              await write()
+              ceilingCheck(() => {
+                for (const commit of commits) commit()
+              })
+            }
+            return mutation ? mutation(changes, guardedWrite) : guardedWrite()
+          }
+        const journal: MutateFiles | undefined = this.#deps.fileRewind
           ? async (changes, write) => {
               if (this.#deps.storeFailed() && this.#deps.fileRewind!.enabled)
                 throw new Error("File write refused: the session could not be saved")
@@ -265,6 +390,7 @@ export class ToolRunner {
               })
             }
           : undefined
+        const mutateFiles = this.#deps.writePolicy || journal ? guardMutation(journal) : undefined
         const steerSignal = this.#deps.steerSignal()
         const context = {
           cwd: this.#deps.cwd,
@@ -286,31 +412,44 @@ export class ToolRunner {
           paths.length > 0 &&
           (traits?.writesFiles === true || traits?.writesFiles === "paths") &&
           traits.usesMutationHook !== true
-        const execute = (mutateFilesOverride?: MutateFiles) =>
-          tool.execute(args, {
+        const execute = (mutateFilesOverride?: MutateFiles) => {
+          assertActive()
+          recheckWrites()
+          options.beforeExecute?.(call, copyArgs(args))
+          assertActive()
+          return tool.execute(args, {
             ...context,
             ...(mutateFilesOverride ? { mutateFiles: mutateFilesOverride } : {}),
           })
-        if (pathCapture) {
-          // Like the mutateFiles hook: no captured write once the session cannot be saved.
-          if (this.#deps.storeFailed()) throw new Error("File write refused: the session could not be saved")
-          let captured: ToolResult | undefined
-          await this.#deps.fileRewind!.mutatePaths(
-            paths!,
-            this.#deps.cwd,
-            async (mutateFiles) => {
-              captured = await execute(mutateFiles)
-            },
-            {
-              sessionId: this.#deps.sessionId,
-              toolCallId: call.id,
-              turnId: turn.id,
-            },
-          )
-          result = normalizeResult(captured!)
-        } else {
-          result = normalizeResult(await execute(mutateFiles))
         }
+        result = await this.#execute(async () => {
+          try {
+            assertActive()
+            if (pathCapture) {
+              // Like the mutateFiles hook: no captured write once the session cannot be saved.
+              if (this.#deps.storeFailed())
+                throw new Error("File write refused: the session could not be saved")
+              let captured: ToolResult | undefined
+              await this.#deps.fileRewind!.mutatePaths(
+                paths!,
+                this.#deps.cwd,
+                async (mutateFiles) => {
+                  recheckWrites()
+                  captured = await execute(guardMutation(mutateFiles))
+                },
+                {
+                  sessionId: this.#deps.sessionId,
+                  toolCallId: call.id,
+                  turnId: turn.id,
+                },
+              )
+              return normalizeResult(captured!)
+            }
+            return normalizeResult(await execute(mutateFiles))
+          } finally {
+            executionClosed = true
+          }
+        })
       } catch (err) {
         const msg = turn.signal.aborted
           ? "Aborted by the user."
