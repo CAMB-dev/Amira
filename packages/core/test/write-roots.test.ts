@@ -431,11 +431,17 @@ test.skipIf(process.platform !== "win32")(
   },
 )
 
-test.skipIf(process.platform === "win32")("case-sensitive sibling directories are distinct", () => {
+test("case-only directory names respect filesystem case sensitivity", () => {
   const { cwd, root } = fixture()
-  mkdirSync(path.join(cwd, "Allowed"))
+  const alternate = path.join(cwd, "Allowed")
   const policy = new WriteRootPolicy(validateWriteRoots([root])!)
-  expect(() => policy.check(cwd, ["Allowed/file"])).toThrow()
+  if (existsSync(alternate)) {
+    expect(realpathSync.native(alternate)).toBe(root)
+    expect(() => policy.check(cwd, ["Allowed/file"])).not.toThrow()
+  } else {
+    mkdirSync(alternate)
+    expect(() => policy.check(cwd, ["Allowed/file"])).toThrow()
+  }
 })
 
 test("malformed reporters fail closed and do not reach executors", async () => {

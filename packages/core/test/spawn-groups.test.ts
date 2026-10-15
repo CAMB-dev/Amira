@@ -565,16 +565,18 @@ test("persistent children count against their group; an ended group stops its id
 })
 
 test("messages that never reached a child's model come back in its result, e.g. after a failed turn", async () => {
-  const { tree, root, mock, bus, events } = setup((req) =>
-    lastText(req) === "break" ? { error: { message: "boom" }, delayMs: 20 } : { text: "ok" },
-  )
+  let accepted: boolean | undefined
+  const { tree, root, mock, bus, events } = setup((req) => {
+    if (lastText(req) !== "break") return { text: "ok" }
+    // The request is recorded, but its failure has not reached the child yet.
+    accepted = child.send("important follow-up")
+    return { error: { message: "boom" } }
+  })
   const child = tree.spawn(root, { prompt: "a", persistent: true })
   await until(() => child.state === "idle")
   expect(child.send("break")).toBe(true)
-  await until(() => child.state === "working")
-  await Bun.sleep(5)
-  expect(child.send("important follow-up")).toBe(true)
   const r = await child.result()
+  expect(accepted).toBe(true)
   expect(r.status).toBe("error")
   expect(r.undelivered?.map((m) => m.content.map((b) => (b.type === "text" ? b.text : "")).join(""))).toEqual(
     ["important follow-up"],
