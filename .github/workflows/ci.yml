@@ -48,7 +48,23 @@ jobs:
       - run: bun install --frozen-lockfile
       # bun run test (inside check) uses the repository's isolated test-home preload.
       # No AMIRA_LIVE_* opt-ins or provider secrets are set in this workflow.
-      - run: bun run check
+      - name: Run bun run check
+        run: |
+          set -o pipefail
+          bun run check 2>&1 | tee "$RUNNER_TEMP/check.log"
+      # Job logs need sign-in; annotations do not. Surface the failing lines as annotations
+      # so failures that are not expect() errors (crashes, file timeouts) are still visible.
+      - name: Annotate check failures
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/check.log"
+          [ -f "$log" ] || exit 0
+          grep -E '^\(fail\)|^error|[Ee]rror:|^ *[0-9]+ fail|timed out|Unhandled' "$log" | tail -n 25 > "$RUNNER_TEMP/failures.txt" || true
+          [ -s "$RUNNER_TEMP/failures.txt" ] || tail -n 25 "$log" > "$RUNNER_TEMP/failures.txt"
+          while IFS= read -r line; do
+            line=${line//%/%25}
+            echo "::error title=bun run check::${line//$'\r'/}"
+          done < "$RUNNER_TEMP/failures.txt"
       - name: Compile the runner's native target
         env:
           TARGET: ${{ matrix.target }}
