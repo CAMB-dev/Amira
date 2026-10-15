@@ -357,23 +357,20 @@ export interface JobOutputParams {
 export const jobOutputTool = defineTool<JobOutputParams>({
   name: "job_output",
   description: [
-    "Read new output/status of a shell background job. wait_for matches each new line case-insensitively (first call includes start output); returns on match, exit or timeout. Without wait_for, timeout waits for exit.",
-    "Do not poll: use wait_for/timeout or do other work before checking.",
-    `Returns at most ${MAX_OUTPUT_CHARS} chars (new output's tail); log file has all output.`,
+    "Read new job output/status. wait_for: case-insensitive line regex; first call includes start output. Ends on match/exit/timeout; without wait_for, timeout waits for exit.",
+    "Do not poll: wait or do other work.",
+    `Max ${MAX_OUTPUT_CHARS} tail chars; full output in log.`,
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
       job_id: { type: "string" },
-      wait_for: {
-        type: "string",
-        description: "Regular expression to await",
-      },
+      wait_for: { type: "string" },
       timeout: {
         type: "integer",
         minimum: 0,
         maximum: MAX_WAIT_MS,
-        description: `Milliseconds; default ${DEFAULT_WAIT_MS} with wait_for, else 0`,
+        description: `ms; default ${DEFAULT_WAIT_MS} with wait_for, else 0`,
       },
     },
     required: ["job_id"],
@@ -450,8 +447,7 @@ export interface JobStopParams {
 
 export const jobStopTool = defineTool<JobStopParams>({
   name: "job_stop",
-  description:
-    "Stop a background job and descendants; returns end status/unread output. Stop unneeded jobs; all stop on Amira exit.",
+  description: "Stop a job and its process tree; return status/unread output. Stop unneeded jobs.",
   parameters: {
     type: "object",
     properties: { job_id: { type: "string" } },
@@ -489,8 +485,7 @@ export const jobStopTool = defineTool<JobStopParams>({
 
 export const jobListTool = defineTool<Record<string, never>>({
   name: "job_list",
-  description:
-    "List the background jobs: id, status, how long they ran, the command and how much output you have not read yet.",
+  description: "List jobs: id, status, elapsed time, command, unread output.",
   parameters: { type: "object", properties: {}, additionalProperties: false },
   traits: { readOnly: true },
   concurrency: "parallel",

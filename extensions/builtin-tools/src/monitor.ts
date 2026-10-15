@@ -28,22 +28,22 @@ export function createMonitorTool(
   return defineTool<MonitorParams>({
     name: "monitor",
     description: [
-      "Run a command in the session shell as a background monitor and return its job id immediately. Normal shell permissions apply.",
-      "Each new line (or case-insensitive filter match; invalid regex is literal) wakes you with an automatic notice. Lines batch for ~1s, at most once per 2s, capped at ~4KB; notifications pause after 200 events. Use a narrow filter for chatty commands.",
-      "Exit/timeout sends a final notice. Stop with job_stop; job_output reads the full buffered output. Owned by this session/sub-agent and stopped when it ends. In print mode (-p), the run stays alive until monitors exit, stop, or time out.",
+      "Monitor a session-shell command; return job id immediately. Normal shell permissions apply.",
+      "New/matching lines wake you. filter: case-insensitive line regex; invalid = literal. Narrow chatty output.",
+      "Batch ~1s; max one notice/2s, ~4KB each; pause output notices after 200 events. Final notice on exit/timeout.",
+      `Stop via job_stop; read via job_output. timeout_ms: default ${DEFAULT_MONITOR_TIMEOUT_MS / 60_000}m, max ${MAX_MONITOR_TIMEOUT_MS / 3_600_000}h. Child monitors end with owner; -p waits until exit/stop/timeout.`,
     ].join("\n"),
     parameters: {
       type: "object",
       properties: {
         command: { type: "string" },
-        filter: { type: "string", description: "Case-insensitive line regex; invalid regex is literal" },
+        filter: { type: "string" },
         timeout_ms: {
           type: "integer",
           minimum: 1,
           maximum: MAX_MONITOR_TIMEOUT_MS,
-          description: `Milliseconds; default ${DEFAULT_MONITOR_TIMEOUT_MS}, max ${MAX_MONITOR_TIMEOUT_MS}`,
         },
-        description: { type: "string", description: "Short label for the monitor" },
+        description: { type: "string" },
       },
       required: ["command"],
       additionalProperties: false,
