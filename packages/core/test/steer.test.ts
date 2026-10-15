@@ -277,6 +277,64 @@ test("a steer during a manual compaction is not lost when the compaction fails",
   expect(texts([mock.requests.at(-1)!.messages.at(-1)!])).toEqual(["user:keep me"])
 })
 
+test("a failed work hold promotes queued input once and keeps its chosen turn id", async () => {
+  const { agent, mock, bus, events } = setup([{ text: "done" }])
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const held = agent.hold("reload", async () => {
+    await gate
+    throw new Error("reload failed")
+  })
+  const failed = held.catch((error: unknown) => error)
+  expect(agent.busy).toBe(true)
+  expect(agent.holdingFor).toBe("reload")
+  const reply = agent.prompt("held prompt", { turnId: "t_held" })
+  agent.steer("held steer")
+  await expect(agent.hold("other work", async () => {})).rejects.toThrow("already running")
+  await expect(agent.prompt("second prompt")).rejects.toThrow("already running")
+  expect(mock.requests).toHaveLength(0)
+  release()
+  expect(await failed).toMatchObject({ message: "reload failed" })
+  expect((await reply).reason).toBe("done")
+  await bus.flush()
+  expect(agent.holdingFor).toBeUndefined()
+  expect(mock.requests).toHaveLength(1)
+  expect(texts(mock.requests[0]!.messages)).toEqual(["user:held prompt|held steer"])
+  expect(events.find((e) => e.type === "turn.start")?.turnId).toBe("t_held")
+  expect(events.filter((e) => e.type === "turn.steer").map((e) => e.data)).toMatchObject([
+    { state: "queued" },
+    { state: "promoted", nextTurnId: "t_held" },
+  ])
+  await agent.dispose()
+})
+
+test("disposal drops held input without promoting a turn when the work finishes", async () => {
+  const { agent, mock, bus, events } = setup([{ text: "must not run" }])
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const held = agent.hold("reload", async () => gate)
+  const reply = agent.prompt("held prompt")
+  const rejected = reply.catch((error: unknown) => error)
+  agent.steer("held steer")
+  await agent.dispose()
+  expect(await rejected).toBeInstanceOf(AgentAbortedError)
+  release()
+  await held
+  await bus.flush()
+  expect(agent.holdingFor).toBeUndefined()
+  expect(mock.requests).toHaveLength(0)
+  expect(events.some((e) => e.type === "turn.start")).toBe(false)
+  expect(events.filter((e) => e.type === "turn.steer").map((e) => e.data.state)).toEqual([
+    "queued",
+    "dropped",
+    "dropped",
+  ])
+})
+
 test("a reply that still ends done after an abort ends the turn aborted and drops the steering", async () => {
   // A dialect that does not look at its signal: it finishes the reply whatever happens.
   let finish!: () => void

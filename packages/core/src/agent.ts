@@ -41,6 +41,7 @@ import {
 } from "./agent/context-builder.ts"
 import type { ContextManager } from "./agent/context-manager.ts"
 import { History } from "./agent/history.ts"
+import { SessionHold } from "./agent/hold.ts"
 import { modelRef } from "./agent/messages.ts"
 import { reportedSpeed, Thinking } from "./agent/model-call.ts"
 import { NoticeInbox } from "./agent/notices.ts"
@@ -57,13 +58,10 @@ import {
 import { checkRestoredTools, setupToolRunner } from "./agent/tool-setup.ts"
 import { TurnRunner, type TurnState } from "./agent/turn-runner.ts"
 import {
-  type AfterCompaction,
   AgentAbortedError,
-  AgentBusyError,
   type AgentOptions,
   type Approver,
   NOTICE_RETRY_MS,
-  newTurnId,
   type PromptOptions,
   type Turn,
   type TurnResult,
@@ -174,14 +172,8 @@ export class Agent {
   /** The running turn's promise, for owners that wait for whatever turn runs. */
   #current: Promise<TurnResult> | undefined
 
-  // Hold state: work between turns and the messages queued behind it.
-  /**
-   * What holds the session (busy, but no turn): "compaction" during a manual compaction, or
-   * the work hold() runs, e.g. "reload".
-   */
-  #holding: string | undefined
-  /** Messages sent during a manual compaction; they start one turn when it ends. */
-  #afterCompaction: AfterCompaction | undefined
+  /** Between-turn work and the messages queued behind it. */
+  #hold: SessionHold
 
   // Lifecycle: disposal and ownership of the session lease.
   #disposePromise: Promise<void> | undefined
@@ -276,10 +268,16 @@ export class Agent {
         retryMs,
         disposed: () => this.#disposed,
         turn: () => this.#turnState.turn,
-        holding: () => this.#holding,
+        holding: () => this.#hold.what,
         busy: () => this.#turnState.abort !== undefined,
         onIdleNotice: this.#onIdleNotice?.bind(this),
         prompt: (message) => this.prompt(message),
+        emit: (turn, type, data) => this.#emit(turn, type, data),
+      })
+      this.#hold = new SessionHold({
+        state: this.#turnState,
+        inbox: this.#inbox,
+        prompt: (message, options) => this.prompt(message, options),
         emit: (turn, type, data) => this.#emit(turn, type, data),
       })
       this.#endTurn = opts.endTurn
@@ -573,68 +571,13 @@ export class Agent {
    * drops the prompts and steers. For work no turn may overlap, such as /reload replacing the
    * tools. `what` names it (holdingFor).
    */
-  async hold<T>(what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    if (this.#turnState.abort) throw new AgentBusyError("a turn or compaction is already running")
-    const abort = new AbortController()
-    this.#turnState.abort = abort
-    this.#holding = what
-    try {
-      return await work(abort.signal)
-    } finally {
-      this.#turnState.abort = undefined
-      this.#holding = undefined
-      const noticed = this.#inbox.takeNoticedDuringHold()
-      // Held prompts and steers start their turn (an abort drops them); notices that came
-      // meanwhile join it before its first model call. Notices are never dropped: without such
-      // a turn they start one, unless the work was aborted: then they wait for the next.
-      this.#startAfterCompaction(abort.signal.aborted, what)
-      if (noticed && !abort.signal.aborted) this.#inbox.wakeQuietly()
-    }
+  hold<T>(what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    return this.#hold.run(what, work)
   }
 
   /** What holds the session while it is busy without a turn ("compaction", "reload"), if anything. */
   get holdingFor(): string | undefined {
-    return this.#holding
-  }
-
-  /** Holds a message sent during a manual compaction for the turn that follows it. */
-  #holdForCompaction(message: UserMessage, steered: boolean, turnId?: string): AfterCompaction {
-    this.#afterCompaction ??= { messages: [], prompted: false, waiters: [], sentAt: Date.now() }
-    const next = this.#afterCompaction
-    next.messages.push({ message, steered })
-    if (turnId !== undefined) next.turnId = turnId
-    return next
-  }
-
-  /** Starts the turn held during a manual compaction, if anything was sent meanwhile. */
-  #startAfterCompaction(aborted: boolean, what: string) {
-    const next = this.#afterCompaction
-    this.#afterCompaction = undefined
-    if (!next) return
-    if (aborted) {
-      for (const { message } of next.messages)
-        this.#emit(undefined, "turn.steer", { message, state: "dropped" })
-      const err = new AgentAbortedError(`the ${what} was aborted before the message was sent`)
-      for (const w of next.waiters) w.reject(err)
-      return
-    }
-    const turnId = next.turnId ?? newTurnId()
-    for (const { message, steered } of next.messages) {
-      if (steered) this.#emit(undefined, "turn.steer", { message, state: "promoted", nextTurnId: turnId })
-    }
-    const [only, ...more] = next.messages
-    const prompt: UserMessage =
-      only && !more.length
-        ? only.message
-        : { role: "user", content: next.messages.flatMap((m) => m.message.content) }
-    this.prompt(prompt, { turnId, sentAt: next.sentAt }).then(
-      (r) => {
-        for (const w of next.waiters) w.resolve(r)
-      },
-      (err) => {
-        for (const w of next.waiters) w.reject(err)
-      },
-    )
+    return this.#hold.what
   }
 
   /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
@@ -795,7 +738,7 @@ export class Agent {
     this.#turnState.steering.splice(0)
     this.#inbox.clear()
     // Messages held for a running hold are dropped as an abort of it drops them.
-    this.#startAfterCompaction(true, this.#holding ?? "session")
+    this.#hold.cancel()
     // A sub-agent's end is subagent.end; session.end means the conversation itself ended.
     if (this.depth === 0) this.#emit(undefined, "session.end", { reason })
     if (this.depth === 0) this.tree?.abortAll("the session ended")
@@ -822,9 +765,8 @@ export class Agent {
     if (this.#disposed) return
     const message = typeof input === "string" ? userMessage(input) : input
     const turn = this.#turnState.turn
-    if (!turn && this.#holding) {
-      this.#holdForCompaction(message, true)
-      this.#emit(undefined, "turn.steer", { message, state: "queued" })
+    if (!turn && this.#hold.what) {
+      this.#hold.steer(message)
       return
     }
     if (!turn) {
@@ -846,11 +788,9 @@ export class Agent {
    */
   prompt(input: string | UserMessage, opts: PromptOptions = {}): Promise<TurnResult> {
     if (this.#disposed) return Promise.reject(new AgentAbortedError("the session has ended"))
-    if (this.#holding && !this.#afterCompaction?.prompted) {
+    if (this.#hold.what && !this.#hold.prompted) {
       const user = typeof input === "string" ? userMessage(input) : input
-      const next = this.#holdForCompaction(user, false, opts.turnId)
-      next.prompted = true
-      return new Promise((resolve, reject) => next.waiters.push({ resolve, reject }))
+      return this.#hold.prompt(user, opts.turnId)
     }
     const turn = this.#turnRunner.run(input, opts)
     this.#current = turn
