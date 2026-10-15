@@ -6,7 +6,19 @@ Amira is a lightweight, extensible coding agent for the terminal, built with Typ
 
 > Work in progress.
 
-## Install from source
+## Install
+
+Install the prebuilt executable with one of these package managers (Node.js ≥18 for the npm/pnpm launcher; Bun is not required):
+
+```sh
+npm i -g amira
+pnpm add -g amira
+bun add -g amira
+```
+
+Or download an archive from [GitHub Releases](https://github.com/CAMB-dev/Amira/releases). See [installation and verification](docs/install.md) for supported platforms, checksums, signed manifests and upgrade commands.
+
+### Install from source
 
 Install [Bun](https://bun.sh), then run these commands in a checkout of this repository:
 
