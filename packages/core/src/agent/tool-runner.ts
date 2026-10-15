@@ -14,6 +14,13 @@ import type { InterceptorRegistry } from "../interceptors.ts"
 import type { Permissions } from "../permissions/policy.ts"
 import { withWrittenPathsCheck, writtenPaths } from "../permissions/protected.ts"
 import type { WritePathCheck, WriteRootPolicy } from "../permissions/write-roots.ts"
+import {
+  beforeShellCall,
+  captureShellTool,
+  classifyShell,
+  shellEntryChanged,
+  shellGuardNames,
+} from "../shell-tool.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
 import { toolTraits } from "../tool-traits.ts"
 import { checkArgs } from "../validate-args.ts"
@@ -46,6 +53,7 @@ interface ToolRunnerDeps {
   /** Read at write time. */
   storeFailed: () => boolean
   callSession: (turn: Turn, toolCallId: string) => ToolSession
+  expectNotice?: ToolSession["expectNotice"]
   keepLarge: (call: ToolCallBlock, result: ToolResult) => Promise<ToolResult>
   /** Dismissal stops the turn; the caller must check that it is still the current turn. */
   interruptTurn: (turn: Turn) => void
@@ -254,8 +262,19 @@ export class ToolRunner {
         run.ceilingDenied = true
         return await reject("blocked", `Tool "${call.name}" is not callable in this session.`)
       }
-      const gate = await this.#deps.interceptors.run(
-        "tool.call.before",
+      // Classification precedes interceptors and approvals; neither may change the dialect
+      // whose name-scoped guards and command rules authorize this call.
+      const shellTool = captureShellTool(tool)
+      const shellTraits = shellTool.traits
+      const shell = await classifyShell(shellTool)
+      const shellKind = shell?.kind
+      const guardNames = shellGuardNames(shellTool, shell, shellTraits?.shell)
+      const disabledShell = () => guardNames.find((name) => this.#deps.tools.disabled.has(name))
+      if (disabledShell())
+        return await reject("blocked", `Shell tool "${disabledShell()}" is disabled by host policy.`)
+      const gate = await beforeShellCall(
+        this.#deps.interceptors,
+        guardNames,
         { toolCallId: call.id, name: call.name, args: call.args },
         { sessionId: this.#deps.sessionId, signal: turn.signal },
       )
@@ -288,9 +307,25 @@ export class ToolRunner {
         },
         async () => {
           await this.#deps.writePolicy?.tool(tool, args, this.#deps.cwd)
+          const permissionTool = shell
+            ? {
+                get name() {
+                  return tool.name
+                },
+                get traits() {
+                  return shellTraits
+                },
+                getWrittenPaths: tool.getWrittenPaths?.bind(tool),
+                shellKind: () => {
+                  // Preserve policy's static/both-shell fallback without retrying resolution.
+                  if (shellKind === undefined) throw new Error("Shell kind unavailable")
+                  return shellKind
+                },
+              }
+            : tool
           // Permissions still decides on the tool's final arguments and registration owner.
           const policy = await this.#deps.permissions.check(
-            tool,
+            permissionTool,
             args,
             this.#deps.cwd,
             registration?.dataOwner,
@@ -341,7 +376,13 @@ export class ToolRunner {
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
       if (turn.signal.aborted || run.finished)
         return await reject("aborted", "Aborted by the user before this tool ran.", args)
-      if (!this.#deps.tools.isEnabled(tool))
+      if (shellEntryChanged(tool, shellTool))
+        return await reject("blocked", "The shell changed after authorization; retry the command.", args)
+      if (
+        !this.#deps.tools.isEnabled(tool) ||
+        !this.#deps.tools.isEnabled(tool, shellTool) ||
+        disabledShell()
+      )
         return await reject("blocked", `Tool "${call.name}" is disabled by host policy.`, args)
       recheckWrites?.()
       const started = performance.now()
@@ -394,11 +435,13 @@ export class ToolRunner {
         const steerSignal = this.#deps.steerSignal()
         const context = {
           cwd: this.#deps.cwd,
+          ...(shellKind ? { shellKind } : {}),
           toolCallId: call.id,
           signal: turn.signal,
           ...(steerSignal ? { steerSignal } : {}),
           ...(this.#deps.backgroundJobs ? { backgroundJobs: this.#deps.backgroundJobs } : {}),
           session: this.#deps.callSession(turn, call.id),
+          ...(this.#deps.expectNotice ? { expectNotice: this.#deps.expectNotice } : {}),
           ...(mutateFiles ? { mutateFiles } : {}),
           update: (partial: ToolResult) => {
             if (run.finished) return

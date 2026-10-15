@@ -24,9 +24,10 @@ import {
   STOP_GRACE_MS,
   watchJobEnds,
 } from "./jobs.ts"
+import { registerTasks, tasksPanel } from "./tasks-ui.ts"
 
 /**
- * Background jobs for the user: a live panel while jobs run, /jobs to list them with their
+ * Background jobs for the user: the unified tasks panel, /jobs to list them with their
  * output and stop them, a notice when one ends on its own, and the clean-up: a sub-agent's jobs
  * stop when it ends, and every job when Amira exits.
  */
@@ -62,31 +63,9 @@ export function jobRow(job: JobInfo, now: number, commandCells = 60): string {
   return `${job.id} · ${jobState(job, now)} · ${clip(job.command.replace(/\s+/g, " ").trim(), commandCells)}`
 }
 
-/**
- * The live panel: while jobs run, a summary and one row per job: its id and time first (they
- * must not be cut), then the command and its last line of output. Folded, only the summary.
- */
+/** The jobs-only entry point for the unified tasks panel; folded, only its summary shows. */
 export function jobsPanel(registry: JobRegistry): PanelDefinition {
-  return {
-    id: "background-jobs",
-    order: 10,
-    render({ width, now, collapsed }) {
-      const live = registry.running()
-      if (!live.length) return []
-      const lines: ToolLine[] = [
-        { kind: "muted", text: `${plural(live.length, "background job")} running · /jobs to see or stop` },
-      ]
-      if (collapsed) return lines
-      for (const j of live) {
-        const head = `● ${j.id} ${formatElapsed(now - j.startedAt)} · `
-        const room = Math.max(10, width - head.length)
-        const command = clip(j.command.replace(/\s+/g, " ").trim(), Math.max(10, Math.floor(room * 0.5)))
-        const last = lastLine(registry, j.id)
-        lines.push({ kind: "text", text: `${head}${command}${last ? ` · ${last}` : ""}` })
-      }
-      return lines
-    },
-  }
+  return tasksPanel(registry)
 }
 
 /** The output of one job as lines: its end, with how much came before. */
@@ -343,7 +322,7 @@ export function registerJobs(api: ExtensionAPI, registry: JobRegistry = hostBack
       api.requestRender()
     }),
   )
-  api.registerPanel(jobsPanel(registry))
+  registerTasks(api, registry)
   api.registerCommand(jobsCommand(registry))
   api.registerView(jobView(registry))
   // The session host stops a sub-agent's jobs when its owner ends.

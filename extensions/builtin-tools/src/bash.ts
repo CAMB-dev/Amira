@@ -1,5 +1,4 @@
 import { type BashDetails, defineTool, type HostRunResult, hostRunCommand, textResult } from "@amira/api"
-import { statOrNull } from "./files.ts"
 import { startBackground } from "./jobs.ts"
 import {
   findPowerShell,
@@ -9,6 +8,7 @@ import {
   resolvePowerShell,
 } from "./powershell.ts"
 import { resolveShell, type Shell } from "./shell.ts"
+import { resolveExecutionShell, validateShellCommand } from "./shell-execution.ts"
 import {
   NOT_CONTAINED_WARNING,
   OUTPUT_OPEN_NOTE,
@@ -32,9 +32,9 @@ export interface BashParams {
 /** Notes for every shell tool; `cd` and `chain` show how that shell sequences commands. */
 function sharedNotes(cd: string, chain: string): string[] {
   return [
-    `Fresh shell in working directory; cd, variables/functions do not persist. To change directory: ${cd}. Concurrent calls run in parallel; chain dependencies (${chain}) or use separate turns.`,
-    `timeout: ms, default/max ${MAX_TIMEOUT_MS}; kills command and descendants. Leftover processes are killed on completion too. For longer/persistent commands use background:true (ignores timeout): returns job id/output immediately. Read via job_output with wait_for, not polling; stop via job_stop. Never use &/nohup. Root jobs survive /clear, /resume, /fork until Amira exits; child jobs end with their sub-agent.`,
-    "stdin closed: use non-interactive flags. Long output: artifact with start/end preview; output_read reads the rest. Prefer file/search tools for reading, editing and searching.",
+    `Fresh shell in cwd; state resets. cd: ${cd}. Parallel calls; chain dependencies (${chain}).`,
+    `timeout: ms, default/max ${MAX_TIMEOUT_MS}; kills tree; completion kills leftovers. No &/nohup. Root jobs survive /clear, /resume, /fork until Amira exits; child jobs end with owner.`,
+    "stdin closed: use non-interactive flags. Long output: artifact preview; read via output_read. Prefer file/search tools.",
   ]
 }
 
@@ -46,11 +46,11 @@ const PARAMETERS = {
       type: "integer",
       minimum: 1,
       maximum: MAX_TIMEOUT_MS,
-      description: `Milliseconds; default ${DEFAULT_TIMEOUT_MS}, ignored in background.`,
+      description: `ms; default ${DEFAULT_TIMEOUT_MS}, ignored in background.`,
     },
     background: {
       type: "boolean",
-      description: "Persistent job; returns immediately.",
+      description: "Immediate job id/output; read/stop: job_output/job_stop.",
     },
   },
   required: ["command"],
@@ -79,14 +79,15 @@ function shellTool(
     // back to PowerShell on Windows.
     shellKind: async () => (await resolve()).kind,
     async execute({ command, timeout, background }, ctx) {
-      if (typeof command !== "string" || command.trim() === "") return textResult("command is required", true)
-      if (command.includes("\0")) return textResult("command must not contain NUL characters", true)
-      if (ctx.signal.aborted) return textResult("Aborted before the command started", true)
-      if (!(await statOrNull(ctx.cwd))?.isDirectory()) {
-        return textResult(`Working directory does not exist: ${ctx.cwd}`, true)
-      }
+      const invalid = await validateShellCommand(command, ctx)
+      if (invalid) return invalid
       const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1, Math.floor(timeout ?? DEFAULT_TIMEOUT_MS)))
-      const shell = await resolve()
+      let shell: Shell
+      try {
+        shell = await resolveExecutionShell(resolve, ctx)
+      } catch (error) {
+        return textResult((error as Error).message, true)
+      }
       if (background === true) return startBackground(name, shell, command, ctx)
 
       const started = performance.now()
@@ -159,9 +160,9 @@ export const bashTool = shellTool(
   "bash",
   "bash",
   [
-    "Run bash; returns combined stdout/stderr and exit code. Windows: Git Bash, POSIX syntax/forward slashes; without Git Bash, PowerShell fallback labels results with Shell: edition; use PowerShell syntax then.",
-    "pipefail: any pipeline failure fails the call, except a successful last command with earlier statuses only 0/SIGPIPE(141). That exception still fails inside the shell, so subsequent && won't run; use command output-limit options when chaining. Other nonzero statuses fail.",
-    "UTF-8 output; legacy Windows code pages may garble non-ASCII.",
+    "Bash: combined stdout/stderr + exit code. Windows uses Git Bash (POSIX syntax, forward slashes), or PowerShell fallback (Shell: edition); use PowerShell syntax for fallback.",
+    "pipefail: any nonzero fails, except a successful final pipeline command with earlier statuses only 0/141 (SIGPIPE). That exception still blocks && inside the shell; prefer output-limit options when chaining.",
+    "UTF-8; legacy Windows code pages may garble non-ASCII.",
     ...sharedNotes("cd dir && cmd", "`a && b`"),
   ],
   resolveShell,

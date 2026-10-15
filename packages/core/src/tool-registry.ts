@@ -70,18 +70,21 @@ export class ToolRegistry {
       }
   }
 
-  /** Check the captured definition too: private tools and late registrations share this policy. */
-  isEnabled(tool: ToolDefinition): boolean {
-    if (this.#base) return this.#base.isEnabled(tool)
+  /** Check captured capabilities without losing the registered identity for explicit shell choices. */
+  isEnabled(
+    tool: ToolDefinition,
+    capabilities: Pick<ToolDefinition, "traits" | "shellKind"> = tool,
+  ): boolean {
+    if (this.#base) return this.#base.isEnabled(tool, capabilities)
     if (this.#disabled.has(tool.name)) return false
-    const traits = toolTraits(tool)
+    const traits = toolTraits({ name: tool.name, traits: capabilities.traits })
     if (this.#policy.nonInteractive && traits?.interactive) return false
     if (this.#policy.shell === "auto") return true
     // Explicit /tools choices authorize the selected global implementation, not a different
     // private same-name replacement with capabilities the host did not select.
     if (this.#policy.enabled.has(tool.name) && this.#tools.get(tool.name)?.at(-1)?.tool === tool) return true
     if (traits?.shell) return traits.shell === this.#policy.shell
-    return tool.shellKind === undefined
+    return capabilities.shellKind === undefined
   }
 
   get disabled(): ReadonlySet<string> {

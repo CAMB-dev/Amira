@@ -492,6 +492,8 @@ api.registerCommand({
 
 ### 子 agent 控制
 
+从 `@amira/api` 导入 `subagentTranscriptText(info, messages, all, now?)`，可将子 agent 的对话渲染为紧凑的纯文本。`/agents` 和 `/tasks` 在无法打开实时视图时使用它。即使收到通知或追问，它也会保留子 agent 原始任务的边界，包含工具调用、结果预览及完整的最终回复。格式化和消息筛选辅助函数属于内部实现；不要从其他扩展或内部包子路径导入它们。
+
 `SessionControl.messageSubagent(id, text)` 向后代子 agent 发送用户消息：运行中会在下一次模型调用前收到，空闲的持久子 agent 会开始新一轮，排队中的子 agent 仅在获得执行名额后收到。消息以用户身份记录在子 agent 的对话及总线事件中，而不是父模型通知。未知、已结束或正在停止的子 agent 返回 false。`pauseSubagent(id)` 在下一次模型调用前暂停，允许当前模型或工具调用完成，不中止工作或丢失结果；`resumeSubagent(id)` 解除暂停。暂停状态通过 `SubagentInfo.status` 和 `subagent.state` 的 paused 表示。已获准执行的暂停子 agent 仍占用树及组的并发名额，不会为其他子 agent 释放名额；暂停时仍可停止。暂停仅适用于运行中的子 agent，不适用于排队或空闲状态；未知、已结束或已处于目标状态时，暂停及恢复返回 false。此暂停独立于扩展的消息队列（包括 swarm 的暂停），恢复一方不会解除另一方。
 
 RPC 客户端使用 `subagent.message` 携带 `{ sessionId, text }`，使用 `subagent.pause` 和 `subagent.resume` 携带 `{ sessionId }`；响应分别包含布尔值 delivered、paused、resumed。delivered 表示已接受，不保证模型已经看到消息。这些新增能力不改变 `API_VERSION`。
@@ -563,7 +565,9 @@ api.registerView(review)
 `readKey(params, { cwd })` 可以为可重复的直接文件读取提供上下文去重标识。
 未声明的能力仍视为未知：权限检查、回退和工作区刷新会继续采取保守行为；MCP 工具目前没有已知能力声明。
 
-能力声明是受信任的：扩展以你自己的代码运行，因此对于工具自己的名字，声明 `readOnly` 或报告的路径少于实际写入的路径，都会被采信。但声明不能削弱内置名字的保护。注册在 `write`、`edit`、`apply_patch`、`bash`、`powershell` 或 `ask_user` 名下的工具（例如 `override`）无论声明什么，都保留该名字隐含的能力：`write`、`edit` 和 `apply_patch` 始终是写文件工具，除了它报告的路径，还会按参数中指明的路径做受保护路径检查；`bash` 和 `powershell` 始终是 shell 工具，受你的命令规则约束（除非 `shellKind()` 给出答案，bash 会按两种 shell 读法都检查）；它们在 plan 模式下都不算只读。既写文件又运行 shell 的工具会同时按两者检查。回退只捕获声明的写文件工具所报告的路径；`usesMutationHook: true` 告诉 host 该工具会通过 `ctx.mutateFiles` 自行捕获写入，声明了却没有这样做的工具不会被捕获。host 捕获声明的写文件工具时，整个调用期间都占用会话的文件捕获队列：其他文件写入（包括同一目录中的子 agent）都要等待它完成，因此这类工具应尽快结束，且不要等待其他 agent 的文件写入。
+能力声明是受信任的：扩展以你自己的代码运行，因此对于工具自己的名字，声明 `readOnly` 或报告的路径少于实际写入的路径，都会被采信。但声明不能削弱内置名字的保护。注册在 `write`、`edit`、`apply_patch`、`bash`、`powershell`、`monitor` 或 `ask_user` 名下的工具（例如 `override`）无论声明什么，都保留该名字隐含的能力：`write`、`edit` 和 `apply_patch` 始终是写文件工具，除了它报告的路径，还会按参数中指明的路径做受保护路径检查；`bash`、`powershell` 和 `monitor` 始终是 shell 工具，受你的命令规则约束（除非 `shellKind()` 给出答案，bash 和 monitor 会按两种 shell 读法都检查）；它们在 plan 模式下都不算只读。既写文件又运行 shell 的工具会同时按两者检查。回退只捕获声明的写文件工具所报告的路径；`usesMutationHook: true` 告诉 host 该工具会通过 `ctx.mutateFiles` 自行捕获写入，声明了却没有这样做的工具不会被捕获。host 捕获声明的写文件工具时，整个调用期间都占用会话的文件捕获队列：其他文件写入（包括同一目录中的子 agent）都要等待它完成，因此这类工具应尽快结束，且不要等待其他 agent 的文件写入。
+
+host 在 before 拦截器和审批之前固定 `shellKind()` 的结果，并通过 `ctx.shellKind` 交给执行器。`monitor` 还会以 `command` 和 `background: true` 参数经过所选 `bash` 或 `powershell` 名下的守卫；禁用 shell 工具也会阻止它。无法确定 shell 时，会同时检查两种 shell 的守卫和命令规则。monitor 自身的守卫仍然生效，shell 守卫禁止后台执行的决定不能被忽略。如果审批期间 monitor 所选的 shell 入口发生改变，调用会被拒绝并要求重试；分派执行前，还会按当前 host 策略重新检查已授权的入口。
 
 `serverToolView(block)` 返回 provider 工具的名称、参数、结果文本和原生搜索详情（包括来源）；未完成的工具块还会带上 `rejected: "aborted"`。可以把其中的 `ToolCallView` 字段交给已有的工具展示器或其他前端使用；它只用于渲染，不能作为本地工具结果发回 provider。
 
@@ -703,6 +707,8 @@ api.registerWorkspaceProvider(provider)
 `ExtensionAPI.backgroundJobs` 是扩展级视图：它只能启动任务，并列出、读取、等待、停止和订阅本扩展自己启动的任务；它不能配置 host 注册表、停止全部任务、关闭会话或在根会话之间转移任务。`/jobs` 命令和 TUI 面板等内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力，因此仍能看到工具启动的会话任务；工具执行器应使用会话级的 `ctx.backgroundJobs`，因为这个公共边界会携带任务所有权和可见性。
 
 启动任务时提供 `command`、`argv`、`cwd`、`env` 和 `shell`。会话 host 会自动记录子 agent 的所有者；主会话可以看到自己的任务和所有子 agent 的任务，子 agent 只能看到自己的任务。`list`、`get`、`running`、`output`、`tail` 和 `stop` 都会执行可见性检查，不可访问的任务会按不存在处理。
+
+启动选项可提供 `onChange(change)`，从该任务的第一个事件开始观察，包括同步启动输出和最终状态快照。输出事件携带新增的原始 `output` 片段，不受保留缓冲区大小限制。需要按行处理时，请在观察器中保留分行状态，并当场捕获最终信息，不要等任务可能被移除后再查询。观察器抛出的异常不会破坏任务生命周期。
 
 `readNew` 为每个 reader 名称维护独立游标，因此多个 reader 可以分别增量读取同一份输出。`waitFor` 可以等待正则表达式匹配、进程退出、超时或 abort signal。`subscribe` 只会报告本扩展任务的启动、状态、输出和结束变化；先用带宽限期的 `stop`，需要强制停止时再用 `0` 调用一次。
 

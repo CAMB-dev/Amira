@@ -15,6 +15,7 @@ import { createCommandHost } from "../src/control.ts"
 import { createSession } from "../src/session.ts"
 
 const PREFIX_BUDGET = { total: 15_000, perTool: 1800 }
+const PREFIX_HEADROOM = 400
 
 async function captureSession(
   run: (session: Awaited<ReturnType<typeof createSession>>, seen: Seen) => Promise<void>,
@@ -65,6 +66,7 @@ test("default Anthropic request stays within the tool prefix budget", async () =
         "job_list",
         "job_output",
         "job_stop",
+        "monitor",
         "output_read",
         "read",
         "skill",
@@ -88,6 +90,9 @@ test("default Anthropic request stays within the tool prefix budget", async () =
     for (const tool of legacy) {
       expect(JSON.stringify(tool).length, tool.name).toBeLessThanOrEqual(PREFIX_BUDGET.perTool)
     }
+    expect(Math.max(JSON.stringify(tools).length, JSON.stringify(legacy).length)).toBeLessThanOrEqual(
+      PREFIX_BUDGET.total - PREFIX_HEADROOM,
+    )
   })
 })
 

@@ -15,6 +15,7 @@ import {
   type ToolSession,
   textResult,
 } from "@amira/api"
+import { CompletionBatches } from "./completion-batches.ts"
 import type { Shell } from "./shell.ts"
 import { NOT_CONTAINED_WARNING } from "./shell-notes.ts"
 import { MAX_OUTPUT_CHARS } from "./truncate.ts"
@@ -73,30 +74,93 @@ function watch<T>(id: string, run: () => Promise<T>): Promise<T> {
   })
 }
 
+/** Read synchronously in an end callback, before the watching tool's promise settles. */
+export function jobIsWatched(id: string): boolean {
+  return watching.has(id)
+}
+
+const END_NOTICE_BYTES = 4096
+const AUTOMATIC_NOTICE = "(Sent automatically; the user did not write this message.)"
+
+interface JobEnd {
+  job: BackgroundJobInfo
+  tail: string
+}
+
+/** Truncate optional details, never the job IDs that identify each completion. */
+function noticeSnippet(text: string, maxBytes: number): string {
+  const bytes = Buffer.from(text)
+  if (bytes.length <= maxBytes) return text
+  if (maxBytes < 3) return ""
+  return `${bytes
+    .subarray(0, maxBytes - 3)
+    .toString("utf8")
+    .replace(/\uFFFD$/, "")}…`
+}
+
+function jobEndNotice(ends: JobEnd[]): { text: string; display: string } {
+  const prefixes = ends.map(({ job }) => `Background job ${job.id}`)
+  const requiredBytes =
+    prefixes.reduce((bytes, prefix) => bytes + Buffer.byteLength(prefix), 0) +
+    ends.length -
+    1 +
+    Buffer.byteLength(` ${AUTOMATIC_NOTICE}`)
+  const budget = Math.max(0, Math.floor((END_NOTICE_BYTES - requiredBytes) / ends.length))
+  const summaries = ends.map(({ job }, i) => {
+    const prefix = prefixes[i]!
+    if (budget < 5) return prefix
+    const ending = noticeSnippet(endText(job), Math.min(256, Math.floor((budget - 5) / 2)))
+    const command = noticeSnippet(job.command, budget - 5 - Buffer.byteLength(ending))
+    return command ? `${prefix} (${command}) ${ending}.` : `${prefix} ${ending}.`
+  })
+  let text = `${summaries.join("\n")} ${AUTOMATIC_NOTICE}`
+  // Very large batches may exceed the budget on IDs alone. Keep every completion, but drop
+  // optional output rather than dropping IDs or delivering another waking message.
+  const outputBudget = Math.max(0, END_NOTICE_BYTES - Buffer.byteLength(text))
+  const perJob = Math.floor(outputBudget / ends.length)
+  for (const { job, tail } of ends) {
+    if (!tail) continue
+    const label = ends.length === 1 ? "\nIts last output:\n" : `\nLast output from ${job.id}:\n`
+    const output = noticeSnippet(tail, perJob - Buffer.byteLength(label))
+    if (output) text += label + output
+  }
+  const first = ends[0]!.job
+  return {
+    text,
+    display:
+      ends.length === 1
+        ? noticeSnippet(`Background job ${first.id} ${endText(first)}: ${first.command}`, 512)
+        : summaries.join("\n"),
+  }
+}
+
 /**
- * Tells the session that started a job when the job ended without anyone asking it to: in its
- * next turn (it does not wake an idle session; the user sees a notice meanwhile). Not when a
- * tool call watching the job reports the end itself. Returns a function that stops listening.
+ * Tells each owner about jobs that end naturally, in one waking message per short batch.
+ * A watching tool reports its own end. Unsubscribing cancels queued notices and timers.
  */
 export function watchJobEnds(registry: BackgroundJobRegistry): () => void {
-  return registry.subscribe(({ type, job }) => {
+  const batches = new CompletionBatches<JobEnd>((ends) => {
+    const { text, display } = jobEndNotice(ends)
+    return {
+      role: "user",
+      content: [{ type: "text", text }],
+      display: { text: display, origin: "job" },
+    }
+  })
+  const off = registry.subscribe(({ type, job }) => {
     if (type !== "end") return
     const session = starters.get(job.id)
     starters.delete(job.id)
-    if (!session || job.stopRequested || watching.has(job.id)) return
-    const notice = session.expectNotice?.()
-    if (!notice) return
-    const tail = registry.tail(job.id, 2000).trimEnd()
-    const text = `Background job ${job.id} (${job.command}) ${endText(job)}. (Sent automatically; the user did not write this message.)${tail ? `\nIts last output:\n${tail}` : ""}`
-    notice.deliver(
-      {
-        role: "user",
-        content: [{ type: "text", text }],
-        display: { text: `Background job ${job.id} ${endText(job)}: ${job.command}`, origin: "job" },
-      },
-      { wake: false },
-    )
+    // Capture suppression here: a deferred check would run after watch() releases the job.
+    if (!session || job.stopRequested || jobIsWatched(job.id)) return
+    const end = { job, tail: registry.tail(job.id, 2000).trimEnd() }
+    // Reserve before scheduling so print sees the batch and handovers retain its lease.
+    batches.add(session.sessionId, end, () => session.expectNotice?.())
   })
+  return () => {
+    off()
+    batches.dispose()
+  }
 }
 
 /** How a job ended, for sentences: "exited with code 1", "was stopped", "failed to start: …". */
@@ -293,23 +357,20 @@ export interface JobOutputParams {
 export const jobOutputTool = defineTool<JobOutputParams>({
   name: "job_output",
   description: [
-    "Read new output/status of a shell background job. wait_for matches each new line case-insensitively (first call includes start output); returns on match, exit or timeout. Without wait_for, timeout waits for exit.",
-    "Do not poll: use wait_for/timeout or do other work before checking.",
-    `Returns at most ${MAX_OUTPUT_CHARS} chars (new output's tail); log file has all output.`,
+    "Read new job output/status. wait_for: case-insensitive line regex; first call includes start output. Ends on match/exit/timeout; without wait_for, timeout waits for exit.",
+    "Do not poll: wait or do other work.",
+    `Max ${MAX_OUTPUT_CHARS} tail chars; full output in log.`,
   ].join("\n"),
   parameters: {
     type: "object",
     properties: {
       job_id: { type: "string" },
-      wait_for: {
-        type: "string",
-        description: "Regular expression to await",
-      },
+      wait_for: { type: "string" },
       timeout: {
         type: "integer",
         minimum: 0,
         maximum: MAX_WAIT_MS,
-        description: `Milliseconds; default ${DEFAULT_WAIT_MS} with wait_for, else 0`,
+        description: `ms; default ${DEFAULT_WAIT_MS} with wait_for, else 0`,
       },
     },
     required: ["job_id"],
@@ -386,8 +447,7 @@ export interface JobStopParams {
 
 export const jobStopTool = defineTool<JobStopParams>({
   name: "job_stop",
-  description:
-    "Stop a background job and descendants; returns end status/unread output. Stop unneeded jobs; all stop on Amira exit.",
+  description: "Stop a job and its process tree; return status/unread output. Stop unneeded jobs.",
   parameters: {
     type: "object",
     properties: { job_id: { type: "string" } },
@@ -425,8 +485,7 @@ export const jobStopTool = defineTool<JobStopParams>({
 
 export const jobListTool = defineTool<Record<string, never>>({
   name: "job_list",
-  description:
-    "List the background jobs: id, status, how long they ran, the command and how much output you have not read yet.",
+  description: "List jobs: id, status, elapsed time, command, unread output.",
   parameters: { type: "object", properties: {}, additionalProperties: false },
   traits: { readOnly: true },
   concurrency: "parallel",

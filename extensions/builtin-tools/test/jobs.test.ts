@@ -313,7 +313,7 @@ test.if(hasBash)("a sub-agent sees only its own jobs, which stop when it ends", 
 })
 
 test.if(hasBash)(
-  "a job that ends on its own: the user gets a notice, the model a message for its next turn",
+  "a job that ends on its own: the user gets a notice, the model a waking message",
   async () => {
     const delivered: Delivered[] = []
     const api = fakeApi()
@@ -324,7 +324,7 @@ test.if(hasBash)(
     )
     const { jobId } = detailsOf(r)
     await waitUntil(() => delivered.length > 0, "the notice to the model")
-    expect(delivered[0]!.opts).toEqual({ wake: false })
+    expect(delivered[0]!.opts).toEqual({ wake: true })
     const text = (delivered[0]!.message.content[0] as { text: string }).text
     expect(text).toStartWith(`Background job ${jobId} (${bun} late-fail.js) exited with code 4.`)
     expect(text).toContain("boom")

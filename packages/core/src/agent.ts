@@ -250,6 +250,7 @@ export class Agent {
         steerSignal: () => this.#turnState.steerAbort?.signal,
         storeFailed: () => this.#history.storeFailed,
         callSession: (turn, toolCallId) => this.#callSession(turn, toolCallId),
+        expectNotice: () => this.#inbox.target().expect(),
         keepLarge: (call, result) => this.#contextManager.keepLarge(call, result),
         interruptTurn: (turn) => {
           if (this.#turnState.turn === turn) this.#turnState.abort?.abort()

@@ -11,6 +11,7 @@ import {
   type Message,
   type SessionControl,
   type SubagentInfo,
+  subagentTranscriptText,
   textResult,
   type UiRequest,
   type ViewDefinition,
@@ -46,7 +47,6 @@ import {
   type RunGit,
   STALE_WORKTREE_MS,
   subagentSummary,
-  transcriptText,
 } from "../src/index.ts"
 import { subagentView } from "../src/subagent-view.ts"
 
@@ -741,7 +741,7 @@ test("plain transcripts group visible tools, keep outcomes inline and start at t
     depth: 1,
     role: "agent",
     title: "Look around",
-    task: "fallback task",
+    task: "own task\nsecond line",
     status: "running",
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   }
@@ -791,7 +791,7 @@ test("plain transcripts group visible tools, keep outcomes inline and start at t
       { type: "toolCall", id: "wait", name: "wait", args: {} },
     ]),
   ]
-  const rows = transcriptText(info, messages, [], 0).split("\n").slice(1)
+  const rows = subagentTranscriptText(info, messages, [], 0).split("\n").slice(1)
   expect(rows).toEqual([
     "  › own task",
     "    second line",
@@ -808,7 +808,7 @@ test("plain transcripts group visible tools, keep outcomes inline and start at t
     "  └ ⠋ wait",
   ])
   expect(
-    transcriptText({ ...info, status: "done" }, messages, [], 0)
+    subagentTranscriptText({ ...info, status: "done" }, messages, [], 0)
       .split("\n")
       .slice(-2),
   ).toEqual(["  ├ web_search  ⊘ did not finish", "  └ wait  ⊘ no result"])
@@ -838,7 +838,7 @@ test("plain summaries and transcript headings use static badges before titles an
     const agent = { ...info, status }
     const details = `Fix parser · coder · s_badges${status === "queued" ? "" : " · 12s"} · 120 tok · $0.0012`
     expect(subagentSummary(agent, 0)).toBe(`${badge} ${details} · repair it`)
-    expect(transcriptText(agent, [], [], 0).split("\n")[0]).toBe(`◆ ${badge} ${details}`)
+    expect(subagentTranscriptText(agent, [], [], 0).split("\n")[0]).toBe(`◆ ${badge} ${details}`)
   }
 })
 
@@ -851,6 +851,18 @@ test("/agents print mode keeps numbering and static badges without opening a sel
   expect(lines[0]).toMatch(/^1\. ✓ done {4}Fix the bug · coder · s_\w+ · \d+s · 1\.2k tok · \$0\.0021 · /)
   expect(lines[1]).toMatch(/^2\. {3}✓ done {4}Find its uses · explorer · s_\w+ · /)
   expect(host.ui.pending).toEqual([])
+})
+
+test("/agents uses the public subagentTranscriptText renderer and keeps its legacy export alias", async () => {
+  const { root, control, run } = await setup(nested)
+  await root.prompt("go")
+  const agents = control.subagents()
+  const info = agents[0]!
+  const expected = subagentTranscriptText(info, control.subagentMessages(info.id) ?? [], agents)
+  expect((await run(`/agents ${info.id}`, "print")).text).toBe(expected)
+  const extension = await import("../src/index.ts")
+  expect(extension.transcriptText).toBe(subagentTranscriptText)
+  expect("subagentOwnMessages" in extension).toBe(false)
 })
 
 test("findSubagent takes a number, an id or a unique start of one", () => {
@@ -869,13 +881,19 @@ test("findSubagent takes a number, an id or a unique start of one", () => {
   expect(findSubagent(list, "s_aa11")?.id).toBe("s_aa11")
   expect(findSubagent(list, "s_a")).toBeUndefined()
   expect(findSubagent(list, "s_ab")?.id).toBe("s_ab22")
-  expect(transcriptText({ ...list[0]!, status: "error", error: "boom" }, [], list)).toContain("✗ boom")
+  expect(subagentTranscriptText({ ...list[0]!, status: "error", error: "boom" }, [], list)).toContain(
+    "✗ boom",
+  )
   expect(
-    transcriptText({ ...list[0]!, note: "stopped early" }, [], list)
+    subagentTranscriptText({ ...list[0]!, note: "stopped early" }, [], list)
       .split("\n")
       .slice(1),
   ).toEqual(["  › (no task)", "", "⊘ stopped early"])
-  expect(transcriptText(list[0]!, [], list).split("\n").slice(1)).toEqual(["  › (no task)", "", "(no reply)"])
+  expect(subagentTranscriptText(list[0]!, [], list).split("\n").slice(1)).toEqual([
+    "  › (no task)",
+    "",
+    "(no reply)",
+  ])
   // One that never started has no time to show.
   expect(subagentSummary({ ...list[0]!, status: "aborted" }, 0)).toBe(
     "‖ stopped Look around · agent · s_aa11 · 0 tok · ",
