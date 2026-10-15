@@ -2,11 +2,13 @@ import { spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
 import { filesystemGatePath } from "./file-lock-fixtures.ts"
+import { fileLockWorkerReady, waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 const [dir, mode] = process.argv.slice(2)
 if (!dir || !mode) throw new Error("missing review worker arguments")
 
 if (mode.startsWith("no-native-")) {
+  await fileLockWorkerReady(dir)
   // Intercept the module without importing or loading any real native bindings.
   Bun.plugin({
     name: "reject-native-loader",
@@ -59,13 +61,6 @@ if (mode.startsWith("no-native-")) {
   })
   const { tryFileLock } = await import("../src/file-lock.ts")
   const { takeFilesystemGate } = await import("../src/file-lock-gate.ts")
-  const waitUntil = async (ready: () => boolean, message: string, timeoutMs = 3000) => {
-    const deadline = Date.now() + timeoutMs
-    while (!ready()) {
-      if (Date.now() > deadline) throw new Error(message)
-      await Bun.sleep(10)
-    }
-  }
   const parent = path.join(dir, "parent")
   fs.mkdirSync(parent)
   const leasePath = path.join(parent, "session.lock")
@@ -76,7 +71,9 @@ if (mode.startsWith("no-native-")) {
   if (!lease || !unblock) throw new Error("could not set up deferred release")
   // Importing modules and constructing the lease/gate are setup, not deferred release.
   fs.writeFileSync(path.join(dir, `ready-${process.pid}`), "ready")
-  await waitUntil(() => fs.existsSync(path.join(dir, "review-go")), "review worker never started", 30_000)
+  await waitForFileLockCondition(`review worker ${mode}: review-go`, () =>
+    fs.existsSync(path.join(dir, "review-go")),
+  )
   lease.release()
   unblock()
   // A directory move keeps the retained inode/lease intact on Windows as well.
@@ -118,11 +115,11 @@ if (mode.startsWith("no-native-")) {
     fs.writeFileSync(leasePath, "unverifiable replacement")
   } else if (mode !== "release-missing-parent" && !filesystemFault) throw new Error(`unknown mode: ${mode}`)
   // Observe the actual close, not an assumed number of scheduled retry turns.
-  await waitUntil(() => closed, "retained lease descriptor leaked")
+  await waitForFileLockCondition(`review worker ${mode}: retained lease descriptor close`, () => closed)
   if (mode === "release-cleanup-error") {
     if (gateRecord === undefined || JSON.parse(gateRecord).pid !== process.pid)
       throw new Error("lost pending gate owner")
-    await waitUntil(() => warnings.length > 0, "missing informative final cleanup warning")
+    await waitForFileLockCondition(`review worker ${mode}: final cleanup warning`, () => warnings.length > 0)
     if (prematureWarning) throw new Error("premature cleanup warning")
     if (
       warnings.slice().length !== 1 ||

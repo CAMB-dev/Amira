@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, wr
 import os from "node:os"
 import path from "node:path"
 import { LockBusyError, tryFileLock, waitFileLock } from "../src/file-lock.ts"
+import { waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 let dir: string
 beforeEach(() => {
@@ -42,11 +43,10 @@ test("a holder's heartbeat keeps its lock fresh; waiting gives up after waitMs",
   const held = tryFileLock(file, 60_000, 20)!
   try {
     utimesSync(file, new Date(0), new Date(0))
-    const deadline = performance.now() + 3000
-    while (statSync(file).mtimeMs === 0) {
-      if (performance.now() > deadline) throw new Error("timed out waiting for the lock heartbeat")
-      await Bun.sleep(5)
-    }
+    await waitForFileLockCondition(
+      "lock heartbeat refreshed the stale mtime",
+      () => statSync(file).mtimeMs !== 0,
+    )
     expect(Date.now() - statSync(file).mtimeMs).toBeLessThan(10_000)
     const err = await waitFileLock(file, { staleMs: 60_000, waitMs: 150, pollMs: 20 }).catch((e) => e)
     expect(err).toBeInstanceOf(LockBusyError)
@@ -54,4 +54,4 @@ test("a holder's heartbeat keeps its lock fresh; waiting gives up after waitMs",
     held.release()
   }
   ;(await waitFileLock(file, { staleMs: 60_000, waitMs: 150 })).release()
-})
+}, 35000)

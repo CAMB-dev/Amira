@@ -2,11 +2,13 @@ import { expect, spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
 import { tryFileLock } from "../src/file-lock.ts"
-import { takeFilesystemGate } from "../src/file-lock-gate.ts"
+import { pendingGateCleanup, takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { filesystemGatePath } from "./file-lock-fixtures.ts"
+import { fileLockWorkerReady, waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 const [dir, mode] = process.argv.slice(2)
 if (!dir || !mode) throw new Error("missing gate safety arguments")
+await fileLockWorkerReady(dir)
 const parent = path.join(dir, "parent")
 fs.mkdirSync(parent)
 const file = path.join(parent, "session.lock")
@@ -90,7 +92,7 @@ if (mode === "exit-success" || mode === "exit-failure") {
   expect(replacement).toBeDefined()
   const nextRecord = fs.readFileSync(path.join(gate, "owner.json"), "utf8")
   privateBlocked = false
-  await Bun.sleep(200)
+  await waitForFileLockCondition("private retirement debris is removed", () => !pendingGateCleanup(gate))
   expect(privateAttempts).toBeGreaterThan(1)
   expect(fs.readFileSync(path.join(gate, "owner.json"), "utf8")).toBe(nextRecord)
   expect(fs.readdirSync(parent)).toEqual(["session.lock.lease-gate"])
@@ -98,7 +100,7 @@ if (mode === "exit-success" || mode === "exit-failure") {
   replacement()
 } else {
   unlock()
-  await Bun.sleep(60)
+  await waitForFileLockCondition(`${mode} deferred retirement attempt`, () => attempts > 1)
   expect(fs.readFileSync(path.join(gate, "owner.json"), "utf8")).toBe(record)
   expect(attempts).toBeGreaterThan(1)
   if (mode === "closure") {
@@ -122,7 +124,10 @@ if (mode === "exit-success" || mode === "exit-failure") {
     fs.renameSync(replacementGate, gate)
     const nextRecord = fs.readFileSync(path.join(gate, "owner.json"), "utf8")
     blocked = false
-    await Bun.sleep(200)
+    await waitForFileLockCondition(
+      `${mode} timer abandons changed ownership`,
+      () => !pendingGateCleanup(gate),
+    )
     unlock()
     expect(fs.readFileSync(path.join(gate, "owner.json"), "utf8")).toBe(nextRecord)
     fs.renameSync(gate, replacementGate)
@@ -132,7 +137,10 @@ if (mode === "exit-success" || mode === "exit-failure") {
     const changed = JSON.stringify({ ...JSON.parse(record), nonce: "unverifiable-replacement" })
     fs.writeFileSync(path.join(gate, "owner.json"), changed)
     blocked = false
-    await Bun.sleep(200)
+    await waitForFileLockCondition(
+      `${mode} timer abandons changed ownership`,
+      () => !pendingGateCleanup(gate),
+    )
     unlock()
     expect(takeFilesystemGate(file)).toBeUndefined()
     expect(fs.readFileSync(path.join(gate, "owner.json"), "utf8")).toBe(changed)
@@ -142,7 +150,10 @@ if (mode === "exit-success" || mode === "exit-failure") {
     fs.mkdirSync(parent)
     fs.writeFileSync(file, "untouched replacement")
     blocked = false
-    await Bun.sleep(200)
+    await waitForFileLockCondition(
+      `${mode} timer abandons changed ownership`,
+      () => !pendingGateCleanup(gate),
+    )
     unlock()
     expect(fs.readdirSync(parent)).toEqual(["session.lock"])
     expect(fs.readFileSync(file, "utf8")).toBe("untouched replacement")

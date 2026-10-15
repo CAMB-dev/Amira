@@ -8,7 +8,8 @@ import { pendingOwnedLockCleanup, SessionWriteGuardError, tryFileLock } from "..
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { leaseOwner } from "../src/file-lock-owner.ts"
 import { SessionInUseError, SessionStore, sessionLockFile } from "../src/session-store.ts"
-import { finishWorker, startWorker, waitFor } from "./session-ownership-worker.ts"
+import { waitForFileLockCondition, waitForFileLockWorkerExit } from "./file-lock-test-waits.ts"
+import { finishWorker, startWorker } from "./session-ownership-worker.ts"
 
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "amira-acquire-core-"))
@@ -38,9 +39,10 @@ for (const code of ["EPERM", "EBUSY", "EACCES"]) {
         attempts++
         return "ready"
       })
+      // A real timer deliberately demonstrates that retries yield to the event loop.
       release = setTimeout(() => {
         denied = false
-      }, 40)
+      }, 0)
       expect(await pending).toBe("ready")
       expect(attempts).toBe(1)
       expect(fs.existsSync(file)).toBe(false)
@@ -113,7 +115,12 @@ test("awaited acquisition fails a verified live foreign-process lease without sl
   store.appendMessage(userMessage("saved"))
   const worker = startWorker(dir, store.file, "hold")
   try {
-    await waitFor(path.join(dir, "claimed"), worker)
+    await waitForFileLockCondition(`ownership worker ${worker.pid}: claimed`, () => {
+      if (fs.existsSync(path.join(dir, "claimed"))) return true
+      if (worker.exitCode !== null)
+        throw new Error(`ownership worker ${worker.pid} exited (${worker.exitCode}) before claim`)
+      return false
+    })
     expect(worker.exitCode).toBeNull()
     expect(fs.readFileSync(file, "utf8").split("\n")[0]).toBe(String(worker.pid))
     const timers = spyOn(globalThis, "setTimeout")
@@ -134,9 +141,13 @@ test("awaited acquisition fails a verified live foreign-process lease without sl
     }
   } finally {
     fs.writeFileSync(path.join(dir, "release"), "release")
-    await finishWorker(worker, dir)
+    try {
+      await waitForFileLockWorkerExit(worker, "ownership worker release")
+    } finally {
+      await finishWorker(worker, dir)
+    }
   }
-})
+}, 65_000)
 
 test("an own pending lease does not make a foreign blocking gate retryable", () => {
   const { dir, store, file } = fixture()
@@ -250,7 +261,9 @@ test("abort clears its wait timer/listener and never claims after cancellation",
       { signal: controller.signal },
     )
     const waitTimer = timers.mock.results.at(-1)?.value
+    const lateWake = timers.mock.calls.at(-1)?.[0]
     expect(waitTimer).toBeDefined()
+    expect(typeof lateWake).toBe("function")
     controller.abort(reason)
     await expect(Promise.resolve(pending)).rejects.toBe(reason)
     expect(clear).toHaveBeenCalledWith(waitTimer)
@@ -259,7 +272,9 @@ test("abort clears its wait timer/listener and never claims after cancellation",
     expect(constructions).toBe(0)
     hook.mockRestore()
     const noLateClaim = spyOn(fs, "linkSync")
-    await new Promise((resolve) => setTimeout(resolve, 25))
+    // Deliver even a cancelled wake explicitly: no wall-clock sleep can prove it safe.
+    if (typeof lateWake === "function") lateWake()
+    await Promise.resolve()
     expect(noLateClaim).not.toHaveBeenCalled()
     noLateClaim.mockRestore()
     const available = tryFileLock(file, 1, undefined, true)

@@ -4,9 +4,11 @@ import path from "node:path"
 import { tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { filesystemGatePath } from "./file-lock-fixtures.ts"
+import { fileLockWorkerReady, waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 const [dir, mode] = process.argv.slice(2)
 if (!dir) throw new Error("missing lease retirement directory")
+await fileLockWorkerReady(dir)
 const file = path.join(dir, "session.lock")
 const gate = filesystemGatePath(file)
 let fd: number | undefined
@@ -62,7 +64,10 @@ if (mode?.startsWith("exit-")) {
   })
   process.exit(0)
 }
-await Bun.sleep(1700)
+await waitForFileLockCondition(
+  "lease retirement exhausts retries and closes its descriptor",
+  () => closed && warnings.some((message) => message.includes(gate) && message.includes("EBUSY")),
+)
 expect(closed).toBe(true)
 expect(fs.readFileSync(file, "utf8")).toBe(original)
 const count = attempts

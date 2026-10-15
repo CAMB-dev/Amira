@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { aliasedDirectory } from "./file-lock-fixtures.ts"
+import { waitForFileLockWorkerExit, waitForFileLockWorkerReady } from "./file-lock-test-waits.ts"
 
 async function runWorker(script: string, args: string[], aliased = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "amira-gate-retirement-"))
@@ -25,26 +26,17 @@ async function runWorker(script: string, args: string[], aliased = false) {
       stderr: "pipe",
     },
   )
-  // The normal worker performs 120 lease turns, not a latency assertion. Keep its
-  // filesystem workload inside the existing 7s test budget, including 2s for cleanup.
-  const completionMs = args[0] === "normal" ? 5000 : 4000
+  const label = `retirement ${script} ${args.join(" ")}`
   try {
-    await Promise.race([
-      worker.exited,
-      Bun.sleep(completionMs).then(() => {
-        throw new Error("retirement worker timed out")
-      }),
-    ])
+    // Spawn/import stalls do not consume the operation's diagnostic bound. These
+    // workers assert cleanup behavior, not latency (normal performs 120 lease turns).
+    await waitForFileLockWorkerReady(worker, dir, label)
+    await waitForFileLockWorkerExit(worker, label)
     expect(await new Response(worker.stderr).text()).toBe("")
     expect(worker.exitCode).toBe(0)
   } finally {
     if (worker.exitCode === null) worker.kill()
-    await Promise.race([
-      worker.exited,
-      Bun.sleep(2000).then(() => {
-        throw new Error("retirement worker failed to exit")
-      }),
-    ])
+    await waitForFileLockWorkerExit(worker, `${label} cleanup`)
     fs.rmSync(root, { recursive: true, force: true })
   }
 }
@@ -55,7 +47,7 @@ for (const [script, mode] of [
   test(
     `aliased parent preserves ${script} ${mode} fault injection`,
     () => runWorker(script!, [mode!], true),
-    7000,
+    95_000,
   )
 }
 for (const phase of ["claim", "release"]) {
@@ -63,7 +55,7 @@ for (const phase of ["claim", "release"]) {
     test(
       `SessionStore ${phase} gate retirement survives ${fault}`,
       () => runWorker("file-lock-retirement-worker.ts", [phase, fault]),
-      7000,
+      95_000,
     )
   }
 }
@@ -71,7 +63,7 @@ for (const mode of ["release", "acquire", "exit-success", "exit-failure"]) {
   test(
     `pending lease release stops automatic retries and retries on next ${mode}`,
     () => runWorker("file-lock-retirement-lease-worker.ts", [mode]),
-    7000,
+    95_000,
   )
 }
 for (const mode of [
@@ -90,6 +82,6 @@ for (const mode of [
   test(
     `owned gate retirement preserves ${mode} safety`,
     () => runWorker("file-lock-retirement-safety-worker.ts", [mode]),
-    7000,
+    95_000,
   )
 }

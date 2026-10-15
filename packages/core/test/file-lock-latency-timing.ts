@@ -1,6 +1,7 @@
 import { expect, spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
+import { waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 // Windows AV can delay both the Bun worker and its PowerShell reader by 4-10s.
 // Include warmup and the nested spawn, but only as hang protection, not latency slack.
@@ -161,11 +162,7 @@ export async function automaticCleanupLatency(label: string) {
       attempts++
     },
     async waitForSamples() {
-      const deadline = performance.now() + 1500
-      while (samples.length < 3) {
-        if (performance.now() > deadline) throw new Error(`${label}: automatic callback samples timed out`)
-        await new Promise<void>((resolve) => timeout(resolve, 2))
-      }
+      await waitForFileLockCondition(`${label}: three automatic callback samples`, () => samples.length >= 3)
     },
     assertResponsive() {
       expect(samples.length).toBeGreaterThanOrEqual(3)

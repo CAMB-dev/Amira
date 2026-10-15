@@ -5,6 +5,11 @@ import path from "node:path"
 import { type FileLock, isProcessAlive, tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { deadLease, expectReleasedArtifacts } from "./file-lock-fixtures.ts"
+import {
+  waitForFileLockCondition,
+  waitForFileLockWorkerExit,
+  waitForFileLockWorkerReady,
+} from "./file-lock-test-waits.ts"
 
 let dir: string
 let deadPid: number
@@ -30,20 +35,13 @@ beforeEach(async () => {
   )
   deadPid = child.pid
   try {
-    expect(
-      await Promise.race([
-        child.exited,
-        Bun.sleep(2000).then(() => {
-          throw new Error("dead-PID fixture child did not exit")
-        }),
-      ]),
-    ).toBe(0)
+    expect(await waitForFileLockWorkerExit(child, "strict dead-PID fixture")).toBe(0)
     expect(await new Response(child.stderr).text()).toBe("")
     expect(isProcessAlive(deadPid)).toBe(false)
   } finally {
     await finishWorker(child)
   }
-})
+}, 65_000)
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 
 test("strict recovery cannot grant a third lease while renaming an interleaved replacement", () => {
@@ -185,14 +183,10 @@ test("a strict release racing a gated acquisition waits before checking and unli
     hook.mockRestore()
     held.release()
   }
-  const deadline = Date.now() + 3000
-  while (fs.existsSync(file)) {
-    if (Date.now() > deadline) throw new Error("timed out waiting for gated release")
-    await Bun.sleep(10)
-  }
+  await waitForFileLockCondition(`strict gated release: ${file}`, () => !fs.existsSync(file))
   expectReleasedArtifacts(dir, [file])
   tryFileLock(file, 60_000, undefined, true)!.release()
-})
+}, 35_000)
 
 function startWorker(file: string, mode: string) {
   return Bun.spawn(
@@ -204,6 +198,7 @@ function startWorker(file: string, mode: string) {
       file,
       dir,
       mode,
+      "ready-go",
     ],
     {
       env: Object.fromEntries(
@@ -215,26 +210,23 @@ function startWorker(file: string, mode: string) {
   )
 }
 
-async function waitForWorker(worker: ReturnType<typeof startWorker>, marker: string, timeoutMs = 3000) {
-  const deadline = Date.now() + timeoutMs
-  while (!fs.existsSync(path.join(dir, marker))) {
-    if (worker.exitCode !== null) {
-      throw new Error(`file-lock worker exited: ${await new Response(worker.stderr).text()}`)
-    }
-    if (Date.now() > deadline) throw new Error(`timed out waiting for file-lock worker: ${marker}`)
-    await Bun.sleep(10)
-  }
+async function waitForWorker(worker: ReturnType<typeof startWorker>, marker: string) {
+  await waitForFileLockCondition(`strict worker ${worker.pid}: ${path.join(dir, marker)}`, () => {
+    if (fs.existsSync(path.join(dir, marker))) return true
+    if (worker.exitCode !== null)
+      throw new Error(`strict worker ${worker.pid} exited (${worker.exitCode}) before ${marker}`)
+    return false
+  }).catch(async (error) => {
+    if (worker.exitCode !== null)
+      throw new Error(`${error.message}: ${await new Response(worker.stderr).text()}`)
+    throw error
+  })
 }
 
 async function finishWorker(worker: ReturnType<typeof startWorker>) {
   // Never kill by process name or an unowned pid; always await this exact child's exit.
   if (worker.exitCode === null) worker.kill()
-  await Promise.race([
-    worker.exited,
-    Bun.sleep(2000).then(() => {
-      throw new Error("file-lock worker did not exit")
-    }),
-  ])
+  await waitForFileLockWorkerExit(worker, "strict worker cleanup")
 }
 
 for (const mode of ["pause-recovery", "pause-create"]) {
@@ -243,6 +235,7 @@ for (const mode of ["pause-recovery", "pause-create"]) {
     if (mode === "pause-recovery") deadLease(file, deadPid)
     const worker = startWorker(file, mode)
     try {
+      await waitForFileLockWorkerReady(worker, dir, `strict ${mode} startup`)
       await waitForWorker(worker, "paused")
       expect(fs.existsSync(`${file}.lease-gate`)).toBe(true)
       if (mode === "pause-recovery") expect(fs.existsSync(file)).toBe(false)
@@ -263,21 +256,22 @@ for (const mode of ["pause-recovery", "pause-create"]) {
       // A real living writer, with no heartbeat, remains the only writer despite old mtime.
       expect(tryFileLock(file, 1, undefined, true)).toBeUndefined()
       fs.writeFileSync(path.join(dir, "release"), "ready")
-      expect(await worker.exited).toBe(0)
+      expect(await waitForFileLockWorkerExit(worker, "strict worker operation")).toBe(0)
       expect(await new Response(worker.stderr).text()).toBe("")
       expect(fs.existsSync(file)).toBe(false)
       tryFileLock(file, 1, undefined, true)!.release()
     } finally {
       await finishWorker(worker)
     }
-  })
+  }, 130_000)
 }
 
 test("strict ordinary crashed process leases remain recoverable", async () => {
   const file = path.join(dir, "session.lock")
   const worker = startWorker(file, "crash-lease")
   try {
-    expect(await worker.exited).toBe(0)
+    await waitForFileLockWorkerReady(worker, dir, "strict crash-lease startup")
+    expect(await waitForFileLockWorkerExit(worker, "strict worker operation")).toBe(0)
     expect(await new Response(worker.stderr).text()).toBe("")
     expect(isProcessAlive(worker.pid)).toBe(false)
     expect(fs.existsSync(`${file}.lease-gate`)).toBe(false)
@@ -289,14 +283,15 @@ test("strict ordinary crashed process leases remain recoverable", async () => {
   } finally {
     await finishWorker(worker)
   }
-})
+}, 95_000)
 
 test("strict recovery crashes automatically recover a provably dead gate", async () => {
   const file = path.join(dir, "session.lock")
   deadLease(file, deadPid)
   const worker = startWorker(file, "crash-recovery")
   try {
-    expect(await worker.exited).toBe(0)
+    await waitForFileLockWorkerReady(worker, dir, "strict crash-recovery startup")
+    expect(await waitForFileLockWorkerExit(worker, "strict worker operation")).toBe(0)
     expect(await new Response(worker.stderr).text()).toBe("")
     expect(isProcessAlive(worker.pid)).toBe(false)
     expect(fs.existsSync(file)).toBe(false)
@@ -311,7 +306,7 @@ test("strict recovery crashes automatically recover a provably dead gate", async
   } finally {
     await finishWorker(worker)
   }
-})
+}, 95_000)
 
 for (const corruption of [
   "foreign",
@@ -411,22 +406,17 @@ for (const mode of [
       },
     )
     try {
-      await waitForWorker(worker, `ready-${worker.pid}`, 15_000)
+      await waitForWorker(worker, `ready-${worker.pid}`)
       fs.writeFileSync(path.join(dir, "review-go"), "go")
-      await Promise.race([
-        worker.exited,
-        Bun.sleep(4000).then(() => {
-          throw new Error("review worker operation timed out")
-        }),
-      ])
+      await waitForFileLockWorkerExit(worker, `review worker ${mode} operation`, 65_000)
       const stderr = await new Response(worker.stderr).text()
       expect(stderr).toBe("")
-      expect(await worker.exited).toBe(0)
+      expect(await waitForFileLockWorkerExit(worker, "strict worker operation")).toBe(0)
       expect(fs.readFileSync(path.join(dir, "survived"), "utf8")).toBe("unchanged")
     } finally {
       await finishWorker(worker)
     }
-  }, 25_000)
+  }, 130_000)
 }
 
 test("120 ordinary strict claims/releases leave no gates, tombstones or other artifacts", () => {

@@ -1,12 +1,22 @@
 import { expect, spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
-import { tryFileLock } from "../src/file-lock.ts"
+import { pendingFileLockCleanup, tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
+import { fileLockWorkerReady, waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
-const [dir, kind, mode, fault] = process.argv.slice(2)
+const [dir, kind, mode, fault, retryDelay] = process.argv.slice(2)
 if (!dir || !kind || !mode || !fault) throw new Error("missing file cleanup arguments")
+await fileLockWorkerReady(dir)
+if (retryDelay) {
+  // Model a delayed Windows retry callback without delaying startup or the assertion's poll.
+  const timeout = globalThis.setTimeout
+  spyOn(globalThis, "setTimeout").mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+    if (args[1] === 100) args[1] = Number(retryDelay)
+    return timeout(...args)
+  }) as typeof setTimeout)
+}
 const parent = path.join(dir, "parent")
 if (mode === "parent") {
   const originalParent = path.join(dir, "original-parent")
@@ -24,6 +34,8 @@ const file =
   kind === "private" && ["fresh", "resumed"].includes(mode)
     ? sessionLockFile(store.file)
     : path.join(parent, "session.lock")
+// Capture the registry key before the parent junction can be replaced.
+const canonicalFile = path.join(fs.realpathSync(parent), path.basename(file))
 const warnings: string[] = []
 spyOn(process, "emitWarning").mockImplementation((message) => {
   warnings.push(String(message))
@@ -55,13 +67,11 @@ spyOn(fs, "closeSync").mockImplementation((fd) => {
 let armed = kind === "private"
 let blocked = true
 let attempts = 0
-let started = 0
 let nested = false
 const target = () => (kind === "private" ? pending : file)
 spyOn(fs, "rmSync").mockImplementation((...args) => {
   if (armed && String(args[0]) === target()) {
     attempts++
-    started ||= Date.now()
     if (mode === "reentrant") {
       nested = true
       inNestedClaim = true
@@ -72,7 +82,8 @@ spyOn(fs, "rmSync").mockImplementation((...args) => {
       }
     }
     const transient = ["direct", "prior-gate", "fresh", "resumed"].includes(mode)
-    if (blocked && (transient ? (fault === "held" ? Date.now() - started < 100 : attempts === 1) : true))
+    // A held reader spans real retry turns, regardless of scheduler/IO speed.
+    if (blocked && (transient ? (fault === "held" ? attempts <= 2 : attempts === 1) : true))
       throw Object.assign(new Error("injected lease reader"), { code: fault === "held" ? "EBUSY" : fault })
   }
   return rm(...args)
@@ -103,7 +114,7 @@ if (mode === "eexist" || mode === "publish-error") {
     expect(fs.readFileSync(file, "utf8")).toBe(otherContents)
   }
   blocked = false
-  await Bun.sleep(250)
+  await waitForFileLockCondition("unpublished private debris removal", () => !fs.existsSync(pending))
   expect(fs.existsSync(pending)).toBe(false)
   expect(warnings).toEqual([])
   other?.release()
@@ -117,7 +128,7 @@ if (kind === "private" && ["fresh", "resumed"].includes(mode)) {
   expect(active.size).toBe(1)
   store.appendDisplay({ type: "display", level: "info", text: "after claim" })
   const disk = fs.readFileSync(store.file, "utf8")
-  await Bun.sleep(300)
+  await waitForFileLockCondition("claimed private debris removal", () => !fs.existsSync(pending))
   expect(fs.existsSync(pending)).toBe(false)
   expect(active.size).toBe(1)
   expect(warnings).toEqual([])
@@ -169,7 +180,7 @@ if (mode.startsWith("exit-")) {
   process.exit(0)
 }
 if (mode === "direct" || mode === "prior-gate") {
-  await Bun.sleep(350)
+  await waitForFileLockCondition(`lease unlink after ${mode} (${fault})`, () => !fs.existsSync(file))
   expect(fs.existsSync(file)).toBe(false)
   expect(active.size).toBe(0)
   expect(attempts).toBe(2)
@@ -188,7 +199,10 @@ if (mode === "direct" || mode === "prior-gate") {
     fs.writeFileSync(destination, "untouched replacement")
   } else fs.writeFileSync(destination, "untouched replacement")
   blocked = false
-  await Bun.sleep(300)
+  await waitForFileLockCondition(
+    `${kind} cleanup abandons ${mode} replacement`,
+    () => !pendingFileLockCleanup(canonicalFile),
+  )
   expect(fs.readFileSync(mode === "canonical-replacement" ? file : destination, "utf8")).toBe(
     "untouched replacement",
   )
@@ -202,11 +216,10 @@ if (mode === "direct" || mode === "prior-gate") {
 } else {
   // Ten 100ms delays exclude time spent inside cleanup (including reentrant I/O).
   // Await exhaustion itself rather than assuming every platform finishes in 1250ms.
-  const deadline = Date.now() + 2500
-  while (warnings.length === 0) {
-    if (Date.now() > deadline) throw new Error("owned cleanup did not exhaust its retry budget")
-    await Bun.sleep(5)
-  }
+  await waitForFileLockCondition(
+    `${kind} owned cleanup exhausts retry budget (${mode})`,
+    () => warnings.length > 0,
+  )
   expect(attempts).toBe(11)
   expect(warnings).toHaveLength(1)
   expect(warnings[0]).toContain(target())
@@ -214,6 +227,7 @@ if (mode === "direct" || mode === "prior-gate") {
   expect(active.size).toBe(kind === "lease" ? 0 : 1)
   expect(fs.readFileSync(target(), "utf8")).toBe(original)
   const count = attempts
+  // Negative observation window: completion is known from the exhaustion warning above.
   await Bun.sleep(200)
   expect(attempts).toBe(count)
   if (kind === "lease") {

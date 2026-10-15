@@ -10,6 +10,7 @@ import {
   latencyWorkerReady,
 } from "./file-lock-latency-timing.ts"
 import { boundedExit, startGateReader } from "./file-lock-reader-fixture.ts"
+import { waitForFileLockCondition } from "./file-lock-test-waits.ts"
 
 const [dir] = process.argv.slice(2)
 if (!dir || process.platform !== "win32") throw new Error("Windows temporary reader required")
@@ -80,17 +81,19 @@ try {
   // Keep the actual deny-delete handle open through an automatic attempt.
   // It schedules another gate callback, and the pending lease cleanup has its
   // own timer: both must run even if a loaded scheduler outlasts the 100ms hold.
-  const automaticDeadline = Date.now() + 1500
-  while (timing.attempts < 2) {
-    if (Date.now() > automaticDeadline) throw new Error("automatic reader cleanup did not run")
-    await Bun.sleep(2)
-  }
+  await waitForFileLockCondition(
+    "Windows reader: automatic cleanup while the handle is held",
+    () => timing.attempts >= 2,
+  )
   fs.writeFileSync(go, "go")
   expect(warnings).toEqual([])
   await boundedExit(reader, "reader")
   expect(reader.exitCode).toBe(0)
   expect(await stderr).toBe("")
-  await Bun.sleep(300)
+  await waitForFileLockCondition(
+    "Windows reader: automatic lease and gate cleanup after handle close",
+    () => !fs.existsSync(file) && !fs.existsSync(gate),
+  )
   await Promise.all(callbacks)
   await timing.waitForSamples()
   timing.assertResponsive()
