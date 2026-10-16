@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 
 interface Step {
+  id?: string
   name?: string
   uses?: string
   run?: string
@@ -12,6 +13,7 @@ interface Job {
   needs?: string | string[]
   if?: string
   permissions?: Record<string, string>
+  outputs?: Record<string, string>
   strategy?: { matrix: Record<string, unknown> }
   steps: Step[]
 }
@@ -136,6 +138,32 @@ test("npm publishes platform packages before main with provenance, public access
   expect(npm).toContain("if status != '404':")
   expect(npm).not.toContain("npm view")
   expect(npm).not.toContain("--force")
+})
+
+test("nightly requires successful main CI for the selected SHA instead of duplicating checks", () => {
+  const gate = nightly.jobs.ci
+  expect(gate).toBeDefined()
+  expect(nightly.jobs.check).toBeUndefined()
+  expect(nightly.permissions).toEqual({ contents: "read" })
+  expect(gate!.needs).toBe("plan")
+  expect(gate!.if).toBe("needs.plan.outputs.changed == 'true'")
+  expect(gate!.permissions).toEqual({ actions: "read" })
+  expect(gate!.strategy).toBeUndefined()
+  expect(gate!.outputs!.success).toBe(`\${{ steps.ci.outputs.success }}`)
+  const step = gate!.steps.find((item) => item.id === "ci")!
+  expect(step.env!.GH_TOKEN).toBe(`\${{ github.token }}`)
+  expect(step.env!.SHA).toBe(`\${{ needs.plan.outputs.sha }}`)
+  expect(step.run).toContain("actions/workflows/ci.yml/runs?head_sha=$SHA&branch=main&event=push")
+  expect(step.run).toContain('echo "success=false" >> "$GITHUB_OUTPUT"')
+  expect(step.run).toContain("if ! gh api")
+  expect(step.run).toContain("::notice::")
+  expect(step.run).toContain("exit 0")
+  expect(JSON.stringify(gate)).not.toMatch(/bun run check|setup-bun|actions\/checkout/)
+  expect(nightly.jobs.build!.needs).toEqual(["plan", "ci"])
+  expect(nightly.jobs.build!.if).toBe("needs.ci.outputs.success == 'true'")
+  expect(nightly.jobs.smoke!.needs).toBe("build")
+  expect(nightly.jobs.publish!.needs).toEqual(["plan", "build", "smoke"])
+  expect(nightly.jobs.publish!.permissions).toEqual({ contents: "write" })
 })
 
 test("nightly construction normalizes RC versions and discovery shares its policy with retention", () => {

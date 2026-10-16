@@ -14,12 +14,14 @@ const root = path.resolve(import.meta.dir, "..")
 const python = [Bun.which("python3"), Bun.which("python")].find(
   (candidate) =>
     candidate &&
-    Bun.spawnSync([candidate, "--version"], {
+    Bun.spawnSync([candidate, "-c", "import sys; sys.exit(sys.version_info < (3, 8))"], {
       stdout: "ignore",
       stderr: "ignore",
       timeout: SPAWN_WAIT_TIMEOUT_MS,
     }).exitCode === 0,
 )
+if (!python)
+  console.warn("Skipping release-policy probes: no working Python 3.8+ found (tried python3 and python).")
 const temporary: string[] = []
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
@@ -37,12 +39,23 @@ function embeddedPython(script: string) {
   return match[1]!
 }
 
-async function execute(script: string, directory: string, env: Record<string, string> = {}) {
+async function execute(
+  script: string,
+  directory: string,
+  env: Record<string, string> = {},
+  inheritedEnv: NodeJS.ProcessEnv = process.env,
+) {
   const runner = path.join(directory, "runner.py")
   await writeFile(runner, script)
+  // Windows treats environment names case-insensitively; avoid duplicate PythonPath/PYTHONPATH entries.
+  const inherited = Object.fromEntries(
+    Object.entries(inheritedEnv).filter(
+      ([key]) => !["PYTHONPATH", "PYTHONDONTWRITEBYTECODE"].includes(key.toUpperCase()),
+    ),
+  )
   const child = Bun.spawn([python!, runner], {
     cwd: directory,
-    env: { ...process.env, PYTHONPATH: root, PYTHONDONTWRITEBYTECODE: "1", ...env },
+    env: { ...inherited, PYTHONPATH: root, PYTHONDONTWRITEBYTECODE: "1", ...env },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -67,6 +80,24 @@ async function workflow(name: string) {
     jobs: Record<string, { steps: { run?: string }[] }>
   }
 }
+
+test.skipIf(!python)(
+  "release-policy probes override inherited PythonPath regardless of Windows environment casing",
+  async () => {
+    const directory = await fixture()
+    const result = await execute(
+      "from scripts.release_policy import next_nightly_tag\nprint(next_nightly_tag('1.2.3', '20261015', []))\n",
+      directory,
+      {},
+      {
+        ...process.env,
+        PythonPath: path.join(directory, "unrelated-imports"),
+      },
+    )
+    expect(result.trim()).toBe("v1.2.3-nightly.20261015")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.skipIf(!python)(
   "RC source versions produce canonical nightlies recognized by discovery and retention",
@@ -117,6 +148,80 @@ test.skipIf(!python)(
     expect(JSON.parse(removed).map((args: string[]) => args[3])).toEqual(
       retained.slice(14).map((release) => release.tag_name),
     )
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
+
+test.skipIf(!python)(
+  "nightly CI gate accepts only the latest successful push run for the selected main SHA",
+  async () => {
+    const directory = await fixture()
+    const nightly = await workflow("nightly")
+    const gate = embeddedPython(
+      nightly.jobs.ci!.steps.find((step) => step.run?.includes("ci-runs.json"))!.run!,
+    )
+    const run = {
+      head_sha: "a".repeat(40),
+      head_branch: "main",
+      event: "push",
+      run_number: 10,
+      run_attempt: 1,
+      status: "completed",
+      conclusion: "success",
+    }
+    const cases = [
+      { name: "missing", runs: [], success: false },
+      { name: "success", runs: [run], success: true },
+      ...["failure", "cancelled", "timed_out", "skipped", "neutral", "action_required"].map((conclusion) => ({
+        name: conclusion,
+        runs: [{ ...run, conclusion }],
+        success: false,
+      })),
+      ...["queued", "in_progress", "waiting"].map((status) => ({
+        name: status,
+        runs: [{ ...run, status, conclusion: null }],
+        success: false,
+      })),
+      { name: "wrong SHA", runs: [{ ...run, head_sha: "b".repeat(40) }], success: false },
+      { name: "wrong branch", runs: [{ ...run, head_branch: "feature" }], success: false },
+      { name: "PR run", runs: [{ ...run, event: "pull_request" }], success: false },
+      {
+        name: "newer failure overrides older success across pages",
+        runs: [{ ...run, run_number: 11, conclusion: "failure" }, run],
+        success: false,
+      },
+      {
+        name: "pending rerun overrides success",
+        runs: [run, { ...run, run_attempt: 2, status: "queued", conclusion: null }],
+        success: false,
+      },
+      {
+        name: "successful rerun overrides failure",
+        runs: [
+          { ...run, conclusion: "failure" },
+          { ...run, run_attempt: 2 },
+        ],
+        success: true,
+      },
+    ]
+    const output = path.join(directory, "output")
+    for (const entry of cases) {
+      await writeFile(output, "")
+      await writeFile(
+        path.join(directory, "ci-runs.json"),
+        JSON.stringify([{ workflow_runs: entry.runs.slice(0, 1) }, { workflow_runs: entry.runs.slice(1) }]),
+      )
+      const stdout = await execute(gate, directory, {
+        SHA: run.head_sha,
+        RUNNER_TEMP: directory,
+        GITHUB_OUTPUT: output,
+      })
+      expect({ name: entry.name, output: (await readFile(output, "utf8")).trim() }).toEqual({
+        name: entry.name,
+        output: `success=${entry.success}`,
+      })
+      expect(stdout.includes("::notice::Skipping nightly")).toBe(!entry.success)
+    }
   },
   SPAWN_TEST_TIMEOUT_MS,
 )
