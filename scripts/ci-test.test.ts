@@ -70,7 +70,7 @@ test("CI runs static checks once before the retry script and retains the shared 
     '(bun run architecture:check && bun run typecheck && bun run lint && bun scripts/ci-test.ts) 2>&1 | tee "$RUNNER_TEMP/check.log"',
   )
   const annotations = workflow.jobs.check.steps.find((step) => step.name === "Annotate check failures")!
-  expect(annotations.if).toBe("failure()")
+  expect(annotations.if).toBe("failure() || cancelled()")
   expect(annotations.run).toContain('log="$RUNNER_TEMP/check.log"')
   expect(annotations.run).toContain("::error title=bun run check::")
   const pkg = await Bun.file(new URL("../package.json", import.meta.url)).json()
