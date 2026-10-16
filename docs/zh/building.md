@@ -41,7 +41,9 @@ Windows 下使用 `dist/amira-bun-windows-x64/amira.exe`。`--version` 输出版
 
 ## CI 与 nightly
 
-CI 在推送到 `main` 和提交 pull request 时运行，使用 Ubuntu、Windows 和 macOS runner，以及 Bun 1.4.2。每个 runner 按冻结的 lockfile 安装依赖，执行 `bun run check`（架构检查、类型检查、lint 和测试），再构建本机目标的可执行文件并进行冒烟测试。测试使用仓库提供的隔离测试主目录，不启用真实 API 测试。
+CI 在推送到 `main` 和提交 pull request 时运行，使用 Ubuntu、Windows 和 macOS runner，以及 Bun 1.4.2。每个 runner 按冻结的 lockfile 安装依赖，依次执行架构检查、类型检查、lint 和测试，再构建本机目标的可执行文件并进行冒烟测试。测试使用仓库提供的隔离测试主目录，不启用真实 API 测试。
+
+仅 CI 使用 `scripts/ci-test.ts`：保留可读的测试日志，同时生成 JUnit 报告。测试失败后，只重跑报告中的失败测试文件一次，使用相同的测试主目录 preload 和环境。如果所有重跑均通过，CI 视为成功，并为每个最初失败的测试添加 `flaky test` 警告。如果再次失败、报告缺失或无效，或测试运行器崩溃，CI 仍然失败，并保留现有的失败注释。架构检查、类型检查和 lint 失败不会重试。本地 `bun run check` 不变，不会重试测试。
 
 Nightly 工作流每天 **UTC 18:00** 运行，也可在 GitHub Actions 中手动触发。如果 `main` 自上一个 nightly 以来没有新提交，则跳过。三个平台通过相同检查后，由一个 runner 交叉编译全部七个目标，渠道为 `next`。独立的本机 runner 校验并解压压缩包，在不安装 Bun 的情况下对 Windows x64、Linux x64（两者均包含 baseline）和 macOS ARM64 进行冒烟测试。由于 `macos-13` 已于 2025 年 12 月退役，macOS x64 冒烟测试被跳过；当前工作流也没有 Linux ARM64 本机冒烟 runner。
 

@@ -46,21 +46,25 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
       - run: bun install --frozen-lockfile
-      # bun run test (inside check) uses the repository's isolated test-home preload.
+      # CI alone retries failed test files once; static checks are never retried.
+      # Both test runs use the repository's isolated test-home preload.
       # No AMIRA_LIVE_* opt-ins or provider secrets are set in this workflow.
-      - name: Run bun run check
+      - name: Run checks and tests
+        # A hang should fail this step with a visible log tail, not cancel the whole job.
+        timeout-minutes: 20
         run: |
           set -o pipefail
-          bun run check 2>&1 | tee "$RUNNER_TEMP/check.log"
+          (bun run architecture:check && bun run typecheck && bun run lint && bun scripts/ci-test.ts) 2>&1 | tee "$RUNNER_TEMP/check.log"
       # Job logs need sign-in; annotations do not. Surface the failing lines as annotations
       # so failures that are not expect() errors (crashes, file timeouts) are still visible.
       - name: Annotate check failures
-        if: failure()
+        if: failure() || cancelled()
         run: |
           log="$RUNNER_TEMP/check.log"
           [ -f "$log" ] || exit 0
           grep -E '^\(fail\)|^error|[Ee]rror:|^ *[0-9]+ fail|timed out|Unhandled' "$log" | tail -n 25 > "$RUNNER_TEMP/failures.txt" || true
-          [ -s "$RUNNER_TEMP/failures.txt" ] || tail -n 25 "$log" > "$RUNNER_TEMP/failures.txt"
+          # The last lines show where a hung run stopped.
+          { echo "-- last log lines --"; tail -n 12 "$log"; } >> "$RUNNER_TEMP/failures.txt"
           while IFS= read -r line; do
             line=${line//%/%25}
             echo "::error title=bun run check::${line//$'\r'/}"

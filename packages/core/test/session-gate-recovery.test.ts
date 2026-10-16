@@ -200,21 +200,31 @@ for (const fault of [undefined, "EPERM", "EBUSY", "EACCES"]) {
       await Promise.all(
         contenders.map((worker) => waitFor(worker, `recovery-ready-${worker.pid}`, true, startupDeadline)),
       )
-      // The rendezvous must not consume the real two-second sharing-error retry budget.
-      if (fault) await Bun.sleep(2500)
+      // Every worker has proved death; release on that event, not an extra wall-clock sleep.
+      // The worker excludes only this artificial rendezvous from its two-second retry budget.
       // Start the operation watchdog only after every recoverer has reached the barrier.
       const operationDeadline = performance.now() + 6000
       fs.writeFileSync(path.join(dir, "recover"), "go")
       await Promise.all(
         contenders.map((worker) => waitFor(worker, `result-${worker.pid}`, true, operationDeadline)),
       )
-      const winners = contenders.filter((worker) => {
-        const result = JSON.parse(fs.readFileSync(path.join(dir, `result-${worker.pid}`), "utf8"))
-        if (!result.held) expect(result.error).toMatch(/stale-write guard|open in another Amira process/)
-        return result.held
-      })
-      expect(winners).toHaveLength(1)
-      if (fault) expect(fs.readdirSync(dir).some((name) => name.startsWith("sharing-"))).toBe(true)
+      const results = contenders.map((worker) => ({
+        pid: worker.pid,
+        ...JSON.parse(fs.readFileSync(path.join(dir, `result-${worker.pid}`), "utf8")),
+      }))
+      const diagnostic = JSON.stringify({ results, files: fs.readdirSync(dir) })
+      for (const result of results)
+        if (!result.held)
+          expect(result.error, diagnostic).toMatch(/stale-write guard|open in another Amira process/)
+      const winners = contenders.filter((worker) =>
+        results.some((result) => result.pid === worker.pid && result.held),
+      )
+      expect(winners, diagnostic).toHaveLength(1)
+      if (fault)
+        expect(
+          results.some((result) => result.sharingInjected),
+          diagnostic,
+        ).toBe(true)
       // A result is not a quiescence barrier: losers may still be finalizing their
       // short-lived gates. Finish them and the winner's gate before probing its lease.
       for (const worker of contenders.filter((worker) => worker !== winners[0]))
