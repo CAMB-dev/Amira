@@ -41,7 +41,9 @@ On Windows, use `dist/amira-bun-windows-x64/amira.exe`. `--version` prints the v
 
 ## CI and nightlies
 
-CI runs on pushes to `main` and pull requests, with Bun 1.4.2 on Ubuntu, Windows and macOS. Each runner installs the frozen lockfile, runs `bun run check` (architecture, types, lint and tests), then builds and smoke-tests its native executable. Tests use the repository's isolated test home; live-test opt-ins are not enabled.
+CI runs on pushes to `main` and pull requests, with Bun 1.4.2 on Ubuntu, Windows and macOS. Each runner installs the frozen lockfile, checks architecture, types and lint, then runs tests before building and smoke-testing its native executable. Tests use the repository's isolated test home; live-test opt-ins are not enabled.
+
+Only CI uses `scripts/ci-test.ts`: it keeps the human test log and writes a JUnit report. After a test failure, it reruns only the failing test files once, with the same test-home preload and environment. If every rerun passes, CI succeeds and adds a `flaky test` warning for each originally failing test. A repeated failure, missing or invalid report, or test-runner crash still fails CI, with the existing failure annotations. Architecture, type and lint failures are never retried. Local `bun run check` is unchanged and does not retry tests.
 
 The nightly workflow runs daily at **18:00 UTC**, or manually from GitHub Actions. It checks `main` and skips when there are no commits since the previous nightly. After all three platforms pass the same checks, one runner cross-compiles all seven targets for channel `next`. Separate native runners verify archive checksums, extract archives and smoke-test Windows x64, Linux x64 (both including baseline), and macOS ARM64 without installing Bun. macOS x64 smoke is skipped because `macos-13` was retired in December 2025; Linux ARM64 currently has no native smoke runner.
 

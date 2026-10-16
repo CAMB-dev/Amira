@@ -403,7 +403,18 @@ test.skipIf(ptyUnavailable())(
       session = await start(name, { cols: 100, rows: 32, idleTimeout: 60_000, args: ["--fullscreen"] })
       await request(name, { command: "wait", text: "ui-walk/main", timeout: 10_000 })
       process.kill(session.childPid, "SIGKILL")
-      await Bun.sleep(5500)
+      const { root, pid, childPid } = session
+      // Observe autonomous cleanup, without a request that could trigger it. The five-second
+      // grace precedes resource teardown and the bounded Windows filesystem cleanup retries.
+      await waitForSpawnCondition(
+        `grace cleanup (root ${root}, daemon ${pid}, child ${childPid})`,
+        () => !existsSync(root) && !processIsAlive(pid) && !processIsAlive(childPid),
+        15_000,
+      ).catch((error) => {
+        throw new Error(
+          `${error.message}; root exists=${existsSync(root)}, daemon alive=${processIsAlive(pid)}, child alive=${processIsAlive(childPid)}`,
+        )
+      })
       expect(await stat(session.root).catch(() => undefined)).toBeUndefined()
       await expect(address(name)).rejects.toThrow("is not running")
       expect(processIsAlive(session.pid)).toBe(false)

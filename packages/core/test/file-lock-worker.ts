@@ -22,7 +22,15 @@ const wait = (name: string, timeoutMs = SPAWN_WAIT_TIMEOUT_MS) => {
 const publishResult = (result: { held: boolean; error?: string }) => {
   const target = path.join(dir, `result-${process.pid}`)
   const pending = `${target}.pending`
-  fs.writeFileSync(pending, JSON.stringify(result))
+  fs.writeFileSync(
+    pending,
+    JSON.stringify({
+      ...result,
+      sharingInjected,
+      acquisitionMs: realNow() - acquisitionStarted - recoveryWaitMs,
+      recoveryWaitMs,
+    }),
+  )
   fs.renameSync(pending, target)
 }
 
@@ -39,6 +47,7 @@ const contender = mode.startsWith("session-contend")
 const synchronizedRecovery = mode.startsWith("session-contend-recover")
 const realNow = performance.now.bind(performance)
 let recoveryWaitMs = 0
+let sharingInjected = false
 const sharingCode = mode.slice(
   (synchronizedRecovery ? "session-contend-recover-" : "session-contend-").length,
 )
@@ -47,7 +56,9 @@ const sharingHook =
     ? spyOn(fs, "renameSync").mockImplementation((...args) => {
         if (args[0] === gate && String(args[1]).startsWith(`${gate}.dead-`)) {
           sharingHook!.mockRestore()
-          mark(`sharing-${process.pid}`)
+          // Diagnostic marker I/O here would consume the real acquisition budget on Windows.
+          // Publish the observation with the result, after the operation has finished instead.
+          sharingInjected = true
           throw Object.assign(new Error(`${sharingCode}: retire dead gate`), { code: sharingCode })
         }
         return rename(...args)
@@ -176,6 +187,7 @@ if (contender) {
   wait("contend", synchronizedRecovery ? 60_000 : 30_000)
 }
 let held: FileLock | undefined
+const acquisitionStarted = realNow()
 try {
   if (store) {
     if (contender) {
