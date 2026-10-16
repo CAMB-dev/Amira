@@ -213,6 +213,44 @@ test("extensions can make host-accounted side calls and reach the current sessio
   expect(session.tree.usage.cost).toBe(0.004)
 })
 
+for (const automatic of [false, true]) {
+  test(`a side call exhausting the budget during ${automatic ? "automatic" : "manual"} compaction prevents a summary request`, async () => {
+    const extension = defineExtension((api) => {
+      api.intercept("compact.before", async () => {
+        await api.complete({ model: "mock/side", messages: [userMessage("side input")] })
+        return { action: "pass" }
+      })
+    })
+    const { mock, session, store } = await setup(
+      [
+        { text: "first reply" },
+        { text: "second reply", usage: { input: 110_000 } },
+        { text: "side reply", usage: { input: 1, cost: 2 } },
+        { text: "must not summarize", usage: { input: 1, cost: 2 } },
+        { text: "must not continue", usage: { input: 1, cost: 2 } },
+      ],
+      { extension, settings: { budget: { costUsd: 1 } } },
+    )
+    try {
+      await session.agent.prompt("first question")
+      await session.agent.prompt("second question")
+      if (automatic) {
+        expect(await session.agent.prompt("third question")).toEqual({ reason: "aborted", steps: 0 })
+      } else {
+        expect(await session.agent.compact()).toBe(false)
+      }
+      expect(mock.requests).toHaveLength(3)
+      expect(mock.requests.at(-1)?.model.id).toBe("side")
+      expect(session.tree.usage.cost).toBe(2)
+      expect(store.entries.some((entry) => entry.type === "side_usage" && entry.usage.cost === 2)).toBe(true)
+    } finally {
+      session.host.unloadAll()
+      await session.host.drain()
+      await session.agent.dispose()
+    }
+  })
+}
+
 test("api.complete rejects provider failures and aborted requests", async () => {
   let api!: ExtensionAPI
   const extension = defineExtension((value) => {

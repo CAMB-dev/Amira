@@ -71,6 +71,8 @@ interface TurnRunnerDeps {
   ownsIdleNotices: () => boolean
   endTurn: () => boolean | undefined
   recordTreeUsage: (usage: Usage) => void
+  /** Live shared state: a child may exhaust the budget while this session runs tools. */
+  budgetExceeded: () => boolean
   recordAttempt: (message: AssistantMessage) => void
 }
 
@@ -120,7 +122,7 @@ export class TurnRunner {
       /** A request over the window first gets one aging round (A3), once a turn. */
       let overflowAged = false
       while (true) {
-        if (abort.signal.aborted) {
+        if (abort.signal.aborted || this.#deps.budgetExceeded()) {
           result = { reason: "aborted", steps }
           break
         }
@@ -136,6 +138,10 @@ export class TurnRunner {
         }
         const ready = this.#deps.execution.beforeModel(abort.signal)
         if (ready) await ready
+        if (abort.signal.aborted || this.#deps.budgetExceeded()) {
+          result = { reason: "aborted", steps }
+          break
+        }
         this.#deps.compactor.noteWindowGuess(turn)
         // Planned synchronously: a turn with nothing to age goes on without waiting.
         const aging = this.#deps.contextManager.age(turn)
@@ -143,7 +149,7 @@ export class TurnRunner {
         if (!compactFailed && this.#deps.compactor.needsCompaction()) {
           compactFailed = (await this.#deps.compactor.compact("threshold", abort.signal, turn)) === false
         }
-        if (abort.signal.aborted) {
+        if (abort.signal.aborted || this.#deps.budgetExceeded()) {
           result = { reason: "aborted", steps }
           break
         }
@@ -151,7 +157,11 @@ export class TurnRunner {
         this.#injectSteering(turn)
         const reply = await this.#callModel(turn)
         if (this.#deps.execution.paused) await this.#deps.execution.wait(abort.signal)
-        if (reply.kind === "aborted" || (this.#deps.execution.paused && abort.signal.aborted)) {
+        if (
+          reply.kind === "aborted" ||
+          abort.signal.aborted ||
+          (reply.kind === "error" && this.#deps.budgetExceeded())
+        ) {
           result = { reason: "aborted", steps }
           break
         }
@@ -184,7 +194,7 @@ export class TurnRunner {
         turn.unanswered = false
         const calls = reply.message.content.filter((b): b is ToolCallBlock => b.type === "toolCall")
         if (calls.length === 0) {
-          result = { reason: "done", steps }
+          result = { reason: this.#deps.budgetExceeded() ? "aborted" : "done", steps }
           break
         }
         await this.#deps.execution.tools(() =>
@@ -194,8 +204,13 @@ export class TurnRunner {
             this.#deps.history.storeViews(views)
           }),
         )
+        // Preserve refusal results from this batch, but never pay for another model call.
+        if (this.#deps.budgetExceeded()) {
+          result = { reason: "aborted", steps }
+          break
+        }
         if (this.#deps.execution.paused) await this.#deps.execution.wait(abort.signal)
-        if (abort.signal.aborted) {
+        if (abort.signal.aborted || this.#deps.budgetExceeded()) {
           result = { reason: "aborted", steps }
           break
         }
@@ -264,12 +279,14 @@ export class TurnRunner {
 
   /** Rebuilt for a sub-agent's user messages, a few times at most: a stream of them cannot starve the model. */
   async #callModel(turn: Turn): Promise<ModelReply> {
+    if (turn.signal.aborted || this.#deps.budgetExceeded()) return { kind: "aborted" }
     const unreadable = await this.#deps.compactor.fillSummaries(turn, turn.signal)
-    if (turn.signal.aborted) return { kind: "aborted" }
+    if (turn.signal.aborted || this.#deps.budgetExceeded()) return { kind: "aborted" }
     if (unreadable) return { kind: "error", error: unreadable }
     let ctx = await this.#deps.buildContext(turn.signal)
     for (let rebuilds = 0; ; rebuilds++) {
-      if (await this.#deps.execution.wait(turn.signal)) return { kind: "aborted" }
+      if (this.#deps.budgetExceeded() || (await this.#deps.execution.wait(turn.signal)))
+        return { kind: "aborted" }
       if (
         this.#deps.depth === 0 ||
         rebuilds >= 3 ||
@@ -280,7 +297,7 @@ export class TurnRunner {
       ctx = await this.#deps.buildContext(turn.signal)
     }
     this.#deps.checkRestoredTools()
-    if (turn.signal.aborted) return { kind: "aborted" }
+    if (turn.signal.aborted || this.#deps.budgetExceeded()) return { kind: "aborted" }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
     const requestModelRef = modelRef(this.#deps.model())

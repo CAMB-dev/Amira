@@ -34,6 +34,18 @@ function setup() {
   return { tree, root, bus, events }
 }
 
+test("budget exhaustion stays latched after a correction and blocks another main request", async () => {
+  const { tree, root } = setup()
+  expect(tree.budgetExceeded).toBeUndefined()
+  tree.recordUsage(root, { ...emptyUsage(), cost: 11 })
+  expect(tree.budgetExceeded).toBe("$11.0000 spent, limit $10")
+  tree.recordUsage(root, { ...emptyUsage(), cost: -11 })
+  expect(tree.usage.cost).toBe(0)
+  expect(tree.budgetExceeded).toBe("$11.0000 spent, limit $10")
+  expect(await root.prompt("must not call the model")).toEqual({ reason: "aborted", steps: 0 })
+  expect(root.messages.filter((message) => message.role === "assistant")).toHaveLength(0)
+})
+
 test("budget.update propagates estimates from group children without changing confirmed amounts", async () => {
   const { tree, root, bus, events } = setup()
   tree.recordUsage(root, { ...emptyUsage(), input: 10, cost: 1 })

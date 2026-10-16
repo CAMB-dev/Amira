@@ -5,6 +5,7 @@ import {
   type ModelInfo,
   modelMessages,
   type ToolSpec,
+  type Usage,
   type UserMessage,
   userMessage,
 } from "@amira/ai"
@@ -328,7 +329,8 @@ export class Agent {
           buildContext: (signal) => this.#buildContext(signal),
           renderSections: () => renderPrompt(this.#sections),
           offeredTools: () => this.#offeredTools(),
-          recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+          recordTreeUsage: (usage) => this.#recordAuxiliaryUsage(usage),
+          budgetExceeded: () => this.tree?.budgetExceeded !== undefined,
           emit: (turn, type, data) => this.#emit(turn, type, data),
         },
         tokens,
@@ -381,7 +383,7 @@ export class Agent {
           const entry = { model: message.model, usage: message.usage, label: "request retry" }
           if (!this.session) this.#retryUsage.push(entry)
           this.#history.store({ type: "side_usage", ...entry })
-          this.tree?.recordUsage(this, message.usage)
+          this.#recordAuxiliaryUsage(message.usage)
         },
         recordSpeed: (speed, pricingUnknown) => {
           this.lastSpeed = speed
@@ -402,6 +404,7 @@ export class Agent {
         ownsIdleNotices: () => !!this.#onIdleNotice,
         endTurn: () => this.#endTurn?.(),
         recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+        budgetExceeded: () => this.tree?.budgetExceeded !== undefined,
       })
     } catch (error) {
       this.#releaseSessionLease?.()
@@ -864,6 +867,12 @@ export class Agent {
   /** What this session's compactions cost, one entry each (SessionControl.compactions). */
   get compactionUsage(): CompactionUsage[] {
     return this.#compactor.usage
+  }
+
+  /** Compaction and retries have no tool batch to finish before stopping. */
+  #recordAuxiliaryUsage(usage: Usage): void {
+    this.tree?.recordUsage(this, usage)
+    if (this.tree?.budgetExceeded) this.abort()
   }
 
   #setStatus(turn: Turn, status: SessionStatus, reason?: string) {

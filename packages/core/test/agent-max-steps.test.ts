@@ -130,6 +130,96 @@ for (const maxSteps of [0, 500]) {
   }
 }
 
+for (const maxSteps of [0, 500]) {
+  test(`a budget-crossing tool reply reports child refusals before stopping with maxSteps ${maxSteps}`, async () => {
+    const { agent, mock, tree, toolCalls } = setup({
+      maxSteps,
+      costUsd: 1,
+      steps: [
+        () => {
+          agent.steer("continue")
+          agent.steer("background result", { notice: true })
+          return {
+            toolCalls: [
+              { name: "delegate", args: {} },
+              { name: "echo", args: {} },
+            ],
+            usage: { cost: 2 },
+          }
+        },
+      ],
+    })
+    agent.tools.register(
+      defineTool({
+        name: "delegate",
+        description: "",
+        parameters: {},
+        execute: async (_params, ctx) => {
+          expect(ctx.signal.aborted).toBe(false)
+          try {
+            tree.spawn(agent, { prompt: "cannot start" })
+            throw new Error("expected a spent-budget refusal")
+          } catch (error) {
+            return textResult(error instanceof Error ? error.message : String(error))
+          }
+        },
+      }),
+      "test",
+    )
+    expect(await agent.prompt("go")).toEqual({ reason: "aborted", steps: 1 })
+    await agent.bus.flush()
+    expect(mock.requests).toHaveLength(1)
+    expect(tree.usage.cost).toBe(2)
+    expect(toolCalls()).toBe(1)
+    expect(
+      agent.messages.find((message) => message.role === "toolResult" && message.toolName === "delegate"),
+    ).toMatchObject({
+      content: [{ type: "text", text: "the agent tree's budget is spent ($2.0000 spent, limit $1)" }],
+    })
+    expect(agent.waitingNotices).toBe(1)
+    expect(agent.noticeRetry).toBeUndefined()
+  })
+
+  test(`a child exhausting the budget lets its parent's tool finish with maxSteps ${maxSteps}`, async () => {
+    const { agent, mock, tree } = setup({
+      maxSteps,
+      costUsd: 1,
+      steps: [
+        { toolCalls: [{ name: "delegate", args: {} }] },
+        { text: "child spent the budget", usage: { cost: 2 } },
+        { text: "must not run", usage: { cost: 2 } },
+      ],
+    })
+    agent.tools.register(
+      defineTool({
+        name: "delegate",
+        description: "",
+        parameters: {},
+        execute: async (_params, ctx) => {
+          agent.steer("continue")
+          agent.steer("background result", { notice: true })
+          const child = tree.spawn(agent, { prompt: "spend the budget" })
+          expect((await child.result()).status).toBe("aborted")
+          expect(ctx.signal.aborted).toBe(false)
+          return textResult("child stopped: budget spent")
+        },
+      }),
+      "test",
+    )
+    expect(await agent.prompt("go")).toEqual({ reason: "aborted", steps: 1 })
+    await agent.bus.flush()
+    expect(mock.requests).toHaveLength(2)
+    expect(tree.usage.cost).toBe(2)
+    expect(agent.messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      content: [{ type: "text", text: "child stopped: budget spent" }],
+    })
+    expect(agent.waitingNotices).toBe(1)
+    expect(agent.noticeRetry).toBeUndefined()
+    await tree.waitForChildren()
+  })
+}
+
 test("an unlimited turn still stops on abort after passing 500 calls", async () => {
   const { agent, mock } = setup({ maxSteps: 0 })
   agent.tools.register(
