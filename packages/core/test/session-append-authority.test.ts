@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
+import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
 import { SessionWriteGuardError } from "../src/file-lock.ts"
 import { deleteSession } from "../src/session-list.ts"
 import { SessionConflictError, SessionStore, sessionLockFile } from "../src/session-store.ts"
@@ -143,44 +144,48 @@ test("transient append and fsync exclude claims and deletion until the write ret
   }
 })
 
-test("a killed transient writer leaves a fenced gate and a recoverable torn line", async () => {
-  const { dir, store } = fixture()
-  const worker = Bun.spawn(
-    [
-      process.execPath,
-      "--preload",
-      path.join(import.meta.dir, "file-lock-worker-preload.ts"),
-      path.join(import.meta.dir, "session-append-worker.ts"),
-      store.file,
-      dir,
-    ],
-    { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-  )
-  try {
-    await waitFor(path.join(dir, "paused"), worker)
-    const gate = `${sessionLockFile(store.file)}.lease-gate`
-    const owner = JSON.parse(fs.readFileSync(path.join(gate, "owner.json"), "utf8"))
-    expect(owner.pid).toBe(worker.pid)
-    expect(() => store.claim()).toThrow(SessionWriteGuardError)
-    expect(() => store.appendMessage(userMessage("blocked"))).toThrow(SessionWriteGuardError)
-    worker.kill()
-    await worker.exited
-    const recovered = SessionStore.open(store.file)
-    recovered.appendMessage(userMessage("after crash"))
-    expect(SessionStore.open(store.file).restore().messages).toEqual([
-      userMessage("old"),
-      userMessage("after crash"),
-    ])
-    expect(fs.existsSync(gate)).toBe(false)
-    expect(fs.existsSync(`${gate}.dead-${owner.nonce}`)).toBe(true)
-    expect(fs.existsSync(sessionLockFile(store.file))).toBe(false)
-    expect(await new Response(worker.stderr).text()).toBe("")
-  } finally {
-    if (worker.exitCode === null) worker.kill()
-    await worker.exited
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-}, 8000)
+test(
+  "a killed transient writer leaves a fenced gate and a recoverable torn line",
+  async () => {
+    const { dir, store } = fixture()
+    const worker = Bun.spawn(
+      [
+        process.execPath,
+        "--preload",
+        path.join(import.meta.dir, "file-lock-worker-preload.ts"),
+        path.join(import.meta.dir, "session-append-worker.ts"),
+        store.file,
+        dir,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    )
+    try {
+      await waitFor(path.join(dir, "paused"), worker)
+      const gate = `${sessionLockFile(store.file)}.lease-gate`
+      const owner = JSON.parse(fs.readFileSync(path.join(gate, "owner.json"), "utf8"))
+      expect(owner.pid).toBe(worker.pid)
+      expect(() => store.claim()).toThrow(SessionWriteGuardError)
+      expect(() => store.appendMessage(userMessage("blocked"))).toThrow(SessionWriteGuardError)
+      await stopSpawn(worker, "transient append worker crash")
+      const recovered = SessionStore.open(store.file)
+      recovered.appendMessage(userMessage("after crash"))
+      expect(SessionStore.open(store.file).restore().messages).toEqual([
+        userMessage("old"),
+        userMessage("after crash"),
+      ])
+      expect(fs.existsSync(gate)).toBe(false)
+      expect(fs.existsSync(`${gate}.dead-${owner.nonce}`)).toBe(true)
+      expect(fs.existsSync(sessionLockFile(store.file))).toBe(false)
+      expect(
+        await waitForSpawnWork(`worker stderr (pid ${worker.pid})`, new Response(worker.stderr).text()),
+      ).toBe("")
+    } finally {
+      await stopSpawn(worker, "transient append worker cleanup")
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("a post-append stat failure cannot cache authority over an unrecorded entry", () => {
   const { dir, store } = fixture()

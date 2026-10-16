@@ -21,6 +21,11 @@ import {
   resetCommandWorker,
   startJob,
 } from "../../../packages/proc/src/index.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  SPAWN_WAIT_TIMEOUT_MS,
+  waitForSpawnCondition,
+} from "../../../scripts/spawn-test.ts"
 import { bashTool, createPowershellTool } from "../src/bash.ts"
 import {
   endText,
@@ -32,16 +37,18 @@ import {
   waitPattern,
 } from "../src/jobs.ts"
 import { jobListPresenter, jobOutputPresenter, jobStopPresenter, registerJobs } from "../src/jobs-ui.ts"
+import { powershellStandby } from "../src/powershell.ts"
 import { shellPresenter } from "../src/presenters.ts"
 import { resolveShell } from "../src/shell.ts"
-import { makeCtx, tempDirs, textOf } from "./util.ts"
+import { makeCtx, tempDirs, textOf, waitForSpawnWork } from "./util.ts"
 
 // Spawns can stall for seconds on Windows machines with antivirus scanning.
-setDefaultTimeout(60_000)
+setDefaultTimeout(SPAWN_TEST_TIMEOUT_MS)
 
 const tmp = tempDirs()
 let dir: string
 let jobRegistry: BackgroundJobHost = hostBackgroundJobs()
+const syntheticJobHosts = new WeakSet<BackgroundJobHost>()
 const hasBash = (await resolveShell()).kind === "bash"
 const onWindows = process.platform === "win32"
 const bun = JSON.stringify(process.execPath.replaceAll("\\", "/"))
@@ -62,12 +69,25 @@ beforeAll(async () => {
     join(dir, "late-fail.js"),
     "setTimeout(() => { console.error('boom'); process.exit(4) }, 2500)",
   )
-}, 60_000)
+}, SPAWN_TEST_TIMEOUT_MS)
 afterEach(async () => {
-  await jobRegistry.stopAll(() => true, 0)
-  jobRegistry = hostBackgroundJobs()
-})
-afterAll(() => tmp.cleanup())
+  // Fake processes use synthetic PIDs (including Linux's real init PID 1).
+  // Custom registries with real processes still need the same OS-exit check.
+  const pids = syntheticJobHosts.has(jobRegistry)
+    ? []
+    : jobRegistry.running().flatMap((job) => (job.pid === undefined ? [] : [job.pid]))
+  try {
+    await waitForSpawnWork(
+      "background jobs stopAll",
+      jobRegistry.stopAll(() => true, 0),
+    )
+    await waitForSpawnCondition("background job processes to exit", () => pids.every((pid) => !alive(pid)))
+  } finally {
+    powershellStandby.dispose()
+    jobRegistry = hostBackgroundJobs()
+  }
+}, SPAWN_TEST_TIMEOUT_MS)
+afterAll(() => tmp.cleanup(), SPAWN_TEST_TIMEOUT_MS)
 
 test.each([
   ["SIGKILL", "was killed by SIGKILL"],
@@ -132,11 +152,7 @@ function alive(pid: number): boolean {
 }
 
 async function waitUntil(check: () => boolean, what: string, timeoutMs = 20_000) {
-  const deadline = performance.now() + timeoutMs
-  while (!check()) {
-    if (performance.now() > deadline) throw new Error(`timed out waiting for ${what}`)
-    await Bun.sleep(20)
-  }
+  await waitForSpawnCondition(what, check, timeoutMs)
 }
 
 test.if(hasBash)(
@@ -171,42 +187,51 @@ test.if(hasBash)(
     const stop = await jobStopTool.execute({ job_id: d.jobId }, ctxIn(main))
     expect(textOf(stop)).toStartWith(`Stopped job ${d.jobId}`)
     expect(detailsOf(stop).status).toBe("stopped")
-    await waitUntil(() => !alive(d.pid!), "the job's process to end")
+    await waitUntil(() => !alive(d.pid!), "the job's process to end", 20_000)
     expect(readFileSync(d.logPath!, "utf8")).toContain("ready on port 3000")
     const again = await jobStopTool.execute({ job_id: d.jobId }, ctxIn(main))
     expect(textOf(again)).toBe(`Job ${d.jobId} had already ended: it was stopped.`)
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test.if(hasBash)("job_output returns partial output when a steer arrives", async () => {
-  const main = session("s_steer")
-  const started = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(main))
-  const jobId = detailsOf(started).jobId
-  const steer = new AbortController()
-  const began = performance.now()
-  const pending = jobOutputTool.execute(
-    { job_id: jobId, wait_for: "never", timeout: 1000 },
-    { ...ctxIn(main), steerSignal: steer.signal },
-  )
-  setTimeout(() => steer.abort(), 50)
-  const r = await pending
-  expect(performance.now() - began).toBeLessThan(500)
-  expect(textOf(r)).toContain("The wait was aborted.")
-})
+test.if(hasBash)(
+  "job_output returns partial output when a steer arrives",
+  async () => {
+    const main = session("s_steer")
+    const started = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(main))
+    const jobId = detailsOf(started).jobId
+    const steer = new AbortController()
+    const began = performance.now()
+    const pending = jobOutputTool.execute(
+      { job_id: jobId, wait_for: "never", timeout: 1000 },
+      { ...ctxIn(main), steerSignal: steer.signal },
+    )
+    setTimeout(() => steer.abort(), 50)
+    const r = await pending
+    expect(performance.now() - began).toBeLessThan(500)
+    expect(textOf(r)).toContain("The wait was aborted.")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.if(hasBash)("job_stop kills the whole tree a background command started", async () => {
-  const pidFile = join(dir, "tree-pids").replaceAll("\\", "/")
-  const r = await bashTool.execute(
-    { command: `${bun} ${treeFixture} ${JSON.stringify(pidFile)}`, background: true },
-    ctxIn(session("s_main")),
-  )
-  const read = () =>
-    existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean) : []
-  await waitUntil(() => read().length >= 3, "the process tree")
-  const pids = read().map(Number)
-  await jobStopTool.execute({ job_id: detailsOf(r).jobId }, ctxIn(session("s_main")))
-  await waitUntil(() => pids.every((p) => !alive(p)), "every process of the tree to end", 10_000)
-})
+test.if(hasBash)(
+  "job_stop kills the whole tree a background command started",
+  async () => {
+    const pidFile = join(dir, "tree-pids").replaceAll("\\", "/")
+    const r = await bashTool.execute(
+      { command: `${bun} ${treeFixture} ${JSON.stringify(pidFile)}`, background: true },
+      ctxIn(session("s_main")),
+    )
+    const read = () =>
+      existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean) : []
+    await waitUntil(() => read().length >= 3, "the process tree", SPAWN_WAIT_TIMEOUT_MS)
+    const pids = read().map(Number)
+    await jobStopTool.execute({ job_id: detailsOf(r).jobId }, ctxIn(session("s_main")))
+    await waitUntil(() => pids.every((p) => !alive(p)), "every process of the tree to end", 10_000)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.if(hasBash && onWindows)(
   "Windows: a lost command worker's Git Bash job still dies whole (its Job Object is ended from the main thread)",
@@ -218,99 +243,128 @@ test.if(hasBash && onWindows)(
     )
     const read = () =>
       existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean) : []
-    await waitUntil(() => read().length >= 3, "the process tree")
+    await waitUntil(() => read().length >= 3, "the process tree", SPAWN_WAIT_TIMEOUT_MS)
     const pids = read().map(Number)
     // taskkill /T cannot follow MSYS's broken parent chain; only the Job Object reaches them all.
     resetCommandWorker()
     const { jobId } = detailsOf(r)
-    await waitUntil(() => backgroundJobs.get(jobId)!.status === "failed", "the job to be reported lost")
+    await waitUntil(
+      () => backgroundJobs.get(jobId)!.status === "failed",
+      "the job to be reported lost",
+      20_000,
+    )
     expect(backgroundJobs.get(jobId)!.error).toBe("the command worker stopped unexpectedly")
     await waitUntil(() => pids.every((p) => !alive(p)), "every process of the tree to end", 10_000)
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test.if(hasBash)("a background command that fails at once is reported like a normal run", async () => {
-  const r = await bashTool.execute(
-    { command: "echo nope >&2; exit 3", background: true },
-    ctxIn(session("s_main")),
-  )
-  expect(r.isError).toBe(true)
-  expect(textOf(r)).toBe(
-    `nope\n\nThe background job ${detailsOf(r).jobId} already ended: it exited with code 3.`,
-  )
-  expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 3, outputLines: 1 })
-})
+test.if(hasBash)(
+  "a background command that fails at once is reported like a normal run",
+  async () => {
+    const r = await bashTool.execute(
+      { command: "echo nope >&2; exit 3", background: true },
+      ctxIn(session("s_main")),
+    )
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).toBe(
+      `nope\n\nThe background job ${detailsOf(r).jobId} already ended: it exited with code 3.`,
+    )
+    expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 3, outputLines: 1 })
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.if(hasBash)("a background pipeline fails when a command before the last one fails", async () => {
-  const r = await bashTool.execute(
-    { command: "false | tail -n 1", background: true },
-    ctxIn(session("s_main")),
-  )
-  expect(r.isError).toBe(true)
-  expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 1 })
-})
+test.if(hasBash)(
+  "a background pipeline fails when a command before the last one fails",
+  async () => {
+    const r = await bashTool.execute(
+      { command: "false | tail -n 1", background: true },
+      ctxIn(session("s_main")),
+    )
+    expect(r.isError).toBe(true)
+    expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 1 })
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.if(hasBash)("SIGPIPE-only background pipelines succeed and other pipeline failures fail", async () => {
-  // Pipeline semantics, not startup speed: under load a valid start response can
-  // still say "starting". Wait for the real job's exit before checking its status.
-  const run = async (command: string) => {
-    const ctx = ctxIn(session("s_main"))
-    const started = await bashTool.execute({ command, background: true }, ctx)
-    return jobOutputTool.execute({ job_id: detailsOf(started).jobId, timeout: 30_000 }, ctx)
-  }
-  const ok = await run("yes | head -n 1")
-  expect(ok.isError).toBe(false)
-  expect(detailsOf(ok)).toMatchObject({ status: "exited", exitCode: 0 })
+test.if(hasBash)(
+  "SIGPIPE-only background pipelines succeed and other pipeline failures fail",
+  async () => {
+    // Pipeline semantics, not startup speed: under load a valid start response can
+    // still say "starting". Wait for the real job's exit before checking its status.
+    const run = async (command: string) => {
+      const ctx = ctxIn(session("s_main"))
+      const started = await bashTool.execute({ command, background: true }, ctx)
+      return jobOutputTool.execute({ job_id: detailsOf(started).jobId, timeout: 30_000 }, ctx)
+    }
+    const ok = await run("yes | head -n 1")
+    expect(ok.isError).toBe(false)
+    expect(detailsOf(ok)).toMatchObject({ status: "exited", exitCode: 0 })
 
-  for (const command of ["false | cat", "cat missing | wc -l", "true | false"]) {
-    const failed = await run(command)
-    expect(failed.isError).toBe(true)
-    expect(detailsOf(failed)).toMatchObject({ status: "exited", exitCode: 1 })
-  }
-})
+    for (const command of ["false | cat", "cat missing | wc -l", "true | false"]) {
+      const failed = await run(command)
+      expect(failed.isError).toBe(true)
+      expect(detailsOf(failed)).toMatchObject({ status: "exited", exitCode: 1 })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.if(onWindows)("powershell runs commands in the background too", async () => {
-  const ps = createPowershellTool()
-  const r = await ps.execute(
-    {
-      command:
-        "Write-Output 'warming up'; Start-Sleep -Milliseconds 300; Write-Output 'ps ready'; Start-Sleep 60",
-      background: true,
-    },
-    ctxIn(session("s_main")),
-  )
-  expect(textOf(r)).toMatch(/^Started background job job\d+/)
-  const d = detailsOf(r)
-  const out = await jobOutputTool.execute(
-    { job_id: d.jobId, wait_for: "ps ready", timeout: 30_000 },
-    ctxIn(session("s_main")),
-  )
-  expect(textOf(out)).toContain("Matched: ps ready")
-  await jobStopTool.execute({ job_id: d.jobId }, ctxIn(session("s_main")))
-  await waitUntil(() => !alive(d.pid!), "PowerShell to end")
-})
+test.if(onWindows)(
+  "powershell runs commands in the background too",
+  async () => {
+    const ps = createPowershellTool()
+    const r = await ps.execute(
+      {
+        command:
+          "Write-Output 'warming up'; Start-Sleep -Milliseconds 300; Write-Output 'ps ready'; Start-Sleep 60",
+        background: true,
+      },
+      ctxIn(session("s_main")),
+    )
+    expect(textOf(r)).toMatch(/^Started background job job\d+/)
+    const d = detailsOf(r)
+    const out = await jobOutputTool.execute(
+      { job_id: d.jobId, wait_for: "ps ready", timeout: 30_000 },
+      ctxIn(session("s_main")),
+    )
+    expect(textOf(out)).toContain("Matched: ps ready")
+    await jobStopTool.execute({ job_id: d.jobId }, ctxIn(session("s_main")))
+    await waitUntil(() => !alive(d.pid!), "PowerShell to end", 20_000)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.if(hasBash)("a sub-agent sees only its own jobs, which stop when it ends", async () => {
-  const child = session("s_child", 1)
-  const r = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(child))
-  const { jobId, pid } = detailsOf(r)
-  expect(backgroundJobs.get(jobId)!.owner).toBe("s_child")
-  // The top-level session sees it; another sub-agent does not.
-  expect((await jobListTool.execute({}, ctxIn(session("s_main")))).isError).toBeUndefined()
-  expect(textOf(await jobListTool.execute({}, ctxIn(session("s_main"))))).toContain(jobId)
-  const other = await jobOutputTool.execute({ job_id: jobId }, ctxIn(session("s_other", 1)))
-  expect(other.isError).toBe(true)
-  expect(textOf(other)).toStartWith(`No background job "${jobId}".`)
-  expect(textOf(await jobListTool.execute({}, ctxIn(session("s_other", 1))))).toBe("No background jobs.")
+test.if(hasBash)(
+  "a sub-agent sees only its own jobs, which stop when it ends",
+  async () => {
+    const child = session("s_child", 1)
+    const r = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(child))
+    const { jobId, pid } = detailsOf(r)
+    expect(backgroundJobs.get(jobId)!.owner).toBe("s_child")
+    // The top-level session sees it; another sub-agent does not.
+    expect((await jobListTool.execute({}, ctxIn(session("s_main")))).isError).toBeUndefined()
+    expect(textOf(await jobListTool.execute({}, ctxIn(session("s_main"))))).toContain(jobId)
+    const other = await jobOutputTool.execute({ job_id: jobId }, ctxIn(session("s_other", 1)))
+    expect(other.isError).toBe(true)
+    expect(textOf(other)).toStartWith(`No background job "${jobId}".`)
+    expect(textOf(await jobListTool.execute({}, ctxIn(session("s_other", 1))))).toBe("No background jobs.")
 
-  // The session-scoped host stops a sub-agent's jobs when it ends.
-  const api = fakeApi()
-  registerJobs(api.api)
-  await jobRegistry.closeSession("s_child", 0)
-  await waitUntil(() => backgroundJobs.get(jobId)!.status === "stopped", "the sub-agent's job to stop")
-  await waitUntil(() => !alive(pid!), "its process to end")
-  expect(api.notices).toEqual([])
-})
+    // The session-scoped host stops a sub-agent's jobs when it ends.
+    const api = fakeApi()
+    registerJobs(api.api)
+    await jobRegistry.closeSession("s_child", 0)
+    await waitUntil(
+      () => backgroundJobs.get(jobId)!.status === "stopped",
+      "the sub-agent's job to stop",
+      20_000,
+    )
+    await waitUntil(() => !alive(pid!), "its process to end", 20_000)
+    expect(api.notices).toEqual([])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.if(hasBash)(
   "a job that ends on its own: the user gets a notice, the model a waking message",
@@ -323,47 +377,56 @@ test.if(hasBash)(
       ctxIn(session("s_main", 0, delivered)),
     )
     const { jobId } = detailsOf(r)
-    await waitUntil(() => delivered.length > 0, "the notice to the model")
+    await waitUntil(() => delivered.length > 0, "the notice to the model", 20_000)
     expect(delivered[0]!.opts).toEqual({ wake: true })
     const text = (delivered[0]!.message.content[0] as { text: string }).text
     expect(text).toStartWith(`Background job ${jobId} (${bun} late-fail.js) exited with code 4.`)
     expect(text).toContain("boom")
     expect(delivered[0]!.message.display).toMatchObject({ origin: "job" })
-    await waitUntil(() => api.notices.length > 0, "the user's notice")
+    await waitUntil(() => api.notices.length > 0, "the user's notice", 20_000)
     expect(api.notices[0]).toEqual({
       text: `Background job ${jobId} exited with code 4: ${bun} late-fail.js`,
       level: "warning",
     })
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test.if(hasBash)("a job ending while job_output waits on it sends no extra message", async () => {
-  const delivered: Delivered[] = []
-  const s = session("s_main", 0, delivered)
-  const r = await bashTool.execute({ command: `${bun} late-fail.js`, background: true }, ctxIn(s))
-  const out = await jobOutputTool.execute({ job_id: detailsOf(r).jobId, timeout: 20_000 }, ctxIn(s))
-  expect(out.isError).toBe(true)
-  expect(textOf(out)).toBe(`boom\n\nJob ${detailsOf(r).jobId} exited with code 4.`)
-  await Bun.sleep(100)
-  expect(delivered).toEqual([])
-})
+test.if(hasBash)(
+  "a job ending while job_output waits on it sends no extra message",
+  async () => {
+    const delivered: Delivered[] = []
+    const s = session("s_main", 0, delivered)
+    const r = await bashTool.execute({ command: `${bun} late-fail.js`, background: true }, ctxIn(s))
+    const out = await jobOutputTool.execute({ job_id: detailsOf(r).jobId, timeout: 20_000 }, ctxIn(s))
+    expect(out.isError).toBe(true)
+    expect(textOf(out)).toBe(`boom\n\nJob ${detailsOf(r).jobId} exited with code 4.`)
+    await Bun.sleep(100)
+    expect(delivered).toEqual([])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.if(hasBash)("job_output says so when it is polled without waiting", async () => {
-  const s = session("s_main")
-  const r = await bashTool.execute(
-    { command: `${bun} -e "setInterval(() => {}, 1000)"`, background: true },
-    ctxIn(s),
-  )
-  const { jobId } = detailsOf(r)
-  const first = await jobOutputTool.execute({ job_id: jobId }, ctxIn(s))
-  expect(textOf(first)).toStartWith("(no new output)")
-  expect(textOf(first)).not.toContain("Do not poll")
-  const second = await jobOutputTool.execute({ job_id: jobId }, ctxIn(s))
-  expect(textOf(second)).toContain("Do not poll: pass wait_for")
-  const timed = await jobOutputTool.execute({ job_id: jobId, wait_for: "never", timeout: 300 }, ctxIn(s))
-  expect(textOf(timed)).toContain("No line matched /never/ within 300 ms.")
-  expect(detailsOf(timed).waited).toBe("timeout")
-})
+test.if(hasBash)(
+  "job_output says so when it is polled without waiting",
+  async () => {
+    const s = session("s_main")
+    const r = await bashTool.execute(
+      { command: `${bun} -e "setInterval(() => {}, 1000)"`, background: true },
+      ctxIn(s),
+    )
+    const { jobId } = detailsOf(r)
+    const first = await jobOutputTool.execute({ job_id: jobId }, ctxIn(s))
+    expect(textOf(first)).toStartWith("(no new output)")
+    expect(textOf(first)).not.toContain("Do not poll")
+    const second = await jobOutputTool.execute({ job_id: jobId }, ctxIn(s))
+    expect(textOf(second)).toContain("Do not poll: pass wait_for")
+    const timed = await jobOutputTool.execute({ job_id: jobId, wait_for: "never", timeout: 300 }, ctxIn(s))
+    expect(textOf(timed)).toContain("No line matched /never/ within 300 ms.")
+    expect(detailsOf(timed).waited).toBe("timeout")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("forgetting ended jobs keeps what job_output knows about live ones", async () => {
   // Jobs that never print or end, without spawning anything.
@@ -375,6 +438,7 @@ test("forgetting ended jobs keeps what job_output knows about live ones", async 
       },
     }),
   )
+  syntheticJobHosts.add(jobRegistry)
   registerJobs(fakeApi({ backgroundJobs: { maxRunning: 300 } }).api, jobRegistry)
   const s = session("s_main")
   const start = () => ctxIn(s).backgroundJobs.start({ command: "idle", argv: ["idle"], cwd: dir }).id
@@ -386,30 +450,38 @@ test("forgetting ended jobs keeps what job_output knows about live ones", async 
   expect(textOf(again)).toContain("Do not poll: pass wait_for")
 })
 
-test.if(hasBash)("the number of running jobs is capped", async () => {
-  jobRegistry = new SessionBackgroundJobHost(new JobRegistry({ start: startJob, maxRunning: 1 }))
-  const s = session("s_main")
-  const first = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(s))
-  expect(first.isError).toBe(false)
-  const second = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(s))
-  expect(second.isError).toBe(true)
-  expect(textOf(second)).toContain(
-    "1 background jobs are running, the most allowed (backgroundJobs.maxRunning)",
-  )
-  expect(textOf(second)).toContain(`Running: ${detailsOf(first).jobId}: ${bun} server.js`)
-})
+test.if(hasBash)(
+  "the number of running jobs is capped",
+  async () => {
+    jobRegistry = new SessionBackgroundJobHost(new JobRegistry({ start: startJob, maxRunning: 1 }))
+    const s = session("s_main")
+    const first = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(s))
+    expect(first.isError).toBe(false)
+    const second = await bashTool.execute({ command: `${bun} server.js`, background: true }, ctxIn(s))
+    expect(second.isError).toBe(true)
+    expect(textOf(second)).toContain(
+      "1 background jobs are running, the most allowed (backgroundJobs.maxRunning)",
+    )
+    expect(textOf(second)).toContain(`Running: ${detailsOf(first).jobId}: ${bun} server.js`)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.if(hasBash)("an interrupted start stops the job", async () => {
-  const abort = new AbortController()
-  setTimeout(() => abort.abort(), 200)
-  const r = await bashTool.execute(
-    { command: `${bun} server.js`, background: true },
-    ctxIn(session("s_main"), abort.signal),
-  )
-  expect(r.isError).toBe(true)
-  expect(textOf(r)).toBe("Aborted while the background job was starting; it was stopped.")
-  expect(jobRegistry.running()).toEqual([])
-})
+test.if(hasBash)(
+  "an interrupted start stops the job",
+  async () => {
+    const abort = new AbortController()
+    setTimeout(() => abort.abort(), 200)
+    const r = await bashTool.execute(
+      { command: `${bun} server.js`, background: true },
+      ctxIn(session("s_main"), abort.signal),
+    )
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).toBe("Aborted while the background job was starting; it was stopped.")
+    expect(jobRegistry.running()).toEqual([])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("unknown jobs and bad patterns", async () => {
   const r = await jobOutputTool.execute({ job_id: "job999" }, ctxIn(session("s_main")))

@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
+import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit } from "../../../scripts/spawn-test.ts"
 import { artifactDir } from "../src/artifacts.ts"
 import { pendingFileLockCleanup } from "../src/file-lock.ts"
 import { fileHistoryDir } from "../src/file-rewind.ts"
@@ -53,56 +54,64 @@ function outsideData(
   }
 }
 
-test("descendant stale deletion-lease recovery stays private when the public root is replaced", () => {
-  const { parent, dir, outside, store, descendant } = setup(true)
-  if (!descendant) throw new Error("missing child")
-  const dead = Bun.spawnSync([process.execPath, "-e", ""], { stdout: "ignore", stderr: "pipe" })
-  expect(dead.exitCode).toBe(0)
-  const contents = `${dead.pid}\n`
-  const assertOutside = outsideData(outside, descendant, contents, dir)
-  const outsideLock = sessionLockFile(path.join(outside, path.relative(dir, descendant.file)))
-  fs.utimesSync(outsideLock, new Date(0), new Date(0))
-  fs.writeFileSync(sessionLockFile(descendant.file), contents)
-  fs.utimesSync(sessionLockFile(descendant.file), new Date(0), new Date(0))
-  const mkdir = fs.mkdirSync
-  const rename = fs.renameSync
-  let root = ""
-  let attempted = false
-  const relocation = spyOn(fs, "renameSync").mockImplementation((from, to) => {
-    if (String(from) === dir) root = String(to)
-    // Keep the replacement throughout acquisition/recovery, then remove it before restoration.
-    if (
-      attempted &&
-      String(from).startsWith(`${root}${path.sep}`) &&
-      fs.existsSync(dir) &&
-      fs.lstatSync(dir).isSymbolicLink()
-    )
-      fs.unlinkSync(dir)
-    return rename(from, to)
-  })
-  const race = spyOn(fs, "mkdirSync").mockImplementation((file, options) => {
-    if (!attempted && path.basename(String(file)) === "subagents") {
-      attempted = true
-      expect(root).not.toBe("")
-      expect(String(file)).toBe(path.join(root, "subagents"))
-      expect(fs.existsSync(dir)).toBe(false)
-      linkDirectory(outside, dir)
+test(
+  "descendant stale deletion-lease recovery stays private when the public root is replaced",
+  async () => {
+    const { parent, dir, outside, store, descendant } = setup(true)
+    if (!descendant) throw new Error("missing child")
+    const dead = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" })
+    try {
+      expect(await waitForSpawnExit(dead, "dead deletion-lease owner")).toBe(0)
+    } finally {
+      await stopSpawn(dead, "dead deletion-lease owner cleanup")
     }
-    return mkdir(file, options)
-  })
-  try {
-    expect(deleteSession(parent, store.id, undefined, dir)).toEqual([store.file, descendant.file])
-    expect(attempted).toBe(true)
-    assertOutside()
-    expect(fs.existsSync(store.file)).toBe(false)
-    expect(fs.existsSync(descendant.file)).toBe(false)
-    expect(fs.existsSync(sessionLockFile(descendant.file))).toBe(false)
-  } finally {
-    race.mockRestore()
-    relocation.mockRestore()
-    fs.rmSync(parent, { recursive: true, force: true })
-  }
-})
+    const contents = `${dead.pid}\n`
+    const assertOutside = outsideData(outside, descendant, contents, dir)
+    const outsideLock = sessionLockFile(path.join(outside, path.relative(dir, descendant.file)))
+    fs.utimesSync(outsideLock, new Date(0), new Date(0))
+    fs.writeFileSync(sessionLockFile(descendant.file), contents)
+    fs.utimesSync(sessionLockFile(descendant.file), new Date(0), new Date(0))
+    const mkdir = fs.mkdirSync
+    const rename = fs.renameSync
+    let root = ""
+    let attempted = false
+    const relocation = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(from) === dir) root = String(to)
+      // Keep the replacement throughout acquisition/recovery, then remove it before restoration.
+      if (
+        attempted &&
+        String(from).startsWith(`${root}${path.sep}`) &&
+        fs.existsSync(dir) &&
+        fs.lstatSync(dir).isSymbolicLink()
+      )
+        fs.unlinkSync(dir)
+      return rename(from, to)
+    })
+    const race = spyOn(fs, "mkdirSync").mockImplementation((file, options) => {
+      if (!attempted && path.basename(String(file)) === "subagents") {
+        attempted = true
+        expect(root).not.toBe("")
+        expect(String(file)).toBe(path.join(root, "subagents"))
+        expect(fs.existsSync(dir)).toBe(false)
+        linkDirectory(outside, dir)
+      }
+      return mkdir(file, options)
+    })
+    try {
+      expect(deleteSession(parent, store.id, undefined, dir)).toEqual([store.file, descendant.file])
+      expect(attempted).toBe(true)
+      assertOutside()
+      expect(fs.existsSync(store.file)).toBe(false)
+      expect(fs.existsSync(descendant.file)).toBe(false)
+      expect(fs.existsSync(sessionLockFile(descendant.file))).toBe(false)
+    } finally {
+      race.mockRestore()
+      relocation.mockRestore()
+      fs.rmSync(parent, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("descendant rollback destinations stay private when the public root is replaced through failure", () => {
   const { parent, dir, outside, store, descendant } = setup(true)

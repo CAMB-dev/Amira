@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
 import {
   assertInlineResponsive,
   INLINE_LATENCY_REPORT,
@@ -28,6 +29,7 @@ async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
       mode,
     ],
     {
+      windowsHide: true,
       env: Object.fromEntries(
         Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
       ),
@@ -52,7 +54,8 @@ async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
       },
       LATENCY_WORKER_READY_TIMEOUT_MS,
     ).catch(async (error) => {
-      if (worker.exitCode !== null) throw new Error(`${error.message}\nstderr:\n${await stderr}`)
+      if (worker.exitCode !== null)
+        throw new Error(`${error.message}\nstderr:\n${await waitForSpawnWork("worker stderr drain", stderr)}`)
       throw error
     })
     // The real reader is holding its handle and warmup is complete. Only now
@@ -67,7 +70,7 @@ async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
         return worker.exited
       })(),
     ])
-    const lines = (await stdout).split("\n")
+    const lines = (await waitForSpawnWork("worker stdout drain", stdout)).split("\n")
     console.log(
       lines
         .filter((line) => !line.startsWith(INLINE_LATENCY_REPORT))
@@ -75,7 +78,7 @@ async function runLatencyWorker(mode: string): Promise<InlineLatencySample[]> {
         .trim(),
     )
     // Structural and automatic-callback checks must pass in EVERY fixture.
-    expect(await stderr).toBe("")
+    expect(await waitForSpawnWork("worker stderr drain", stderr)).toBe("")
     expect(await worker.exited).toBe(0)
     const reports = lines.filter((line) => line.startsWith(INLINE_LATENCY_REPORT))
     expect(reports).toHaveLength(1)
@@ -108,7 +111,7 @@ for (const mode of modes) {
       assertInlineResponsive(mode, samples, entries)
       // Startup hang protection is separate; measured cleanup budgets are unchanged.
     },
-    (LATENCY_WORKER_READY_TIMEOUT_MS + 7000) * INLINE_LATENCY_RUNS,
+    SPAWN_TEST_TIMEOUT_MS * INLINE_LATENCY_RUNS,
   )
 }
 
@@ -153,7 +156,7 @@ await import(${JSON.stringify(pathToFileURL(worker).href)});`,
         hook.mockRestore()
       }
     },
-    LATENCY_WORKER_READY_TIMEOUT_MS + 7000,
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }
 
@@ -190,6 +193,6 @@ for (const startup of ["slow", "crash"] as const) {
         hook.mockRestore()
       }
     },
-    LATENCY_WORKER_READY_TIMEOUT_MS + 7000,
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }

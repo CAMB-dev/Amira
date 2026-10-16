@@ -6,6 +6,13 @@ import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type MockStep, userMessage } from "@amira/ai"
 import type { Extension } from "@amira/api"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 import { createCommandHost } from "../src/control.ts"
 import { type PrintIO, runPrint } from "../src/print.ts"
 import { runRpc } from "../src/rpc.ts"
@@ -17,6 +24,20 @@ const here = import.meta.dir
 const main = path.join(here, "..", "src", "main.ts")
 
 type Line = Record<string, any>
+
+// Every child is reaped even when a response assertion fails before close().
+const rpcProcesses = new Set<Bun.Subprocess>()
+function withRpcCleanup(run: () => Promise<void>) {
+  return async () => {
+    try {
+      await run()
+    } finally {
+      const children = [...rpcProcesses]
+      rpcProcesses.clear()
+      await Promise.all(children.map((child) => stopSpawn(child, "RPC cleanup")))
+    }
+  }
+}
 
 /** Drives `amira --rpc` as a child process, the way a real client would. Sessions go to `home`. */
 function spawnRpc(
@@ -46,6 +67,7 @@ function spawnRpc(
       env: { ...process.env, AMIRA_TEST_MOCK: JSON.stringify(replies), AMIRA_HOME: home },
     },
   )
+  rpcProcesses.add(p)
   const lines: Line[] = []
   const raw: string[] = []
   const reading = (async () => {
@@ -80,338 +102,378 @@ function spawnRpc(
     waitFor((l) => l.type === type && l.seq > after, `event ${type} after ${after}`)
   const close = async () => {
     p.stdin.end()
-    const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()])
-    await reading
+    const [code, err] = await waitForSpawnWork(
+      "RPC output",
+      Promise.all([waitForSpawnExit(p, "RPC"), new Response(p.stderr).text()]),
+    )
+    await waitForSpawnWork("RPC stdout", reading)
+    rpcProcesses.delete(p)
     return { code, err }
   }
   return { send, response, event, waitFor, lines, close }
 }
 
-test("amira --rpc: prompt, steer, ui.respond, reads and errors, end to end", async () => {
-  const rpc = spawnRpc([
-    { toolCalls: [{ name: "wait", args: { ms: 400 } }] },
-    { text: "done" },
-    { toolCalls: [{ name: "ask", args: {} }] },
-    { text: "asked" },
-  ])
-  await rpc.event("session.start")
+test(
+  "amira --rpc: prompt, steer, ui.respond, reads and errors, end to end",
+  withRpcCleanup(async () => {
+    const rpc = spawnRpc([
+      { toolCalls: [{ name: "wait", args: { ms: 400 } }] },
+      { text: "done" },
+      { toolCalls: [{ name: "ask", args: {} }] },
+      { text: "asked" },
+    ])
+    await rpc.event("session.start")
 
-  rpc.send("this is not json")
-  expect((await rpc.response(null)).error.code).toBe("parse_error")
-  rpc.send({ id: "u", cmd: "nope" })
-  expect((await rpc.response("u")).error.code).toBe("unknown_command")
-  rpc.send({ id: "bad", cmd: "prompt" })
-  expect((await rpc.response("bad")).error.code).toBe("invalid_params")
+    rpc.send("this is not json")
+    expect((await rpc.response(null)).error.code).toBe("parse_error")
+    rpc.send({ id: "u", cmd: "nope" })
+    expect((await rpc.response("u")).error.code).toBe("unknown_command")
+    rpc.send({ id: "bad", cmd: "prompt" })
+    expect((await rpc.response("bad")).error.code).toBe("invalid_params")
 
-  // prompt answers with the turn id before the turn's first event.
-  rpc.send({ id: 1, cmd: "prompt", text: "go" })
-  const started = await rpc.response(1)
-  expect(started.ok).toBe(true)
-  const turnStart = await rpc.event("turn.start")
-  expect(turnStart.turnId).toBe(started.turnId)
-  expect(rpc.lines.indexOf(started)).toBeLessThan(rpc.lines.indexOf(turnStart))
+    // prompt answers with the turn id before the turn's first event.
+    rpc.send({ id: 1, cmd: "prompt", text: "go" })
+    const started = await rpc.response(1)
+    expect(started.ok).toBe(true)
+    const turnStart = await rpc.event("turn.start")
+    expect(turnStart.turnId).toBe(started.turnId)
+    expect(rpc.lines.indexOf(started)).toBeLessThan(rpc.lines.indexOf(turnStart))
 
-  // Steering while the tool runs lands after its result, before the next model call.
-  const toolStart = await rpc.event("tool.execute.start")
-  rpc.send({ id: 2, cmd: "steer", text: "also B" })
-  expect(await rpc.response(2)).toMatchObject({ ok: true, queued: true, turnId: started.turnId })
-  rpc.send({ id: 3, cmd: "prompt", text: "too early" })
-  expect((await rpc.response(3)).error.code).toBe("busy")
-  const injected = await rpc.waitFor(
-    (l) => l.type === "turn.steer" && l.data.state === "injected",
-    "injected",
-  )
-  const toolEnd = await rpc.event("tool.execute.end")
-  expect(toolEnd.seq).toBeLessThan(injected.seq)
-  const end = await rpc.event("turn.end", toolStart.seq)
-  expect(end.data.reason).toBe("done")
+    // Steering while the tool runs lands after its result, before the next model call.
+    const toolStart = await rpc.event("tool.execute.start")
+    rpc.send({ id: 2, cmd: "steer", text: "also B" })
+    expect(await rpc.response(2)).toMatchObject({ ok: true, queued: true, turnId: started.turnId })
+    rpc.send({ id: 3, cmd: "prompt", text: "too early" })
+    expect((await rpc.response(3)).error.code).toBe("busy")
+    const injected = await rpc.waitFor(
+      (l) => l.type === "turn.steer" && l.data.state === "injected",
+      "injected",
+    )
+    const toolEnd = await rpc.event("tool.execute.end")
+    expect(toolEnd.seq).toBeLessThan(injected.seq)
+    const end = await rpc.event("turn.end", toolStart.seq)
+    expect(end.data.reason).toBe("done")
 
-  rpc.send({ id: 4, cmd: "session.read", what: "lastTurn" })
-  const last = await rpc.response(4)
-  expect(last).toMatchObject({ ok: true, turnId: started.turnId, reason: "done", text: "done" })
-  expect(last.messages.map((m: Line) => m.role)).toEqual([
-    "user",
-    "assistant",
-    "toolResult",
-    "user",
-    "assistant",
-  ])
-  expect(last.messages[3].content[0].text).toBe("also B")
+    rpc.send({ id: 4, cmd: "session.read", what: "lastTurn" })
+    const last = await rpc.response(4)
+    expect(last).toMatchObject({ ok: true, turnId: started.turnId, reason: "done", text: "done" })
+    expect(last.messages.map((m: Line) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+      "assistant",
+    ])
+    expect(last.messages[3].content[0].text).toBe("also B")
 
-  rpc.send({ id: 5, cmd: "state" })
-  expect(await rpc.response(5)).toMatchObject({
-    ok: true,
-    status: "idle",
-    model: "mock/m",
-    messages: 5,
-    lastAssistantText: "done",
-    uiRequests: [],
-  })
+    rpc.send({ id: 5, cmd: "state" })
+    expect(await rpc.response(5)).toMatchObject({
+      ok: true,
+      status: "idle",
+      model: "mock/m",
+      messages: 5,
+      lastAssistantText: "done",
+      uiRequests: [],
+    })
 
-  // A dialog from a tool is answered by the client.
-  rpc.send({ id: 6, cmd: "prompt", text: "ask me" })
-  const asked = await rpc.event("ui.request")
-  expect(asked.data).toMatchObject({ kind: "confirm", title: "Deploy?", message: "to production" })
-  rpc.send({ id: 7, cmd: "ui.respond", requestId: asked.data.requestId, value: "yes" })
-  expect((await rpc.response(7)).error.code).toBe("invalid_params")
-  rpc.send({ id: 8, cmd: "ui.respond", requestId: asked.data.requestId, value: true })
-  expect((await rpc.response(8)).ok).toBe(true)
-  rpc.send({ id: 9, cmd: "ui.respond", requestId: asked.data.requestId, value: true })
-  expect((await rpc.response(9)).error.code).toBe("not_found")
-  await rpc.event("turn.end", asked.seq)
-  rpc.send({ id: 10, cmd: "session.read", what: "lastTurn" })
-  const second = await rpc.response(10)
-  expect(second.messages[2].content[0].text).toBe("answer: true")
-  expect(second.text).toBe("asked")
+    // A dialog from a tool is answered by the client.
+    rpc.send({ id: 6, cmd: "prompt", text: "ask me" })
+    const asked = await rpc.event("ui.request")
+    expect(asked.data).toMatchObject({ kind: "confirm", title: "Deploy?", message: "to production" })
+    rpc.send({ id: 7, cmd: "ui.respond", requestId: asked.data.requestId, value: "yes" })
+    expect((await rpc.response(7)).error.code).toBe("invalid_params")
+    rpc.send({ id: 8, cmd: "ui.respond", requestId: asked.data.requestId, value: true })
+    expect((await rpc.response(8)).ok).toBe(true)
+    rpc.send({ id: 9, cmd: "ui.respond", requestId: asked.data.requestId, value: true })
+    expect((await rpc.response(9)).error.code).toBe("not_found")
+    await rpc.event("turn.end", asked.seq)
+    rpc.send({ id: 10, cmd: "session.read", what: "lastTurn" })
+    const second = await rpc.response(10)
+    expect(second.messages[2].content[0].text).toBe("answer: true")
+    expect(second.text).toBe("asked")
 
-  rpc.send({ id: 11, cmd: "model.set", model: "mock/other" })
-  expect(await rpc.response(11)).toMatchObject({ ok: true, model: "mock/other" })
-  rpc.send({ id: 12, cmd: "model.set", model: "nope" })
-  expect((await rpc.response(12)).error.code).toBe("invalid_params")
-  rpc.send({ id: 13, cmd: "session.resume", sessionId: "s_1" })
-  expect((await rpc.response(13)).error.code).toBe("not_found")
-  rpc.send({ id: 14, cmd: "session.read", what: "messages" })
-  expect((await rpc.response(14)).messages.length).toBe(9)
+    rpc.send({ id: 11, cmd: "model.set", model: "mock/other" })
+    expect(await rpc.response(11)).toMatchObject({ ok: true, model: "mock/other" })
+    rpc.send({ id: 12, cmd: "model.set", model: "nope" })
+    expect((await rpc.response(12)).error.code).toBe("invalid_params")
+    rpc.send({ id: 13, cmd: "session.resume", sessionId: "s_1" })
+    expect((await rpc.response(13)).error.code).toBe("not_found")
+    rpc.send({ id: 14, cmd: "session.read", what: "messages" })
+    expect((await rpc.response(14)).messages.length).toBe(9)
 
-  const { code, err } = await rpc.close()
-  expect(code).toBe(0)
-  expect(err).toBe("")
+    const { code, err } = await rpc.close()
+    expect(code).toBe(0)
+    expect(err).toBe("")
 
-  // Everything on stdout is a response or an event the schema describes.
-  const schema = rpcSchema() as any
-  const known = new Set(schema.$defs.Event.anyOf.flatMap((e: any) => e.properties.type.enum ?? []))
-  for (const l of rpc.lines) {
-    if ("ok" in l) expect(typeof l.ok).toBe("boolean")
-    else expect(known.has(l.type)).toBe(true)
-  }
-}, 60_000)
+    // Everything on stdout is a response or an event the schema describes.
+    const schema = rpcSchema() as any
+    const known = new Set(schema.$defs.Event.anyOf.flatMap((e: any) => e.properties.type.enum ?? []))
+    for (const l of rpc.lines) {
+      if ("ok" in l) expect(typeof l.ok).toBe("boolean")
+      else expect(known.has(l.type)).toBe(true)
+    }
+  }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("amira --rpc: session.resume continues a stored session on the same connection", async () => {
-  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
-  const first = spawnRpc([{ text: "first answer" }], home)
-  const started = await first.event("session.start")
-  first.send({ id: 1, cmd: "prompt", text: "remember me" })
-  await first.response(1)
-  await first.event("turn.end")
-  expect((await first.close()).code).toBe(0)
-  const storedId = started.sessionId
+test(
+  "amira --rpc: session.resume continues a stored session on the same connection",
+  withRpcCleanup(async () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
+    const first = spawnRpc([{ text: "first answer" }], home)
+    const started = await first.event("session.start")
+    first.send({ id: 1, cmd: "prompt", text: "remember me" })
+    await first.response(1)
+    await first.event("turn.end")
+    expect((await first.close()).code).toBe(0)
+    const storedId = started.sessionId
 
-  const second = spawnRpc([{ text: "second answer" }], home)
-  const fresh = await second.event("session.start")
-  expect(fresh.sessionId).not.toBe(storedId)
-  second.send({ id: 1, cmd: "session.resume", sessionId: storedId })
-  expect(await second.response(1)).toMatchObject({ ok: true, sessionId: storedId })
-  const ended = await second.waitFor(
-    (l) => l.type === "session.end" && l.sessionId === fresh.sessionId && l.data.reason === "switch",
-    "old session.end",
-  )
-  expect(ended.data.reason).toBe("switch")
-  const resumed = await second.waitFor(
-    (l) => l.type === "session.start" && l.data.reason === "resume",
-    "resumed session.start",
-  )
-  expect(resumed.sessionId).toBe(storedId)
-  second.send({ id: 2, cmd: "state" })
-  expect(await second.response(2)).toMatchObject({ sessionId: storedId, messages: 2 })
-  second.send({ id: 3, cmd: "prompt", text: "and now?" })
-  await second.response(3)
-  await second.waitFor((l) => l.type === "turn.end" && l.sessionId === storedId, "turn.end")
-  second.send({ id: 4, cmd: "session.read", what: "messages" })
-  const texts = (await second.response(4)).messages.map((m: Line) => m.content[0].text)
-  expect(texts).toEqual(["remember me", "first answer", "and now?", "second answer"])
-  expect((await second.close()).code).toBe(0)
-}, 60_000)
+    const second = spawnRpc([{ text: "second answer" }], home)
+    const fresh = await second.event("session.start")
+    expect(fresh.sessionId).not.toBe(storedId)
+    second.send({ id: 1, cmd: "session.resume", sessionId: storedId })
+    expect(await second.response(1)).toMatchObject({ ok: true, sessionId: storedId })
+    const ended = await second.waitFor(
+      (l) => l.type === "session.end" && l.sessionId === fresh.sessionId && l.data.reason === "switch",
+      "old session.end",
+    )
+    expect(ended.data.reason).toBe("switch")
+    const resumed = await second.waitFor(
+      (l) => l.type === "session.start" && l.data.reason === "resume",
+      "resumed session.start",
+    )
+    expect(resumed.sessionId).toBe(storedId)
+    second.send({ id: 2, cmd: "state" })
+    expect(await second.response(2)).toMatchObject({ sessionId: storedId, messages: 2 })
+    second.send({ id: 3, cmd: "prompt", text: "and now?" })
+    await second.response(3)
+    await second.waitFor((l) => l.type === "turn.end" && l.sessionId === storedId, "turn.end")
+    second.send({ id: 4, cmd: "session.read", what: "messages" })
+    const texts = (await second.response(4)).messages.map((m: Line) => m.content[0].text)
+    expect(texts).toEqual(["remember me", "first answer", "and now?", "second answer"])
+    expect((await second.close()).code).toBe(0)
+  }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("amira --rpc: rename and fork preserve the original and expose session operations", async () => {
-  const rpc = spawnRpc([{ text: "first answer" }, { text: "second answer" }])
-  const start = await rpc.event("session.start")
-  rpc.send({ id: "rename", cmd: "session.rename", title: "Database repair" })
-  expect(await rpc.response("rename")).toMatchObject({ ok: true, title: "Database repair" })
-  expect((await rpc.event("session.title")).data.title).toBe("Database repair")
-  rpc.send({ id: "first", cmd: "prompt", text: "first question" })
-  await rpc.response("first")
-  const first = await rpc.event("turn.end")
-  rpc.send({ id: "second", cmd: "prompt", text: "second question" })
-  await rpc.response("second")
-  await rpc.event("turn.end", first.seq)
-  rpc.send({ id: "invalid", cmd: "session.fork", index: -1 })
-  expect((await rpc.response("invalid")).error.code).toBe("invalid_params")
-  rpc.send({ id: "fork", cmd: "session.fork", index: 2 })
-  const fork = await rpc.response("fork")
-  expect(fork.ok).toBe(true)
-  expect(fork.sessionId).not.toBe(start.sessionId)
-  expect(
-    (await rpc.waitFor((l) => l.type === "session.start" && l.sessionId === fork.sessionId, "fork start"))
-      .data.reason,
-  ).toBe("fork")
-  rpc.send({ id: "state", cmd: "state" })
-  expect((await rpc.response("state")).messages).toBe(2)
-  rpc.send({ id: "resume", cmd: "session.resume", sessionId: start.sessionId })
-  expect((await rpc.response("resume")).ok).toBe(true)
-  rpc.send({ id: "original", cmd: "state" })
-  expect((await rpc.response("original")).messages).toBe(4)
-  expect((await rpc.close()).code).toBe(0)
-}, 60_000)
+test(
+  "amira --rpc: rename and fork preserve the original and expose session operations",
+  withRpcCleanup(async () => {
+    const rpc = spawnRpc([{ text: "first answer" }, { text: "second answer" }])
+    const start = await rpc.event("session.start")
+    rpc.send({ id: "rename", cmd: "session.rename", title: "Database repair" })
+    expect(await rpc.response("rename")).toMatchObject({ ok: true, title: "Database repair" })
+    expect((await rpc.event("session.title")).data.title).toBe("Database repair")
+    rpc.send({ id: "first", cmd: "prompt", text: "first question" })
+    await rpc.response("first")
+    const first = await rpc.event("turn.end")
+    rpc.send({ id: "second", cmd: "prompt", text: "second question" })
+    await rpc.response("second")
+    await rpc.event("turn.end", first.seq)
+    rpc.send({ id: "invalid", cmd: "session.fork", index: -1 })
+    expect((await rpc.response("invalid")).error.code).toBe("invalid_params")
+    rpc.send({ id: "fork", cmd: "session.fork", index: 2 })
+    const fork = await rpc.response("fork")
+    expect(fork.ok).toBe(true)
+    expect(fork.sessionId).not.toBe(start.sessionId)
+    expect(
+      (await rpc.waitFor((l) => l.type === "session.start" && l.sessionId === fork.sessionId, "fork start"))
+        .data.reason,
+    ).toBe("fork")
+    rpc.send({ id: "state", cmd: "state" })
+    expect((await rpc.response("state")).messages).toBe(2)
+    rpc.send({ id: "resume", cmd: "session.resume", sessionId: start.sessionId })
+    expect((await rpc.response("resume")).ok).toBe(true)
+    rpc.send({ id: "original", cmd: "state" })
+    expect((await rpc.response("original")).messages).toBe(4)
+    expect((await rpc.close()).code).toBe(0)
+  }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("amira --rpc: slash commands list, complete and run, and may ask questions", async () => {
-  const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
-  const rpc = spawnRpc([{ text: "hello" }], undefined, ["-e", commandsExt])
-  const started = await rpc.event("session.start")
+test(
+  "amira --rpc: slash commands list, complete and run, and may ask questions",
+  withRpcCleanup(async () => {
+    const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
+    const rpc = spawnRpc([{ text: "hello" }], undefined, ["-e", commandsExt])
+    const started = await rpc.event("session.start")
 
-  rpc.send({ id: 1, cmd: "command.list" })
-  const names = (await rpc.response(1)).commands.map((c: Line) => c.name)
-  expect(names).toContain("status")
-  expect(names).toContain("cost")
-  rpc.send({ id: 2, cmd: "command.complete", text: "/sta" })
-  expect((await rpc.response(2)).candidates[0]).toMatchObject({ value: "status" })
+    rpc.send({ id: 1, cmd: "command.list" })
+    const names = (await rpc.response(1)).commands.map((c: Line) => c.name)
+    expect(names).toContain("status")
+    expect(names).toContain("cost")
+    rpc.send({ id: 2, cmd: "command.complete", text: "/sta" })
+    expect((await rpc.response(2)).candidates[0]).toMatchObject({ value: "status" })
 
-  rpc.send({ id: 3, cmd: "prompt", text: "hi" })
-  await rpc.event("turn.end")
-  rpc.send({ id: 4, cmd: "command.run", text: "/cost" })
-  const cost = await rpc.response(4)
-  expect(cost).toMatchObject({ ok: true, command: "cost" })
-  expect(cost.output[0]).toContain("mock/m")
-  expect((await rpc.event("command.output")).data).toMatchObject({ command: "cost", level: "info" })
+    rpc.send({ id: 3, cmd: "prompt", text: "hi" })
+    await rpc.event("turn.end")
+    rpc.send({ id: 4, cmd: "command.run", text: "/cost" })
+    const cost = await rpc.response(4)
+    expect(cost).toMatchObject({ ok: true, command: "cost" })
+    expect(cost.output[0]).toContain("mock/m")
+    expect((await rpc.event("command.output")).data).toMatchObject({ command: "cost", level: "info" })
 
-  // /model without an argument asks; the answer arrives while command.run is still pending.
-  rpc.send({ id: 5, cmd: "command.run", text: "/model" })
-  const ask = await rpc.event("ui.request")
-  expect(ask.data.options).toContain("mock/m")
-  rpc.send({ id: 6, cmd: "ui.respond", requestId: ask.data.requestId, value: "mock/m" })
-  expect(await rpc.response(5)).toMatchObject({ ok: true, output: ["Model: mock/m"] })
+    // /model without an argument asks; the answer arrives while command.run is still pending.
+    rpc.send({ id: 5, cmd: "command.run", text: "/model" })
+    const ask = await rpc.event("ui.request")
+    expect(ask.data.options).toContain("mock/m")
+    rpc.send({ id: 6, cmd: "ui.respond", requestId: ask.data.requestId, value: "mock/m" })
+    expect(await rpc.response(5)).toMatchObject({ ok: true, output: ["Model: mock/m"] })
 
-  rpc.send({ id: 7, cmd: "command.run", text: "/nope" })
-  expect((await rpc.response(7)).error.code).toBe("not_found")
-  rpc.send({ id: 71, cmd: "command.run", text: "/usage" })
-  expect(await rpc.response(71)).toMatchObject({ ok: true, command: "cost" })
-  rpc.send({ id: 8, cmd: "command.run", text: "/tools enable nope" })
-  expect((await rpc.response(8)).error).toEqual({ code: "command_failed", message: 'no tool named "nope"' })
+    rpc.send({ id: 7, cmd: "command.run", text: "/nope" })
+    expect((await rpc.response(7)).error.code).toBe("not_found")
+    rpc.send({ id: 71, cmd: "command.run", text: "/usage" })
+    expect(await rpc.response(71)).toMatchObject({ ok: true, command: "cost" })
+    rpc.send({ id: 8, cmd: "command.run", text: "/tools enable nope" })
+    expect((await rpc.response(8)).error).toEqual({ code: "command_failed", message: 'no tool named "nope"' })
 
-  // /clear starts a new session, and the rpc frontend follows it.
-  rpc.send({ id: 9, cmd: "command.run", text: "/clear" })
-  await rpc.response(9)
-  const cleared = await rpc.waitFor((l) => l.type === "session.start" && l.data.reason === "clear", "clear")
-  expect(cleared.sessionId).not.toBe(started.sessionId)
-  rpc.send({ id: 10, cmd: "state" })
-  expect(await rpc.response(10)).toMatchObject({ sessionId: cleared.sessionId, messages: 0 })
-  expect((await rpc.close()).code).toBe(0)
-}, 60_000)
+    // /clear starts a new session, and the rpc frontend follows it.
+    rpc.send({ id: 9, cmd: "command.run", text: "/clear" })
+    await rpc.response(9)
+    const cleared = await rpc.waitFor((l) => l.type === "session.start" && l.data.reason === "clear", "clear")
+    expect(cleared.sessionId).not.toBe(started.sessionId)
+    rpc.send({ id: 10, cmd: "state" })
+    expect(await rpc.response(10)).toMatchObject({ sessionId: cleared.sessionId, messages: 0 })
+    expect((await rpc.close()).code).toBe(0)
+  }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("amira --rpc: skills are listed and run apart from the slash commands", async () => {
-  const ext = (name: string) => path.join(here, "..", "..", "..", "extensions", name, "src", "index.ts")
-  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
-  mkdirSync(path.join(home, "skills", "rpc-deploy"), { recursive: true })
-  writeFileSync(
-    path.join(home, "skills", "rpc-deploy", "SKILL.md"),
-    "---\nname: rpc-deploy\ndescription: Ship it\n---\nRun ./ship.sh\n",
-  )
-  const rpc = spawnRpc([{ text: "shipping" }], home, ["-e", ext("commands"), "-e", ext("skills")])
-  await rpc.event("session.start")
+test(
+  "amira --rpc: skills are listed and run apart from the slash commands",
+  withRpcCleanup(async () => {
+    const ext = (name: string) => path.join(here, "..", "..", "..", "extensions", name, "src", "index.ts")
+    const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
+    mkdirSync(path.join(home, "skills", "rpc-deploy"), { recursive: true })
+    writeFileSync(
+      path.join(home, "skills", "rpc-deploy", "SKILL.md"),
+      "---\nname: rpc-deploy\ndescription: Ship it\n---\nRun ./ship.sh\n",
+    )
+    const rpc = spawnRpc([{ text: "shipping" }], home, ["-e", ext("commands"), "-e", ext("skills")])
+    await rpc.event("session.start")
 
-  rpc.send({ id: 1, cmd: "skill.list" })
-  const { skills } = await rpc.response(1)
-  expect(skills.find((s: Line) => s.name === "rpc-deploy")).toEqual({
-    name: "rpc-deploy",
-    description: "Ship it",
-    hint: "[arguments]",
-    source: expect.stringMatching(/skills[/\\]src[/\\]index\.ts$/),
-  })
-  rpc.send({ id: 2, cmd: "command.list" })
-  expect((await rpc.response(2)).commands.map((c: Line) => c.name)).not.toContain("rpc-deploy")
-  rpc.send({ id: 3, cmd: "command.run", text: "/rpc-deploy" })
-  expect((await rpc.response(3)).error).toEqual({
-    code: "not_found",
-    message: "Unknown command /rpc-deploy — skills now start with $: $rpc-deploy",
-  })
+    rpc.send({ id: 1, cmd: "skill.list" })
+    const { skills } = await rpc.response(1)
+    expect(skills.find((s: Line) => s.name === "rpc-deploy")).toEqual({
+      name: "rpc-deploy",
+      description: "Ship it",
+      hint: "[arguments]",
+      source: expect.stringMatching(/skills[/\\]src[/\\]index\.ts$/),
+    })
+    rpc.send({ id: 2, cmd: "command.list" })
+    expect((await rpc.response(2)).commands.map((c: Line) => c.name)).not.toContain("rpc-deploy")
+    rpc.send({ id: 3, cmd: "command.run", text: "/rpc-deploy" })
+    expect((await rpc.response(3)).error).toEqual({
+      code: "not_found",
+      message: "Unknown command /rpc-deploy — skills now start with $: $rpc-deploy",
+    })
 
-  rpc.send({ id: 4, cmd: "skill.run", name: "rpc-deploy", args: "to prod" })
-  expect(await rpc.response(4)).toMatchObject({ ok: true, skill: "rpc-deploy", output: [] })
-  await rpc.event("turn.end")
-  rpc.send({ id: 5, cmd: "session.read", what: "messages" })
-  const [prompt] = (await rpc.response(5)).messages
-  expect(prompt.display).toEqual({ text: "$rpc-deploy to prod", note: "Loaded skill rpc-deploy (1 line)" })
-  expect(prompt.content[0].text).toContain("Run ./ship.sh")
-  expect(prompt.content[0].text).toContain("Arguments: to prod")
+    rpc.send({ id: 4, cmd: "skill.run", name: "rpc-deploy", args: "to prod" })
+    expect(await rpc.response(4)).toMatchObject({ ok: true, skill: "rpc-deploy", output: [] })
+    await rpc.event("turn.end")
+    rpc.send({ id: 5, cmd: "session.read", what: "messages" })
+    const [prompt] = (await rpc.response(5)).messages
+    expect(prompt.display).toEqual({ text: "$rpc-deploy to prod", note: "Loaded skill rpc-deploy (1 line)" })
+    expect(prompt.content[0].text).toContain("Run ./ship.sh")
+    expect(prompt.content[0].text).toContain("Arguments: to prod")
 
-  rpc.send({ id: 6, cmd: "skill.run", name: "nope" })
-  expect((await rpc.response(6)).error).toEqual({
-    code: "not_found",
-    message: "Unknown skill $nope. Type $ to list the skills.",
-  })
-  rpc.send({ id: 7, cmd: "skill.run", name: "two words" })
-  expect((await rpc.response(7)).error.code).toBe("invalid_params")
-  expect((await rpc.close()).code).toBe(0)
-}, 60_000)
+    rpc.send({ id: 6, cmd: "skill.run", name: "nope" })
+    expect((await rpc.response(6)).error).toEqual({
+      code: "not_found",
+      message: "Unknown skill $nope. Type $ to list the skills.",
+    })
+    rpc.send({ id: 7, cmd: "skill.run", name: "two words" })
+    expect((await rpc.response(7)).error.code).toBe("invalid_params")
+    expect((await rpc.close()).code).toBe(0)
+  }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("amira --rpc: settings aliases are listed, completed and run", async () => {
-  const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
-  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
-  writeFileSync(
-    path.join(home, "settings.json"),
-    JSON.stringify({ commandAliases: { mm: "model mock/m", q: "status", ghost: "nope" } }),
-  )
-  const rpc = spawnRpc([], home, ["-e", commandsExt])
-  const warning = await rpc.event("extension.error")
-  expect(warning.data.error).toContain("commandAliases: /q is already an alias of /quit")
+test(
+  "amira --rpc: settings aliases are listed, completed and run",
+  withRpcCleanup(async () => {
+    const commandsExt = path.join(here, "..", "..", "..", "extensions", "commands", "src", "index.ts")
+    const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-home-"))
+    writeFileSync(
+      path.join(home, "settings.json"),
+      JSON.stringify({ commandAliases: { mm: "model mock/m", q: "status", ghost: "nope" } }),
+    )
+    const rpc = spawnRpc([], home, ["-e", commandsExt])
+    const warning = await rpc.event("extension.error")
+    expect(warning.data.error).toContain("commandAliases: /q is already an alias of /quit")
 
-  rpc.send({ id: 1, cmd: "command.list" })
-  const list = await rpc.response(1)
-  expect(list.commands.find((c: Line) => c.name === "quit").aliases).toEqual(["exit", "q"])
-  expect(list.aliases).toEqual([
-    { name: "ghost", expansion: "nope" },
-    { name: "mm", expansion: "model mock/m" },
-  ])
-  rpc.send({ id: 2, cmd: "command.complete", text: "/mm" })
-  expect((await rpc.response(2)).candidates[0]).toMatchObject({ value: "mm", label: "mm → /model mock/m" })
-  rpc.send({ id: 3, cmd: "command.run", text: "/mm" })
-  expect(await rpc.response(3)).toMatchObject({ ok: true, command: "model", output: ["Model: mock/m"] })
-  rpc.send({ id: 4, cmd: "command.run", text: "/ghost" })
-  expect((await rpc.response(4)).error).toMatchObject({
-    code: "not_found",
-    message: expect.stringContaining("The alias /ghost runs /nope, which is not a command"),
-  })
-  expect((await rpc.close()).code).toBe(0)
-}, 60_000)
+    rpc.send({ id: 1, cmd: "command.list" })
+    const list = await rpc.response(1)
+    expect(list.commands.find((c: Line) => c.name === "quit").aliases).toEqual(["exit", "q"])
+    expect(list.aliases).toEqual([
+      { name: "ghost", expansion: "nope" },
+      { name: "mm", expansion: "model mock/m" },
+    ])
+    rpc.send({ id: 2, cmd: "command.complete", text: "/mm" })
+    expect((await rpc.response(2)).candidates[0]).toMatchObject({ value: "mm", label: "mm → /model mock/m" })
+    rpc.send({ id: 3, cmd: "command.run", text: "/mm" })
+    expect(await rpc.response(3)).toMatchObject({ ok: true, command: "model", output: ["Model: mock/m"] })
+    rpc.send({ id: 4, cmd: "command.run", text: "/ghost" })
+    expect((await rpc.response(4)).error).toMatchObject({
+      code: "not_found",
+      message: expect.stringContaining("The alias /ghost runs /nope, which is not a command"),
+    })
+    expect((await rpc.close()).code).toBe(0)
+  }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("amira --rpc-schema prints a JSON Schema covering every command", async () => {
-  const p = Bun.spawn([process.execPath, main, "--rpc-schema"], { stdout: "pipe", stderr: "pipe" })
-  const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited])
-  expect(code).toBe(0)
-  const schema = JSON.parse(out)
-  expect(schema.$schema).toContain("json-schema.org")
-  const commands = schema.$defs.Command.oneOf.map((c: any) => c.properties.cmd.enum[0])
-  expect(commands.sort()).toEqual(
-    [
-      "abort",
-      "command.complete",
-      "command.list",
-      "command.run",
-      "model.set",
-      "thinking.set",
-      "prompt",
-      "session.read",
-      "session.resume",
-      "session.rename",
-      "session.fork",
-      "skill.list",
-      "skill.run",
-      "state",
-      "steer",
-      "subagent.message",
-      "subagent.pause",
-      "subagent.resume",
-      "ui.action",
-      "ui.configure",
-      "ui.focus",
-      "ui.respond",
-    ].sort(),
-  )
-  expect(Object.keys(COMMAND_PARAMS).sort()).toEqual(commands)
-  // Every $ref points at a definition.
-  for (const ref of out.match(/"#\/\$defs\/(\w+)"/g) ?? []) {
-    expect(schema.$defs[ref.slice(9, -1)]).toBeDefined()
-  }
-}, 60_000)
+test(
+  "amira --rpc-schema prints a JSON Schema covering every command",
+  withRpcCleanup(async () => {
+    const p = Bun.spawn([process.execPath, main, "--rpc-schema"], { stdout: "pipe", stderr: "pipe" })
+    rpcProcesses.add(p)
+    const [out, , code] = await waitForSpawnWork(
+      "RPC schema output",
+      Promise.all([
+        new Response(p.stdout).text(),
+        new Response(p.stderr).text(),
+        waitForSpawnExit(p, "RPC schema"),
+      ]),
+    )
+    expect(code).toBe(0)
+    const schema = JSON.parse(out)
+    expect(schema.$schema).toContain("json-schema.org")
+    const commands = schema.$defs.Command.oneOf.map((c: any) => c.properties.cmd.enum[0])
+    expect(commands.sort()).toEqual(
+      [
+        "abort",
+        "command.complete",
+        "command.list",
+        "command.run",
+        "model.set",
+        "thinking.set",
+        "prompt",
+        "session.read",
+        "session.resume",
+        "session.rename",
+        "session.fork",
+        "skill.list",
+        "skill.run",
+        "state",
+        "steer",
+        "subagent.message",
+        "subagent.pause",
+        "subagent.resume",
+        "ui.action",
+        "ui.configure",
+        "ui.focus",
+        "ui.respond",
+      ].sort(),
+    )
+    expect(Object.keys(COMMAND_PARAMS).sort()).toEqual(commands)
+    // Every $ref points at a definition.
+    for (const ref of out.match(/"#\/\$defs\/(\w+)"/g) ?? []) {
+      expect(schema.$defs[ref.slice(9, -1)]).toBeDefined()
+    }
+  }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 /** A line source a test can push commands into. */
 function channel() {
@@ -485,53 +547,95 @@ test("a slow client loses deltas, gets events.lost, and can resync with state", 
   expect(out.find((l) => l.id === 2)).toMatchObject({ status: "idle", lastAssistantText: "x".repeat(4000) })
 })
 
-test("amira --rpc drops deltas when the client stops reading stdout", async () => {
-  const total = 100_000
-  const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-backpressure-"))
-  const preload = path.join(home, "mock.ts")
-  // Build the large reply in the child to avoid Linux's per-argument/environment entry size limit.
-  writeFileSync(preload, `process.env.AMIRA_TEST_MOCK = JSON.stringify([{ text: "x".repeat(${total * 8}) }])`)
-  writeFileSync(path.join(home, "settings.json"), JSON.stringify({ sessions: { autoTitle: false } }))
-  // Bun.spawn reads a child's pipe eagerly, so only node's paused stream leaves it full.
-  const p = spawn(process.execPath, ["--preload", preload, main, "--rpc", "-m", "mock/m", "--no-builtins"], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, AMIRA_HOME: home },
-  })
-  p.stdout.pause()
-  let err = ""
-  p.stderr.on("data", (c: Buffer) => {
-    err += c.toString()
-  })
-  p.stdin.write(`${JSON.stringify({ id: 1, cmd: "prompt", text: "go" })}\n`)
-  await Bun.sleep(4000)
-  // While the client ignores stdout, the process still answers (its main thread is free).
-  p.stdin.write(`${JSON.stringify({ id: 2, cmd: "state" })}\n`)
-  const out: Line[] = []
-  let buffer = ""
-  const exited = new Promise<number | null>((r) => p.on("close", r))
-  p.stdout.on("data", (c: Buffer) => {
-    buffer += c.toString()
-    let nl = buffer.indexOf("\n")
-    while (nl !== -1) {
-      out.push(JSON.parse(buffer.slice(0, nl)))
-      buffer = buffer.slice(nl + 1)
-      nl = buffer.indexOf("\n")
+test(
+  "amira --rpc drops deltas when the client stops reading stdout",
+  async () => {
+    const total = 100_000
+    const home = mkdtempSync(path.join(os.tmpdir(), "amira-rpc-backpressure-"))
+    const preload = path.join(home, "mock.ts")
+    // Build the large reply in the child to avoid Linux's per-argument/environment entry size limit.
+    writeFileSync(
+      preload,
+      `process.env.AMIRA_TEST_MOCK = JSON.stringify([{ text: "x".repeat(${total * 8}) }])`,
+    )
+    writeFileSync(path.join(home, "settings.json"), JSON.stringify({ sessions: { autoTitle: false } }))
+    // Bun.spawn reads a child's pipe eagerly, so only node's paused stream leaves it full.
+    const p = spawn(
+      process.execPath,
+      ["--preload", preload, main, "--rpc", "-m", "mock/m", "--no-builtins"],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, AMIRA_HOME: home },
+      },
+    )
+    let closed = false
+    const exited = new Promise<number>((resolve) =>
+      p.once("close", (code) => {
+        closed = true
+        resolve(code ?? -1)
+      }),
+    )
+    const child = {
+      pid: p.pid!,
+      get exitCode() {
+        return closed ? (p.exitCode ?? -1) : null
+      },
+      exited,
+      kill: () => {
+        p.kill("SIGKILL")
+      },
     }
-    if (out.some((l) => l.type === "turn.end") && out.some((l) => l.id === 2)) p.stdin.end()
-  })
-  p.stdout.resume()
-  const code = await exited
-  rmSync(home, { recursive: true, force: true })
-  expect(code).toBe(0)
-  expect(err).toBe("")
-  const deltas = out.filter((l) => l.type === "message.delta").length
-  const lost = out.filter((l) => l.type === "events.lost")
-  expect(lost.length).toBeGreaterThan(0)
-  expect(lost.reduce((n, l) => n + l.data.dropped, 0)).toBeGreaterThan(0)
-  expect(deltas).toBeLessThan(total)
-  expect(out.find((l) => l.type === "turn.end")?.data.reason).toBe("done")
-  expect(out.find((l) => l.id === 2)?.ok).toBe(true)
-}, 90_000)
+    try {
+      let err = ""
+      p.stderr.on("data", (c: Buffer) => {
+        err += c.toString()
+      })
+      let ready = ""
+      const onReady = (chunk: Buffer) => {
+        ready += chunk.toString()
+      }
+      p.stdout.on("data", onReady)
+      await waitForSpawnCondition("RPC backpressure startup", () => ready.includes('"type":"session.start"'))
+      p.stdout.pause()
+      p.stdout.off("data", onReady)
+      p.stdin.write(`${JSON.stringify({ id: 1, cmd: "prompt", text: "go" })}\n`)
+      await Bun.sleep(4000)
+      // While the client ignores stdout, the process still answers (its main thread is free).
+      p.stdin.write(`${JSON.stringify({ id: 2, cmd: "state" })}\n`)
+      const out: Line[] = []
+      let buffer = ""
+      p.stdout.on("data", (c: Buffer) => {
+        buffer += c.toString()
+        let nl = buffer.indexOf("\n")
+        while (nl !== -1) {
+          out.push(JSON.parse(buffer.slice(0, nl)))
+          buffer = buffer.slice(nl + 1)
+          nl = buffer.indexOf("\n")
+        }
+        if (out.some((l) => l.type === "turn.end") && out.some((l) => l.id === 2)) p.stdin.end()
+      })
+      p.stdout.resume()
+      const code = await waitForSpawnExit(child, "RPC backpressure")
+      expect(code).toBe(0)
+      expect(err).toBe("")
+      const deltas = out.filter((l) => l.type === "message.delta").length
+      const lost = out.filter((l) => l.type === "events.lost")
+      expect(lost.length).toBeGreaterThan(0)
+      expect(lost.reduce((n, l) => n + l.data.dropped, 0)).toBeGreaterThan(0)
+      expect(deltas).toBeLessThan(total)
+      expect(out.find((l) => l.type === "turn.end")?.data.reason).toBe("done")
+      expect(out.find((l) => l.id === 2)?.ok).toBe(true)
+    } finally {
+      p.stdout.resume()
+      try {
+        await stopSpawn(child, "RPC backpressure cleanup")
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 /** runRpc in process, with commands pushed and responses awaited by id. */
 function inProcess(s: Awaited<ReturnType<typeof session>>, commands?: ReturnType<typeof createCommandHost>) {

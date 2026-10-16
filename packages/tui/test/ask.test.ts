@@ -12,8 +12,9 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import { FakeTerminal, setColorEnabled } from "@amira/tui-kit"
-import builtinTools from "../../../extensions/builtin-tools/src/index.ts"
 import statusExtension from "../../../extensions/status/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
+import { builtinToolsWithoutWarmup as builtinTools } from "../../../scripts/test-builtin-tools.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { fileList } from "../src/file-index.ts"
@@ -187,297 +188,329 @@ async function setup(steps: MockStep[], o: Options) {
 afterEach(() => setColorEnabled(true))
 
 for (const mode of MODES) {
-  test(`${mode}: the model's questions are asked in one barred block and answered together`, async () => {
-    const s = await setup([askUser(), { text: "Patching it." }], { mode })
-    s.terminal.send("fix the bug\r")
-    await waitFor(() => s.dialog().length > 0, "the dialog")
-    expect(s.dialog()).toEqual([
-      "  Which approach do you prefer?",
-      "  1/2 · Approach",
-      "",
-      "› 1 Rewrite (Recommended)  Start over",
-      "  2 Patch                  Fix it in place",
-      "  3 Other…",
-      "",
-      "  ←→ question · ↑↓ move · enter next · esc cancel",
-    ])
-    s.terminal.send("2")
-    await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
-    // Back to the first and forward again: the answer is kept.
-    s.terminal.send(LEFT)
-    await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "back")
-    s.terminal.send("\x1b[C")
-    await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "forward")
-    s.terminal.send(" ")
-    s.terminal.send("3")
-    await waitFor(() => s.dialog().includes("› 3 [x] Changelog"), "checked")
-    expect(s.dialog()).toContain("  1 [x] Tests")
-    s.terminal.send("\r")
-    await s.shows("Patching it.")
-    await s.idle()
-    expect(s.toolResult("ask_user")).toBe(
-      [
-        "The user answered:",
-        "1. Which approach do you prefer?",
-        "   → Patch",
-        "2. What else should I do?",
-        "   → Tests, Changelog",
-      ].join("\n"),
-    )
-    // No echo of the dialog: the tool call's result shows the answers.
-    expect(s.all()).not.toContain("  Which approach do you prefer? ›")
-    // Each question's label, with the answer whole under it.
-    expect(s.all()).toMatch(/Approach\n +Patch\n/)
-    expect(s.dialog()).toEqual([])
-    s.terminal.send("\x03")
-    await s.exited
-  })
+  test(
+    `${mode}: the model's questions are asked in one barred block and answered together`,
+    async () => {
+      const s = await setup([askUser(), { text: "Patching it." }], { mode })
+      s.terminal.send("fix the bug\r")
+      await waitFor(() => s.dialog().length > 0, "the dialog")
+      expect(s.dialog()).toEqual([
+        "  Which approach do you prefer?",
+        "  1/2 · Approach",
+        "",
+        "› 1 Rewrite (Recommended)  Start over",
+        "  2 Patch                  Fix it in place",
+        "  3 Other…",
+        "",
+        "  ←→ question · ↑↓ move · enter next · esc cancel",
+      ])
+      s.terminal.send("2")
+      await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
+      // Back to the first and forward again: the answer is kept.
+      s.terminal.send(LEFT)
+      await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "back")
+      s.terminal.send("\x1b[C")
+      await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "forward")
+      s.terminal.send(" ")
+      s.terminal.send("3")
+      await waitFor(() => s.dialog().includes("› 3 [x] Changelog"), "checked")
+      expect(s.dialog()).toContain("  1 [x] Tests")
+      s.terminal.send("\r")
+      await s.shows("Patching it.")
+      await s.idle()
+      expect(s.toolResult("ask_user")).toBe(
+        [
+          "The user answered:",
+          "1. Which approach do you prefer?",
+          "   → Patch",
+          "2. What else should I do?",
+          "   → Tests, Changelog",
+        ].join("\n"),
+      )
+      // No echo of the dialog: the tool call's result shows the answers.
+      expect(s.all()).not.toContain("  Which approach do you prefer? ›")
+      // Each question's label, with the answer whole under it.
+      expect(s.all()).toMatch(/Approach\n +Patch\n/)
+      expect(s.dialog()).toEqual([])
+      s.terminal.send("\x03")
+      await s.exited
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test(`${mode}: full detail commits all offered choices and selected marks, including own words`, async () => {
-    const s = await setup([askUser(), { text: "Done." }], { mode, cols: 60, rows: 40 })
-    s.terminal.send("\x0f")
-    s.terminal.send("go\r")
-    await waitFor(() => s.dialog().length > 0, "the dialog")
-    s.terminal.send("2")
-    await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
-    s.terminal.send(" ")
-    s.terminal.send("2")
-    s.terminal.send("4")
-    await waitFor(() => s.dialog().some((line) => line.includes("Type your answer")), "own words")
-    s.terminal.send("Keep it small\r")
-    await waitFor(
-      () => s.dialog().some((line) => line.includes('[x] Other… "Keep it small"')),
-      "saved own words",
-    )
-    s.terminal.send("\r")
-    await s.shows("Done.")
-    await s.idle()
-    expect(s.all()).toContain("[ ] Rewrite (Recommended)  Start over")
-    expect(s.all()).toContain("✓ Patch  Fix it in place")
-    expect(s.all()).toContain("✓ Tests")
-    expect(s.all()).toContain("✓ Docs")
-    expect(s.all()).toContain("[ ] Changelog")
-    expect(s.all()).toContain('✓ (own words) "Keep it small"')
-    const message = s.agent.messages.find((message) => message.role === "toolResult")
-    expect(message?.role === "toolResult" && message.details).toMatchObject({
-      questions: QUESTIONS,
-      outcome: {
-        answers: [{ selected: ["Patch"] }, { selected: ["Tests", "Docs"], other: "Keep it small" }],
-      },
-    })
-    expect(s.dialog()).toEqual([])
-    s.terminal.send("\x03")
-    await s.exited
-  })
+  test(
+    `${mode}: full detail commits all offered choices and selected marks, including own words`,
+    async () => {
+      const s = await setup([askUser(), { text: "Done." }], { mode, cols: 60, rows: 40 })
+      s.terminal.send("\x0f")
+      s.terminal.send("go\r")
+      await waitFor(() => s.dialog().length > 0, "the dialog")
+      s.terminal.send("2")
+      await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
+      s.terminal.send(" ")
+      s.terminal.send("2")
+      s.terminal.send("4")
+      await waitFor(() => s.dialog().some((line) => line.includes("Type your answer")), "own words")
+      s.terminal.send("Keep it small\r")
+      await waitFor(
+        () => s.dialog().some((line) => line.includes('[x] Other… "Keep it small"')),
+        "saved own words",
+      )
+      s.terminal.send("\r")
+      await s.shows("Done.")
+      await s.idle()
+      expect(s.all()).toContain("[ ] Rewrite (Recommended)  Start over")
+      expect(s.all()).toContain("✓ Patch  Fix it in place")
+      expect(s.all()).toContain("✓ Tests")
+      expect(s.all()).toContain("✓ Docs")
+      expect(s.all()).toContain("[ ] Changelog")
+      expect(s.all()).toContain('✓ (own words) "Keep it small"')
+      const message = s.agent.messages.find((message) => message.role === "toolResult")
+      expect(message?.role === "toolResult" && message.details).toMatchObject({
+        questions: QUESTIONS,
+        outcome: {
+          answers: [{ selected: ["Patch"] }, { selected: ["Tests", "Docs"], other: "Keep it small" }],
+        },
+      })
+      expect(s.dialog()).toEqual([])
+      s.terminal.send("\x03")
+      await s.exited
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test(`${mode}: Other takes free text; Esc leaves the field, a second Esc declines`, async () => {
-    const s = await setup(
-      [askUser([QUESTIONS[0]!]), { text: "ok" }, askUser([QUESTIONS[0]!]), { text: "fine" }],
-      {
+  test(
+    `${mode}: Other takes free text; Esc leaves the field, a second Esc declines`,
+    async () => {
+      const s = await setup(
+        [askUser([QUESTIONS[0]!]), { text: "ok" }, askUser([QUESTIONS[0]!]), { text: "fine" }],
+        {
+          mode,
+        },
+      )
+      s.terminal.send("go\r")
+      await waitFor(() => s.dialog().length > 0, "the dialog")
+      s.terminal.send("3")
+      await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
+      // Digits and y are text in the field.
+      s.terminal.send("both, 2 steps")
+      await waitFor(() => s.dialog().includes("› 3 both, 2 steps"), "typed")
+      expect(s.dialog().at(-1)).toBe("  enter submit · esc back")
+      s.terminal.send("\r")
+      await s.shows("ok")
+      await s.idle()
+      expect(s.toolResult("ask_user")).toBe(
+        'The user answered:\n1. Which approach do you prefer?\n   → (own words) "both, 2 steps"',
+      )
+      expect(s.all()).toMatch(
+        new RegExp(
+          `^└ Asked Which approach do you prefer\\? +${TIMESTAMP}\\n {2}✓ \\(own words\\) "both, 2 steps"$`,
+          "m",
+        ),
+      )
+      s.terminal.send("again\r")
+      await waitFor(() => s.dialog().length > 0, "the second dialog")
+      s.terminal.send(`${UP}\r`)
+      await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
+      s.terminal.send(ESC)
+      await waitFor(() => s.dialog().includes("› 3 Other…"), "the field closed")
+      s.terminal.send(ESC)
+      await s.shows("fine")
+      await s.idle()
+      const results = s.agent.messages.filter((m) => m.role === "toolResult")
+      expect(JSON.stringify(results.at(-1))).toContain("The user declined to answer.")
+      expect(s.all()).not.toContain("  Which approach do you prefer? ›")
+      s.terminal.send("\x03")
+      await s.exited
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  test(
+    `${mode}: narrow screens put descriptions under their labels, and CJK fits its cells`,
+    async () => {
+      const cjk: AskQuestion = {
+        question: "你想用哪种方法来实现这个功能？",
+        options: [
+          { label: "重写（推荐）", description: "从头开始写这个模块" },
+          { label: "修补", description: "就地修复" },
+        ],
+      }
+      const s = await setup([askUser([QUESTIONS[0]!]), { text: "a" }, askUser([cjk]), { text: "b" }], {
         mode,
-      },
-    )
-    s.terminal.send("go\r")
-    await waitFor(() => s.dialog().length > 0, "the dialog")
-    s.terminal.send("3")
-    await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
-    // Digits and y are text in the field.
-    s.terminal.send("both, 2 steps")
-    await waitFor(() => s.dialog().includes("› 3 both, 2 steps"), "typed")
-    expect(s.dialog().at(-1)).toBe("  enter submit · esc back")
-    s.terminal.send("\r")
-    await s.shows("ok")
-    await s.idle()
-    expect(s.toolResult("ask_user")).toBe(
-      'The user answered:\n1. Which approach do you prefer?\n   → (own words) "both, 2 steps"',
-    )
-    expect(s.all()).toMatch(
-      new RegExp(
-        `^└ Asked Which approach do you prefer\\? +${TIMESTAMP}\\n {2}✓ \\(own words\\) "both, 2 steps"$`,
-        "m",
-      ),
-    )
-    s.terminal.send("again\r")
-    await waitFor(() => s.dialog().length > 0, "the second dialog")
-    s.terminal.send(`${UP}\r`)
-    await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
-    s.terminal.send(ESC)
-    await waitFor(() => s.dialog().includes("› 3 Other…"), "the field closed")
-    s.terminal.send(ESC)
-    await s.shows("fine")
-    await s.idle()
-    const results = s.agent.messages.filter((m) => m.role === "toolResult")
-    expect(JSON.stringify(results.at(-1))).toContain("The user declined to answer.")
-    expect(s.all()).not.toContain("  Which approach do you prefer? ›")
-    s.terminal.send("\x03")
-    await s.exited
-  })
+        cols: 32,
+        rows: 30,
+      })
+      s.terminal.send("go\r")
+      await waitFor(() => s.dialog().length > 0, "the dialog")
+      expect(s.dialog()).toEqual([
+        "  Which approach do you prefer?",
+        "",
+        "› 1 Rewrite (Recommended)",
+        "    Start over",
+        "  2 Patch",
+        "    Fix it in place",
+        "  3 Other…",
+        "",
+        "  enter choose · esc cancel",
+      ])
+      s.terminal.send("1")
+      await s.shows("a")
+      await s.idle()
+      s.terminal.send("again\r")
+      await waitFor(() => s.dialog().length > 0, "the CJK dialog")
+      expect(s.dialog()).toEqual([
+        "  你想用哪种方法来实现这个功能",
+        "  ？",
+        "",
+        "› 1 重写（推荐）",
+        "    从头开始写这个模块",
+        "  2 修补",
+        "    就地修复",
+        "  3 Other…",
+        "",
+        "  enter choose · esc cancel",
+      ])
+      s.terminal.send("2")
+      await s.shows("b")
+      await s.idle()
+      // The echo wraps like any line: the answer follows the question.
+      expect(s.all()).toMatch(new RegExp(`^└ Asked 你想用哪…个功能？ {2}${TIMESTAMP}\\n {2}✓ 修补$`, "m"))
+      expect(s.all()).toMatch(
+        new RegExp(`^└ Asked Which ap… prefer\\? {2}${TIMESTAMP}\\n {2}✓ Rewrite \\(Recommended\\)$`, "m"),
+      )
+      s.terminal.send("\x03")
+      await s.exited
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test(`${mode}: narrow screens put descriptions under their labels, and CJK fits its cells`, async () => {
-    const cjk: AskQuestion = {
-      question: "你想用哪种方法来实现这个功能？",
-      options: [
-        { label: "重写（推荐）", description: "从头开始写这个模块" },
-        { label: "修补", description: "就地修复" },
-      ],
-    }
-    const s = await setup([askUser([QUESTIONS[0]!]), { text: "a" }, askUser([cjk]), { text: "b" }], {
-      mode,
-      cols: 32,
-      rows: 30,
-    })
-    s.terminal.send("go\r")
-    await waitFor(() => s.dialog().length > 0, "the dialog")
-    expect(s.dialog()).toEqual([
-      "  Which approach do you prefer?",
-      "",
-      "› 1 Rewrite (Recommended)",
-      "    Start over",
-      "  2 Patch",
-      "    Fix it in place",
-      "  3 Other…",
-      "",
-      "  enter choose · esc cancel",
-    ])
-    s.terminal.send("1")
-    await s.shows("a")
-    await s.idle()
-    s.terminal.send("again\r")
-    await waitFor(() => s.dialog().length > 0, "the CJK dialog")
-    expect(s.dialog()).toEqual([
-      "  你想用哪种方法来实现这个功能",
-      "  ？",
-      "",
-      "› 1 重写（推荐）",
-      "    从头开始写这个模块",
-      "  2 修补",
-      "    就地修复",
-      "  3 Other…",
-      "",
-      "  enter choose · esc cancel",
-    ])
-    s.terminal.send("2")
-    await s.shows("b")
-    await s.idle()
-    // The echo wraps like any line: the answer follows the question.
-    expect(s.all()).toMatch(new RegExp(`^└ Asked 你想用哪…个功能？ {2}${TIMESTAMP}\\n {2}✓ 修补$`, "m"))
-    expect(s.all()).toMatch(
-      new RegExp(`^└ Asked Which ap… prefer\\? {2}${TIMESTAMP}\\n {2}✓ Rewrite \\(Recommended\\)$`, "m"),
-    )
-    s.terminal.send("\x03")
-    await s.exited
-  })
-
-  test(`${mode}: an approval is a list in the warning color; "don't ask again" holds, Other says what instead`, async () => {
-    const s = await setup(
-      [
-        { toolCalls: [{ name: "wipe", args: {} }] },
-        { toolCalls: [{ name: "wipe", args: {} }] },
-        { text: "wiped twice" },
-      ],
-      { mode, approve: ["wipe"] },
-    )
-    s.terminal.send("clean up\r")
-    await waitFor(() => s.dialog().length > 0, "the approval")
-    expect(s.dialog()).toEqual([
-      "  Allow wipe? (approval)",
-      "  it deletes files",
-      "",
-      "  Yes",
-      "  Yes, and don't ask again this session",
-      "  No",
-      "  Other…",
-      "",
-      "  ↑↓ select · n no · esc deny",
-    ])
-    // Nothing is preselected: an Enter typed now does not answer it.
-    s.terminal.send("\r")
-    await Bun.sleep(30)
-    expect(s.host.ui.pending.length).toBe(1)
-    s.terminal.send(`${DOWN}${DOWN}`)
-    await waitFor(() => s.dialog().includes("› Yes, and don't ask again this session"), "moved")
-    // The bar is drawn in the palette warning, the ❯ in the accent.
-    expect(s.terminal.output).toContain("\x1b[38;2;226;179;86m╭")
-    expect(s.terminal.output).toContain("\x1b[38;2;120;219;226m›")
-    s.terminal.send("\r")
-    await s.shows("wiped twice")
-    await s.idle()
-    expect(s.host.ui.pending).toEqual([])
-    expect(s.all()).not.toContain("  Allow wipe? ›")
-    // Asked once for both calls.
-    expect(s.all().split("Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
-    // Each call says who let it run.
-    expect(s.all()).toMatch(
-      new RegExp(
-        `^${mode === "fullscreen" ? "├" : "└"} wipe {2}✓ wiped · allowed by you +${TIMESTAMP}\\n└ wipe {2}✓ wiped · allowed · session rule$`,
-        "m",
-      ),
-    )
-    s.terminal.send("\x03")
-    await s.exited
-  })
+  test(
+    `${mode}: an approval is a list in the warning color; "don't ask again" holds, Other says what instead`,
+    async () => {
+      const s = await setup(
+        [
+          { toolCalls: [{ name: "wipe", args: {} }] },
+          { toolCalls: [{ name: "wipe", args: {} }] },
+          { text: "wiped twice" },
+        ],
+        { mode, approve: ["wipe"] },
+      )
+      s.terminal.send("clean up\r")
+      await waitFor(() => s.dialog().length > 0, "the approval")
+      expect(s.dialog()).toEqual([
+        "  Allow wipe? (approval)",
+        "  it deletes files",
+        "",
+        "  Yes",
+        "  Yes, and don't ask again this session",
+        "  No",
+        "  Other…",
+        "",
+        "  ↑↓ select · n no · esc deny",
+      ])
+      // Nothing is preselected: an Enter typed now does not answer it.
+      s.terminal.send("\r")
+      await Bun.sleep(30)
+      expect(s.host.ui.pending.length).toBe(1)
+      s.terminal.send(`${DOWN}${DOWN}`)
+      await waitFor(() => s.dialog().includes("› Yes, and don't ask again this session"), "moved")
+      // The bar is drawn in the palette warning, the ❯ in the accent.
+      expect(s.terminal.output).toContain("\x1b[38;2;226;179;86m╭")
+      expect(s.terminal.output).toContain("\x1b[38;2;120;219;226m›")
+      s.terminal.send("\r")
+      await s.shows("wiped twice")
+      await s.idle()
+      expect(s.host.ui.pending).toEqual([])
+      expect(s.all()).not.toContain("  Allow wipe? ›")
+      // Asked once for both calls.
+      expect(s.all().split("Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
+      // Each call says who let it run.
+      expect(s.all()).toMatch(
+        new RegExp(
+          `^${mode === "fullscreen" ? "├" : "└"} wipe {2}✓ wiped · allowed by you +${TIMESTAMP}\\n└ wipe {2}✓ wiped · allowed · session rule$`,
+          "m",
+        ),
+      )
+      s.terminal.send("\x03")
+      await s.exited
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 }
 
-test("Esc on an approval denies the call and stops the turn; meanwhile the activity line waits for you", async () => {
-  const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "tried another way" }], {
-    mode: "inline",
-    approve: ["wipe"],
-  })
-  s.terminal.send("clean up\r")
-  await waitFor(() => s.dialog().length > 0, "the approval")
-  expect(s.live()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}esc stop$/m)
-  s.terminal.send(ESC)
-  await s.idle()
-  expect(s.host.ui.pending).toEqual([])
-  expect(s.all()).toContain("Interrupted")
-  // The turn stopped: the model was not asked again.
-  expect(s.all()).not.toContain("tried another way")
-  s.terminal.send("\x03")
-  await s.exited
-})
-
-test("an approval refused with free text tells the model what to do instead", async () => {
-  const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "ok, moving to trash" }], {
-    mode: "inline",
-    approve: ["wipe"],
-  })
-  s.terminal.send("clean up\r")
-  await waitFor(() => s.dialog().length > 0, "the approval")
-  s.terminal.send(`${UP}\r`)
-  s.terminal.send("move them to the trash\r")
-  await s.shows("ok, moving to trash")
-  await s.idle()
-  expect(s.toolResult("wipe")).toContain("the user said no: move them to the trash")
-  expect(s.all()).toMatch(
-    new RegExp(
-      `^└ wipe +${TIMESTAMP}\\n {2}⊘ Tool call not approved: the user said no: move them to\\n {2}the trash$`,
-      "m",
-    ),
-  )
-  s.terminal.send("\x03")
-  await s.exited
-})
-
-test("with NO_COLOR the bar and › still mark the dialog and its selection", async () => {
-  setColorEnabled(false)
-  for (const mode of MODES) {
-    const s = await setup([askUser([QUESTIONS[0]!]), { text: "done" }], { mode })
-    s.terminal.send("go\r")
-    await waitFor(() => s.dialog().length > 0, "the dialog")
-    expect(s.dialog().slice(0, 4)).toEqual([
-      "  Which approach do you prefer?",
-      "",
-      "› 1 Rewrite (Recommended)  Start over",
-      "  2 Patch                  Fix it in place",
-    ])
-    // No colors at all: foreground colors are SGR 30–39 and 90–97.
-    expect(s.terminal.output).not.toMatch(new RegExp(`${String.fromCharCode(27)}\\[(3\\d|9[0-7])m`))
-    s.terminal.send(`${DOWN}`)
-    await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "moved")
-    s.terminal.send("\r")
-    await s.shows("done")
+test(
+  "Esc on an approval denies the call and stops the turn; meanwhile the activity line waits for you",
+  async () => {
+    const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "tried another way" }], {
+      mode: "inline",
+      approve: ["wipe"],
+    })
+    s.terminal.send("clean up\r")
+    await waitFor(() => s.dialog().length > 0, "the approval")
+    expect(s.live()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}esc stop$/m)
+    s.terminal.send(ESC)
     await s.idle()
+    expect(s.host.ui.pending).toEqual([])
+    expect(s.all()).toContain("Interrupted")
+    // The turn stopped: the model was not asked again.
+    expect(s.all()).not.toContain("tried another way")
     s.terminal.send("\x03")
     await s.exited
-  }
-})
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
+
+test(
+  "an approval refused with free text tells the model what to do instead",
+  async () => {
+    const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "ok, moving to trash" }], {
+      mode: "inline",
+      approve: ["wipe"],
+    })
+    s.terminal.send("clean up\r")
+    await waitFor(() => s.dialog().length > 0, "the approval")
+    s.terminal.send(`${UP}\r`)
+    s.terminal.send("move them to the trash\r")
+    await s.shows("ok, moving to trash")
+    await s.idle()
+    expect(s.toolResult("wipe")).toContain("the user said no: move them to the trash")
+    expect(s.all()).toMatch(
+      new RegExp(
+        `^└ wipe +${TIMESTAMP}\\n {2}⊘ Tool call not approved: the user said no: move them to\\n {2}the trash$`,
+        "m",
+      ),
+    )
+    s.terminal.send("\x03")
+    await s.exited
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
+
+test(
+  "with NO_COLOR the bar and › still mark the dialog and its selection",
+  async () => {
+    setColorEnabled(false)
+    for (const mode of MODES) {
+      const s = await setup([askUser([QUESTIONS[0]!]), { text: "done" }], { mode })
+      s.terminal.send("go\r")
+      await waitFor(() => s.dialog().length > 0, "the dialog")
+      expect(s.dialog().slice(0, 4)).toEqual([
+        "  Which approach do you prefer?",
+        "",
+        "› 1 Rewrite (Recommended)  Start over",
+        "  2 Patch                  Fix it in place",
+      ])
+      // No colors at all: foreground colors are SGR 30–39 and 90–97.
+      expect(s.terminal.output).not.toMatch(new RegExp(`${String.fromCharCode(27)}\\[(3\\d|9[0-7])m`))
+      s.terminal.send(`${DOWN}`)
+      await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "moved")
+      s.terminal.send("\r")
+      await s.shows("done")
+      await s.idle()
+      s.terminal.send("\x03")
+      await s.exited
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

@@ -1,18 +1,36 @@
-import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
+import { afterEach, beforeEach, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { runExtCommand } from "../src/ext-command.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+} from "../../../scripts/spawn-test.ts"
+import { runExtCommand as runExt } from "../src/ext-command.ts"
 import { clean, ExtProgress, progressMode } from "../src/ext-progress.ts"
 
-setDefaultTimeout(60_000)
+let abort: AbortController
+const pending = new Set<Promise<number>>()
+const runExtCommand: typeof runExt = (args, io, opts = {}) => {
+  const signal = opts.signal ? AbortSignal.any([abort.signal, opts.signal]) : abort.signal
+  const result = runExt(args, io, { ...opts, signal })
+  pending.add(result)
+  void result.then(
+    () => pending.delete(result),
+    () => pending.delete(result),
+  )
+  return result
+}
 
 let dir: string
 let home: string
 let cwd: string
 
 beforeEach(() => {
+  abort = new AbortController()
   dir = mkdtempSync(path.join(os.tmpdir(), "amira-ext-progress-"))
   home = path.join(dir, "home")
   cwd = path.join(dir, "project")
@@ -20,7 +38,11 @@ beforeEach(() => {
   mkdirSync(cwd, { recursive: true })
 })
 
-afterEach(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }))
+afterEach(async () => {
+  abort.abort()
+  await waitForSpawnCondition("extension command cleanup", () => pending.size === 0)
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+}, SPAWN_TEST_TIMEOUT_MS)
 
 /**
  * Replays what was written to a terminal: text, newlines, and the few sequences the progress
@@ -259,61 +281,73 @@ async function gitRepoWithPackage(name: string): Promise<string> {
     ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "one"],
   ]) {
     const p = Bun.spawn(["git", ...args], { cwd: repo, stdout: "ignore", stderr: "ignore" })
-    expect(await p.exited).toBe(0)
+    try {
+      expect(await waitForSpawnExit(p, `git ${args.join(" ")}`)).toBe(0)
+    } finally {
+      await stopSpawn(p, "extension Git fixture cleanup")
+    }
   }
   return pathToFileURL(repo).href
 }
 
-test("Ctrl+C stops the package being fetched and the ones after it", async () => {
-  const url = await gitRepoWithPackage("slow")
-  const ac = new AbortController()
-  const io = capture()
-  const stderr = io.stderr
-  io.stderr = (s: string) => {
-    stderr(s)
-    if (s.includes(": fetching")) ac.abort()
-  }
-  const code = await runExtCommand(["install", url, makePackage("never", "1.0.0")], io, {
-    home,
-    cwd,
-    signal: ac.signal,
-  })
-  expect(code).toBe(130)
-  expect(io.err).toContain("amira: stopped\n")
-  expect(io.err).not.toContain("never:")
-  expect(io.err).toContain(`amira: ${url}: cancelled\n`)
-  expect(io.out).toBe("1 cancelled\n")
-  expect(existsSync(path.join(home, "packages", "never"))).toBe(false)
-  const scope = path.join(home, "packages")
-  expect(existsSync(scope) ? readdirSync(scope).filter((n) => n.startsWith(".work-")) : []).toEqual([])
-})
+test(
+  "Ctrl+C stops the package being fetched and the ones after it",
+  async () => {
+    const url = await gitRepoWithPackage("slow")
+    const ac = new AbortController()
+    const io = capture()
+    const stderr = io.stderr
+    io.stderr = (s: string) => {
+      stderr(s)
+      if (s.includes(": fetching")) ac.abort()
+    }
+    const code = await runExtCommand(["install", url, makePackage("never", "1.0.0")], io, {
+      home,
+      cwd,
+      signal: ac.signal,
+    })
+    expect(code).toBe(130)
+    expect(io.err).toContain("amira: stopped\n")
+    expect(io.err).not.toContain("never:")
+    expect(io.err).toContain(`amira: ${url}: cancelled\n`)
+    expect(io.out).toBe("1 cancelled\n")
+    expect(existsSync(path.join(home, "packages", "never"))).toBe(false)
+    const scope = path.join(home, "packages")
+    expect(existsSync(scope) ? readdirSync(scope).filter((n) => n.startsWith(".work-")) : []).toEqual([])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("ext cache lists, prunes and cleans the cached repositories", async () => {
-  const url = await gitRepoWithPackage("cached")
-  await runExtCommand(["install", "-q", url], capture(), { home, cwd })
-  const list = capture()
-  await runExtCommand(["cache"], list, { home, cwd })
-  expect(list.out).toMatch(
-    new RegExp(`^${escapeRegExp(url)}  [\\d.]+ (B|KiB|MiB)  last used \\d{4}-\\d\\d-\\d\\d\\n1 cached, `),
-  )
-  // In use: prune keeps it.
-  const prune = capture()
-  await runExtCommand(["gc"], prune, { home, cwd })
-  expect(prune.out).toBe("Nothing to remove.\n")
-  await runExtCommand(["remove", "-q", "cached"], capture(), { home, cwd })
-  const unused = capture()
-  await runExtCommand(["cache", "list"], unused, { home, cwd })
-  expect(unused.out).toContain("[unused]")
-  const pruned = capture()
-  await runExtCommand(["cache", "prune"], pruned, { home, cwd })
-  expect(pruned.out).toMatch(/^Removed 1 cached repository \(/)
-  // clean removes every one, used or not.
-  await runExtCommand(["install", "-q", url], capture(), { home, cwd })
-  const clean = capture()
-  await runExtCommand(["cache", "clean"], clean, { home, cwd })
-  expect(clean.out).toMatch(/^Removed 1 cached repository/)
-  expect(await runExtCommand(["cache"], capture(), { home, cwd })).toBe(0)
-})
+test(
+  "ext cache lists, prunes and cleans the cached repositories",
+  async () => {
+    const url = await gitRepoWithPackage("cached")
+    await runExtCommand(["install", "-q", url], capture(), { home, cwd })
+    const list = capture()
+    await runExtCommand(["cache"], list, { home, cwd })
+    expect(list.out).toMatch(
+      new RegExp(`^${escapeRegExp(url)}  [\\d.]+ (B|KiB|MiB)  last used \\d{4}-\\d\\d-\\d\\d\\n1 cached, `),
+    )
+    // In use: prune keeps it.
+    const prune = capture()
+    await runExtCommand(["gc"], prune, { home, cwd })
+    expect(prune.out).toBe("Nothing to remove.\n")
+    await runExtCommand(["remove", "-q", "cached"], capture(), { home, cwd })
+    const unused = capture()
+    await runExtCommand(["cache", "list"], unused, { home, cwd })
+    expect(unused.out).toContain("[unused]")
+    const pruned = capture()
+    await runExtCommand(["cache", "prune"], pruned, { home, cwd })
+    expect(pruned.out).toMatch(/^Removed 1 cached repository \(/)
+    // clean removes every one, used or not.
+    await runExtCommand(["install", "-q", url], capture(), { home, cwd })
+    const clean = capture()
+    await runExtCommand(["cache", "clean"], clean, { home, cwd })
+    expect(clean.out).toMatch(/^Removed 1 cached repository/)
+    expect(await runExtCommand(["cache"], capture(), { home, cwd })).toBe(0)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

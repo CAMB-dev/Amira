@@ -3,6 +3,12 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import os from "node:os"
 import path from "node:path"
 import type { CommandContext } from "@amira/api"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+} from "../../../scripts/spawn-test.ts"
 import { validateSettings } from "../src/config/schema.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
@@ -110,60 +116,80 @@ test("the JSON examples parse, and the settings ones are valid settings", () => 
 const isSettingsExtensions = (v: Record<string, unknown>) =>
   Object.hasOwn(v, "extensions") && !Array.isArray(v.extensions)
 
-test("the example extension in docs/extensions.md loads, runs and typechecks", async () => {
-  const code = read("docs/extensions.md").match(/```ts\n([\s\S]*?)\n```/)![1]!
-  for (const language of ["zh", "ja"]) {
-    expect(read(`docs/${language}/extensions.md`).match(/```ts\n([\s\S]*?)\n```/)![1]).toBe(code)
-  }
+test(
+  "the example extension in docs/extensions.md loads, runs and typechecks",
+  async () => {
+    const code = read("docs/extensions.md").match(/```ts\n([\s\S]*?)\n```/)![1]!
+    for (const language of ["zh", "ja"]) {
+      expect(read(`docs/${language}/extensions.md`).match(/```ts\n([\s\S]*?)\n```/)![1]).toBe(code)
+    }
 
-  const dir = mkdtempSync(path.join(os.tmpdir(), "amira-doc-example-"))
-  try {
-    const entry = path.join(dir, "index.ts")
-    writeFileSync(entry, code)
-    const bus = new EventBus()
-    const host = new ExtensionHost({
-      bus,
-      interceptors: new InterceptorRegistry(),
-      tools: new ToolRegistry(),
-      cwd: dir,
-      settings: { extensions: { "hello-extension": { message: "Configured greeting." } } },
-    })
-    expect(await host.loadFile(entry, { name: "hello-extension" })).toBe(true)
-    expect(host.status.snapshot()).toHaveLength(0)
-    const printed: string[] = []
-    const ctx = { print: (s: string) => void printed.push(s) } as CommandContext
-    const hello = host.commands.get("hello")!.def
-    await hello.run("", ctx)
-    await hello.run("", ctx)
-    expect(printed).toEqual(["Configured greeting.", "Configured greeting."])
-    expect(host.status.snapshot()[0]!.text).toBe("Hello: 2")
-    expect(host.unload(entry)).toBe(true)
-    expect(host.commands.has("hello")).toBe(false)
-    host.unloadAll()
-    await bus.flush()
+    const dir = mkdtempSync(path.join(os.tmpdir(), "amira-doc-example-"))
+    try {
+      const entry = path.join(dir, "index.ts")
+      writeFileSync(entry, code)
+      const bus = new EventBus()
+      const host = new ExtensionHost({
+        bus,
+        interceptors: new InterceptorRegistry(),
+        tools: new ToolRegistry(),
+        cwd: dir,
+        settings: { extensions: { "hello-extension": { message: "Configured greeting." } } },
+      })
+      expect(await host.loadFile(entry, { name: "hello-extension" })).toBe(true)
+      expect(host.status.snapshot()).toHaveLength(0)
+      const printed: string[] = []
+      const ctx = { print: (s: string) => void printed.push(s) } as CommandContext
+      const hello = host.commands.get("hello")!.def
+      await hello.run("", ctx)
+      await hello.run("", ctx)
+      expect(printed).toEqual(["Configured greeting.", "Configured greeting."])
+      expect(host.status.snapshot()[0]!.text).toBe("Hello: 2")
+      expect(host.unload(entry)).toBe(true)
+      expect(host.commands.has("hello")).toBe(false)
+      host.unloadAll()
+      await bus.flush()
 
-    const tsconfig = path.join(dir, "tsconfig.json")
-    writeFileSync(
-      tsconfig,
-      JSON.stringify({
-        extends: path.join(root, "tsconfig.json"),
-        compilerOptions: {
-          paths: {
-            "@amira/api": [path.join(root, "packages/api/src/index.ts")],
-            "@amira/ai": [path.join(root, "packages/ai/src/index.ts")],
+      const tsconfig = path.join(dir, "tsconfig.json")
+      writeFileSync(
+        tsconfig,
+        JSON.stringify({
+          extends: path.join(root, "tsconfig.json"),
+          compilerOptions: {
+            paths: {
+              "@amira/api": [path.join(root, "packages/api/src/index.ts")],
+              "@amira/ai": [path.join(root, "packages/ai/src/index.ts")],
+            },
+            typeRoots: [path.join(root, "node_modules/@types")],
           },
-          typeRoots: [path.join(root, "node_modules/@types")],
-        },
-        include: [entry],
-      }),
-    )
-    const tsc = Bun.spawnSync(
-      [process.execPath, path.join(root, "node_modules/typescript/bin/tsc"), "-p", tsconfig, "--noEmit"],
-      { stdout: "pipe", stderr: "pipe" },
-    )
-    expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("")
-    expect(tsc.exitCode).toBe(0)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-}, 30_000)
+          include: [entry],
+        }),
+      )
+      const tsc = Bun.spawn(
+        [process.execPath, path.join(root, "node_modules/typescript/bin/tsc"), "-p", tsconfig, "--noEmit"],
+        { stdout: "pipe", stderr: "pipe" },
+      )
+      try {
+        let drained = false
+        const output = Promise.all([
+          new Response(tsc.stdout).text(),
+          new Response(tsc.stderr).text(),
+        ]).finally(() => {
+          drained = true
+        })
+        const [code, [stdout, stderr]] = await Promise.all([
+          waitForSpawnExit(tsc, "docs extension typecheck"),
+          output,
+          waitForSpawnCondition("docs extension typecheck output", () => drained),
+        ])
+        expect(stdout + stderr).toBe("")
+        expect(code).toBe(0)
+      } finally {
+        await stopSpawn(tsc, "docs extension typecheck cleanup")
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

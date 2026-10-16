@@ -2,24 +2,31 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { GitCache, gitCacheKey, gitUrlsInUse, packageScope, pruneGitCaches, writeLock } from "../src/index.ts"
 import * as tools from "../src/run.ts"
+import { spawnOperations } from "./spawn-operations.ts"
 
 let dir: string
 let home: string
 let cwd: string
 let cacheDir: string
+const operations = spawnOperations()
 
 beforeEach(() => {
+  operations.start()
   dir = mkdtempSync(path.join(os.tmpdir(), "amira-cache-regression-"))
   home = path.join(dir, "home")
   cwd = path.join(dir, "current")
   cacheDir = path.join(home, "cache", "git")
   mkdirSync(cacheDir, { recursive: true })
   mkdirSync(cwd, { recursive: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
-afterEach(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }))
+afterEach(async () => {
+  await operations.stop()
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+}, SPAWN_TEST_TIMEOUT_MS)
 
 function pin(project: string, url: string) {
   writeLock(packageScope("project", { home, cwd: project }).lockFile, {
@@ -106,41 +113,48 @@ test("cache regression: dry-run lists candidates without deleting caches or stal
 
 // This case starts real Git for setup, config and tree queries; parallel Windows
 // process startup can exceed the default 5 s even without any network access.
-test("cache regression: old git fallback blocks legacy promisors even when a transport is allowed", async () => {
-  const url = "https://example.test/legacy"
-  const commit = "a".repeat(40)
-  const bare = cached(url)
-  const remote = path.join(dir, "remote.git")
-  await tools.runTool(["git", "init", "--bare", bare], dir, "git init")
-  await tools.runTool(["git", "init", "--bare", remote], dir, "git init")
-  for (const [key, value] of [
-    ["extensions.partialClone", "origin"],
-    ["remote.origin.promisor", "false"],
-    ["remote.origin.url", remote],
-    ["protocol.file.allow", "always"],
-  ])
-    await tools.runTool(["git", `--git-dir=${bare}`, "config", key!, value!], dir, "git config")
-  const config = readFileSync(path.join(bare, "config"), "utf8")
-  const trace = path.join(dir, "git-trace.log")
-  const realRun = tools.runTool
-  const run = spyOn(tools, "runTool").mockImplementation(async (argv, at, what, opts = {}) => {
-    if (argv.includes("--version")) return "git version 2.44.0\n"
-    if (argv.includes(`${commit}^{commit}`)) return commit
-    // Emulate old git ignoring GIT_NO_LAZY_FETCH while using the real installed git.
-    const env: Record<string, string> = { ...opts.env, GIT_TRACE: trace }
-    delete env.GIT_NO_LAZY_FETCH
-    return realRun(argv, at, what, { ...opts, env })
-  })
-  try {
-    await new GitCache(cacheDir).withCommit({ url, commit }, {}, async (repo) => {
-      expect(await repo.treesOf([`${"b".repeat(40)}^{tree}`])).toEqual([undefined])
-    })
-    expect(readFileSync(trace, "utf8")).not.toContain("upload-pack")
-    expect(readFileSync(path.join(bare, "config"), "utf8")).toBe(config)
-  } finally {
-    run.mockRestore()
-  }
-}, 30_000)
+test(
+  "cache regression: old git fallback blocks legacy promisors even when a transport is allowed",
+  () =>
+    operations.run(async (signal) => {
+      const url = "https://example.test/legacy"
+      const commit = "a".repeat(40)
+      const bare = cached(url)
+      const remote = path.join(dir, "remote.git")
+      await tools.runTool(["git", "init", "--bare", bare], dir, "git init", { signal })
+      await tools.runTool(["git", "init", "--bare", remote], dir, "git init", { signal })
+      for (const [key, value] of [
+        ["extensions.partialClone", "origin"],
+        ["remote.origin.promisor", "false"],
+        ["remote.origin.url", remote],
+        ["protocol.file.allow", "always"],
+      ])
+        await tools.runTool(["git", `--git-dir=${bare}`, "config", key!, value!], dir, "git config", {
+          signal,
+        })
+      const config = readFileSync(path.join(bare, "config"), "utf8")
+      const trace = path.join(dir, "git-trace.log")
+      const realRun = tools.runTool
+      const run = spyOn(tools, "runTool").mockImplementation(async (argv, at, what, opts = {}) => {
+        if (argv.includes("--version")) return "git version 2.44.0\n"
+        if (argv.includes(`${commit}^{commit}`)) return commit
+        // Emulate old git ignoring GIT_NO_LAZY_FETCH while using the real installed git.
+        const env: Record<string, string> = { ...opts.env, GIT_TRACE: trace }
+        delete env.GIT_NO_LAZY_FETCH
+        return realRun(argv, at, what, { ...opts, env })
+      })
+      try {
+        await new GitCache(cacheDir).withCommit({ url, commit }, { signal }, async (repo) => {
+          expect(await repo.treesOf([`${"b".repeat(40)}^{tree}`])).toEqual([undefined])
+        })
+        expect(readFileSync(trace, "utf8")).not.toContain("upload-pack")
+        expect(readFileSync(path.join(bare, "config"), "utf8")).toBe(config)
+      } finally {
+        run.mockRestore()
+      }
+    }),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 for (const version of ["2.44.0", "2.45.0", "2.55.0.windows.5", "3.0.0"]) {
   test(`cache regression: git ${version} uses the supported no-lazy-fetch guard`, async () => {

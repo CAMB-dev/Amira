@@ -1,7 +1,14 @@
-import { afterEach, expect, setDefaultTimeout, spyOn, test } from "bun:test"
+import { afterEach, expect, spyOn, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  SPAWN_WAIT_TIMEOUT_MS,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 import {
   backgroundJobs,
   type JobEvent,
@@ -10,17 +17,35 @@ import {
   liveJobPids,
   PASSIVE_SIGNAL_LISTENER,
   resetCommandWorker,
-  startJob,
-  startJobInline,
+  startJob as startProductionJob,
+  startJobInline as startProductionJobInline,
 } from "../src/index.ts"
 
-// Spawns can take seconds on Windows machines with antivirus scanning.
-setDefaultTimeout(60_000)
+import { cleanupProcWork, ownSpawn, stopCommands } from "./spawn-fixture.ts"
 
 const bun = process.execPath
 const cwd = process.cwd()
 const tree = join(import.meta.dir, "fixtures", "tree.ts")
 const host = join(import.meta.dir, "fixtures", "host.ts")
+
+const activeJobs = new Set<{ stop(graceMs: number): void }>()
+function ownedJob(start: typeof startProductionJob): typeof startProductionJob {
+  return (spec, emit) => {
+    let ended = false
+    let handle: ReturnType<typeof start>
+    handle = start(spec, (event) => {
+      if (event.type === "exit") {
+        ended = true
+        if (handle) activeJobs.delete(handle)
+      }
+      emit(event)
+    })
+    if (!ended) activeJobs.add(handle)
+    return handle
+  }
+}
+const startJob = ownedJob(startProductionJob)
+const startJobInline = ownedJob(startProductionJobInline)
 
 const dirs: string[] = []
 function tempDir() {
@@ -29,21 +54,27 @@ function tempDir() {
   return d
 }
 afterEach(async () => {
-  await backgroundJobs.stopAll(() => true, 0)
+  await cleanupProcWork([
+    stopCommands,
+    () =>
+      waitForSpawnWork(
+        "background job cleanup",
+        backgroundJobs.stopAll(() => true, 0),
+      ),
+    async () => {
+      for (const job of activeJobs) job.stop(0)
+      await waitForSpawnCondition("direct job cleanup", () => activeJobs.size === 0)
+    },
+  ])
   for (const d of dirs.splice(0)) {
     try {
       rmSync(d, { recursive: true, force: true })
     } catch {}
   }
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
-async function waitUntil(check: () => boolean, what: string, timeoutMs = 20_000) {
-  const deadline = performance.now() + timeoutMs
-  while (!check()) {
-    if (performance.now() > deadline) throw new Error(`timed out waiting for ${what}`)
-    await Bun.sleep(20)
-  }
-}
+const waitUntil = (check: () => boolean, what: string, timeoutMs = 20_000) =>
+  waitForSpawnCondition(what, check, timeoutMs)
 
 function alive(pid: number): boolean {
   try {
@@ -57,14 +88,19 @@ function alive(pid: number): boolean {
 /** The pids a tree.ts run wrote, once all three are up. */
 async function treePids(file: string): Promise<number[]> {
   const read = () => (existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean) : [])
-  await waitUntil(() => read().length >= 3, "the process tree to start")
+  await waitUntil(() => read().length >= 3, "the process tree to start", SPAWN_WAIT_TIMEOUT_MS)
   return read().map(Number)
 }
 
 /** Windows: whether tasklist still lists any of the pids (the process-tree check). */
 function listedByTasklist(pids: number[]): number[] {
   if (process.platform !== "win32") return []
-  const out = Bun.spawnSync(["tasklist", "/FO", "CSV", "/NH"], { stdout: "pipe", windowsHide: true })
+  const out = Bun.spawnSync(["tasklist", "/FO", "CSV", "/NH"], {
+    stdout: "pipe",
+    windowsHide: true,
+    timeout: SPAWN_WAIT_TIMEOUT_MS,
+  })
+  expect({ success: out.success, exitCode: out.exitCode }).toEqual({ success: true, exitCode: 0 })
   const listed = new Set(
     out.stdout
       .toString()
@@ -85,113 +121,133 @@ const script = (code: string) => [bun, "-e", code]
 test.each([null, "SIGKILL"] as const)(
   "job exits distinguish signal metadata from exit 137 (%s)",
   async (signal) => {
-    const proc = Bun.spawn(script("process.exit(137)"), {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      windowsHide: true,
-      detached: process.platform !== "win32",
-    })
-    await proc.exited
+    const proc = ownSpawn(
+      Bun.spawn(script("process.exit(137)"), {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        windowsHide: true,
+        detached: process.platform !== "win32",
+      }),
+    )
+    await waitForSpawnExit(proc, "completed job fixture")
     Object.defineProperty(proc, "signalCode", { value: signal })
     const spawn = spyOn(Bun, "spawn").mockReturnValue(proc)
     try {
-      const exit = await new Promise<JobEvent>((resolve) => {
-        startJobInline({ argv: script("unused"), cwd }, (event) => {
-          if (event.type === "exit") resolve(event)
-        })
-      })
+      const exit = await waitForSpawnWork(
+        "inline job exit",
+        new Promise<JobEvent>((resolve) => {
+          startJobInline({ argv: script("unused"), cwd }, (event) => {
+            if (event.type === "exit") resolve(event)
+          })
+        }),
+      )
       expect(exit).toEqual({ type: "exit", code: signal ? null : 137, signal })
     } finally {
       spawn.mockRestore()
     }
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test("a job runs detached from its caller; its output is read incrementally", async () => {
-  const job = backgroundJobs.start({
-    command: "count",
-    argv: script(
-      "let i = 0; const t = setInterval(() => { console.log('line ' + ++i); if (i === 6) { clearInterval(t) } }, 50)",
-    ),
-    cwd,
-  })
-  expect(job.id).toMatch(/^job\d+$/)
-  expect(["starting", "running"]).toContain(job.status)
-  await backgroundJobs.waitFor(job.id, { pattern: /line 3/, timeoutMs: 20_000 })
-  const first = backgroundJobs.readNew(job.id, "model")
-  expect(first.text).toContain("line 1")
-  expect(first.from).toBe(0)
-  await backgroundJobs.waitFor(job.id, { timeoutMs: 20_000 })
-  const second = backgroundJobs.readNew(job.id, "model")
-  expect(second.from).toBe(first.to)
-  expect(second.text).toContain("line 6")
-  expect(second.text).not.toContain("line 1\n")
-  // Another reader has its own place.
-  expect(backgroundJobs.readNew(job.id, "other").text).toContain("line 1")
-  const info = backgroundJobs.get(job.id)!
-  expect(info).toMatchObject({ status: "exited", exitCode: 0, stopRequested: false })
-  expect(info.pid).toBeGreaterThan(0)
-  expect(info.contained).toBe(true)
-})
+test(
+  "a job runs detached from its caller; its output is read incrementally",
+  async () => {
+    const job = backgroundJobs.start({
+      command: "count",
+      argv: script(
+        "let i = 0; const t = setInterval(() => { console.log('line ' + ++i); if (i === 6) { clearInterval(t) } }, 50)",
+      ),
+      cwd,
+    })
+    expect(job.id).toMatch(/^job\d+$/)
+    expect(["starting", "running"]).toContain(job.status)
+    await backgroundJobs.waitFor(job.id, { pattern: /line 3/, timeoutMs: 20_000 })
+    const first = backgroundJobs.readNew(job.id, "model")
+    expect(first.text).toContain("line 1")
+    expect(first.from).toBe(0)
+    await backgroundJobs.waitFor(job.id, { timeoutMs: 20_000 })
+    const second = backgroundJobs.readNew(job.id, "model")
+    expect(second.from).toBe(first.to)
+    expect(second.text).toContain("line 6")
+    expect(second.text).not.toContain("line 1\n")
+    // Another reader has its own place.
+    expect(backgroundJobs.readNew(job.id, "other").text).toContain("line 1")
+    const info = backgroundJobs.get(job.id)!
+    expect(info).toMatchObject({ status: "exited", exitCode: 0, stopRequested: false })
+    expect(info.pid).toBeGreaterThan(0)
+    expect(info.contained).toBe(true)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("waitFor resolves on a matching line, on the job's exit, or on the timeout", async () => {
-  const job = backgroundJobs.start({
-    command: "server",
-    argv: script(
-      "console.log('compiling'); setTimeout(() => console.log('Ready on http://localhost:3000'), 300); setInterval(() => {}, 1000)",
-    ),
-    cwd,
-  })
-  const ready = await backgroundJobs.waitFor(job.id, {
-    pattern: /ready on .*:(\d+)/i,
-    timeoutMs: 20_000,
-  })
-  expect(ready).toEqual({ reason: "match", line: "Ready on http://localhost:3000" })
-  // The same line is not matched again from where the reader is now.
-  const again = await backgroundJobs.waitFor(job.id, {
-    pattern: /ready/i,
-    from: backgroundJobs.output(job.id).to,
-    timeoutMs: 200,
-  })
-  expect(again.reason).toBe("timeout")
-  const abort = new AbortController()
-  setTimeout(() => abort.abort(), 100)
-  expect(
-    (await backgroundJobs.waitFor(job.id, { pattern: /never/, timeoutMs: 20_000, signal: abort.signal }))
-      .reason,
-  ).toBe("aborted")
-  const ending = backgroundJobs.waitFor(job.id, { pattern: /never/, timeoutMs: 20_000 })
-  await backgroundJobs.stop(job.id, 0)
-  expect((await ending).reason).toBe("exit")
-})
+test(
+  "waitFor resolves on a matching line, on the job's exit, or on the timeout",
+  async () => {
+    const job = backgroundJobs.start({
+      command: "server",
+      argv: script(
+        "console.log('compiling'); setTimeout(() => console.log('Ready on http://localhost:3000'), 300); setInterval(() => {}, 1000)",
+      ),
+      cwd,
+    })
+    const ready = await backgroundJobs.waitFor(job.id, {
+      pattern: /ready on .*:(\d+)/i,
+      timeoutMs: 20_000,
+    })
+    expect(ready).toEqual({ reason: "match", line: "Ready on http://localhost:3000" })
+    // The same line is not matched again from where the reader is now.
+    const again = await backgroundJobs.waitFor(job.id, {
+      pattern: /ready/i,
+      from: backgroundJobs.output(job.id).to,
+      timeoutMs: 200,
+    })
+    expect(again.reason).toBe("timeout")
+    const abort = new AbortController()
+    setTimeout(() => abort.abort(), 100)
+    expect(
+      (await backgroundJobs.waitFor(job.id, { pattern: /never/, timeoutMs: 20_000, signal: abort.signal }))
+        .reason,
+    ).toBe("aborted")
+    const ending = backgroundJobs.waitFor(job.id, { pattern: /never/, timeoutMs: 20_000 })
+    await backgroundJobs.stop(job.id, 0)
+    expect((await ending).reason).toBe("exit")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("stop kills the whole tree, grandchildren included", async () => {
-  const dir = tempDir()
-  const pidFile = join(dir, "pids")
-  const job = backgroundJobs.start({ command: "tree", argv: [bun, tree, pidFile], cwd })
-  const pids = await treePids(pidFile)
-  expect(pids.every(alive)).toBe(true)
-  expect(liveJobPids()).toContain(backgroundJobs.get(job.id)!.pid!)
-  // While jobs run, a passive listener kills them on SIGTERM and SIGHUP, leaving the rest to others.
-  const passive = (signal: NodeJS.Signals) =>
-    process.listeners(signal).filter((l) => (l as never)[PASSIVE_SIGNAL_LISTENER])
-  expect(passive("SIGTERM")).toHaveLength(1)
-  expect(passive("SIGHUP")).toHaveLength(1)
-  const ended = await backgroundJobs.stop(job.id)
-  expect(ended.status).toBe("stopped")
-  expect(ended.stopRequested).toBe(true)
-  await expectAllGone(pids)
-  expect(liveJobPids()).not.toContain(ended.pid!)
-  // None run: the listeners are gone again.
-  expect(passive("SIGTERM")).toHaveLength(0)
-})
+test(
+  "stop kills the whole tree, grandchildren included",
+  async () => {
+    const dir = tempDir()
+    const pidFile = join(dir, "pids")
+    const job = backgroundJobs.start({ command: "tree", argv: [bun, tree, pidFile], cwd })
+    const pids = await treePids(pidFile)
+    expect(pids.every(alive)).toBe(true)
+    expect(liveJobPids()).toContain(backgroundJobs.get(job.id)!.pid!)
+    // While jobs run, a passive listener kills them on SIGTERM and SIGHUP, leaving the rest to others.
+    const passive = (signal: NodeJS.Signals) =>
+      process.listeners(signal).filter((l) => (l as never)[PASSIVE_SIGNAL_LISTENER])
+    expect(passive("SIGTERM")).toHaveLength(1)
+    expect(passive("SIGHUP")).toHaveLength(1)
+    const ended = await backgroundJobs.stop(job.id)
+    expect(ended.status).toBe("stopped")
+    expect(ended.stopRequested).toBe(true)
+    await expectAllGone(pids)
+    expect(liveJobPids()).not.toContain(ended.pid!)
+    // None run: the listeners are gone again.
+    expect(passive("SIGTERM")).toHaveLength(0)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a job whose main process exits takes what it left running with it", async () => {
-  const dir = tempDir()
-  const pidFile = join(dir, "pids")
-  // The main process starts the tree's root and exits once it is up: the tree must not stay.
-  const code = `
+test(
+  "a job whose main process exits takes what it left running with it",
+  async () => {
+    const dir = tempDir()
+    const pidFile = join(dir, "pids")
+    // The main process starts the tree's root and exits once it is up: the tree must not stay.
+    const code = `
     const { spawn } = Bun
     spawn([process.execPath, ${JSON.stringify(tree)}, ${JSON.stringify(pidFile)}], { stdio: ["ignore", "inherit", "inherit"] })
     const fs = require("node:fs")
@@ -199,51 +255,61 @@ test("a job whose main process exits takes what it left running with it", async 
       const n = fs.existsSync(${JSON.stringify(pidFile)}) ? fs.readFileSync(${JSON.stringify(pidFile)}, "utf8").trim().split("\\n").length : 0
       if (n >= 3) { clearInterval(t); process.exit(7) }
     }, 20)`
-  const job = backgroundJobs.start({ command: "crash", argv: script(code), cwd })
-  const done = await backgroundJobs.waitFor(job.id, { timeoutMs: 30_000 })
-  expect(done.reason).toBe("exit")
-  expect(backgroundJobs.get(job.id)).toMatchObject({ status: "exited", exitCode: 7 })
-  await expectAllGone(await treePids(pidFile))
-})
+    const job = backgroundJobs.start({ command: "crash", argv: script(code), cwd })
+    const done = await backgroundJobs.waitFor(job.id, { timeoutMs: 30_000 })
+    expect(done.reason).toBe("exit")
+    expect(backgroundJobs.get(job.id)).toMatchObject({ status: "exited", exitCode: 7 })
+    await expectAllGone(await treePids(pidFile))
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("output also goes to the log file; a job that cannot start fails", async () => {
-  const dir = tempDir()
-  const logPath = join(dir, "logs", "job.log")
-  const job = backgroundJobs.start({
-    command: "hello",
-    argv: script("console.log('to the log'); console.error('and stderr')"),
-    cwd,
-    logPath,
-  })
-  await backgroundJobs.waitFor(job.id, { timeoutMs: 20_000 })
-  const log = readFileSync(logPath, "utf8")
-  expect(log).toContain("to the log")
-  expect(log).toContain("and stderr")
-  expect(backgroundJobs.get(job.id)!.logPath).toBe(logPath)
+test(
+  "output also goes to the log file; a job that cannot start fails",
+  async () => {
+    const dir = tempDir()
+    const logPath = join(dir, "logs", "job.log")
+    const job = backgroundJobs.start({
+      command: "hello",
+      argv: script("console.log('to the log'); console.error('and stderr')"),
+      cwd,
+      logPath,
+    })
+    await backgroundJobs.waitFor(job.id, { timeoutMs: 20_000 })
+    const log = readFileSync(logPath, "utf8")
+    expect(log).toContain("to the log")
+    expect(log).toContain("and stderr")
+    expect(backgroundJobs.get(job.id)!.logPath).toBe(logPath)
 
-  const bad = backgroundJobs.start({ command: "nope", argv: script("1"), cwd: join(dir, "missing") })
-  await backgroundJobs.waitFor(bad.id, { timeoutMs: 20_000 })
-  expect(backgroundJobs.get(bad.id)).toMatchObject({ status: "failed" })
-  expect(backgroundJobs.get(bad.id)!.error).toBeTruthy()
-})
+    const bad = backgroundJobs.start({ command: "nope", argv: script("1"), cwd: join(dir, "missing") })
+    await backgroundJobs.waitFor(bad.id, { timeoutMs: 20_000 })
+    expect(backgroundJobs.get(bad.id)).toMatchObject({ status: "failed" })
+    expect(backgroundJobs.get(bad.id)!.error).toBeTruthy()
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("the log stops at its size limit", async () => {
-  const dir = tempDir()
-  const logPath = join(dir, "job.log")
-  const job = backgroundJobs.start({
-    command: "loud",
-    argv: script("for (let i = 0; i < 200; i++) console.log('x'.repeat(99))"),
-    cwd,
-    logPath,
-    maxLogBytes: 1000,
-  })
-  await backgroundJobs.waitFor(job.id, { timeoutMs: 20_000 })
-  const log = readFileSync(logPath, "utf8")
-  expect(log.length).toBeLessThan(1200)
-  expect(log).toContain("[log stopped here: it reached 1000 bytes]")
-  // Memory still has all of it.
-  expect(backgroundJobs.get(job.id)!.outputChars).toBeGreaterThan(19_000)
-})
+test(
+  "the log stops at its size limit",
+  async () => {
+    const dir = tempDir()
+    const logPath = join(dir, "job.log")
+    const job = backgroundJobs.start({
+      command: "loud",
+      argv: script("for (let i = 0; i < 200; i++) console.log('x'.repeat(99))"),
+      cwd,
+      logPath,
+      maxLogBytes: 1000,
+    })
+    await backgroundJobs.waitFor(job.id, { timeoutMs: 20_000 })
+    const log = readFileSync(logPath, "utf8")
+    expect(log.length).toBeLessThan(1200)
+    expect(log).toContain("[log stopped here: it reached 1000 bytes]")
+    // Memory still has all of it.
+    expect(backgroundJobs.get(job.id)!.outputChars).toBeGreaterThan(19_000)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.skipIf(process.platform === "win32")(
   "POSIX: stop asks the process group to stop before killing it",
@@ -262,23 +328,28 @@ test.skipIf(process.platform === "win32")(
     // Every process of the group got the SIGTERM.
     expect(readFileSync(termLog, "utf8").trim().split("\n")).toHaveLength(3)
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 /** Runs fixtures/host.ts, which ends as `how` says once its job's tree is up. */
 async function runHost(how: string) {
   const dir = tempDir()
   const pidFile = join(dir, "pids")
-  const child = Bun.spawn([bun, host, pidFile, how], { stdout: "pipe", stderr: "pipe", cwd })
+  const child = ownSpawn(Bun.spawn([bun, host, pidFile, how], { stdout: "pipe", stderr: "pipe", cwd }))
   return { child, pidFile }
 }
 
 for (const how of ["exit", "crash", ...(process.platform === "win32" ? [] : ["sigterm"])]) {
-  test(`Amira ending (${how}) leaves no process of a job behind`, async () => {
-    const { child, pidFile } = await runHost(how)
-    await child.exited
-    const pids = await treePids(pidFile)
-    await expectAllGone(pids)
-  })
+  test(
+    `Amira ending (${how}) leaves no process of a job behind`,
+    async () => {
+      const { child, pidFile } = await runHost(how)
+      await waitForSpawnExit(child, "job host")
+      const pids = await treePids(pidFile)
+      await expectAllGone(pids)
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 }
 
 // POSIX has no Job Object kill-on-close equivalent; an outright SIGKILL leaves its jobs alive.
@@ -288,68 +359,86 @@ test.if(process.platform === "win32")(
     const { child, pidFile } = await runHost("wait")
     const pids = await treePids(pidFile)
     const reader = child.stdout.getReader()
-    await reader.read()
+    try {
+      await waitForSpawnWork("job host readiness", reader.read())
+    } finally {
+      await reader.cancel()
+      reader.releaseLock()
+    }
     // TerminateProcess: no exit hook runs.
     child.kill("SIGKILL")
-    await child.exited
+    await waitForSpawnExit(child, "job host")
     await expectAllGone(pids)
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test("a SIGINT someone handles leaves jobs running; one nobody handles kills them and exits 130", async () => {
-  const job = backgroundJobs.start({ command: "idle", argv: script("setInterval(() => {}, 1000)"), cwd })
-  await waitUntil(() => backgroundJobs.get(job.id)!.status === "running", "the job to run")
-  const pid = backgroundJobs.get(job.id)!.pid!
-  let handled = 0
-  const handler = () => void handled++
-  process.on("SIGINT", handler)
-  try {
-    process.emit("SIGINT", "SIGINT")
-  } finally {
-    process.off("SIGINT", handler)
-  }
-  expect(handled).toBe(1)
-  await Bun.sleep(200)
-  expect(alive(pid)).toBe(true)
-  const exit = process.exit
-  let code: number | undefined
-  process.exit = ((c?: number) => {
-    code = c
-  }) as typeof process.exit
-  try {
-    process.emit("SIGINT", "SIGINT")
-  } finally {
-    process.exit = exit
-  }
-  expect(code).toBe(130)
-  await waitUntil(() => !alive(pid), "the job to be killed")
-})
+test(
+  "a SIGINT someone handles leaves jobs running; one nobody handles kills them and exits 130",
+  async () => {
+    const job = backgroundJobs.start({ command: "idle", argv: script("setInterval(() => {}, 1000)"), cwd })
+    await waitUntil(
+      () => backgroundJobs.get(job.id)!.status === "running",
+      "the job to run",
+      SPAWN_WAIT_TIMEOUT_MS,
+    )
+    const pid = backgroundJobs.get(job.id)!.pid!
+    let handled = 0
+    const handler = () => void handled++
+    process.on("SIGINT", handler)
+    try {
+      process.emit("SIGINT", "SIGINT")
+    } finally {
+      process.off("SIGINT", handler)
+    }
+    expect(handled).toBe(1)
+    await Bun.sleep(200)
+    expect(alive(pid)).toBe(true)
+    const exit = process.exit
+    let code: number | undefined
+    process.exit = ((c?: number) => {
+      code = c
+    }) as typeof process.exit
+    try {
+      process.emit("SIGINT", "SIGINT")
+    } finally {
+      process.exit = exit
+    }
+    expect(code).toBe(130)
+    await waitUntil(() => !alive(pid), "the job to be killed", 20_000)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a job keeps running on this thread when the worker cannot load", async () => {
-  resetCommandWorker({ url: new URL("./does-not-exist.ts", import.meta.url).href })
-  try {
-    const events: JobEvent[] = []
-    let resolveExit = () => {}
-    const exited = new Promise<void>((r) => {
-      resolveExit = r
-    })
-    startJob({ argv: script("console.log('inline')"), cwd }, (e) => {
-      events.push(e)
-      if (e.type === "exit") resolveExit()
-    })
-    await exited
-    expect(events[0]).toMatchObject({ type: "spawned" })
-    expect(
-      events
-        .filter((e) => e.type === "output")
-        .map((e) => (e as { data: string }).data)
-        .join(""),
-    ).toContain("inline")
-    expect(events.at(-1)).toMatchObject({ type: "exit", code: 0 })
-  } finally {
-    resetCommandWorker()
-  }
-})
+test(
+  "a job keeps running on this thread when the worker cannot load",
+  async () => {
+    resetCommandWorker({ url: new URL("./does-not-exist.ts", import.meta.url).href })
+    try {
+      const events: JobEvent[] = []
+      let resolveExit = () => {}
+      const exited = new Promise<void>((r) => {
+        resolveExit = r
+      })
+      startJob({ argv: script("console.log('inline')"), cwd }, (e) => {
+        events.push(e)
+        if (e.type === "exit") resolveExit()
+      })
+      await waitForSpawnWork("fallback job exit", exited)
+      expect(events[0]).toMatchObject({ type: "spawned" })
+      expect(
+        events
+          .filter((e) => e.type === "output")
+          .map((e) => (e as { data: string }).data)
+          .join(""),
+      ).toContain("inline")
+      expect(events.at(-1)).toMatchObject({ type: "exit", code: 0 })
+    } finally {
+      resetCommandWorker()
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 // The registry's own bookkeeping, over a fake process.
 function fakeRegistry(opts: { maxRunning?: number; bufferChars?: number } = {}) {

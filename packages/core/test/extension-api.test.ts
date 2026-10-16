@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test"
+import { afterEach, expect, spyOn, test } from "bun:test"
 import { createHash } from "node:crypto"
 import * as fs from "node:fs"
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
@@ -6,11 +6,37 @@ import os, { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative } from "node:path"
 import { type AnyEvent, defineTool, type ExtensionAPI, textResult } from "@amira/api"
 import { resetCommandWorker } from "@amira/proc"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { amiraHome } from "../src/home.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
+
+const commandRuns = new Map<Promise<unknown>, AbortController>()
+
+function runExtensionCommand(
+  api: ExtensionAPI,
+  argv: string[],
+  opts: Parameters<ExtensionAPI["runCommand"]>[1],
+) {
+  const abort = new AbortController()
+  const run = api.runCommand(argv, { ...opts, signal: AbortSignal.any([opts.signal, abort.signal]) })
+  commandRuns.set(run, abort)
+  const settled = () => void commandRuns.delete(run)
+  void run.then(settled, settled)
+  return run
+}
+
+afterEach(async () => {
+  for (const abort of commandRuns.values()) abort.abort()
+  try {
+    await waitForSpawnCondition("extension commands cleanup", () => commandRuns.size === 0)
+  } finally {
+    resetCommandWorker()
+    commandRuns.clear()
+  }
+}, SPAWN_TEST_TIMEOUT_MS)
 
 test("extensions get the cwd, the user directory and a way to report later failures", async () => {
   const bus = new EventBus()
@@ -457,192 +483,225 @@ test("views: the last registration wins, unloading restores it, and subagent is 
   expect(host.views.kinds()).toEqual([])
 })
 
-test("runCommand writes stdin, adding the newline, and closes it", async () => {
-  const host = new ExtensionHost({
-    bus: new EventBus(),
-    interceptors: new InterceptorRegistry(),
-    tools: new ToolRegistry(),
-  })
-  let api: ExtensionAPI | undefined
-  await host.load((a) => {
-    api = a
-  }, "ext:stdin")
-  const read =
-    "let s = ''; for await (const c of process.stdin) s += c; process.stdout.write(JSON.stringify(s))"
-  const opts = {
-    cwd: process.cwd(),
-    timeoutMs: 20_000,
-    signal: new AbortController().signal,
-    stdoutOnly: true,
-  }
-  const r = await api!.runCommand([process.execPath, "-e", read], { ...opts, stdin: '{"a":1}' })
-  expect(r.exitCode).toBe(0)
-  expect(JSON.parse(r.output)).toBe('{"a":1}\n')
-  const same = await api!.runCommand([process.execPath, "-e", read], { ...opts, stdin: "x\n" })
-  expect(JSON.parse(same.output)).toBe("x\n")
-  await expect(api!.runCommand(["x"], { ...opts, stdin: "x", viaCmd: true })).rejects.toThrow("stdin")
-})
-
-test("runCommand streams output while the command runs, and an abort stops it", async () => {
-  const host = new ExtensionHost({
-    bus: new EventBus(),
-    interceptors: new InterceptorRegistry(),
-    tools: new ToolRegistry(),
-  })
-  let api: ExtensionAPI | undefined
-  await host.load((a) => {
-    api = a
-  }, "ext:stream")
-  const opts = { cwd: process.cwd(), timeoutMs: 20_000, signal: new AbortController().signal }
-
-  const chunks: string[] = []
-  let done = false
-  let doneAtFirstChunk: boolean | undefined
-  const script = "console.log('one'); await Bun.sleep(1000); console.log('two')"
-  const run = api!.runCommand([process.execPath, "-e", script], {
-    ...opts,
-    onChunk: (c) => {
-      doneAtFirstChunk ??= done
-      chunks.push(c)
-    },
-  })
-  void run.then(() => (done = true))
-  const r = await run
-  expect(doneAtFirstChunk).toBe(false)
-  expect(chunks[0]).toContain("one")
-  expect(chunks.join("")).toBe(r.output)
-  expect(r.output).toContain("two")
-
-  const abort = new AbortController()
-  const started = performance.now()
-  const stopped = await api!.runCommand(
-    [process.execPath, "-e", "console.log('one'); await Bun.sleep(60_000)"],
-    {
-      ...opts,
-      signal: abort.signal,
-      onChunk: () => abort.abort(),
-    },
-  )
-  expect(stopped).toMatchObject({ aborted: true, timedOut: false })
-  expect(stopped.output).toContain("one")
-  expect(performance.now() - started).toBeLessThan(20_000)
-})
-
-for (const mode of ["interleaved", "stdoutOnly", ...(process.platform === "win32" ? ["viaCmd"] : [])]) {
-  test(`runCommand streams incremental git stdout before git exits (${mode})`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), "amira-git-stream-"))
-    const script = join(dir, "stream.ts")
-    const acknowledgements = [join(dir, "one.ack"), join(dir, "two.ack")]
-    // Each piece must reach onChunk before git can produce the next one or exit. A sleep
-    // alone would let a callback delivered after child exit (but before promise resolution) pass.
-    writeFileSync(
-      script,
-      [
-        'import { existsSync } from "node:fs"',
-        `const acknowledgements = ${JSON.stringify(acknowledgements)}`,
-        'for (const [i, text] of ["one\\n", "two\\n"].entries()) {',
-        "  await Bun.write(Bun.stdout, text)",
-        "  const deadline = performance.now() + 15_000",
-        "  while (!existsSync(acknowledgements[i]!)) {",
-        "    if (performance.now() >= deadline) process.exit(7)",
-        "    await Bun.sleep(10)",
-        "  }",
-        "}",
-        'await Bun.write(Bun.stdout, "done\\n")',
-      ].join("\n"),
-    )
+test(
+  "runCommand writes stdin, adding the newline, and closes it",
+  async () => {
     const host = new ExtensionHost({
       bus: new EventBus(),
       interceptors: new InterceptorRegistry(),
       tools: new ToolRegistry(),
-      cwd: dir,
     })
     let api: ExtensionAPI | undefined
     await host.load((a) => {
       api = a
-    }, "ext:git-stream")
-    const quote = (s: string) => `'${s.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`
-    const chunks: string[] = []
-    let output = ""
-    resetCommandWorker()
-    // The real worker has its own Bun globals. If it cannot load, the inline fallback must
-    // fail instead of silently turning this into a main-thread stdout test.
-    const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
-      throw new Error("git streaming must run in the actual command worker")
-    })
-    try {
-      const run = await api!.runCommand(
-        ["git", "-c", `alias.amira-stream=!${quote(process.execPath)} ${quote(script)}`, "amira-stream"],
-        {
-          cwd: dir,
-          env: {
-            ...process.env,
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-          },
-          timeoutMs: 30_000,
-          signal: new AbortController().signal,
-          stdoutOnly: mode === "stdoutOnly",
-          viaCmd: mode === "viaCmd",
-          onChunk: (chunk) => {
-            chunks.push(chunk)
-            output += chunk
-            for (const [i, text] of ["one\n", "two\n"].entries()) {
-              if (output.includes(text)) writeFileSync(acknowledgements[i]!, "received")
-            }
-          },
-        },
-      )
-      expect(spawn).not.toHaveBeenCalled()
-      expect(run).toMatchObject({
-        output: "one\ntwo\ndone\n",
-        exitCode: 0,
-        timedOut: false,
-        aborted: false,
-        settled: true,
-      })
-      expect(chunks.join("")).toBe(run.output)
-      expect(chunks.length).toBeGreaterThanOrEqual(3)
-    } finally {
-      spawn.mockRestore()
-      resetCommandWorker()
-      host.unload("ext:git-stream")
-      rmSync(dir, { recursive: true, force: true })
+    }, "ext:stdin")
+    const read =
+      "let s = ''; for await (const c of process.stdin) s += c; process.stdout.write(JSON.stringify(s))"
+    const opts = {
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      signal: new AbortController().signal,
+      stdoutOnly: true,
     }
-  }, 60_000)
-}
+    const r = await runExtensionCommand(api!, [process.execPath, "-e", read], { ...opts, stdin: '{"a":1}' })
+    expect(r.exitCode).toBe(0)
+    expect(JSON.parse(r.output)).toBe('{"a":1}\n')
+    const same = await runExtensionCommand(api!, [process.execPath, "-e", read], { ...opts, stdin: "x\n" })
+    expect(JSON.parse(same.output)).toBe("x\n")
+    await expect(runExtensionCommand(api!, ["x"], { ...opts, stdin: "x", viaCmd: true })).rejects.toThrow(
+      "stdin",
+    )
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("runCommand caps output at 1,000,000 characters by default, keeping the end", async () => {
-  const host = new ExtensionHost({
-    bus: new EventBus(),
-    interceptors: new InterceptorRegistry(),
-    tools: new ToolRegistry(),
-  })
-  let api: ExtensionAPI | undefined
-  await host.load((a) => {
-    api = a
-  }, "ext:cap")
-  const opts = { cwd: process.cwd(), timeoutMs: 20_000, signal: new AbortController().signal }
-  let streamed = 0
-  const r = await api!.runCommand(
-    [process.execPath, "-e", "process.stdout.write('x'.repeat(1_000_000) + 'END')"],
-    {
+test(
+  "runCommand streams output while the command runs, and an abort stops it",
+  async () => {
+    const host = new ExtensionHost({
+      bus: new EventBus(),
+      interceptors: new InterceptorRegistry(),
+      tools: new ToolRegistry(),
+    })
+    let api: ExtensionAPI | undefined
+    await host.load((a) => {
+      api = a
+    }, "ext:stream")
+    const opts = { cwd: process.cwd(), timeoutMs: 20_000, signal: new AbortController().signal }
+
+    const chunks: string[] = []
+    let done = false
+    let doneAtFirstChunk: boolean | undefined
+    const script = "console.log('one'); await Bun.sleep(1000); console.log('two')"
+    const run = runExtensionCommand(api!, [process.execPath, "-e", script], {
       ...opts,
       onChunk: (c) => {
-        streamed += c.length
+        doneAtFirstChunk ??= done
+        chunks.push(c)
       },
+    })
+    void run.then(
+      () => (done = true),
+      () => (done = true),
+    )
+    const r = await run
+    expect(doneAtFirstChunk).toBe(false)
+    expect(chunks[0]).toContain("one")
+    expect(chunks.join("")).toBe(r.output)
+    expect(r.output).toContain("two")
+
+    const abort = new AbortController()
+    let started: number | undefined
+    const stopping = runExtensionCommand(
+      api!,
+      [process.execPath, "-e", "console.log('one'); await Bun.sleep(60_000)"],
+      {
+        ...opts,
+        signal: abort.signal,
+        onChunk: () => {
+          started ??= performance.now()
+          abort.abort()
+        },
+      },
+    )
+    await waitForSpawnCondition("extension command first output before abort", () => started !== undefined)
+    const stopped = await stopping
+    expect(stopped).toMatchObject({ aborted: true, timedOut: false })
+    expect(stopped.output).toContain("one")
+    expect(performance.now() - started!).toBeLessThan(20_000)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
+
+for (const mode of ["interleaved", "stdoutOnly", ...(process.platform === "win32" ? ["viaCmd"] : [])]) {
+  test(
+    `runCommand streams incremental git stdout before git exits (${mode})`,
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "amira-git-stream-"))
+      const script = join(dir, "stream.ts")
+      const acknowledgements = [join(dir, "one.ack"), join(dir, "two.ack")]
+      // Each piece must reach onChunk before git can produce the next one or exit. A sleep
+      // alone would let a callback delivered after child exit (but before promise resolution) pass.
+      writeFileSync(
+        script,
+        [
+          'import { existsSync } from "node:fs"',
+          `const acknowledgements = ${JSON.stringify(acknowledgements)}`,
+          'for (const [i, text] of ["one\\n", "two\\n"].entries()) {',
+          "  await Bun.write(Bun.stdout, text)",
+          "  const deadline = performance.now() + 15_000",
+          "  while (!existsSync(acknowledgements[i]!)) {",
+          "    if (performance.now() >= deadline) process.exit(7)",
+          "    await Bun.sleep(10)",
+          "  }",
+          "}",
+          'await Bun.write(Bun.stdout, "done\\n")',
+        ].join("\n"),
+      )
+      const host = new ExtensionHost({
+        bus: new EventBus(),
+        interceptors: new InterceptorRegistry(),
+        tools: new ToolRegistry(),
+        cwd: dir,
+      })
+      let api: ExtensionAPI | undefined
+      await host.load((a) => {
+        api = a
+      }, "ext:git-stream")
+      const quote = (s: string) => `'${s.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`
+      const chunks: string[] = []
+      let output = ""
+      resetCommandWorker()
+      // The real worker has its own Bun globals. If it cannot load, the inline fallback must
+      // fail instead of silently turning this into a main-thread stdout test.
+      const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
+        throw new Error("git streaming must run in the actual command worker")
+      })
+      try {
+        const run = await runExtensionCommand(
+          api!,
+          ["git", "-c", `alias.amira-stream=!${quote(process.execPath)} ${quote(script)}`, "amira-stream"],
+          {
+            cwd: dir,
+            env: {
+              ...process.env,
+              GIT_CONFIG_NOSYSTEM: "1",
+              GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+            },
+            timeoutMs: 30_000,
+            signal: new AbortController().signal,
+            stdoutOnly: mode === "stdoutOnly",
+            viaCmd: mode === "viaCmd",
+            onChunk: (chunk) => {
+              chunks.push(chunk)
+              output += chunk
+              for (const [i, text] of ["one\n", "two\n"].entries()) {
+                if (output.includes(text)) writeFileSync(acknowledgements[i]!, "received")
+              }
+            },
+          },
+        )
+        expect(spawn).not.toHaveBeenCalled()
+        expect(run).toMatchObject({
+          output: "one\ntwo\ndone\n",
+          exitCode: 0,
+          timedOut: false,
+          aborted: false,
+          settled: true,
+        })
+        expect(chunks.join("")).toBe(run.output)
+        expect(chunks.length).toBeGreaterThanOrEqual(3)
+      } finally {
+        spawn.mockRestore()
+        resetCommandWorker()
+        host.unload("ext:git-stream")
+        rmSync(dir, { recursive: true, force: true })
+      }
     },
+    SPAWN_TEST_TIMEOUT_MS,
   )
-  expect(r.output.length).toBe(1_000_000)
-  expect(r.output.endsWith("xEND")).toBe(true)
-  expect(r.truncated).toBe(true)
-  expect(streamed).toBe(1_000_003)
-  const small = await api!.runCommand([process.execPath, "-e", "process.stdout.write('x'.repeat(10))"], {
-    ...opts,
-    maxOutputChars: 4,
-  })
-  expect(small).toMatchObject({ output: "xxxx", truncated: true })
-})
+}
+
+test(
+  "runCommand caps output at 1,000,000 characters by default, keeping the end",
+  async () => {
+    const host = new ExtensionHost({
+      bus: new EventBus(),
+      interceptors: new InterceptorRegistry(),
+      tools: new ToolRegistry(),
+    })
+    let api: ExtensionAPI | undefined
+    await host.load((a) => {
+      api = a
+    }, "ext:cap")
+    const opts = { cwd: process.cwd(), timeoutMs: 20_000, signal: new AbortController().signal }
+    let streamed = 0
+    const r = await runExtensionCommand(
+      api!,
+      [process.execPath, "-e", "process.stdout.write('x'.repeat(1_000_000) + 'END')"],
+      {
+        ...opts,
+        onChunk: (c) => {
+          streamed += c.length
+        },
+      },
+    )
+    expect(r.output.length).toBe(1_000_000)
+    expect(r.output.endsWith("xEND")).toBe(true)
+    expect(r.truncated).toBe(true)
+    expect(streamed).toBe(1_000_003)
+    const small = await runExtensionCommand(
+      api!,
+      [process.execPath, "-e", "process.stdout.write('x'.repeat(10))"],
+      {
+        ...opts,
+        maxOutputChars: 4,
+      },
+    )
+    expect(small).toMatchObject({ output: "xxxx", truncated: true })
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("notify sends an extension.notice, info by default", async () => {
   const bus = new EventBus()
@@ -767,38 +826,55 @@ test("tool renderer decorators build on the presenter below, which may change la
   expect(base.renderers.get("write")?.result?.({} as never)).toBe("2 errors")
 })
 
-test("openPipe starts a piped process whose events reach the extension", async () => {
-  const host = new ExtensionHost({
-    bus: new EventBus(),
-    interceptors: new InterceptorRegistry(),
-    tools: new ToolRegistry(),
-  })
-  let api: ExtensionAPI | undefined
-  await host.load((a) => {
-    api = a
-  }, "ext:pipe")
-  let out = ""
-  const exit = Promise.withResolvers<number | null>()
-  const pipe = api!.openPipe(
-    [process.execPath, "-e", "process.stdin.on('data', (d) => process.stdout.write('got ' + d))"],
-    {
-      cwd: process.cwd(),
-      onEvent: (e) => {
-        if (e.type === "stdout") out += e.data
-        if (e.type === "exit") exit.resolve(e.code)
-        // A throwing handler does not stop later events.
-        if (e.type === "spawned") throw new Error("ignored")
+test(
+  "openPipe starts a piped process whose events reach the extension",
+  async () => {
+    const host = new ExtensionHost({
+      bus: new EventBus(),
+      interceptors: new InterceptorRegistry(),
+      tools: new ToolRegistry(),
+    })
+    let api: ExtensionAPI | undefined
+    await host.load((a) => {
+      api = a
+    }, "ext:pipe")
+    let out = ""
+    let exited = false
+    const exit = Promise.withResolvers<number | null>()
+    const pipe = api!.openPipe(
+      [process.execPath, "-e", "process.stdin.on('data', (d) => process.stdout.write('got ' + d))"],
+      {
+        cwd: process.cwd(),
+        onEvent: (e) => {
+          if (e.type === "stdout") out += e.data
+          if (e.type === "exit") {
+            exited = true
+            exit.resolve(e.code)
+          }
+          // A throwing handler does not stop later events.
+          if (e.type === "spawned") throw new Error("ignored")
+        },
       },
-    },
-  )
-  pipe.write("ping\n")
-  const deadline = Date.now() + 30_000
-  while (!out.includes("got ping") && Date.now() < deadline) await Bun.sleep(20)
-  expect(out).toContain("got ping")
-  pipe.close(2000)
-  expect(await exit.promise).toBe(0)
-  expect(() => api!.openPipe([], { cwd: process.cwd(), onEvent: () => {} })).toThrow()
-}, 60_000)
+    )
+    try {
+      pipe.write("ping\n")
+      await waitForSpawnCondition("extension pipe ping response", () => out.includes("got ping"))
+      expect(out).toContain("got ping")
+      pipe.close(2000)
+      await waitForSpawnCondition("extension pipe exit", () => exited)
+      expect(await exit.promise).toBe(0)
+      expect(() => api!.openPipe([], { cwd: process.cwd(), onEvent: () => {} })).toThrow()
+    } finally {
+      pipe.close(2000)
+      try {
+        await waitForSpawnCondition("extension pipe cleanup exit", () => exited)
+      } finally {
+        host.unload("ext:pipe")
+      }
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("terminal proxies follow binding, default to no-op and become inert on unload", async () => {
   const host = new ExtensionHost({

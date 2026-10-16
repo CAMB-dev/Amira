@@ -7,6 +7,11 @@ import type { AnyEvent, Extension, WorkspaceFacts } from "@amira/api"
 import { Agent, EventBus } from "@amira/core"
 import agentExtension from "../../../extensions/agent/src/index.ts"
 import statusExtension from "../../../extensions/status/src/index.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  waitForSpawnCondition,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 import { createReloadReplay } from "../src/session/extension-loading.ts"
 import { createSession } from "../src/session.ts"
 
@@ -14,44 +19,50 @@ const mockAi = () =>
   createAi({ dialects: [createMockDialect()], providers: [{ id: "mock", dialect: "mock", baseUrl: "" }] })
 
 async function until(check: () => boolean) {
-  const deadline = performance.now() + 30_000
-  while (!check() && performance.now() < deadline) await Bun.sleep(10)
+  await waitForSpawnCondition("workspace event", check)
   expect(check()).toBe(true)
 }
 
-test("the built-in agent supplies workspace events, while no-builtins leaves the host without a provider", async () => {
-  const cwd = await mkdtemp(path.join(tmpdir(), "amira-workspace-cli-"))
-  try {
-    for (const noBuiltins of [false, true]) {
-      const session = await createSession({
-        cwd,
-        noBuiltins,
-        extensions: [],
-        ai: mockAi(),
-        builtins: async () => [{ source: "builtin:agent", extension: agentExtension }],
-      })
-      const seen: AnyEvent[] = []
-      session.agent.bus.subscribe((e) => void seen.push(e), { types: ["workspace.changed"] })
-      try {
-        await session.host.load(statusExtension, "test:status")
-        session.agent.start("startup")
-        if (noBuiltins) {
-          await Bun.sleep(600)
-          expect(seen).toEqual([])
-        } else {
-          await until(() => seen.length === 1)
-          expect(seen[0]).toMatchObject({ sessionId: session.agent.sessionId, data: { cwd } })
+test(
+  "the built-in agent supplies workspace events, while no-builtins leaves the host without a provider",
+  async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "amira-workspace-cli-"))
+    try {
+      for (const noBuiltins of [false, true]) {
+        const session = await createSession({
+          cwd,
+          noBuiltins,
+          extensions: [],
+          ai: mockAi(),
+          builtins: async () => [{ source: "builtin:agent", extension: agentExtension }],
+        })
+        const seen: AnyEvent[] = []
+        session.agent.bus.subscribe((e) => void seen.push(e), { types: ["workspace.changed"] })
+        try {
+          await session.host.load(statusExtension, "test:status")
+          session.agent.start("startup")
+          if (noBuiltins) {
+            await Bun.sleep(600)
+            expect(seen).toEqual([])
+          } else {
+            await until(() => seen.length === 1)
+            expect(seen[0]).toMatchObject({ sessionId: session.agent.sessionId, data: { cwd } })
+          }
+          expect(session.host.status.snapshot().find((i) => i.id === "place")?.text).toBe(path.basename(cwd))
+        } finally {
+          try {
+            await waitForSpawnWork("workspace session disposal", session.agent.dispose("exit"))
+          } finally {
+            session.host.unloadAll()
+          }
         }
-        expect(session.host.status.snapshot().find((i) => i.id === "place")?.text).toBe(path.basename(cwd))
-      } finally {
-        await session.agent.dispose("exit")
-        session.host.unloadAll()
       }
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
     }
-  } finally {
-    await rm(cwd, { recursive: true, force: true })
-  }
-}, 60_000)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("reload replays the current workspace and replaces the provider without duplicate events", async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "amira-workspace-reload-"))

@@ -1,6 +1,7 @@
 import { splitLines } from "./diff.ts"
 
-/** Matching budget per batch of files, including worker startup and message delivery. */
+/** Worker startup is bounded separately from each batch's regex and message delivery budget. */
+const WORKER_STARTUP_TIMEOUT_MS = 30_000
 const MATCH_TIMEOUT_MS = 1_000
 export const MAX_TESTED_LINE_CHARS = 10_000
 
@@ -22,6 +23,7 @@ self.onmessage = ({ data: { pattern, flags, texts, firstOnly, maxChars } }) => {
     return matches
   }))
 }
+self.postMessage("ready")
 `
 
 /** One matcher per call: aborting or timing out must not disrupt concurrent searches. */
@@ -31,11 +33,18 @@ export function grepMatcher(re: RegExp, signal: AbortSignal) {
   const literal = !/[\\^$.*+?()[\]{}|]/.test(re.source)
   let worker: Worker | undefined
   let url: string | undefined
-  const close = () => {
+  let ready = false
+  let cancel: (() => void) | undefined
+  const stopWorker = () => {
     worker?.terminate()
     worker = undefined
+    ready = false
     if (url) URL.revokeObjectURL(url)
     url = undefined
+  }
+  const close = () => {
+    cancel?.()
+    stopWorker()
   }
 
   return {
@@ -56,12 +65,18 @@ export function grepMatcher(re: RegExp, signal: AbortSignal) {
         })
       }
       if (!worker) {
-        url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }))
-        worker = new Worker(url)
+        try {
+          url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }))
+          worker = new Worker(url)
+        } catch {
+          stopWorker()
+          throw new Error("The grep matching worker failed")
+        }
       }
       const w = worker
       return new Promise<number[][]>((resolve, reject) => {
         let settled = false
+        let timer: ReturnType<typeof setTimeout> | undefined
         const finish = (error?: Error, matches?: number[][]) => {
           if (settled) return
           settled = true
@@ -70,39 +85,60 @@ export function grepMatcher(re: RegExp, signal: AbortSignal) {
           w.onmessage = null
           w.removeEventListener("error", onError)
           w.removeEventListener("close", onClose)
+          cancel = undefined
           if (error) {
-            close()
+            stopWorker()
             reject(error)
           } else resolve(matches!)
         }
         const onAbort = () => finish(new Error("Aborted"))
-        const onError = () => finish(new Error("The grep matching worker failed"))
+        const onError = (event?: Event) => {
+          event?.preventDefault()
+          finish(new Error("The grep matching worker failed"))
+        }
         const onClose = () => finish(new Error("The grep matching worker stopped unexpectedly"))
-        const timer = setTimeout(
-          () =>
-            finish(
-              new Error(
-                "Regular expression matching timed out (1 second for a batch of files). No results were returned. " +
-                  "Simplify the pattern: avoid nested quantifiers such as (a+)+ and overlapping alternatives; " +
-                  "use a literal or a bounded repetition instead. You can also narrow path or glob.",
+        const startMatching = () => {
+          clearTimeout(timer)
+          timer = setTimeout(
+            () =>
+              finish(
+                new Error(
+                  "Regular expression matching timed out (1 second for a batch of files). No results were returned. " +
+                    "Simplify the pattern: avoid nested quantifiers such as (a+)+ and overlapping alternatives; " +
+                    "use a literal or a bounded repetition instead. You can also narrow path or glob.",
+                ),
               ),
-            ),
-          MATCH_TIMEOUT_MS,
-        )
-        w.onmessage = (event: MessageEvent<number[][]>) => finish(undefined, event.data)
+            MATCH_TIMEOUT_MS,
+          )
+          try {
+            w.postMessage({
+              pattern: re.source,
+              flags: re.flags,
+              texts,
+              firstOnly,
+              maxChars: MAX_TESTED_LINE_CHARS,
+            })
+          } catch {
+            onError()
+          }
+        }
+        w.onmessage = (event: MessageEvent<"ready" | number[][]>) => {
+          if (!ready && event.data === "ready") {
+            ready = true
+            startMatching()
+          } else if (ready && event.data !== "ready") finish(undefined, event.data)
+        }
         w.addEventListener("error", onError)
         w.addEventListener("close", onClose)
         signal.addEventListener("abort", onAbort, { once: true })
-        try {
-          w.postMessage({
-            pattern: re.source,
-            flags: re.flags,
-            texts,
-            firstOnly,
-            maxChars: MAX_TESTED_LINE_CHARS,
-          })
-        } catch {
-          onError()
+        cancel = onClose
+        if (signal.aborted) onAbort()
+        else if (ready) startMatching()
+        else {
+          timer = setTimeout(
+            () => finish(new Error("The grep matching worker failed to start within 30 seconds")),
+            WORKER_STARTUP_TIMEOUT_MS,
+          )
         }
       })
     },

@@ -1,12 +1,30 @@
 // Regression tests for defects found in code review of the agent loop.
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AnyEvent, defineTool, textResult } from "@amira/api"
+import { resetCommandWorker } from "@amira/proc"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
+
+let commandAbort: AbortController | undefined
+let commandRun: Promise<unknown> | undefined
+afterEach(async () => {
+  if (!commandAbort) return
+  commandAbort.abort()
+  let settled = false
+  void Promise.allSettled(commandRun ? [commandRun] : []).then(() => (settled = true))
+  try {
+    await waitForSpawnCondition("agent extension command cleanup", () => settled)
+  } finally {
+    resetCommandWorker()
+    commandAbort = undefined
+    commandRun = undefined
+  }
+}, SPAWN_TEST_TIMEOUT_MS)
 
 function setup(steps: MockStep[], abortGraceMs = 50) {
   const mock = createMockDialect(steps)
@@ -259,23 +277,36 @@ test("tool registry: removing a middle override keeps the top one", () => {
   expect(reg.get("x")?.description).toBe("a")
 })
 
-test("extensions can run commands through the host", async () => {
-  const host = new ExtensionHost({
-    bus: new EventBus(),
-    interceptors: new InterceptorRegistry(),
-    tools: new ToolRegistry(),
-  })
-  let output = ""
-  await host.load(async (api) => {
-    const run = await api.runCommand([process.execPath, "-e", "console.log('from ext')"], {
-      cwd: process.cwd(),
-      timeoutMs: 60_000,
-      signal: new AbortController().signal,
+test(
+  "extensions can run commands through the host",
+  async () => {
+    const host = new ExtensionHost({
+      bus: new EventBus(),
+      interceptors: new InterceptorRegistry(),
+      tools: new ToolRegistry(),
     })
-    output = run.output.trim()
-  }, "runner")
-  expect(output).toBe("from ext")
-}, 60_000)
+    const abort = new AbortController()
+    commandAbort = abort
+    try {
+      let output = ""
+      await host.load(async (api) => {
+        const running = api.runCommand([process.execPath, "-e", "console.log('from ext')"], {
+          cwd: process.cwd(),
+          timeoutMs: 60_000,
+          signal: abort.signal,
+        })
+        commandRun = running
+        const run = await running
+        output = run.output.trim()
+      }, "runner")
+      expect(output).toBe("from ext")
+    } finally {
+      abort.abort()
+      host.unload("runner")
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("parallel calls sharing a key run in order while other keys run alongside", async () => {
   const { agent } = setup([

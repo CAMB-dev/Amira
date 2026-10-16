@@ -1,8 +1,9 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep, type ModelRequest } from "@amira/ai"
 import type { Extension } from "@amira/api"
 import agentExtension from "../../../extensions/agent/src/index.ts"
-import builtinTools from "../../../extensions/builtin-tools/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
+import { builtinToolsWithoutWarmup as builtinTools } from "../../../scripts/test-builtin-tools.ts"
 import { type PrintIO, runPrint } from "../src/print.ts"
 import { runRpc } from "../src/rpc.ts"
 import { rpcSchema } from "../src/rpc-schema.ts"
@@ -11,6 +12,19 @@ import { createSession } from "../src/session.ts"
 /** ask_user end to end with the mock model: rpc clients answer it, print mode cannot. */
 
 const here = import.meta.dir
+
+const cleanup: (() => Promise<void>)[] = []
+afterEach(async () => {
+  const errors: unknown[] = []
+  for (const dispose of cleanup.splice(0).reverse()) {
+    try {
+      await dispose()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, "ask_user cleanup failed")
+}, SPAWN_TEST_TIMEOUT_MS)
 
 type Line = Record<string, any>
 
@@ -50,18 +64,30 @@ async function session(
     builtins: async () => extensions.map((extension, i) => ({ source: `ext${i}`, extension })),
     ...extra,
   })
+  cleanup.push(async () => {
+    s.host.ui.cancelAll()
+    try {
+      await waitForSpawnWork("ask_user session disposal", s.agent.dispose("exit"))
+    } finally {
+      s.host.unloadAll()
+    }
+  })
   return { ...s, mock }
 }
 
-test("a non-interactive session hides ask_user and tells the model to decide", async () => {
-  const s = await session([{ text: "done" }], [builtinTools], { nonInteractive: true })
-  const io: PrintIO = { stdout: () => {}, stderr: () => {} }
-  expect(await runPrint(s.agent, "go", false, { io })).toBe(0)
-  const request = s.mock.requests[0]!
-  expect(request.tools.some((tool) => tool.name === "ask_user")).toBe(false)
-  expect(request.systemPrompt).toContain("Run mode: non-interactive")
-  expect(request.systemPrompt).toContain("decide for yourself")
-})
+test(
+  "a non-interactive session hides ask_user and tells the model to decide",
+  async () => {
+    const s = await session([{ text: "done" }], [builtinTools], { nonInteractive: true })
+    const io: PrintIO = { stdout: () => {}, stderr: () => {} }
+    expect(await runPrint(s.agent, "go", false, { io })).toBe(0)
+    const request = s.mock.requests[0]!
+    expect(request.tools.some((tool) => tool.name === "ask_user")).toBe(false)
+    expect(request.systemPrompt).toContain("Run mode: non-interactive")
+    expect(request.systemPrompt).toContain("decide for yourself")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 function inProcess(s: Awaited<ReturnType<typeof session>>, withUi = true) {
   const queue: string[] = []
@@ -97,23 +123,33 @@ function inProcess(s: Awaited<ReturnType<typeof session>>, withUi = true) {
   const end = () => {
     ended = true
     wake?.()
-    return done
+    return waitForSpawnWork("ask_user RPC exit", done)
   }
+  cleanup.push(async () => {
+    s.agent.abort()
+    s.tree.abortAll("test cleanup")
+    s.host.ui.cancelAll()
+    await end()
+  })
   return { out, until, call, end }
 }
 
-test("rpc without a UI client hides ask_user and tells the model to decide", async () => {
-  const s = await session([
-    (req) => ({ text: req.systemPrompt.includes("non-interactive") ? "done" : "bad" }),
-  ])
-  const rpc = inProcess(s, false)
-  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
-  await rpc.until((l) => l.type === "turn.end", "the turn's end")
-  expect(await rpc.end()).toBe(0)
-  const request = s.mock.requests[0]!
-  expect(request.tools.some((tool) => tool.name === "ask_user")).toBe(false)
-  expect(request.systemPrompt).toContain("Run mode: non-interactive")
-})
+test(
+  "rpc without a UI client hides ask_user and tells the model to decide",
+  async () => {
+    const s = await session([
+      (req) => ({ text: req.systemPrompt.includes("non-interactive") ? "done" : "bad" }),
+    ])
+    const rpc = inProcess(s, false)
+    await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+    await rpc.until((l) => l.type === "turn.end", "the turn's end")
+    expect(await rpc.end()).toBe(0)
+    const request = s.mock.requests[0]!
+    expect(request.tools.some((tool) => tool.name === "ask_user")).toBe(false)
+    expect(request.systemPrompt).toContain("Run mode: non-interactive")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 const toolResultText = (s: { agent: { messages: unknown[] } }, name = "ask_user") => {
   const m = s.agent.messages.find(
@@ -123,188 +159,212 @@ const toolResultText = (s: { agent: { messages: unknown[] } }, name = "ask_user"
   return m?.content[0]?.text
 }
 
-test("an rpc client gets ask_user as a ui.request of kind ask and answers with the selections", async () => {
-  const s = await session([
-    { toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
-    { text: "ok" },
-  ])
-  const rpc = inProcess(s)
-  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
-  const request = await rpc.until((l) => l.type === "ui.request", "the question")
-  expect(request.data).toMatchObject({ kind: "ask", title: "2 questions", questions: QUESTIONS })
-  const bad = await rpc.call({
-    id: 2,
-    cmd: "ui.respond",
-    requestId: request.data.requestId,
-    value: ["Patch"],
-  })
-  expect(bad).toMatchObject({ ok: false, error: { code: "invalid_params" } })
-  const value = [{ selected: ["Patch"] }, { selected: ["Tests"], other: "and a changelog" }]
-  expect(
-    await rpc.call({ id: 3, cmd: "ui.respond", requestId: request.data.requestId, value }),
-  ).toMatchObject({
-    ok: true,
-  })
-  await rpc.until((l) => l.type === "turn.end", "the turn's end")
-  expect(await rpc.end()).toBe(0)
-  expect(
-    rpc.out.flatMap((line) => {
-      if (line.type === "status.changed") return [`status ${line.data.status}`]
-      if (["ui.request", "ui.resolved", "tool.execute.start", "tool.execute.end"].includes(line.type))
-        return [line.type]
-      return []
-    }),
-  ).toEqual([
-    "status working",
-    "tool.execute.start",
-    "status blocked",
-    "ui.request",
-    "ui.resolved",
-    "status working",
-    "tool.execute.end",
-    "status idle",
-  ])
-  expect(toolResultText(s)).toBe(
-    [
-      "The user answered:",
-      "1. Which approach do you prefer?",
-      "   → Patch",
-      "2. What else should I do?",
-      '   → Tests, (own words) "and a changelog"',
-    ].join("\n"),
-  )
-})
+test(
+  "an rpc client gets ask_user as a ui.request of kind ask and answers with the selections",
+  async () => {
+    const s = await session([
+      { toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
+      { text: "ok" },
+    ])
+    const rpc = inProcess(s)
+    await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+    const request = await rpc.until((l) => l.type === "ui.request", "the question")
+    expect(request.data).toMatchObject({ kind: "ask", title: "2 questions", questions: QUESTIONS })
+    const bad = await rpc.call({
+      id: 2,
+      cmd: "ui.respond",
+      requestId: request.data.requestId,
+      value: ["Patch"],
+    })
+    expect(bad).toMatchObject({ ok: false, error: { code: "invalid_params" } })
+    const value = [{ selected: ["Patch"] }, { selected: ["Tests"], other: "and a changelog" }]
+    expect(
+      await rpc.call({ id: 3, cmd: "ui.respond", requestId: request.data.requestId, value }),
+    ).toMatchObject({
+      ok: true,
+    })
+    await rpc.until((l) => l.type === "turn.end", "the turn's end")
+    expect(await rpc.end()).toBe(0)
+    expect(
+      rpc.out.flatMap((line) => {
+        if (line.type === "status.changed") return [`status ${line.data.status}`]
+        if (["ui.request", "ui.resolved", "tool.execute.start", "tool.execute.end"].includes(line.type))
+          return [line.type]
+        return []
+      }),
+    ).toEqual([
+      "status working",
+      "tool.execute.start",
+      "status blocked",
+      "ui.request",
+      "ui.resolved",
+      "status working",
+      "tool.execute.end",
+      "status idle",
+    ])
+    expect(toolResultText(s)).toBe(
+      [
+        "The user answered:",
+        "1. Which approach do you prefer?",
+        "   → Patch",
+        "2. What else should I do?",
+        '   → Tests, (own words) "and a changelog"',
+      ].join("\n"),
+    )
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("approval and question UI events keep their order around tool execution", async () => {
-  const s = await session([
-    { toolCalls: [{ name: "ask_user", args: { questions: [QUESTIONS[0]] } }] },
-    { text: "ok" },
-  ])
-  s.agent.interceptors.add("tool.call.before", () => ({ action: "ask", reason: "test approval" }))
-  const rpc = inProcess(s)
-  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
-  const approval = await rpc.until(
-    (line) => line.type === "ui.request" && line.data.kind === "confirm",
-    "the approval",
-  )
-  await rpc.call({ id: 2, cmd: "ui.respond", requestId: approval.data.requestId, value: true })
-  const question = await rpc.until(
-    (line) => line.type === "ui.request" && line.data.kind === "ask",
-    "the question",
-  )
-  await rpc.call({
-    id: 3,
-    cmd: "ui.respond",
-    requestId: question.data.requestId,
-    value: [{ selected: ["Patch"] }],
-  })
-  await rpc.until((line) => line.type === "turn.end", "the turn's end")
-  expect(await rpc.end()).toBe(0)
-  expect(
-    rpc.out.flatMap((line) => {
-      if (line.type === "status.changed") return [`status ${line.data.status}`]
-      if (line.type === "ui.request") return [`ui.request ${line.data.kind}`]
-      if (["ui.resolved", "tool.execute.start", "tool.execute.end"].includes(line.type)) return [line.type]
-      return []
-    }),
-  ).toEqual([
-    "status working",
-    "status blocked",
-    "ui.request confirm",
-    "ui.resolved",
-    "status working",
-    "tool.execute.start",
-    "status blocked",
-    "ui.request ask",
-    "ui.resolved",
-    "status working",
-    "tool.execute.end",
-    "status idle",
-  ])
-})
+test(
+  "approval and question UI events keep their order around tool execution",
+  async () => {
+    const s = await session([
+      { toolCalls: [{ name: "ask_user", args: { questions: [QUESTIONS[0]] } }] },
+      { text: "ok" },
+    ])
+    s.agent.interceptors.add("tool.call.before", () => ({ action: "ask", reason: "test approval" }))
+    const rpc = inProcess(s)
+    await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+    const approval = await rpc.until(
+      (line) => line.type === "ui.request" && line.data.kind === "confirm",
+      "the approval",
+    )
+    await rpc.call({ id: 2, cmd: "ui.respond", requestId: approval.data.requestId, value: true })
+    const question = await rpc.until(
+      (line) => line.type === "ui.request" && line.data.kind === "ask",
+      "the question",
+    )
+    await rpc.call({
+      id: 3,
+      cmd: "ui.respond",
+      requestId: question.data.requestId,
+      value: [{ selected: ["Patch"] }],
+    })
+    await rpc.until((line) => line.type === "turn.end", "the turn's end")
+    expect(await rpc.end()).toBe(0)
+    expect(
+      rpc.out.flatMap((line) => {
+        if (line.type === "status.changed") return [`status ${line.data.status}`]
+        if (line.type === "ui.request") return [`ui.request ${line.data.kind}`]
+        if (["ui.resolved", "tool.execute.start", "tool.execute.end"].includes(line.type)) return [line.type]
+        return []
+      }),
+    ).toEqual([
+      "status working",
+      "status blocked",
+      "ui.request confirm",
+      "ui.resolved",
+      "status working",
+      "tool.execute.start",
+      "status blocked",
+      "ui.request ask",
+      "ui.resolved",
+      "status working",
+      "tool.execute.end",
+      "status idle",
+    ])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("an rpc client that cancels leaves the model a declined answer", async () => {
-  const s = await session([
-    { toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
-    { text: "ok" },
-  ])
-  const rpc = inProcess(s)
-  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
-  const request = await rpc.until((l) => l.type === "ui.request", "the question")
-  await rpc.call({ id: 2, cmd: "ui.respond", requestId: request.data.requestId, value: null })
-  await rpc.until((l) => l.type === "turn.end", "the turn's end")
-  expect(await rpc.end()).toBe(0)
-  expect(toolResultText(s)).toStartWith("The user declined to answer.")
-})
+test(
+  "an rpc client that cancels leaves the model a declined answer",
+  async () => {
+    const s = await session([
+      { toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
+      { text: "ok" },
+    ])
+    const rpc = inProcess(s)
+    await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+    const request = await rpc.until((l) => l.type === "ui.request", "the question")
+    await rpc.call({ id: 2, cmd: "ui.respond", requestId: request.data.requestId, value: null })
+    await rpc.until((l) => l.type === "turn.end", "the turn's end")
+    expect(await rpc.end()).toBe(0)
+    expect(toolResultText(s)).toStartWith("The user declined to answer.")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("in print mode ask_user is not offered", async () => {
-  const s = await session([
-    { toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
-    { text: "ok" },
-  ])
-  const errors: string[] = []
-  const io: PrintIO = { stdout: () => {}, stderr: (t) => void errors.push(t) }
-  expect(await runPrint(s.agent, "go", false, { io, ui: s.host.ui })).toBe(0)
-  expect(toolResultText(s)).toStartWith('Unknown tool "ask_user".')
-  expect(errors.join("")).not.toContain("cancelled")
-})
+test(
+  "in print mode ask_user is not offered",
+  async () => {
+    const s = await session([
+      { toolCalls: [{ name: "ask_user", args: { questions: QUESTIONS } }] },
+      { text: "ok" },
+    ])
+    const errors: string[] = []
+    const io: PrintIO = { stdout: () => {}, stderr: (t) => void errors.push(t) }
+    expect(await runPrint(s.agent, "go", false, { io, ui: s.host.ui })).toBe(0)
+    expect(toolResultText(s)).toStartWith('Unknown tool "ask_user".')
+    expect(errors.join("")).not.toContain("cancelled")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a sub-agent's question goes to its commander, which passes it on to the rpc client", async () => {
-  const text = (req: ModelRequest, i: number) => {
-    const c = req.messages.at(i)?.content[0]
-    return c?.type === "text" ? c.text : ""
-  }
-  const route = (req: ModelRequest) => {
-    const last = req.messages.at(-1)
-    if (text(req, -1).includes("asks you this question")) return { text: "ASK_USER" }
-    if (text(req, 0) === "child task") {
-      if (last?.role === "toolResult") return { text: "child done" }
-      return { toolCalls: [{ name: "ask_user", args: { questions: [QUESTIONS[0]] } }] }
+test(
+  "a sub-agent's question goes to its commander, which passes it on to the rpc client",
+  async () => {
+    const text = (req: ModelRequest, i: number) => {
+      const c = req.messages.at(i)?.content[0]
+      return c?.type === "text" ? c.text : ""
     }
-    if (text(req, -1) === "go") {
-      return {
-        toolCalls: [
-          { name: "agent", args: { tasks: [{ title: "Pick an approach", prompt: "child task" }] } },
-        ],
+    const route = (req: ModelRequest) => {
+      const last = req.messages.at(-1)
+      if (text(req, -1).includes("asks you this question")) return { text: "ASK_USER" }
+      if (text(req, 0) === "child task") {
+        if (last?.role === "toolResult") return { text: "child done" }
+        return { toolCalls: [{ name: "ask_user", args: { questions: [QUESTIONS[0]] } }] }
       }
+      if (text(req, -1) === "go") {
+        return {
+          toolCalls: [
+            { name: "agent", args: { tasks: [{ title: "Pick an approach", prompt: "child task" }] } },
+          ],
+        }
+      }
+      return { text: "main done" }
     }
-    return { text: "main done" }
-  }
-  const s = await session(
-    Array.from({ length: 10 }, () => route),
-    [builtinTools, agentExtension],
-  )
-  const rpc = inProcess(s)
-  await rpc.call({ id: 1, cmd: "prompt", text: "go" })
-  const request = await rpc.until((l) => l.type === "ui.request", "the question")
-  // It reaches the user marked as a sub-agent's.
-  expect(request.data).toMatchObject({
-    kind: "ask",
-    source: "sub-agent",
-    title: "Which approach do you prefer?",
-  })
-  await rpc.call({
-    id: 2,
-    cmd: "ui.respond",
-    requestId: request.data.requestId,
-    value: [{ selected: ["Patch"] }],
-  })
-  const end = await rpc.until(
-    (l) => l.type === "tool.execute.end" && l.data.name === "ask_user",
-    "the sub-agent's ask_user result",
-  )
-  await rpc.until((l) => l.type === "subagent.end", "the sub-agent's end")
-  expect(await rpc.end()).toBe(0)
-  const start = rpc.out.find((l) => l.type === "subagent.start")
-  expect(end.sessionId).toBe(start?.data.childSessionId)
-  expect(end.data.result.content[0].text).toBe(
-    "The user answered:\n1. Which approach do you prefer?\n   → Patch",
-  )
-})
+    const s = await session(
+      Array.from({ length: 10 }, () => route),
+      [builtinTools, agentExtension],
+    )
+    const rpc = inProcess(s)
+    await rpc.call({ id: 1, cmd: "prompt", text: "go" })
+    const request = await rpc.until((l) => l.type === "ui.request", "the question")
+    // It reaches the user marked as a sub-agent's.
+    expect(request.data).toMatchObject({
+      kind: "ask",
+      source: "sub-agent",
+      title: "Which approach do you prefer?",
+    })
+    await rpc.call({
+      id: 2,
+      cmd: "ui.respond",
+      requestId: request.data.requestId,
+      value: [{ selected: ["Patch"] }],
+    })
+    const end = await rpc.until(
+      (l) => l.type === "tool.execute.end" && l.data.name === "ask_user",
+      "the sub-agent's ask_user result",
+    )
+    await rpc.until((l) => l.type === "subagent.end", "the sub-agent's end")
+    expect(await rpc.end()).toBe(0)
+    const start = rpc.out.find((l) => l.type === "subagent.start")
+    expect(end.sessionId).toBe(start?.data.childSessionId)
+    expect(end.data.result.content[0].text).toBe(
+      "The user answered:\n1. Which approach do you prefer?\n   → Patch",
+    )
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("the rpc schema describes ask requests and their answers", () => {
-  const schema = JSON.stringify(rpcSchema())
-  expect(schema).toContain('"ask"')
-  expect(schema).toContain("AskAnswer")
-  expect(schema).toContain("AskQuestion")
-})
+test(
+  "the rpc schema describes ask requests and their answers",
+  () => {
+    const schema = JSON.stringify(rpcSchema())
+    expect(schema).toContain('"ask"')
+    expect(schema).toContain("AskAnswer")
+    expect(schema).toContain("AskQuestion")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

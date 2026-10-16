@@ -1,14 +1,18 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { symlinkSync } from "node:fs"
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
+import { resetCommandWorker } from "@amira/proc"
+import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit } from "../../../scripts/spawn-test.ts"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { gitInfo, trackWorkspace } from "../src/git.ts"
 import { workspaceFor } from "../src/workspace.ts"
+
+afterEach(() => resetCommandWorker(), SPAWN_TEST_TIMEOUT_MS)
 
 test("Agent.start cannot be tricked into overriding cwd and carries no turn id", async () => {
   const ai = createAi({
@@ -29,38 +33,54 @@ test("Agent.start cannot be tricked into overriding cwd and carries no turn id",
   expect(ev.sessionId).toBe(agent.sessionId)
 })
 
+async function init(cwd: string) {
+  const child = Bun.spawn(["git", "init", "-q", "-b", "main"], { cwd, stdout: "ignore", stderr: "inherit" })
+  try {
+    expect(await waitForSpawnExit(child, "git fixture init")).toBe(0)
+  } finally {
+    await stopSpawn(child, "git fixture init cleanup")
+  }
+}
+
 // Four probes launch fourteen real Git commands plus init. Their Windows startup
 // waits compound under parallel load; the individual command deadlines stay unchanged.
-test("deprecated gitInfo still probes git standalone, without any provider", async () => {
-  const d = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-"))
-  try {
-    expect(await gitInfo(d)).toEqual({})
-    const sh = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: d })
-    sh("init", "-q", "-b", "main")
-    const info = await gitInfo(d, 15_000, { dirty: true })
-    expect(info).toMatchObject({ branch: "main", isWorktree: false, dirty: false })
-    expect(info.repoRoot && path.resolve(info.repoRoot)).toBe(await realpath(d))
-    await writeFile(path.join(d, "a.txt"), "x")
-    expect((await gitInfo(d, 15_000, { dirty: true })).dirty).toBe(true)
-    expect((await gitInfo(d)).dirty).toBeUndefined()
-  } finally {
-    await rm(d, { recursive: true, force: true })
-  }
-}, 60_000)
+test(
+  "deprecated gitInfo still probes git standalone, without any provider",
+  async () => {
+    const d = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-"))
+    try {
+      expect(await gitInfo(d)).toEqual({})
+      await init(d)
+      const info = await gitInfo(d, 15_000, { dirty: true })
+      expect(info).toMatchObject({ branch: "main", isWorktree: false, dirty: false })
+      expect(info.repoRoot && path.resolve(info.repoRoot)).toBe(await realpath(d))
+      await writeFile(path.join(d, "a.txt"), "x")
+      expect((await gitInfo(d, 15_000, { dirty: true })).dirty).toBe(true)
+      expect((await gitInfo(d)).dirty).toBeUndefined()
+    } finally {
+      await rm(d, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("deprecated gitInfo detects a plain repository through a directory link", async () => {
-  const d = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-link-"))
-  const linkDir = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-alias-"))
-  try {
-    expect(Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: d }).exitCode).toBe(0)
-    const link = path.join(linkDir, "repo")
-    symlinkSync(d, link, process.platform === "win32" ? "junction" : "dir")
-    expect(await gitInfo(link)).toMatchObject({ branch: "main", isWorktree: false })
-  } finally {
-    await rm(linkDir, { recursive: true, force: true })
-    await rm(d, { recursive: true, force: true })
-  }
-}, 60_000)
+test(
+  "deprecated gitInfo detects a plain repository through a directory link",
+  async () => {
+    const d = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-link-"))
+    const linkDir = await mkdtemp(path.join(tmpdir(), "amira-gitinfo-alias-"))
+    try {
+      await init(d)
+      const link = path.join(linkDir, "repo")
+      symlinkSync(d, link, process.platform === "win32" ? "junction" : "dir")
+      expect(await gitInfo(link)).toMatchObject({ branch: "main", isWorktree: false })
+    } finally {
+      await rm(linkDir, { recursive: true, force: true })
+      await rm(d, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("deprecated trackWorkspace starts the bus's host tracker, which emits from its provider", async () => {
   const bus = new EventBus()

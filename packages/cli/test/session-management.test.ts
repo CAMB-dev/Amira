@@ -7,6 +7,13 @@ import { defineExtension, type Extension, type ExtensionAPI, type Settings } fro
 import { Agent, projectKey, SessionStore, sessionLockFile, validateSettings } from "@amira/core"
 import autoTitleExtension from "../../../extensions/auto-title/src/index.ts"
 import commandsExtension, { costReport } from "../../../extensions/commands/src/index.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 import { createCommandHost } from "../src/control.ts"
 import { formatSessionList } from "../src/resume.ts"
 import { createSession } from "../src/session.ts"
@@ -352,60 +359,76 @@ test("rename and fork commands update session info and preserve the source; fork
   expect((await host.run("/fork", { frontend: "tui" })).ok).toBe(true)
 })
 
-test("clear, resume and fork hand over top-level background jobs", async () => {
-  const { host, session, store } = await setup([])
-  const old = session.agent
-  const ended: string[] = []
-  old.bus.subscribe((event) => {
-    if (event.type === "session.end") ended.push(event.data.reason)
-  })
-  store.appendMessage(userMessage("original session"))
-  const job = session.agent.backgroundJobs!.start({
-    command: "long-running test job",
-    argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
-    cwd: store.header.cwd,
-  })
-  try {
-    await host.control.newSession()
-    await old.bus.flush()
-    expect(ended).toEqual(["switch"])
-    expect(old.backgroundJobs!.get(job.id)).toBeUndefined()
-    expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+test(
+  "clear, resume and fork hand over top-level background jobs",
+  async () => {
+    const { host, session, store } = await setup([])
+    const old = session.agent
+    const ended: string[] = []
+    old.bus.subscribe((event) => {
+      if (event.type === "session.end") ended.push(event.data.reason)
+    })
+    store.appendMessage(userMessage("original session"))
+    const job = session.agent.backgroundJobs!.start({
+      command: "long-running test job",
+      argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+      cwd: store.header.cwd,
+    })
+    try {
+      await host.control.newSession()
+      await old.bus.flush()
+      expect(ended).toEqual(["switch"])
+      expect(old.backgroundJobs!.get(job.id)).toBeUndefined()
+      expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
 
-    await host.control.resume(store.id)
-    expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+      await host.control.resume(store.id)
+      expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
 
-    await host.control.fork!()
-    expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
-  } finally {
-    await session.host.backgroundJobs.stop(job.id, 0)
-  }
-})
+      await host.control.fork!()
+      expect(host.agent.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+    } finally {
+      await session.host.backgroundJobs.stop(job.id, 0)
+      await waitForSpawnCondition(
+        "management job cleanup",
+        () => !["starting", "running"].includes(session.host.backgroundJobs.get(job.id)?.status ?? ""),
+      )
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("resuming a session another process holds leaves the current session and its jobs intact", async () => {
-  const { host, session, store } = await setup([])
-  const busy = SessionStore.create({ cwd: store.header.cwd, dir: path.dirname(store.file) })
-  busy.appendMessage(userMessage("held elsewhere"))
-  writeFileSync(
-    sessionLockFile(busy.file),
-    `${process.ppid}
+test(
+  "resuming a session another process holds leaves the current session and its jobs intact",
+  async () => {
+    const { host, session, store } = await setup([])
+    const busy = SessionStore.create({ cwd: store.header.cwd, dir: path.dirname(store.file) })
+    busy.appendMessage(userMessage("held elsewhere"))
+    writeFileSync(
+      sessionLockFile(busy.file),
+      `${process.ppid}
 `,
-  )
-  const current = host.agent
-  const job = current.backgroundJobs!.start({
-    command: "long-running test job",
-    argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
-    cwd: store.header.cwd,
-  })
-  try {
-    await expect(host.control.resume(busy.id)).rejects.toThrow()
-    expect(host.agent).toBe(current)
-    expect(current.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
-  } finally {
-    rmSync(sessionLockFile(busy.file), { force: true })
-    await session.host.backgroundJobs.stop(job.id, 0)
-  }
-})
+    )
+    const current = host.agent
+    const job = current.backgroundJobs!.start({
+      command: "long-running test job",
+      argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+      cwd: store.header.cwd,
+    })
+    try {
+      await expect(host.control.resume(busy.id)).rejects.toThrow()
+      expect(host.agent).toBe(current)
+      expect(current.backgroundJobs!.get(job.id)).toMatchObject({ status: expect.any(String) })
+    } finally {
+      rmSync(sessionLockFile(busy.file), { force: true })
+      await session.host.backgroundJobs.stop(job.id, 0)
+      await waitForSpawnCondition(
+        "management job cleanup",
+        () => !["starting", "running"].includes(session.host.backgroundJobs.get(job.id)?.status ?? ""),
+      )
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("switch disposes the old agent tree before the replacement is active", async () => {
   const { host, session, store } = await setup([{ text: "child answer" }])
@@ -441,29 +464,41 @@ test("sessions.autoTitle is accepted at project scope and rejects non-booleans",
   expect(() => validateSettings({ sessions: { autoTitle: "false" } }, "project")).toThrow()
 })
 
-test("amira sessions rm deletes stored sessions without loading models or keys", async () => {
-  const home = mkdtempSync(path.join(tmpdir(), "amira-sessions-rm-"))
-  const cwd = path.join(home, "project")
-  const store = SessionStore.create({ cwd, dir: path.join(home, "sessions", projectKey(cwd)) })
-  store.appendMessage(userMessage("delete me"))
-  const child = Bun.spawn(
-    [process.execPath, path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
-    {
-      env: { ...process.env, AMIRA_HOME: home },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  )
-  const [code, output, error] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ])
-  expect(code).toBe(0)
-  expect(error).toBe("")
-  expect(output).toContain(`Deleted session ${store.id}`)
-  expect(existsSync(store.file)).toBe(false)
-})
+test(
+  "amira sessions rm deletes stored sessions without loading models or keys",
+  async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "amira-sessions-rm-"))
+    const cwd = path.join(home, "project")
+    const store = SessionStore.create({ cwd, dir: path.join(home, "sessions", projectKey(cwd)) })
+    store.appendMessage(userMessage("delete me"))
+    const child = Bun.spawn(
+      [process.execPath, path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
+      {
+        env: { ...process.env, AMIRA_HOME: home },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    try {
+      const [code, output, error] = await waitForSpawnWork(
+        "child output",
+        Promise.all([
+          waitForSpawnExit(child, "sessions rm"),
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]),
+      )
+      expect(code).toBe(0)
+      expect(error).toBe("")
+      expect(output).toContain(`Deleted session ${store.id}`)
+      expect(existsSync(store.file)).toBe(false)
+    } finally {
+      await stopSpawn(child, "sessions rm cleanup")
+      rmSync(home, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("switching sessions gives up the lease on the one left behind", async () => {
   const { store, host } = await setup([])
@@ -475,31 +510,51 @@ test("switching sessions gives up the lease on the one left behind", async () =>
 
 // The CLI probes the real foreign PID: the first Windows process.kill(pid, 0) alone
 // takes about 4 s here, before contention and CLI startup. Keep this an OS integration test.
-test("amira sessions rm refuses a session leased by another process", async () => {
-  const home = mkdtempSync(path.join(tmpdir(), "amira-sessions-rm-live-"))
-  const cwd = path.join(home, "project")
-  const store = SessionStore.create({ cwd, dir: path.join(home, "sessions", projectKey(cwd)) })
-  store.appendMessage(userMessage("keep me"))
-  store.claim()
-  try {
-    const child = Bun.spawn(
-      [process.execPath, path.join(import.meta.dir, "../src/main.ts"), "sessions", "rm", store.id, "-C", cwd],
-      {
-        env: { ...process.env, AMIRA_HOME: home },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    )
-    const [code, output, error] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ])
-    expect(code).not.toBe(0)
-    expect(output).toBe("")
-    expect(error).toContain("open in another Amira process")
-    expect(existsSync(store.file)).toBe(true)
-  } finally {
-    store.release()
-  }
-}, 15_000)
+test(
+  "amira sessions rm refuses a session leased by another process",
+  async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "amira-sessions-rm-live-"))
+    const cwd = path.join(home, "project")
+    const store = SessionStore.create({ cwd, dir: path.join(home, "sessions", projectKey(cwd)) })
+    store.appendMessage(userMessage("keep me"))
+    store.claim()
+    try {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          path.join(import.meta.dir, "../src/main.ts"),
+          "sessions",
+          "rm",
+          store.id,
+          "-C",
+          cwd,
+        ],
+        {
+          env: { ...process.env, AMIRA_HOME: home },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      )
+      try {
+        const [code, output, error] = await waitForSpawnWork(
+          "child output",
+          Promise.all([
+            waitForSpawnExit(child, "leased sessions rm"),
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+          ]),
+        )
+        expect(code).not.toBe(0)
+        expect(output).toBe("")
+        expect(error).toContain("open in another Amira process")
+        expect(existsSync(store.file)).toBe(true)
+      } finally {
+        await stopSpawn(child, "leased sessions rm cleanup")
+      }
+    } finally {
+      store.release()
+      rmSync(home, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

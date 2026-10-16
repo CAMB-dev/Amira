@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, setDefaultTimeout, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, test } from "bun:test"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
@@ -7,14 +7,12 @@ import { createAi, createMockDialect, isNoModel, type MockStep, type ProviderCon
 import type { ExtensionAPI } from "@amira/api"
 import { Agent, loadSettings, resolveShimmer } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, SPAWN_WAIT_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { parseCliArgs } from "../src/args.ts"
 import { resolveConfig } from "../src/config.ts"
 import { createCommandHost } from "../src/control.ts"
 import { rememberingControl } from "../src/remember-choice.ts"
 import { createSession, type Session } from "../src/session.ts"
-
-// Each case spawns real git probes (3s timeout each); a loaded machine can exceed the 5s default.
-setDefaultTimeout(30_000)
 
 let root: string
 let home: string
@@ -45,7 +43,7 @@ afterEach(async () => {
   if (savedHome === undefined) delete process.env.AMIRA_HOME
   else process.env.AMIRA_HOME = savedHome
   rmSync(root, { recursive: true, force: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 async function start(
   flags: string[] = [],
@@ -96,98 +94,110 @@ async function start(
   return { session, commands, config, mock }
 }
 
-test("interactive commands save both choices on each change, and the last change wins", async () => {
-  const { commands } = await start()
-  expect((await commands.run("/second", { frontend: "tui" })).ok).toBe(true)
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()]) {
-    expect(json(file)).toEqual({ model: "mock/second", thinking: "default" })
-  }
-  expect((await commands.run("/thinking high", { frontend: "tui" })).ok).toBe(true)
-  await commands.flushChoices()
-  expect(json(localFile()).thinking).toBe("high")
-  commands.control.setThinking("max")
-  commands.control.setModel("mock/first")
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()]) {
-    expect(json(file)).toEqual({ model: "mock/first", thinking: "max" })
-  }
-})
+test(
+  "interactive commands save both choices on each change, and the last change wins",
+  async () => {
+    const { commands } = await start()
+    expect((await commands.run("/second", { frontend: "tui" })).ok).toBe(true)
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) {
+      expect(json(file)).toEqual({ model: "mock/second", thinking: "default" })
+    }
+    expect((await commands.run("/thinking high", { frontend: "tui" })).ok).toBe(true)
+    await commands.flushChoices()
+    expect(json(localFile()).thinking).toBe("high")
+    commands.control.setThinking("max")
+    commands.control.setModel("mock/first")
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) {
+      expect(json(file)).toEqual({ model: "mock/first", thinking: "max" })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("fast commands remember the preference even when unavailable, and reload it", async () => {
-  const { commands, session } = await start()
-  expect(commands.control.info().fastMode).toEqual({ requested: false, applied: false })
-  expect((await commands.run("/fast on", { frontend: "tui" })).ok).toBe(true)
-  expect(session.agent.fastMode).toBe(true)
-  expect(commands.control.info().fastMode).toEqual({ requested: true, applied: false })
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(true)
-  expect((await commands.run("/fast status", { frontend: "tui" })).ok).toBe(true)
-  const reloaded = await start()
-  expect(reloaded.session.agent.fastMode).toBe(true)
-  await commands.control.newSession()
-  expect(commands.control.info().fastMode?.requested).toBe(true)
-  expect((await commands.run("/fast", { frontend: "tui" })).ok).toBe(true)
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(false)
-  expect((await commands.run("/fast off", { frontend: "tui" })).ok).toBe(true)
-  await commands.flushChoices()
-  expect((await start()).session.agent.fastMode).toBe(false)
-})
+test(
+  "fast commands remember the preference even when unavailable, and reload it",
+  async () => {
+    const { commands, session } = await start()
+    expect(commands.control.info().fastMode).toEqual({ requested: false, applied: false })
+    expect((await commands.run("/fast on", { frontend: "tui" })).ok).toBe(true)
+    expect(session.agent.fastMode).toBe(true)
+    expect(commands.control.info().fastMode).toEqual({ requested: true, applied: false })
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(true)
+    expect((await commands.run("/fast status", { frontend: "tui" })).ok).toBe(true)
+    const reloaded = await start()
+    expect(reloaded.session.agent.fastMode).toBe(true)
+    await commands.control.newSession()
+    expect(commands.control.info().fastMode?.requested).toBe(true)
+    expect((await commands.run("/fast", { frontend: "tui" })).ok).toBe(true)
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(false)
+    expect((await commands.run("/fast off", { frontend: "tui" })).ok).toBe(true)
+    await commands.flushChoices()
+    expect((await start()).session.agent.fastMode).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("fast applies immediately on supported models and status reports the last response", async () => {
-  const mock = createMockDialect([
-    { text: "fast reply", usage: { speed: "fast" } },
-    { text: "plain reply", usage: { speed: "standard" } },
-    { text: "fast again" },
-  ])
-  mock.id = "anthropic-messages"
-  const ai = createAi({
-    dialects: [mock],
-    providers: [
-      {
-        id: "claude",
-        dialect: mock.id,
-        baseUrl: "https://api.anthropic.com",
-        models: [
-          {
-            id: "claude-opus-5",
-            fast: { kind: "anthropic-speed" },
-            cost: { input: 5, output: 25, fast: { input: 10, output: 50 } },
-          },
-          { id: "claude-opus-4-7" },
-        ],
-      },
-    ],
-  })
-  const session = await createSession({
-    ai,
-    model: "claude/claude-opus-5",
-    cwd,
-    settings: { fastMode: true },
-    extensions: [],
-    noBuiltins: false,
-    builtins: async () => [{ source: "builtin:commands", extension: commandsExtension }],
-  })
-  sessions.push(session)
-  const commands = createCommandHost({ session, cwd, home, interactive: true })
-  hosts.push(commands)
-  await session.agent.prompt("one")
-  expect(mock.requests[0]?.fastMode).toBe(true)
-  expect(commands.control.info().fastMode).toEqual({ requested: true, applied: true, used: "fast" })
-  commands.control.setModel("claude/claude-opus-4-7")
-  await session.agent.prompt("two")
-  expect(mock.requests[1]).not.toHaveProperty("fastMode")
-  expect(commands.control.info().fastMode).toEqual({ requested: true, applied: false, used: "standard" })
-  commands.control.setModel("claude/claude-opus-5")
-  await session.agent.prompt("three")
-  expect(mock.requests[2]?.fastMode).toBe(true)
-  expect(commands.control.info().fastMode).toEqual({
-    requested: true,
-    applied: true,
-    pricingUnknown: true,
-  })
-})
+test(
+  "fast applies immediately on supported models and status reports the last response",
+  async () => {
+    const mock = createMockDialect([
+      { text: "fast reply", usage: { speed: "fast" } },
+      { text: "plain reply", usage: { speed: "standard" } },
+      { text: "fast again" },
+    ])
+    mock.id = "anthropic-messages"
+    const ai = createAi({
+      dialects: [mock],
+      providers: [
+        {
+          id: "claude",
+          dialect: mock.id,
+          baseUrl: "https://api.anthropic.com",
+          models: [
+            {
+              id: "claude-opus-5",
+              fast: { kind: "anthropic-speed" },
+              cost: { input: 5, output: 25, fast: { input: 10, output: 50 } },
+            },
+            { id: "claude-opus-4-7" },
+          ],
+        },
+      ],
+    })
+    const session = await createSession({
+      ai,
+      model: "claude/claude-opus-5",
+      cwd,
+      settings: { fastMode: true },
+      extensions: [],
+      noBuiltins: false,
+      builtins: async () => [{ source: "builtin:commands", extension: commandsExtension }],
+    })
+    sessions.push(session)
+    const commands = createCommandHost({ session, cwd, home, interactive: true })
+    hosts.push(commands)
+    await session.agent.prompt("one")
+    expect(mock.requests[0]?.fastMode).toBe(true)
+    expect(commands.control.info().fastMode).toEqual({ requested: true, applied: true, used: "fast" })
+    commands.control.setModel("claude/claude-opus-4-7")
+    await session.agent.prompt("two")
+    expect(mock.requests[1]).not.toHaveProperty("fastMode")
+    expect(commands.control.info().fastMode).toEqual({ requested: true, applied: false, used: "standard" })
+    commands.control.setModel("claude/claude-opus-5")
+    await session.agent.prompt("three")
+    expect(mock.requests[2]?.fastMode).toBe(true)
+    expect(commands.control.info().fastMode).toEqual({
+      requested: true,
+      applied: true,
+      pricingUnknown: true,
+    })
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.each(["openai-chat", "openai-responses"])(
   "%s fast commands persist a provider-neutral preference and report actual service tiers",
@@ -262,6 +272,7 @@ test.each(["openai-chat", "openai-responses"])(
     for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(false)
     expect((await start([], cwd, provider)).session.agent.fastMode).toBe(false)
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.each(["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1", "https://api.kimi.com/coding/v1"])(
@@ -294,6 +305,7 @@ test.each(["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1", "https://
     await commands.flushChoices()
     for (const file of [globalFile(), localFile()]) expect(json(file).fastMode).toBe(true)
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test("non-interactive fast commands do not write settings", async () => {
@@ -305,55 +317,63 @@ test("non-interactive fast commands do not write settings", async () => {
   expect(existsSync(localFile())).toBe(false)
 })
 
-test("theme choices preserve nested settings and share the ordered choice writer", async () => {
-  const original =
-    '{\n  "tui": { "theme": "amira", "colorDepth": "256", "themeVariant": "light" },\n  "model": "mock/first"\n}\n'
-  for (const file of [globalFile(), localFile()]) writeFileSync(file, original)
-  const { commands } = await start()
-  commands.rememberTheme("amber", "dark")
-  commands.rememberTheme("lavender", "auto")
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()]) {
-    expect(readFileSync(file, "utf8")).toBe(
-      original.replace('"amira"', '"lavender"').replace('"light"', '"auto"'),
-    )
-  }
-})
+test(
+  "theme choices preserve nested settings and share the ordered choice writer",
+  async () => {
+    const original =
+      '{\n  "tui": { "theme": "amira", "colorDepth": "256", "themeVariant": "light" },\n  "model": "mock/first"\n}\n'
+    for (const file of [globalFile(), localFile()]) writeFileSync(file, original)
+    const { commands } = await start()
+    commands.rememberTheme("amber", "dark")
+    commands.rememberTheme("lavender", "auto")
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) {
+      expect(readFileSync(file, "utf8")).toBe(
+        original.replace('"amira"', '"lavender"').replace('"light"', '"auto"'),
+      )
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("shimmer writeback preserves unrelated nested settings and omitted overrides", async () => {
-  const tui = { theme: "amira", themeVariant: "light", colorDepth: "256", bell: true, shimmer: "wave" }
-  for (const file of [globalFile(), localFile()])
-    writeFileSync(file, `${JSON.stringify({ tui, model: "mock/first", thinking: "high" }, null, 2)}\n`)
-  const { commands } = await start()
-  commands.rememberTheme("amber", "dark")
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()])
-    expect(json(file)).toEqual({
-      tui: { ...tui, theme: "amber", themeVariant: "dark" },
-      model: "mock/first",
-      thinking: "high",
-    })
+test(
+  "shimmer writeback preserves unrelated nested settings and omitted overrides",
+  async () => {
+    const tui = { theme: "amira", themeVariant: "light", colorDepth: "256", bell: true, shimmer: "wave" }
+    for (const file of [globalFile(), localFile()])
+      writeFileSync(file, `${JSON.stringify({ tui, model: "mock/first", thinking: "high" }, null, 2)}\n`)
+    const { commands } = await start()
+    commands.rememberTheme("amber", "dark")
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()])
+      expect(json(file)).toEqual({
+        tui: { ...tui, theme: "amber", themeVariant: "dark" },
+        model: "mock/first",
+        thinking: "high",
+      })
 
-  const shimmer = {
-    style: "bounce",
-    width: 9,
-    period: 2200,
-    edge: "linear",
-    direction: "rtl",
-    colors: { dark: ["#110000", "#220000"], light: ["#001100", "#002200"] },
-  } as const
-  commands.rememberTheme("lavender", "auto", shimmer)
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()])
-    expect(json(file)).toEqual({
-      tui: { ...tui, theme: "lavender", themeVariant: "auto", shimmer },
-      model: "mock/first",
-      thinking: "high",
-    })
-  commands.rememberTheme("burnt", "light")
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()]) expect(json(file).tui.shimmer).toEqual(shimmer)
-})
+    const shimmer = {
+      style: "bounce",
+      width: 9,
+      period: 2200,
+      edge: "linear",
+      direction: "rtl",
+      colors: { dark: ["#110000", "#220000"], light: ["#001100", "#002200"] },
+    } as const
+    commands.rememberTheme("lavender", "auto", shimmer)
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()])
+      expect(json(file)).toEqual({
+        tui: { ...tui, theme: "lavender", themeVariant: "auto", shimmer },
+        model: "mock/first",
+        thinking: "high",
+      })
+    commands.rememberTheme("burnt", "light")
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) expect(json(file).tui.shimmer).toEqual(shimmer)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.each([undefined, {}] as const)(
   "explicit %s removes shimmer without changing other tui fields",
@@ -372,6 +392,7 @@ test.each([undefined, {}] as const)(
         keep: true,
       })
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.each(["soft", { preset: "soft" }, { preset: "sweep" }] as const)(
@@ -391,32 +412,41 @@ test.each(["soft", { preset: "soft" }, { preset: "sweep" }] as const)(
             : { preset: "soft", style: "sweep", width: 6, period: 1800, edge: "soft", direction: "ltr" },
       })
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test("customized shimmer preset survives an actual three-layer settings reload", async () => {
-  const projectFile = path.join(cwd, ".amira", "settings.json")
-  const project = {
-    tui: { shimmer: { style: "pulse", period: 4000, width: 12, edge: "hard", direction: "rtl" } },
-  }
-  writeFileSync(projectFile, JSON.stringify(project))
-  const { commands } = await start()
-  commands.rememberTheme("amira", "dark", { preset: "off", width: 7 })
-  await commands.flushChoices()
+test(
+  "customized shimmer preset survives an actual three-layer settings reload",
+  async () => {
+    const projectFile = path.join(cwd, ".amira", "settings.json")
+    const project = {
+      tui: { shimmer: { style: "pulse", period: 4000, width: 12, edge: "hard", direction: "rtl" } },
+    }
+    writeFileSync(projectFile, JSON.stringify(project))
+    const { commands } = await start()
+    commands.rememberTheme("amira", "dark", { preset: "off", width: 7 })
+    await commands.flushChoices()
 
-  const reloaded = loadSettings({ cwd, home })
-  expect(reloaded.files).toEqual([globalFile(), projectFile, localFile()])
-  const knobs = { style: "off", width: 7, period: 1800, edge: "soft", direction: "ltr" } satisfies ReturnType<
-    typeof resolveShimmer
-  >
-  expect(resolveShimmer("wave", reloaded.settings.tui?.shimmer)).toEqual(knobs)
-  for (const file of [globalFile(), localFile()])
-    expect(json(file).tui).toEqual({
-      theme: "amira",
-      themeVariant: "dark",
-      shimmer: { preset: "off", ...knobs },
-    })
-  expect(json(projectFile)).toEqual(project)
-})
+    const reloaded = loadSettings({ cwd, home })
+    expect(reloaded.files).toEqual([globalFile(), projectFile, localFile()])
+    const knobs = {
+      style: "off",
+      width: 7,
+      period: 1800,
+      edge: "soft",
+      direction: "ltr",
+    } satisfies ReturnType<typeof resolveShimmer>
+    expect(resolveShimmer("wave", reloaded.settings.tui?.shimmer)).toEqual(knobs)
+    for (const file of [globalFile(), localFile()])
+      expect(json(file).tui).toEqual({
+        theme: "amira",
+        themeVariant: "dark",
+        shimmer: { preset: "off", ...knobs },
+      })
+    expect(json(projectFile)).toEqual(project)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("shimmer choices remain ordered across a delayed project eligibility probe", async () => {
   const { commands } = await start(["--rpc"])
@@ -455,77 +485,93 @@ test.each(["-p", "--rpc"])("%s never saves a theme choice", async (mode) => {
   expect(existsSync(localFile())).toBe(false)
 })
 
-test.each([false, true])("theme project write requires git ignore (ignored=%s)", async (ignored) => {
-  execFileSync("git", ["init", "--quiet", cwd])
-  if (ignored) writeFileSync(path.join(cwd, ".gitignore"), ".amira/settings.local.json\n")
-  const { commands } = await start()
-  commands.rememberTheme("burnt", "light")
-  await commands.flushChoices()
-  expect(json(globalFile())).toEqual({ tui: { theme: "burnt", themeVariant: "light" } })
-  expect(existsSync(localFile())).toBe(ignored)
-  if (ignored) expect(json(localFile())).toEqual({ tui: { theme: "burnt", themeVariant: "light" } })
-})
+test.each([false, true])(
+  "theme project write requires git ignore (ignored=%s)",
+  async (ignored) => {
+    execFileSync("git", ["init", "--quiet", cwd], { timeout: SPAWN_WAIT_TIMEOUT_MS })
+    if (ignored) writeFileSync(path.join(cwd, ".gitignore"), ".amira/settings.local.json\n")
+    const { commands } = await start()
+    commands.rememberTheme("burnt", "light")
+    await commands.flushChoices()
+    expect(json(globalFile())).toEqual({ tui: { theme: "burnt", themeVariant: "light" } })
+    expect(existsSync(localFile())).toBe(ignored)
+    if (ignored) expect(json(localFile())).toEqual({ tui: { theme: "burnt", themeVariant: "light" } })
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("picker selections use the same remembered interactive controls", async () => {
-  const { session, commands } = await start()
-  const picks = ["mock/second", "high"]
-  session.agent.bus.subscribe((event) => {
-    if (event.type === "ui.request" && event.data.kind === "select") {
-      const pick = picks.shift()!
-      const option = event.data.options.find((option) => option.startsWith(pick))!
-      session.host.ui.respond(event.data.requestId, option)
-    }
-  })
-  expect((await commands.run("/model", { frontend: "tui" })).ok).toBe(true)
-  await commands.flushChoices()
-  expect(json(localFile())).toEqual({ model: "mock/second", thinking: "high" })
-  expect(json(globalFile())).toEqual(json(localFile()))
-})
+test(
+  "picker selections use the same remembered interactive controls",
+  async () => {
+    const { session, commands } = await start()
+    const picks = ["mock/second", "high"]
+    session.agent.bus.subscribe((event) => {
+      if (event.type === "ui.request" && event.data.kind === "select") {
+        const pick = picks.shift()!
+        const option = event.data.options.find((option) => option.startsWith(pick))!
+        session.host.ui.respond(event.data.requestId, option)
+      }
+    })
+    expect((await commands.run("/model", { frontend: "tui" })).ok).toBe(true)
+    await commands.flushChoices()
+    expect(json(localFile())).toEqual({ model: "mock/second", thinking: "high" })
+    expect(json(globalFile())).toEqual(json(localFile()))
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("project choices survive global changes; a new project falls back to the global choice", async () => {
-  const first = await start()
-  first.commands.control.setModel("mock/second")
-  first.commands.control.setThinking("high")
-  await first.commands.flushChoices()
-  const other = path.join(root, "other")
-  mkdirSync(path.join(other, ".amira"), { recursive: true })
-  const second = await start([], other)
-  expect(second.commands.control.info()).toMatchObject({
-    model: { provider: "mock", model: "second" },
-    thinkingLevel: "high",
-  })
-  second.commands.control.setModel("mock/first")
-  second.commands.control.setThinking("low")
-  await second.commands.flushChoices()
-  const restarted = await start()
-  expect(restarted.commands.control.info()).toMatchObject({
-    model: { provider: "mock", model: "second" },
-    thinkingLevel: "high",
-  })
-  expect((await start([], other)).commands.control.info().thinkingLevel).toBe("low")
-})
+test(
+  "project choices survive global changes; a new project falls back to the global choice",
+  async () => {
+    const first = await start()
+    first.commands.control.setModel("mock/second")
+    first.commands.control.setThinking("high")
+    await first.commands.flushChoices()
+    const other = path.join(root, "other")
+    mkdirSync(path.join(other, ".amira"), { recursive: true })
+    const second = await start([], other)
+    expect(second.commands.control.info()).toMatchObject({
+      model: { provider: "mock", model: "second" },
+      thinkingLevel: "high",
+    })
+    second.commands.control.setModel("mock/first")
+    second.commands.control.setThinking("low")
+    await second.commands.flushChoices()
+    const restarted = await start()
+    expect(restarted.commands.control.info()).toMatchObject({
+      model: { provider: "mock", model: "second" },
+      thinkingLevel: "high",
+    })
+    expect((await start([], other)).commands.control.info().thinkingLevel).toBe("low")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("flags and env are one-off until an actual interactive change", async () => {
-  writeFileSync(globalFile(), '{"model":"mock/first","thinking":"low"}')
-  const original = readFileSync(globalFile(), "utf8")
-  const { commands } = await start(["-m", "mock/second", "--thinking", "max"])
-  expect(commands.control.info().thinkingLevel).toBe("max")
-  expect(commands.control.info().model.model).toBe("second")
-  expect(readFileSync(globalFile(), "utf8")).toBe(original)
-  expect(existsSync(localFile())).toBe(false)
-  commands.control.setModel("mock/second")
-  commands.control.setThinking("max")
-  expect(existsSync(localFile())).toBe(false)
-  commands.control.setThinking("high")
-  await commands.flushChoices()
-  expect(json(localFile())).toEqual({ model: "mock/second", thinking: "high" })
-  const envArgs = parseCliArgs([], cwd, { AMIRA_MODEL: "mock/first" })
-  expect(resolveConfig(envArgs, home).settings.model).toBe("mock/first")
-  expect(
-    resolveConfig(parseCliArgs(["-m", "mock/second"], cwd, { AMIRA_MODEL: "mock/first" }), home).settings
-      .model,
-  ).toBe("mock/second")
-})
+test(
+  "flags and env are one-off until an actual interactive change",
+  async () => {
+    writeFileSync(globalFile(), '{"model":"mock/first","thinking":"low"}')
+    const original = readFileSync(globalFile(), "utf8")
+    const { commands } = await start(["-m", "mock/second", "--thinking", "max"])
+    expect(commands.control.info().thinkingLevel).toBe("max")
+    expect(commands.control.info().model.model).toBe("second")
+    expect(readFileSync(globalFile(), "utf8")).toBe(original)
+    expect(existsSync(localFile())).toBe(false)
+    commands.control.setModel("mock/second")
+    commands.control.setThinking("max")
+    expect(existsSync(localFile())).toBe(false)
+    commands.control.setThinking("high")
+    await commands.flushChoices()
+    expect(json(localFile())).toEqual({ model: "mock/second", thinking: "high" })
+    const envArgs = parseCliArgs([], cwd, { AMIRA_MODEL: "mock/first" })
+    expect(resolveConfig(envArgs, home).settings.model).toBe("mock/first")
+    expect(
+      resolveConfig(parseCliArgs(["-m", "mock/second"], cwd, { AMIRA_MODEL: "mock/first" }), home).settings
+        .model,
+    ).toBe("mock/second")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.each(["-p", "--rpc"])("%s controls never save model or effort", async (mode) => {
   const flags = [mode, "-m", "mock/first", "--thinking", "low"]
@@ -568,37 +614,41 @@ test("extensions and child agents never save, even in an interactive host", asyn
   }
 })
 
-test.each([false, true])("extension slash commands do not save (override=%s)", async (override) => {
-  const { session, commands } = await start()
-  await session.host.load((api) => {
-    api.registerCommand({
-      name: override ? "model" : "auto-model",
-      description: "Choose a model programmatically",
-      aliases: ["automatic"],
-      override,
-      args: {
-        complete: (_prefix, ctx) => {
-          ctx.session.setThinking("low")
-          return []
+test.each([false, true])(
+  "extension slash commands do not save (override=%s)",
+  async (override) => {
+    const { session, commands } = await start()
+    await session.host.load((api) => {
+      api.registerCommand({
+        name: override ? "model" : "auto-model",
+        description: "Choose a model programmatically",
+        aliases: ["automatic"],
+        override,
+        args: {
+          complete: (_prefix, ctx) => {
+            ctx.session.setThinking("low")
+            return []
+          },
         },
-      },
-      run: (_args, ctx) => {
-        ctx.session.setModel("mock/second")
-        ctx.session.setThinking("high")
-      },
-    })
-  }, "test:commands")
-  await commands.complete("/automatic ")
-  expect((await commands.run("/automatic", { frontend: "tui", onSend: () => undefined })).ok).toBe(true)
-  await commands.flushChoices()
-  expect(commands.control.info()).toMatchObject({ model: { model: "second" }, thinkingLevel: "high" })
-  expect(existsSync(globalFile())).toBe(false)
-  expect(existsSync(localFile())).toBe(false)
-  session.host.unload("test:commands")
-  expect((await commands.run("/model mock/first", { frontend: "tui" })).ok).toBe(true)
-  await commands.flushChoices()
-  expect(json(localFile())).toEqual({ model: "mock/first", thinking: "high" })
-})
+        run: (_args, ctx) => {
+          ctx.session.setModel("mock/second")
+          ctx.session.setThinking("high")
+        },
+      })
+    }, "test:commands")
+    await commands.complete("/automatic ")
+    expect((await commands.run("/automatic", { frontend: "tui", onSend: () => undefined })).ok).toBe(true)
+    await commands.flushChoices()
+    expect(commands.control.info()).toMatchObject({ model: { model: "second" }, thinkingLevel: "high" })
+    expect(existsSync(globalFile())).toBe(false)
+    expect(existsSync(localFile())).toBe(false)
+    session.host.unload("test:commands")
+    expect((await commands.run("/model mock/first", { frontend: "tui" })).ok).toBe(true)
+    await commands.flushChoices()
+    expect(json(localFile())).toEqual({ model: "mock/first", thinking: "high" })
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("extension skills and input handlers also receive non-saving controls", async () => {
   const { session, commands } = await start()
@@ -690,30 +740,38 @@ test("unsafe-project warning and eligibility probes occur once per session", asy
   }
 })
 
-test("default effort is remembered instead of exposing a lower project setting", async () => {
-  writeFileSync(path.join(cwd, ".amira", "settings.json"), '{"thinking":"high"}')
-  const { commands } = await start()
-  commands.control.setThinking(undefined)
-  await commands.flushChoices()
-  expect(json(localFile()).thinking).toBe("default")
-  expect(json(globalFile()).thinking).toBe("default")
-  expect((await start()).commands.control.info()).not.toHaveProperty("thinkingLevel")
-})
+test(
+  "default effort is remembered instead of exposing a lower project setting",
+  async () => {
+    writeFileSync(path.join(cwd, ".amira", "settings.json"), '{"thinking":"high"}')
+    const { commands } = await start()
+    commands.control.setThinking(undefined)
+    await commands.flushChoices()
+    expect(json(localFile()).thinking).toBe("default")
+    expect(json(globalFile()).thinking).toBe("default")
+    expect((await start()).commands.control.info()).not.toHaveProperty("thinkingLevel")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("existing keys, nested formatting, order, BOM and CRLF are preserved", async () => {
-  const original =
-    '\uFEFF{\r\n\t"custom": { "nested" : [1, {"model":"not-a-setting"}] },\r\n\t"model" : "mock/first",\r\n\t"thinking": "low",\r\n\t"shell": "auto"\r\n}\r\n'
-  for (const file of [globalFile(), localFile()]) writeFileSync(file, original)
-  const { commands } = await start()
-  commands.control.setModel("mock/second")
-  commands.control.setThinking("max")
-  await commands.flushChoices()
-  for (const file of [globalFile(), localFile()]) {
-    expect(readFileSync(file, "utf8")).toBe(
-      original.replace('"mock/first"', '"mock/second"').replace('"low"', '"max"'),
-    )
-  }
-})
+test(
+  "existing keys, nested formatting, order, BOM and CRLF are preserved",
+  async () => {
+    const original =
+      '\uFEFF{\r\n\t"custom": { "nested" : [1, {"model":"not-a-setting"}] },\r\n\t"model" : "mock/first",\r\n\t"thinking": "low",\r\n\t"shell": "auto"\r\n}\r\n'
+    for (const file of [globalFile(), localFile()]) writeFileSync(file, original)
+    const { commands } = await start()
+    commands.control.setModel("mock/second")
+    commands.control.setThinking("max")
+    await commands.flushChoices()
+    for (const file of [globalFile(), localFile()]) {
+      expect(readFileSync(file, "utf8")).toBe(
+        original.replace('"mock/first"', '"mock/second"').replace('"low"', '"max"'),
+      )
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.each(["{invalid", "null", "[]"])(
   "invalid settings %s stay untouched; the other file still saves",
@@ -740,60 +798,71 @@ test.each(["{invalid", "null", "[]"])(
     expect(readFileSync(globalFile(), "utf8")).toBe(invalid)
     expect(json(localFile()).thinking).toBe("low")
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test.each(["bare", "user"])("no project (%s) only saves globally", async (scope) => {
-  const directory = path.join(root, scope)
-  mkdirSync(directory)
-  if (scope === "user") {
-    home = path.join(directory, ".amira")
-    mkdirSync(home)
-    process.env.AMIRA_HOME = home
-  }
-  const { commands } = await start([], directory)
-  commands.control.setThinking("max")
-  await commands.flushChoices()
-  expect(json(globalFile()).thinking).toBe("max")
-  expect(existsSync(path.join(directory, ".amira", "settings.local.json"))).toBe(false)
-  if (scope === "bare") expect(existsSync(path.join(directory, ".amira"))).toBe(false)
-})
+test.each(["bare", "user"])(
+  "no project (%s) only saves globally",
+  async (scope) => {
+    const directory = path.join(root, scope)
+    mkdirSync(directory)
+    if (scope === "user") {
+      home = path.join(directory, ".amira")
+      mkdirSync(home)
+      process.env.AMIRA_HOME = home
+    }
+    const { commands } = await start([], directory)
+    commands.control.setThinking("max")
+    await commands.flushChoices()
+    expect(json(globalFile()).thinking).toBe("max")
+    expect(existsSync(path.join(directory, ".amira", "settings.local.json"))).toBe(false)
+    if (scope === "bare") expect(existsSync(path.join(directory, ".amira"))).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("repository project choices must be ignored and untracked; scope stays at cwd", async () => {
-  execFileSync("git", ["init", "--quiet", cwd])
-  const { session, commands } = await start()
-  const warnings: string[] = []
-  session.agent.bus.subscribe((event) => {
-    if (event.type === "extension.error") warnings.push(event.data.error)
-  })
-  commands.control.setThinking("high")
-  await commands.flushChoices()
-  await session.agent.bus.flush()
-  expect(existsSync(localFile())).toBe(false)
-  expect(json(globalFile()).thinking).toBe("high")
-  expect(warnings.some((warning) => warning.includes("keep it untracked"))).toBe(true)
-  writeFileSync(path.join(cwd, ".gitignore"), "**/.amira/settings.local.json\n")
-  commands.control.setThinking("max")
-  await commands.flushChoices()
-  await session.agent.bus.flush()
-  expect(existsSync(localFile())).toBe(false)
-  expect(warnings).toHaveLength(1)
-  const ignored = await start()
-  ignored.commands.control.setThinking("high")
-  await ignored.commands.flushChoices()
-  expect(json(localFile()).thinking).toBe("high")
-  execFileSync("git", ["-C", cwd, "add", "--force", ".amira/settings.local.json"])
-  const tracked = await start()
-  tracked.commands.control.setThinking("low")
-  await tracked.commands.flushChoices()
-  expect(json(localFile()).thinking).toBe("high")
-  const nested = path.join(cwd, "nested")
-  mkdirSync(nested)
-  const inner = await start([], nested)
-  inner.commands.control.setThinking("max")
-  await inner.commands.flushChoices()
-  expect(json(path.join(nested, ".amira", "settings.local.json")).thinking).toBe("max")
-  expect(json(localFile()).thinking).toBe("high")
-})
+test(
+  "repository project choices must be ignored and untracked; scope stays at cwd",
+  async () => {
+    execFileSync("git", ["init", "--quiet", cwd], { timeout: SPAWN_WAIT_TIMEOUT_MS })
+    const { session, commands } = await start()
+    const warnings: string[] = []
+    session.agent.bus.subscribe((event) => {
+      if (event.type === "extension.error") warnings.push(event.data.error)
+    })
+    commands.control.setThinking("high")
+    await commands.flushChoices()
+    await session.agent.bus.flush()
+    expect(existsSync(localFile())).toBe(false)
+    expect(json(globalFile()).thinking).toBe("high")
+    expect(warnings.some((warning) => warning.includes("keep it untracked"))).toBe(true)
+    writeFileSync(path.join(cwd, ".gitignore"), "**/.amira/settings.local.json\n")
+    commands.control.setThinking("max")
+    await commands.flushChoices()
+    await session.agent.bus.flush()
+    expect(existsSync(localFile())).toBe(false)
+    expect(warnings).toHaveLength(1)
+    const ignored = await start()
+    ignored.commands.control.setThinking("high")
+    await ignored.commands.flushChoices()
+    expect(json(localFile()).thinking).toBe("high")
+    execFileSync("git", ["-C", cwd, "add", "--force", ".amira/settings.local.json"], {
+      timeout: SPAWN_WAIT_TIMEOUT_MS,
+    })
+    const tracked = await start()
+    tracked.commands.control.setThinking("low")
+    await tracked.commands.flushChoices()
+    expect(json(localFile()).thinking).toBe("high")
+    const nested = path.join(cwd, "nested")
+    mkdirSync(nested)
+    const inner = await start([], nested)
+    inner.commands.control.setThinking("max")
+    await inner.commands.flushChoices()
+    expect(json(path.join(nested, ".amira", "settings.local.json")).thinking).toBe("max")
+    expect(json(localFile()).thinking).toBe("high")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("a remembered missing provider uses the stored-session fallback without deleting the key", async () => {
   writeFileSync(localFile(), '{"model":"removed/model","thinking":"high"}')

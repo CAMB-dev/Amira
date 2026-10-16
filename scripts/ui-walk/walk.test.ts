@@ -1,9 +1,17 @@
 import { expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { trackProcessTree } from "../../packages/proc/src/index.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../spawn-test.ts"
 import { address, positiveInteger, request, type SessionAddress, sessionRoot, start } from "./session.ts"
 
 function ptyUnavailable(): boolean {
@@ -47,8 +55,9 @@ test.skipIf(ptyUnavailable())(
     )
     const names = [`e2e-${randomUUID()}`, `e2e-${randomUUID()}`]
     const roots: string[] = []
+    const cached: SessionAddress[] = []
     try {
-      const sessions = await Promise.all(
+      const results = await Promise.allSettled(
         names.map(async (name) => {
           const launcher = Bun.spawn(
             [
@@ -72,22 +81,34 @@ test.skipIf(ptyUnavailable())(
           // Reproduce an agent shell host: it kills its whole tree once the CLI call ends.
           const toolTree = trackProcessTree(launcher, { killOnClose: true })
           try {
-            const [output, error, code] = await Promise.all([
-              new Response(launcher.stdout).text(),
-              new Response(launcher.stderr).text(),
-              launcher.exited,
-            ])
+            const [output, error, code] = await waitForSpawnWork(
+              "child output",
+              Promise.all([
+                new Response(launcher.stdout).text(),
+                new Response(launcher.stderr).text(),
+                waitForSpawnExit(launcher, "UI walk CLI start"),
+              ]),
+            )
             expect(code).toBe(0)
             if (code !== 0) throw new Error(`CLI start failed: ${output}${error}`)
           } finally {
-            toolTree.kill()
-            toolTree.dispose()
+            try {
+              toolTree.kill()
+              await stopSpawn(launcher)
+            } finally {
+              toolTree.dispose()
+            }
           }
           const state = await address(name)
           roots.push(state.root)
+          cached.push(state)
           return state
         }),
       )
+      const sessions = results.map((result) => {
+        if (result.status === "rejected") throw result.reason
+        return result.value
+      })
       expect(sessions[0]!.root).not.toBe(sessions[1]!.root)
       expect(sessions[0]!.port).not.toBe(sessions[1]!.port)
       expect(sessions[0]!.childPid).not.toBe(sessions[1]!.childPid)
@@ -109,7 +130,11 @@ test.skipIf(ptyUnavailable())(
         "Walkthrough E2E response arrived.",
       )
       const first = await address(names[0]!)
-      const unauthorized = await fetch(`http://127.0.0.1:${first.port}/`, { method: "POST", body: "{}" })
+      const unauthorized = await fetch(`http://127.0.0.1:${first.port}/`, {
+        method: "POST",
+        body: "{}",
+        signal: AbortSignal.timeout(5000),
+      })
       expect(unauthorized.status).toBe(403)
       await request(names[0]!, { command: "resize", cols: 60, rows: 24 })
       const status = (await (await request(names[0]!, { command: "status" })).json()) as {
@@ -126,19 +151,18 @@ test.skipIf(ptyUnavailable())(
       expect(neighbor.exitCode).toBeNull()
     } finally {
       await Promise.all(names.map((name) => request(name, { command: "stop" }).catch(() => undefined)))
-      const deadline = Date.now() + 5000
-      while (
-        Date.now() < deadline &&
-        (await Promise.all(roots.map((root) => stat(root).catch(() => undefined)))).some(Boolean)
-      ) {
-        await Bun.sleep(50)
-      }
+      await Promise.all(cached.map(stopCached))
+      await waitForSpawnCondition(
+        "UI walk roots removed",
+        () => roots.every((root) => !existsSync(root)),
+        5000,
+      )
       for (const root of roots) expect(await stat(root).catch(() => undefined)).toBeUndefined()
       for (const name of names) await expect(address(name)).rejects.toThrow("is not running")
       await rm(dir, { recursive: true, force: true })
     }
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.skipIf(ptyUnavailable())(
@@ -148,6 +172,7 @@ test.skipIf(ptyUnavailable())(
     const source = path.join(directory, "extension")
     const second = path.join(directory, "second")
     const names = [`ext-${randomUUID()}`, `ext-${randomUUID()}`]
+    const cached: SessionAddress[] = []
     await mkdir(source)
     await mkdir(second)
     await writeFile(path.join(source, "label.ts"), 'export const label = "Local extension command loaded"')
@@ -231,14 +256,23 @@ test.skipIf(ptyUnavailable())(
         ],
         { stdout: "pipe", stderr: "pipe", windowsHide: true },
       )
-      const [output, diagnostic, code] = await Promise.all([
-        new Response(launcher.stdout).text(),
-        new Response(launcher.stderr).text(),
-        launcher.exited,
-      ])
-      if (code !== 0) throw new Error(`Extension start failed: ${output}${diagnostic}`)
+      try {
+        const [output, diagnostic, code] = await waitForSpawnWork(
+          "child output",
+          Promise.all([
+            new Response(launcher.stdout).text(),
+            new Response(launcher.stderr).text(),
+            waitForSpawnExit(launcher, "extension CLI start"),
+          ]),
+        )
+        if (code !== 0) throw new Error(`Extension start failed: ${output}${diagnostic}`)
+      } finally {
+        await stopSpawn(launcher)
+      }
       const loaded = await address(names[0]!)
+      cached.push(loaded)
       const neighbor = await start(names[1]!, { cols: 100, rows: 32, idleTimeout: 60_000, args: [] })
+      cached.push(neighbor)
       for (const name of names)
         await request(name, { command: "wait", text: "ui-walk/main", timeout: 10_000 })
       const home = path.join(loaded.root, "home/.amira")
@@ -274,10 +308,11 @@ test.skipIf(ptyUnavailable())(
       expect(text).toContain("Safe canned extension read")
     } finally {
       await Promise.all(names.map((name) => request(name, { command: "stop" }).catch(() => undefined)))
+      await Promise.all(cached.map(stopCached))
       await rm(directory, { recursive: true, force: true })
     }
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 function processIsAlive(pid: number): boolean {
@@ -297,6 +332,10 @@ async function stopCached(session: SessionAddress | undefined): Promise<void> {
     body: JSON.stringify({ command: "stop" }),
     signal: AbortSignal.timeout(5000),
   }).catch(() => undefined)
+  await waitForSpawnCondition(
+    "UI walk session cleanup",
+    () => !processIsAlive(session.pid) && !processIsAlive(session.childPid),
+  )
 }
 
 test.skipIf(ptyUnavailable())(
@@ -318,7 +357,7 @@ test.skipIf(ptyUnavailable())(
       await stopCached(replacement)
     }
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.skipIf(ptyUnavailable())(
@@ -337,22 +376,22 @@ test.skipIf(ptyUnavailable())(
       process.kill(session.childPid, "SIGKILL")
       await Bun.sleep(200)
       await expect(request(name, { command: "text" })).rejects.toThrow("Amira exited")
-      const deadline = Date.now() + 5000
-      while (Date.now() < deadline && (await stat(session.root).catch(() => undefined))) await Bun.sleep(25)
+      const root = session.root
+      await waitForSpawnCondition("exited session root removed", () => !existsSync(root), 5000)
       expect(await stat(session.root).catch(() => undefined)).toBeUndefined()
       await Bun.sleep(100)
       await expect(
         fetch(`http://127.0.0.1:${session.port}/`, { signal: AbortSignal.timeout(1000) }),
       ).rejects.toThrow()
       await expect(fetch(providerUrl, { signal: AbortSignal.timeout(1000) })).rejects.toThrow()
-      const daemonDeadline = Date.now() + 5000
-      while (Date.now() < daemonDeadline && processIsAlive(session.pid)) await Bun.sleep(25)
+      const pid = session.pid
+      await waitForSpawnCondition("exited session daemon stopped", () => !processIsAlive(pid), 5000)
       expect(processIsAlive(session.pid)).toBe(false)
     } finally {
       await stopCached(session)
     }
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.skipIf(ptyUnavailable())(
@@ -372,5 +411,5 @@ test.skipIf(ptyUnavailable())(
       await stopCached(session)
     }
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )

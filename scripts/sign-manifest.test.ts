@@ -11,6 +11,7 @@ import {
   validateMetadata,
   verifyManifest,
 } from "./sign-manifest.ts"
+import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit, waitForSpawnWork } from "./spawn-test.ts"
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -116,12 +117,19 @@ async function cli(directory: string, argv: string[], env: Record<string, string
       stderr: "pipe",
     },
   )
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, code }
+  try {
+    const [stdout, stderr, code] = await waitForSpawnWork(
+      "child output",
+      Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        waitForSpawnExit(child, "manifest CLI"),
+      ]),
+    )
+    return { stdout, stderr, code }
+  } finally {
+    await stopSpawn(child)
+  }
 }
 
 async function expectNoPrivateFiles(directory: string) {
@@ -137,62 +145,74 @@ async function expectNoPrivateFiles(directory: string) {
   }
 }
 
-test("CLI signs from an environment key and verifies retries without any private-key file", async () => {
-  const dir = await fixture()
-  await manifestCommand(["generate", "--dist", dir])
-  const keys = generateKeyPairSync("ed25519", {
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-    publicKeyEncoding: { type: "spki", format: "pem" },
-  })
-  const env = { SIGNING_KEY_FIXTURE: keys.privateKey }
-  const signed = await cli(dir, ["sign", "--key-env", "SIGNING_KEY_FIXTURE"], env)
-  expect(signed.code).toBe(0)
-  expect(signed.stderr).toBe("")
-  expect(signed.stdout.trim()).toBe(keys.publicKey.trim())
-  expect(signed.stdout).not.toContain("PRIVATE KEY")
-  expect(signed.stderr).not.toContain(keys.privateKey)
-  await writeFile(path.join(dir, "public.pem"), signed.stdout)
-  expect(await cli(dir, ["verify", "--key-env", "SIGNING_KEY_FIXTURE"], env)).toEqual({
-    code: 0,
-    stdout: "",
-    stderr: "",
-  })
-  expect((await cli(dir, ["verify", "--public-key", "public.pem"])).code).toBe(0)
-  await expectNoPrivateFiles(dir)
-  await writeFile(path.join(dir, "manifest.json"), "tampered")
-  const tampered = await cli(dir, ["verify", "--key-env", "SIGNING_KEY_FIXTURE"], env)
-  expect(tampered.code).not.toBe(0)
-  expect(tampered.stderr).toContain("verification failed")
-  expect(tampered.stderr).not.toContain(keys.privateKey)
-})
+test(
+  "CLI signs from an environment key and verifies retries without any private-key file",
+  async () => {
+    const dir = await fixture()
+    await manifestCommand(["generate", "--dist", dir])
+    const keys = generateKeyPairSync("ed25519", {
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    })
+    const env = { SIGNING_KEY_FIXTURE: keys.privateKey }
+    const signed = await cli(dir, ["sign", "--key-env", "SIGNING_KEY_FIXTURE"], env)
+    expect(signed.code).toBe(0)
+    expect(signed.stderr).toBe("")
+    expect(signed.stdout.trim()).toBe(keys.publicKey.trim())
+    expect(signed.stdout).not.toContain("PRIVATE KEY")
+    expect(signed.stderr).not.toContain(keys.privateKey)
+    await writeFile(path.join(dir, "public.pem"), signed.stdout)
+    expect(await cli(dir, ["verify", "--key-env", "SIGNING_KEY_FIXTURE"], env)).toEqual({
+      code: 0,
+      stdout: "",
+      stderr: "",
+    })
+    expect((await cli(dir, ["verify", "--public-key", "public.pem"])).code).toBe(0)
+    await expectNoPrivateFiles(dir)
+    await writeFile(path.join(dir, "manifest.json"), "tampered")
+    const tampered = await cli(dir, ["verify", "--key-env", "SIGNING_KEY_FIXTURE"], env)
+    expect(tampered.code).not.toBe(0)
+    expect(tampered.stderr).toContain("verification failed")
+    expect(tampered.stderr).not.toContain(keys.privateKey)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("CLI ephemeral signing creates and discards its private key entirely in memory", async () => {
-  const dir = await fixture()
-  await manifestCommand(["generate", "--dist", dir])
-  const signed = await cli(dir, ["sign", "--ephemeral", "true"])
-  expect(signed.code).toBe(0)
-  expect(signed.stderr).toBe("")
-  expect(signed.stdout).toContain("BEGIN PUBLIC KEY")
-  expect(signed.stdout).not.toContain("PRIVATE KEY")
-  await writeFile(path.join(dir, "public.pem"), signed.stdout)
-  expect((await cli(dir, ["verify", "--public-key", "public.pem"])).code).toBe(0)
-  await expectNoPrivateFiles(dir)
-})
+test(
+  "CLI ephemeral signing creates and discards its private key entirely in memory",
+  async () => {
+    const dir = await fixture()
+    await manifestCommand(["generate", "--dist", dir])
+    const signed = await cli(dir, ["sign", "--ephemeral", "true"])
+    expect(signed.code).toBe(0)
+    expect(signed.stderr).toBe("")
+    expect(signed.stdout).toContain("BEGIN PUBLIC KEY")
+    expect(signed.stdout).not.toContain("PRIVATE KEY")
+    await writeFile(path.join(dir, "public.pem"), signed.stdout)
+    expect((await cli(dir, ["verify", "--public-key", "public.pem"])).code).toBe(0)
+    await expectNoPrivateFiles(dir)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("CI key sources reject missing secrets, conflicting sources and invalid ephemeral requests", async () => {
-  const dir = await fixture()
-  await manifestCommand(["generate", "--dist", dir])
-  for (const argv of [
-    ["sign", "--key-env", "SIGNING_KEY_FIXTURE"],
-    ["verify", "--key-env", "SIGNING_KEY_FIXTURE"],
-    ["sign", "--key-env", "SIGNING_KEY_FIXTURE", "--key", "private.pem"],
-    ["sign", "--key-env", "SIGNING_KEY_FIXTURE", "--ephemeral", "true"],
-    ["sign", "--ephemeral", "false"],
-  ]) {
-    expect((await cli(dir, argv, { SIGNING_KEY_FIXTURE: "" })).code).not.toBe(0)
-  }
-  expect((await readdir(dir)).sort()).toEqual(["amira-bun-linux-x64.tar.gz", "build.json", "manifest.json"])
-})
+test(
+  "CI key sources reject missing secrets, conflicting sources and invalid ephemeral requests",
+  async () => {
+    const dir = await fixture()
+    await manifestCommand(["generate", "--dist", dir])
+    for (const argv of [
+      ["sign", "--key-env", "SIGNING_KEY_FIXTURE"],
+      ["verify", "--key-env", "SIGNING_KEY_FIXTURE"],
+      ["sign", "--key-env", "SIGNING_KEY_FIXTURE", "--key", "private.pem"],
+      ["sign", "--key-env", "SIGNING_KEY_FIXTURE", "--ephemeral", "true"],
+      ["sign", "--ephemeral", "false"],
+    ]) {
+      expect((await cli(dir, argv, { SIGNING_KEY_FIXTURE: "" })).code).not.toBe(0)
+    }
+    expect((await readdir(dir)).sort()).toEqual(["amira-bun-linux-x64.tar.gz", "build.json", "manifest.json"])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("CLI keygen refuses overwrite and sign/verify detects tampered manifests", async () => {
   const dir = await fixture()

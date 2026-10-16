@@ -2,12 +2,23 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  SPAWN_WAIT_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "./spawn-test.ts"
 
 const root = path.resolve(import.meta.dir, "..")
 const python = [Bun.which("python3"), Bun.which("python")].find(
   (candidate) =>
     candidate &&
-    Bun.spawnSync([candidate, "--version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0,
+    Bun.spawnSync([candidate, "--version"], {
+      stdout: "ignore",
+      stderr: "ignore",
+      timeout: SPAWN_WAIT_TIMEOUT_MS,
+    }).exitCode === 0,
 )
 const temporary: string[] = []
 afterEach(async () => {
@@ -35,13 +46,20 @@ async function execute(script: string, directory: string, env: Record<string, st
     stdout: "pipe",
     stderr: "pipe",
   })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  if (code) throw new Error(stderr)
-  return stdout
+  try {
+    const [stdout, stderr, code] = await waitForSpawnWork(
+      "child output",
+      Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        waitForSpawnExit(child, "release policy"),
+      ]),
+    )
+    if (code) throw new Error(stderr)
+    return stdout
+  } finally {
+    await stopSpawn(child)
+  }
 }
 
 async function workflow(name: string) {
@@ -100,6 +118,7 @@ test.skipIf(!python)(
       retained.slice(14).map((release) => release.tag_name),
     )
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 async function publishProbe(commits: string[]) {
@@ -136,6 +155,7 @@ test.skipIf(!python)(
       { sha: "a".repeat(40), calls: 3 },
     ])
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.skipIf(!python)(
@@ -152,6 +172,7 @@ test.skipIf(!python)(
     expect(errors[1]).toContain("Invalid or cyclic")
     expect(errors[2]).toContain("Invalid or cyclic")
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.skipIf(!python)(
@@ -164,24 +185,37 @@ test.skipIf(!python)(
     )
     expect(JSON.parse(result)).toEqual(Array(3).fill("v1.2.3-nightly.20261015.5"))
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test.skipIf(!python)("a moved remote tag aborts before draft creation", async () => {
-  const result = await publishProbe(["b".repeat(40)])
-  expect(result.error).toContain("does not match planned commit")
-  expect(result.actions.some((args) => args.includes("create"))).toBe(false)
-})
+test.skipIf(!python)(
+  "a moved remote tag aborts before draft creation",
+  async () => {
+    const result = await publishProbe(["b".repeat(40)])
+    expect(result.error).toContain("does not match planned commit")
+    expect(result.actions.some((args) => args.includes("create"))).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.skipIf(!python)("a matching remote tag permits draft creation and one publication", async () => {
-  const result = await publishProbe(["a".repeat(40)])
-  expect(result.error).toBeNull()
-  expect(result.actions.filter((args) => args.includes("create"))).toHaveLength(1)
-  expect(result.actions.filter((args) => args.includes("--draft=false"))).toHaveLength(1)
-})
+test.skipIf(!python)(
+  "a matching remote tag permits draft creation and one publication",
+  async () => {
+    const result = await publishProbe(["a".repeat(40)])
+    expect(result.error).toBeNull()
+    expect(result.actions.filter((args) => args.includes("create"))).toHaveLength(1)
+    expect(result.actions.filter((args) => args.includes("--draft=false"))).toHaveLength(1)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test.skipIf(!python)("a tag moved after upload aborts before immutable publication", async () => {
-  const result = await publishProbe(["a".repeat(40), "b".repeat(40)])
-  expect(result.actions.some((args) => args.includes("create"))).toBe(true)
-  expect(result.error).toContain("does not match planned commit")
-  expect(result.actions.some((args) => args.includes("--draft=false"))).toBe(false)
-})
+test.skipIf(!python)(
+  "a tag moved after upload aborts before immutable publication",
+  async () => {
+    const result = await publishProbe(["a".repeat(40), "b".repeat(40)])
+    expect(result.actions.some((args) => args.includes("create"))).toBe(true)
+    expect(result.error).toContain("does not match planned commit")
+    expect(result.actions.some((args) => args.includes("--draft=false"))).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

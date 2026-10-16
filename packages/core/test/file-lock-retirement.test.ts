@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
 import { aliasedDirectory } from "./file-lock-fixtures.ts"
 import { waitForFileLockWorkerExit, waitForFileLockWorkerReady } from "./file-lock-test-waits.ts"
 
@@ -18,6 +19,7 @@ async function runWorker(script: string, args: string[], aliased = false) {
       ...args,
     ],
     {
+      windowsHide: true,
       env: Object.fromEntries(
         Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
       ),
@@ -32,7 +34,9 @@ async function runWorker(script: string, args: string[], aliased = false) {
     // workers assert cleanup behavior, not latency (normal performs 120 lease turns).
     await waitForFileLockWorkerReady(worker, dir, label)
     await waitForFileLockWorkerExit(worker, label)
-    expect(await new Response(worker.stderr).text()).toBe("")
+    expect(
+      await waitForSpawnWork(`worker stderr (pid ${worker.pid})`, new Response(worker.stderr).text()),
+    ).toBe("")
     expect(worker.exitCode).toBe(0)
   } finally {
     if (worker.exitCode === null) worker.kill()
@@ -47,7 +51,7 @@ for (const [script, mode] of [
   test(
     `aliased parent preserves ${script} ${mode} fault injection`,
     () => runWorker(script!, [mode!], true),
-    95_000,
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }
 for (const phase of ["claim", "release"]) {
@@ -55,7 +59,7 @@ for (const phase of ["claim", "release"]) {
     test(
       `SessionStore ${phase} gate retirement survives ${fault}`,
       () => runWorker("file-lock-retirement-worker.ts", [phase, fault]),
-      95_000,
+      SPAWN_TEST_TIMEOUT_MS,
     )
   }
 }
@@ -63,7 +67,7 @@ for (const mode of ["release", "acquire", "exit-success", "exit-failure"]) {
   test(
     `pending lease release stops automatic retries and retries on next ${mode}`,
     () => runWorker("file-lock-retirement-lease-worker.ts", [mode]),
-    95_000,
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }
 for (const mode of [
@@ -82,6 +86,6 @@ for (const mode of [
   test(
     `owned gate retirement preserves ${mode} safety`,
     () => runWorker("file-lock-retirement-safety-worker.ts", [mode]),
-    95_000,
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }

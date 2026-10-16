@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, afterEach, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -12,7 +12,13 @@ import {
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
 import { resetCommandWorker } from "../../../packages/proc/src/index.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  SPAWN_WAIT_TIMEOUT_MS,
+  waitForSpawnCondition,
+} from "../../../scripts/spawn-test.ts"
 import { TOOL_SEARCH, toolSearchExtension } from "../../builtin-tools/src/tool-search.ts"
+import { cleanupSpawnWork, waitForSpawnWork } from "../../builtin-tools/test/util.ts"
 import { McpClient } from "../src/client.ts"
 import type { ServerConfig } from "../src/config.ts"
 import { HttpTransport } from "../src/http.ts"
@@ -25,22 +31,68 @@ const FIXTURE = path.join(import.meta.dir, "fixtures", "server.ts")
 // Spawning can stall for seconds on machines with aggressive antivirus.
 const SLOW = 60_000
 
+const cleanup: (() => unknown)[] = []
+const pidFiles: string[] = []
+const transports: StdioTransport[] = []
+const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-mcp-processes-"))
+const dirs = [tmp]
+let nextPidFile = 0
+function trackedClient(transport: ConstructorParameters<typeof McpClient>[0]) {
+  const client = new McpClient(transport)
+  cleanup.push(() => client.close())
+  if (transport instanceof StdioTransport) transports.push(transport)
+  return client
+}
+function trackedMcp(options: McpExtensionOptions) {
+  const mcp = createMcpExtension(options)
+  cleanup.push(() => mcp.close())
+  return mcp
+}
+afterEach(async () => {
+  try {
+    await cleanupSpawnWork("MCP resource teardown", cleanup.splice(0))
+  } finally {
+    const pids = [
+      ...pidFiles.splice(0).flatMap((file) => (existsSync(file) ? [Number(readFileSync(file, "utf8"))] : [])),
+      ...transports.splice(0).flatMap((transport) => (transport.pid === undefined ? [] : [transport.pid])),
+    ].filter((pid) => pid > 0)
+    try {
+      await waitForSpawnCondition("MCP fixture servers to exit", () => pids.every((pid) => !alive(pid)))
+    } finally {
+      for (const pid of pids) {
+        if (pid > 0 && alive(pid)) {
+          try {
+            process.kill(pid, "SIGKILL")
+          } catch {}
+        }
+      }
+      await waitForSpawnCondition("MCP fixture cleanup", () => pids.every((pid) => !alive(pid)))
+    }
+  }
+}, SPAWN_TEST_TIMEOUT_MS)
+
 const http = startHttpServer(false)
 const httpSse = startHttpServer(true)
 afterAll(() => {
   http.stop()
   httpSse.stop()
-})
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+}, SPAWN_TEST_TIMEOUT_MS)
 
-function stdioServer(name: string, extra: Partial<ServerConfig> = {}): ServerConfig {
+function stdioServer(
+  name: string,
+  extra: Partial<Extract<ServerConfig, { type: "stdio" }>> = {},
+): ServerConfig {
+  const pidFile = path.join(tmp, `${nextPidFile++}.pid`)
+  pidFiles.push(pidFile)
   return {
     name,
     source: "test",
     type: "stdio",
     command: process.execPath,
     args: [FIXTURE, "stdio"],
-    env: { FIXTURE_SECRET: "s3cret" },
     ...extra,
+    env: { FIXTURE_SECRET: "s3cret", ...extra.env, FIXTURE_PID_FILE: pidFile },
   } as ServerConfig
 }
 
@@ -58,7 +110,7 @@ async function harness(servers: ServerConfig[], steps: MockStep[] = [], opts: Mc
   const tools = new ToolRegistry()
   const host = new ExtensionHost({ bus, interceptors, tools, cwd: import.meta.dir })
   await host.load(toolSearchExtension, "builtin:tool-search")
-  const mcp = createMcpExtension({ config: { servers, problems: [] }, ...opts })
+  const mcp = trackedMcp({ config: { servers, problems: [] }, ...opts })
   expect(await host.load(mcp, "builtin:mcp")).toBe(true)
   const agent = new Agent({
     ai,
@@ -73,6 +125,7 @@ async function harness(servers: ServerConfig[], steps: MockStep[] = [], opts: Mc
     await bus.flush()
     return events.flatMap((e) => (e.type === "extension.error" ? [e.data.error] : []))
   }
+  cleanup.push(() => agent.dispose())
   return { agent, mock, tools, mcp, errors }
 }
 
@@ -80,9 +133,11 @@ test(
   "host settings layers reload MCP servers without restarting unchanged connections",
   async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "amira-mcp-reload-"))
+    dirs.push(dir)
     const file = (name: string) => path.join(dir, `${name}.pid`)
     const userFile = path.join(dir, "settings.json")
     const named = (pidFile: string) => {
+      pidFiles.push(pidFile)
       return { command: process.execPath, args: [FIXTURE, "stdio"], env: { FIXTURE_PID_FILE: pidFile } }
     }
     const layers = (servers: Record<string, unknown>) => ({
@@ -102,7 +157,7 @@ test(
         change: named(file("change-before")),
       }),
     })
-    const mcp = createMcpExtension({ connectTimeoutMs: 5000 })
+    const mcp = trackedMcp({ connectTimeoutMs: SPAWN_WAIT_TIMEOUT_MS })
     try {
       expect(await host.load(mcp, "builtin:mcp")).toBe(true)
       await mcp.settled()
@@ -138,11 +193,16 @@ test(
       expect(await gone(Number(changePid))).toBe(true)
       expect(alive(Number(keepPid))).toBe(true)
     } finally {
-      await mcp.close()
+      await waitForSpawnWork("reloaded MCP servers close", mcp.close())
+      await waitForSpawnCondition("reloaded MCP servers to exit", () =>
+        pidFiles
+          .filter((file) => file.startsWith(dir) && existsSync(file))
+          .every((file) => !alive(Number(readFileSync(file, "utf8")))),
+      )
       rmSync(dir, { recursive: true, force: true })
     }
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 function alive(pid: number): boolean {
@@ -156,7 +216,7 @@ function alive(pid: number): boolean {
 
 /** Waits until the process is gone; false if it still runs after `ms`. */
 async function gone(pid: number, ms = 15_000): Promise<boolean> {
-  for (const end = Date.now() + ms; Date.now() < end; ) {
+  for (const end = performance.now() + ms; performance.now() < end; ) {
     if (!alive(pid)) return true
     await Bun.sleep(100)
   }
@@ -192,12 +252,13 @@ test(
       maxGap = Math.max(maxGap, now - last)
       last = now
     }, 5)
+    cleanup.push(() => clearInterval(ticker))
     const t = new StdioTransport({
       argv: [process.execPath, FIXTURE, "stdio"],
       cwd: import.meta.dir,
       env: {},
     })
-    const client = new McpClient(t)
+    const client = trackedClient(t)
     await client.connect({ timeoutMs: SLOW })
     clearInterval(ticker)
     // The spawn happened in the command worker; the main thread kept ticking.
@@ -217,7 +278,7 @@ test(
       "connection closed",
     )
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -264,7 +325,7 @@ test(
     await mcp.close()
     expect(tools.deferred()).toEqual([])
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -279,7 +340,7 @@ test(
     expect(tools.get("mcp__fx__echo")).toBeDefined()
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -301,7 +362,7 @@ test(
     expect(JSON.parse(resultText(cancelled)).length).toBe(1)
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -322,7 +383,7 @@ test(
     expect(JSON.parse(resultText(toolResults(agent).at(-1))).length).toBe(1)
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -347,7 +408,7 @@ test(
 
     await agent.prompt("crash it")
     expect(toolResults(agent)[0]).toMatchObject({ isError: true })
-    for (let i = 0; i < 100 && mcp.servers()[1]!.state === "ready"; i++) await Bun.sleep(50)
+    await waitForSpawnCondition("crashed MCP server state", () => mcp.servers()[1]!.state !== "ready", 5000)
     expect(mcp.servers()[1]!.state).toBe("failed")
     expect(tools.get("mcp__fx__echo")).toBeUndefined()
     const lost = (await errors()).find((e) => e.includes('"fx"'))
@@ -355,7 +416,7 @@ test(
     expect(lost).toContain("crashing on purpose")
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -368,11 +429,11 @@ test(
     await mcp.settled()
     expect(tools.get("mcp__fx__extra")).toBeUndefined()
     await agent.prompt("go")
-    for (let i = 0; i < 100 && !tools.get("mcp__fx__extra"); i++) await Bun.sleep(20)
+    await waitForSpawnCondition("MCP extra tool registration", () => !!tools.get("mcp__fx__extra"), 2000)
     expect(tools.get("mcp__fx__extra")?.exposure).toBe("deferred")
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -380,11 +441,11 @@ test(
   async () => {
     const { tools, mcp } = await harness([stdioServer("fx", { env: { FIXTURE_LATE_TOOL: "1" } })])
     await mcp.settled()
-    for (let i = 0; i < 100 && !tools.get("mcp__fx__extra"); i++) await Bun.sleep(20)
+    await waitForSpawnCondition("MCP extra tool registration", () => !!tools.get("mcp__fx__extra"), 2000)
     expect(tools.get("mcp__fx__extra")?.exposure).toBe("deferred")
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test("streamable HTTP with JSON and with SSE replies, including notifications in the stream", async () => {
@@ -418,18 +479,18 @@ test("streamable HTTP with JSON and with SSE replies, including notifications in
 })
 
 test("HTTP errors fail the connection with the status; headers are sent", async () => {
-  const good = new McpClient(
+  const good = trackedClient(
     new HttpTransport(`${http.url}?token=required`, { authorization: "Bearer secret" }),
   )
   await good.connect({ timeoutMs: 5000 })
   expect((await good.listTools({ timeoutMs: 5000 })).length).toBe(13)
   await good.close()
-  const bad = new McpClient(new HttpTransport(`${http.url}?token=required`))
+  const bad = trackedClient(new HttpTransport(`${http.url}?token=required`))
   expect(await failure(bad.connect({ timeoutMs: 5000 }))).toContain("HTTP 401")
 })
 
 test("an HTTP request is abortable", async () => {
-  const client = new McpClient(new HttpTransport(httpSse.url))
+  const client = trackedClient(new HttpTransport(httpSse.url))
   await client.connect({ timeoutMs: 5000 })
   const abort = new AbortController()
   const call = client.callTool("slow", { ms: 5000 }, { timeoutMs: 10_000, signal: abort.signal })
@@ -450,7 +511,9 @@ test("an HTTP request is abortable", async () => {
 test(
   "a model call right after startup waits briefly for connecting servers",
   async () => {
-    const { agent, mock, mcp } = await harness([stdioServer("fx")], [{ text: "a" }])
+    const { agent, mock, mcp } = await harness([stdioServer("fx")], [{ text: "a" }], {
+      startupWaitMs: SPAWN_WAIT_TIMEOUT_MS,
+    })
     // No settled(): the background connect has not even started yet.
     await agent.prompt("go")
     expect(mock.requests[0]!.systemPrompt).toContain("- mcp__fx__echo:")
@@ -458,7 +521,7 @@ test(
     expect(mock.requests[0]!.tools.map((t) => t.name)).toEqual([TOOL_SEARCH])
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -473,7 +536,7 @@ test(
     expect(mock.requests[1]!.systemPrompt).not.toContain("Still connecting")
     await mcp.close()
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test(
@@ -481,7 +544,7 @@ test(
   async () => {
     resetCommandWorker({ url: new URL("./fixtures/missing-worker.ts", import.meta.url).href })
     try {
-      const client = new McpClient(
+      const client = trackedClient(
         new StdioTransport({ argv: [process.execPath, FIXTURE, "stdio"], cwd: import.meta.dir, env: {} }),
       )
       await client.connect({ timeoutMs: SLOW })
@@ -493,5 +556,5 @@ test(
       resetCommandWorker()
     }
   },
-  SLOW,
+  SPAWN_TEST_TIMEOUT_MS,
 )

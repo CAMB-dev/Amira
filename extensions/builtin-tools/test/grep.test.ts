@@ -1,7 +1,13 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  waitForSpawnCondition,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 import { type GrepParams, grepTool } from "../src/grep.ts"
+import { observeGrepWorkers } from "./grep-matcher-fixture.ts"
 import { makeCtx, tempDirs, textOf } from "./util.ts"
 
 const tmp = tempDirs()
@@ -72,63 +78,98 @@ test("only the first 10,000 characters of a line are searched", async () => {
   expect(textOf(await grep({ pattern: "FAR", path: "long.txt" }))).toContain("No matches")
 })
 
-test("pathological regex times out without blocking the main thread", async () => {
-  const d = await tmp.make()
-  // Bun may cap one regex evaluation internally; repeated hostile lines still block the caller.
-  await writeFile(join(d, "bad.txt"), `${"a".repeat(9_000)}!\n`.repeat(20))
-  let ticks = 0
-  const heartbeat = setInterval(() => ticks++, 20)
-  const started = performance.now()
-  try {
-    const result = await grepTool.execute({ pattern: "(a+)+$", path: "bad.txt" }, makeCtx(d))
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain("timed out")
-    expect(textOf(result)).toContain("Simplify")
-    expect(ticks).toBeGreaterThan(0)
-    expect(performance.now() - started).toBeLessThan(4_000)
-  } finally {
-    clearInterval(heartbeat)
-  }
-}, 5_000)
+test(
+  "pathological regex times out without blocking the main thread",
+  async () => {
+    const d = await tmp.make()
+    // Bun may cap one regex evaluation internally; repeated hostile lines still block the caller.
+    await writeFile(join(d, "bad.txt"), `${"a".repeat(9_000)}!\n`.repeat(20))
+    const observed = observeGrepWorkers()
+    const controller = new AbortController()
+    let ticks = 0
+    const heartbeat = setInterval(() => ticks++, 20)
+    const pending = grepTool.execute({ pattern: "(a+)+$", path: "bad.txt" }, makeCtx(d, controller.signal))
+    try {
+      await waitForSpawnCondition(
+        "grep worker batch dispatched",
+        () => observed.workers[0]?.started !== undefined,
+      )
+      const started = observed.workers[0]!.started!
+      ticks = 0
+      const result = await waitForSpawnWork("pathological grep timeout", pending)
+      expect(result.isError).toBe(true)
+      expect(textOf(result)).toContain("timed out")
+      expect(textOf(result)).toContain("Simplify")
+      expect(ticks).toBeGreaterThan(0)
+      expect(performance.now() - started).toBeLessThan(4_000)
+    } finally {
+      controller.abort()
+      clearInterval(heartbeat)
+      await pending
+      observed.restore()
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("an in-flight regex search can be aborted without affecting another search", async () => {
-  const d = await tmp.make()
-  await writeFile(join(d, "bad.txt"), `${"a".repeat(9_000)}!\n`.repeat(20))
-  const controller = new AbortController()
-  const started = performance.now()
-  const pending = grepTool.execute(
-    { pattern: "(a+)+$", path: "bad.txt", output_mode: "count" },
-    makeCtx(d, controller.signal),
-  )
-  const timer = setTimeout(() => controller.abort(), 100)
-  try {
-    const normal = await grep({ pattern: "TODO\\b", path: "src/a.ts", output_mode: "content" })
-    expect(textOf(normal)).toBe("src/a.ts:1:const TODO = 1")
-    const result = await pending
-    expect(result.isError).toBe(true)
-    expect(textOf(result)).toBe("Aborted")
-    expect(performance.now() - started).toBeLessThan(2_000)
-  } finally {
-    clearTimeout(timer)
-  }
-  // A cancelled worker must not poison later regex searches.
-  expect(textOf(await grep({ pattern: "TODO.*", path: "notes.md" }))).toBe("notes.md")
-})
+test(
+  "an in-flight regex search can be aborted without affecting another search",
+  async () => {
+    const d = await tmp.make()
+    await writeFile(join(d, "bad.txt"), `${"a".repeat(9_000)}!\n`.repeat(20))
+    const observed = observeGrepWorkers()
+    const controller = new AbortController()
+    const pending = grepTool.execute(
+      { pattern: "(a+)+$", path: "bad.txt", output_mode: "count" },
+      makeCtx(d, controller.signal),
+    )
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let normal: ReturnType<typeof grep> | undefined
+    try {
+      await waitForSpawnCondition(
+        "abortable grep batch dispatched",
+        () => observed.workers[0]?.started !== undefined,
+      )
+      const started = observed.workers[0]!.started!
+      timer = setTimeout(() => controller.abort(), 100)
+      normal = grep({ pattern: "TODO\\b", path: "src/a.ts", output_mode: "content" })
+      const result = await waitForSpawnWork("aborted grep", pending)
+      expect(result.isError).toBe(true)
+      expect(textOf(result)).toBe("Aborted")
+      expect(performance.now() - started).toBeLessThan(2_000)
+      // The other worker's startup is not part of the aborted operation's latency budget.
+      expect(textOf(await waitForSpawnWork("concurrent grep", normal))).toBe("src/a.ts:1:const TODO = 1")
+    } finally {
+      controller.abort()
+      clearTimeout(timer)
+      await pending
+      if (normal) await normal
+      observed.restore()
+    }
+    // A cancelled worker must not poison later regex searches.
+    expect(textOf(await grep({ pattern: "TODO.*", path: "notes.md" }))).toBe("notes.md")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("worker matching preserves JavaScript regex features and all output modes", async () => {
-  const d = await tmp.make()
-  await writeFile(join(d, "a.txt"), "TODO TODO\r\ntodo todo\r\nTODO other\r\n")
-  await writeFile(join(d, "b.txt"), "TODO TODO\n")
-  const run = (params: GrepParams) => grepTool.execute(params, makeCtx(d))
-  const pattern = "^(\\w+) \\1(?=$)"
-  expect(textOf(await run({ pattern, ignore_case: true, output_mode: "content" }))).toBe(
-    "a.txt:1:TODO TODO\na.txt:2:todo todo\nb.txt:1:TODO TODO",
-  )
-  expect(textOf(await run({ pattern, ignore_case: true, output_mode: "count" }))).toBe("a.txt:2\nb.txt:1")
-  expect(textOf(await run({ pattern }))).toBe("a.txt\nb.txt")
-  expect(textOf(await run({ pattern: "NOT.*HERE" }))).toContain("No matches")
-  expect(textOf(await run({ pattern: "TODO.*", head_limit: 1 }))).toContain("Showing 1 of 2")
-})
+test(
+  "worker matching preserves JavaScript regex features and all output modes",
+  async () => {
+    const d = await tmp.make()
+    await writeFile(join(d, "a.txt"), "TODO TODO\r\ntodo todo\r\nTODO other\r\n")
+    await writeFile(join(d, "b.txt"), "TODO TODO\n")
+    const run = (params: GrepParams) => grepTool.execute(params, makeCtx(d))
+    const pattern = "^(\\w+) \\1(?=$)"
+    expect(textOf(await run({ pattern, ignore_case: true, output_mode: "content" }))).toBe(
+      "a.txt:1:TODO TODO\na.txt:2:todo todo\nb.txt:1:TODO TODO",
+    )
+    expect(textOf(await run({ pattern, ignore_case: true, output_mode: "count" }))).toBe("a.txt:2\nb.txt:1")
+    expect(textOf(await run({ pattern }))).toBe("a.txt\nb.txt")
+    expect(textOf(await run({ pattern: "NOT.*HERE" }))).toContain("No matches")
+    expect(textOf(await run({ pattern: "TODO.*", head_limit: 1 }))).toContain("Showing 1 of 2")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("an already aborted search returns an error", async () => {
   const controller = new AbortController()
@@ -138,24 +179,32 @@ test("an already aborted search returns an error", async () => {
   expect(textOf(result)).toBe("Aborted")
 })
 
-test("worker matching retains the 10,000-character limit", async () => {
-  const d = await tmp.make()
-  await writeFile(join(d, "long.txt"), `${"a".repeat(9_000)}NEAR${"a".repeat(2_000)}FAR`)
-  const run = (pattern: string) => grepTool.execute({ pattern, path: "long.txt" }, makeCtx(d))
-  expect(textOf(await run("NEAR.*"))).toBe("long.txt")
-  expect(textOf(await run("FAR.*"))).toContain("No matches")
-})
+test(
+  "worker matching retains the 10,000-character limit",
+  async () => {
+    const d = await tmp.make()
+    await writeFile(join(d, "long.txt"), `${"a".repeat(9_000)}NEAR${"a".repeat(2_000)}FAR`)
+    const run = (pattern: string) => grepTool.execute({ pattern, path: "long.txt" }, makeCtx(d))
+    expect(textOf(await run("NEAR.*"))).toBe("long.txt")
+    expect(textOf(await run("FAR.*"))).toContain("No matches")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a search over more files than one worker batch reports every file, in order", async () => {
-  const d = await tmp.make()
-  const names = Array.from({ length: 300 }, (_, i) => `f${String(i).padStart(3, "0")}.txt`)
-  for (const name of names) await writeFile(join(d, name), "skip\r\nkeep me\r\nkeep\n")
-  const run = (params: GrepParams) => grepTool.execute({ head_limit: 1000, ...params }, makeCtx(d))
-  const counts = textOf(await run({ pattern: "^keep", output_mode: "count" })).split("\n")
-  expect(counts).toEqual(names.map((n) => `${n}:2`))
-  const rows = textOf(await run({ pattern: "^keep me$", output_mode: "content" })).split("\n")
-  expect(rows).toEqual(names.map((n) => `${n}:2:keep me`))
-})
+test(
+  "a search over more files than one worker batch reports every file, in order",
+  async () => {
+    const d = await tmp.make()
+    const names = Array.from({ length: 300 }, (_, i) => `f${String(i).padStart(3, "0")}.txt`)
+    for (const name of names) await writeFile(join(d, name), "skip\r\nkeep me\r\nkeep\n")
+    const run = (params: GrepParams) => grepTool.execute({ head_limit: 1000, ...params }, makeCtx(d))
+    const counts = textOf(await run({ pattern: "^keep", output_mode: "count" })).split("\n")
+    expect(counts).toEqual(names.map((n) => `${n}:2`))
+    const rows = textOf(await run({ pattern: "^keep me$", output_mode: "content" })).split("\n")
+    expect(rows).toEqual(names.map((n) => `${n}:2:keep me`))
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("a single-file path is searched even when glob would not match it", async () => {
   const r = await grep({ pattern: "docs", path: "notes.md", glob: "src/**/*.ts", output_mode: "content" })
@@ -180,29 +229,33 @@ test("a ./-prefixed glob works like the plain one", async () => {
   expect(textOf(await grep({ pattern: "TODO", glob: "./src/deep/**" }))).toBe("src/deep/b.ts")
 })
 
-test("a final line break ends the last line instead of starting another, as read counts lines", async () => {
-  const d = await tmp.make()
-  const files: Record<string, string> = {
-    "empty.txt": "",
-    "none.txt": "hello",
-    "lf.txt": "hello\n",
-    "crlf.txt": "hello\r\n",
-    "blank.txt": "\n",
-    "blanks.txt": "a\n\n\nb\r\n",
-  }
-  for (const [name, text] of Object.entries(files)) await writeFile(join(d, name), text)
-  const run = (params: GrepParams) => grepTool.execute(params, makeCtx(d))
-  expect(textOf(await run({ pattern: "^$", output_mode: "content" })).split("\n")).toEqual([
-    "blank.txt:1:",
-    "blanks.txt:2:",
-    "blanks.txt:3:",
-  ])
-  expect(textOf(await run({ pattern: "^", output_mode: "count" })).split("\n")).toEqual([
-    "blank.txt:1",
-    "blanks.txt:4",
-    "crlf.txt:1",
-    "lf.txt:1",
-    "none.txt:1",
-  ])
-  expect(textOf(await run({ pattern: "^$" })).split("\n")).toEqual(["blank.txt", "blanks.txt"])
-})
+test(
+  "a final line break ends the last line instead of starting another, as read counts lines",
+  async () => {
+    const d = await tmp.make()
+    const files: Record<string, string> = {
+      "empty.txt": "",
+      "none.txt": "hello",
+      "lf.txt": "hello\n",
+      "crlf.txt": "hello\r\n",
+      "blank.txt": "\n",
+      "blanks.txt": "a\n\n\nb\r\n",
+    }
+    for (const [name, text] of Object.entries(files)) await writeFile(join(d, name), text)
+    const run = (params: GrepParams) => grepTool.execute(params, makeCtx(d))
+    expect(textOf(await run({ pattern: "^$", output_mode: "content" })).split("\n")).toEqual([
+      "blank.txt:1:",
+      "blanks.txt:2:",
+      "blanks.txt:3:",
+    ])
+    expect(textOf(await run({ pattern: "^", output_mode: "count" })).split("\n")).toEqual([
+      "blank.txt:1",
+      "blanks.txt:4",
+      "crlf.txt:1",
+      "lf.txt:1",
+      "none.txt:1",
+    ])
+    expect(textOf(await run({ pattern: "^$" })).split("\n")).toEqual(["blank.txt", "blanks.txt"])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

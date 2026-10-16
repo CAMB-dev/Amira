@@ -2,10 +2,10 @@ import { expect, spyOn, test } from "bun:test"
 import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { boundedExit, READER_READY_TIMEOUT_MS, startGateReader } from "./file-lock-reader-fixture.ts"
+import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
+import { boundedExit, startGateReader } from "./file-lock-reader-fixture.ts"
 
 if (process.platform === "win32") {
-  const timeout = READER_READY_TIMEOUT_MS * 2 + 5000
   for (const startup of ["slow", "crash"] as const) {
     test(
       `Windows reader readiness diagnoses ${startup} startup separately from contention`,
@@ -46,7 +46,7 @@ if (process.platform === "win32") {
           fs.rmSync(dir, { recursive: true, force: true })
         }
       },
-      timeout,
+      SPAWN_TEST_TIMEOUT_MS,
     )
   }
 
@@ -71,6 +71,6 @@ if (process.platform === "win32") {
         fs.rmSync(dir, { recursive: true, force: true })
       }
     },
-    timeout,
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }

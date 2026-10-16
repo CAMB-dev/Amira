@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test"
+import { afterAll, afterEach, expect, test } from "bun:test"
 import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
@@ -35,6 +35,8 @@ import {
 import { runCommand } from "../../../packages/proc/src/index.ts"
 import { ExtensionViewer } from "../../../packages/tui/src/extension-view.ts"
 import { monoTheme, stripAnsi } from "../../../packages/tui-kit/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
+import { cleanupSpawnWork, spawnWorkScope } from "../../builtin-tools/test/util.ts"
 import {
   createAgentExtension,
   createWorktree,
@@ -50,13 +52,29 @@ import {
 } from "../src/index.ts"
 import { subagentView } from "../src/subagent-view.ts"
 
+const gitWork = spawnWorkScope("git runner cleanup")
+const runGitCommand: typeof runCommand = (argv, options) =>
+  gitWork.run((signal) => runCommand(argv, { ...options, signal }), options.signal)
+const roots: Agent[] = []
+afterEach(async () => {
+  gitWork.abort()
+  try {
+    await cleanupSpawnWork(
+      "agent teardown",
+      roots.splice(0).map((root) => () => root.dispose()),
+    )
+  } finally {
+    await gitWork.cleanup()
+  }
+}, SPAWN_TEST_TIMEOUT_MS)
+
 const dirs: string[] = []
 const savedHome = process.env.AMIRA_HOME
 afterAll(async () => {
   if (savedHome === undefined) delete process.env.AMIRA_HOME
   else process.env.AMIRA_HOME = savedHome
   for (const d of dirs) await rm(d, { recursive: true, force: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 function who(req: ModelRequest): string {
   const m = /You are an? (explorer|coder|reviewer)\b/.exec(req.systemPrompt)
@@ -128,6 +146,7 @@ async function setup(
     })
     return { ...r, text: r.output.join("\n") }
   }
+  roots.push(root)
   return { root, tree, tools, bus, events, host, commands, control, run, views, screen, home }
 }
 
@@ -608,7 +627,7 @@ async function repository(git: RunGit) {
 test(
   "/agents lists the worktrees sub-agents kept, to merge, keep or discard each over its diff",
   async () => {
-    const git = hostGit({ runCommand })
+    const git = hostGit({ runCommand: runGitCommand })
     const repo = await repository(git)
     const { run, host, home } = await setup(nested, { git, cwd: repo })
     const kept = async (name: string, title: string) => {
@@ -628,7 +647,7 @@ test(
     utimesSync(old.dir, then, then)
     writeFileSync(`${old.dir}.expiring`, "")
     const next = async () => {
-      while (!host.ui.pending.length) await Bun.sleep(5)
+      await waitForSpawnCondition("kept-worktree picker", () => host.ui.pending.length > 0)
       return host.ui.pending[0]!
     }
     const answer = async (line: string, pick: (r: UiRequest) => unknown, review?: string) => {
@@ -696,43 +715,47 @@ test(
     expect(existsSync(path.join(repo, "new.txt"))).toBe(false)
     expect((await run("/agents")).text).toBe("No sub-agents in this session yet.")
   },
-  { timeout: 60_000 },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test("with sub-agents too, the kept worktrees follow them under a heading of their own", async () => {
-  const git = hostGit({ runCommand })
-  const repo = await repository(git)
-  const { root, run, host, home } = await setup(nested, { git, cwd: repo })
-  const wt = await createWorktree(git, {
-    cwd: repo,
-    home,
-    name: "sa_x",
-    about: { title: "Fix it", role: "coder" },
-  })
-  if ("error" in wt) throw new Error(wt.error)
-  writeFileSync(path.join(wt.dir, "f.txt"), "x\n")
-  await keepChanges(git, wt)
-  await root.prompt("go")
-  const running = run("/agents")
-  while (!host.ui.pending.length) await Bun.sleep(5)
-  const r = host.ui.pending[0]!
-  expect(r).toMatchObject({
-    title: "Sub-agents",
-    optionStatuses: ["done", "done", undefined],
-    sections: [
-      { at: 0, choose: "open", keys: [{ key: "p", label: "print" }] },
-      { at: 2, title: "Worktrees kept with their changes", choose: "review" },
-    ],
-  })
-  expect(r.kind === "select" ? r.options[2] : "").toBe("Fix it · coder · 1 file, +1 -3")
-  expect(r.kind === "select" ? r.descriptions : []).toEqual([
-    "",
-    "",
-    expect.stringMatching(/^changed today · /),
-  ])
-  host.ui.cancel(r.requestId)
-  expect((await running).text).toBe("")
-}, 60_000)
+test(
+  "with sub-agents too, the kept worktrees follow them under a heading of their own",
+  async () => {
+    const git = hostGit({ runCommand: runGitCommand })
+    const repo = await repository(git)
+    const { root, run, host, home } = await setup(nested, { git, cwd: repo })
+    const wt = await createWorktree(git, {
+      cwd: repo,
+      home,
+      name: "sa_x",
+      about: { title: "Fix it", role: "coder" },
+    })
+    if ("error" in wt) throw new Error(wt.error)
+    writeFileSync(path.join(wt.dir, "f.txt"), "x\n")
+    await keepChanges(git, wt)
+    await root.prompt("go")
+    const running = run("/agents")
+    await waitForSpawnCondition("sub-agent worktree picker", () => host.ui.pending.length > 0)
+    const r = host.ui.pending[0]!
+    expect(r).toMatchObject({
+      title: "Sub-agents",
+      optionStatuses: ["done", "done", undefined],
+      sections: [
+        { at: 0, choose: "open", keys: [{ key: "p", label: "print" }] },
+        { at: 2, title: "Worktrees kept with their changes", choose: "review" },
+      ],
+    })
+    expect(r.kind === "select" ? r.options[2] : "").toBe("Fix it · coder · 1 file, +1 -3")
+    expect(r.kind === "select" ? r.descriptions : []).toEqual([
+      "",
+      "",
+      expect.stringMatching(/^changed today · /),
+    ])
+    host.ui.cancel(r.requestId)
+    expect((await running).text).toBe("")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("plain transcripts group visible tools, keep outcomes inline and start at the fork's own task", () => {
   const info: SubagentInfo = {

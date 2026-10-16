@@ -72,9 +72,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     case "pipe-close":
       return pipes.get(msg.id)?.close(msg.graceMs)
     case "dispose":
-      prepared.get(msg.id)?.dispose()
-      prepared.delete(msg.id)
-      return
+      return dispose(msg.id)
     case "run":
       return track(msg.id, msg.request, (opts) =>
         runCommandInline(msg.request.argv, { ...msg.request, ...opts }),
@@ -100,6 +98,23 @@ function prepare(id: number, request: SpawnRequest) {
   } catch {
     post({ type: "gone", id })
   }
+}
+
+/** Do not acknowledge a kill request until the native child has actually exited. */
+function dispose(id: number) {
+  const command = prepared.get(id)
+  Promise.resolve()
+    .then(() => command?.dispose())
+    .then(
+      () => {
+        prepared.delete(id)
+        post({ type: "disposed", id })
+      },
+      (error) => {
+        prepared.delete(id)
+        post({ type: "disposed", id, error: error instanceof Error ? error.message : String(error) })
+      },
+    )
 }
 
 /** Runs a command under an abort controller the main thread can reach, and reports back. */

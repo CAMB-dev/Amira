@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os"
 import path from "node:path"
 import { type FormSpec, runFormDialogs } from "@amira/api"
+import * as core from "@amira/core"
 import { UsageError } from "../src/args.ts"
 import type { CatalogCacheOptions } from "../src/catalog.ts"
 import { lineDialogs, runProviderAdminCommand } from "../src/provider-cli.ts"
@@ -15,7 +16,11 @@ setDefaultTimeout(30_000)
 let home: string
 let cwd: string
 let networkFetch: ReturnType<typeof spyOn<typeof globalThis, "fetch">>
+let restrict: ReturnType<typeof spyOn<typeof core, "restrictToCurrentUser">>
 beforeEach(() => {
+  // ACL enforcement has a real-process integration test in core/provider-config.
+  // These dialog tests only need the save contract, not an incidental icacls spawn.
+  restrict = spyOn(core, "restrictToCurrentUser").mockResolvedValue(undefined)
   networkFetch = spyOn(globalThis, "fetch").mockImplementation(
     Object.assign(
       async () => {
@@ -41,6 +46,7 @@ afterEach(() => {
     expect(networkFetch).not.toHaveBeenCalled()
   } finally {
     networkFetch.mockRestore()
+    restrict.mockRestore()
     rmSync(home, { recursive: true, force: true })
   }
 })
@@ -118,6 +124,7 @@ test("provider add from piped stdin asks field by field and saves", async () => 
     models: [{ id: "deepseek-chat" }, { id: "deepseek-reasoner" }],
   })
   expect(auth()).toEqual({ "ds-test": { type: "api_key", apiKey: KEY } })
+  expect(restrict).toHaveBeenCalledWith(path.join(home, "auth.json"), {})
 })
 
 test("provider edit shows the prefilled form; remove and key work without a session", async () => {

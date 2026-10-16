@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test"
+import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit } from "../../../scripts/spawn-test.ts"
 import { setup } from "./app-harness.ts"
+import { waitForSpawnWork } from "./spawn-fixture.ts"
 
 test("TERM=dumb emits no escapes while starting, replying, printing notices and quitting", async () => {
   const s = await setup([{ text: "**plain reply** [link](https://example.com)" }], {
@@ -28,14 +30,16 @@ test("TERM=dumb emits no escapes while starting, replying, printing notices and 
 })
 
 for (const supplied of [false, true]) {
-  test(`TERM=dumb strips synchronous emergency cleanup (supplied: ${supplied})`, async () => {
-    const module = new URL("../src/app/terminal.ts", import.meta.url).href
-    const processTerminal = new URL("../../tui-kit/src/terminal.ts", import.meta.url).href
-    const child = Bun.spawn(
-      [
-        process.execPath,
-        "-e",
-        `
+  test(
+    `TERM=dumb strips synchronous emergency cleanup (supplied: ${supplied})`,
+    async () => {
+      const module = new URL("../src/app/terminal.ts", import.meta.url).href
+      const processTerminal = new URL("../../tui-kit/src/terminal.ts", import.meta.url).href
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
     const { interactiveTerminal } = await import(${JSON.stringify(module)})
     const { ProcessTerminal } = await import(${JSON.stringify(processTerminal)})
     const terminal = interactiveTerminal(${supplied ? "new ProcessTerminal()" : "undefined"}, { TERM: "dumb" })
@@ -45,16 +49,25 @@ for (const supplied of [false, true]) {
     process.emit("uncaughtExceptionMonitor", new Error("test"), "uncaughtException")
     terminal.stop()
   `,
-      ],
-      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-    )
-    const [output, error, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ])
-    expect({ output, error, code }).toEqual({ output: "plain\nbye\n", error: "", code: 0 })
-  }, 30_000)
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      )
+      try {
+        const [output, error, code] = await waitForSpawnWork(
+          Promise.all([
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+            waitForSpawnExit(child, "dumb terminal emergency cleanup"),
+          ]),
+          "dumb terminal output and exit",
+        )
+        expect({ output, error, code }).toEqual({ output: "plain\nbye\n", error: "", code: 0 })
+      } finally {
+        await stopSpawn(child, "dumb terminal cleanup")
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 }
 
 test("TERM=dumb drops the bell as well as escapes", async () => {

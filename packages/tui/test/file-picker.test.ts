@@ -4,9 +4,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { key } from "@amira/tui-kit"
+import { SPAWN_TEST_TIMEOUT_MS, SPAWN_WAIT_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { plain } from "../../tui-kit/test/context.ts"
 import { FileIndex, fileList, listProjectFiles, withDirectories } from "../src/file-index.ts"
 import { atReference, FilePicker, fuzzyScore, rankFiles, Search } from "../src/file-picker.ts"
+import { waitForSpawnWork } from "./spawn-fixture.ts"
 
 const files = [
   "README.md",
@@ -379,7 +381,7 @@ test("FileIndex grows its listing in place, each directory once, and stops at it
 })
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-files-"))
-afterAll(() => rmSync(tmp, { recursive: true, force: true }))
+afterAll(() => rmSync(tmp, { recursive: true, force: true }), SPAWN_TEST_TIMEOUT_MS)
 
 function tree(root: string, paths: string[]) {
   for (const p of paths) {
@@ -426,14 +428,29 @@ test("a disposed FileIndex stops its listing and tells no one", async () => {
   expect(changes).toBe(0)
 })
 
+async function listFixtureFiles(root: string, opts: { limit?: number } = {}) {
+  const abort = new AbortController()
+  const listing = listProjectFiles(root, { ...opts, signal: abort.signal })
+  try {
+    return await waitForSpawnWork(listing, `list fixture files in ${root}`)
+  } finally {
+    abort.abort()
+    await waitForSpawnWork(listing, `file listing cleanup in ${root}`)
+  }
+}
+
 // Both listing integration cases wait for real Git (even the non-repository fallback).
-// Leave time for Windows subprocess startup rather than ending before its 15 s deadline.
-test("outside a repository the files are walked, skipping .git and node_modules", async () => {
-  const root = path.join(tmp, "plain")
-  tree(root, ["b.ts", "a/x.ts", "node_modules/m/i.js", "a/node_modules/y.js"])
-  expect(await listProjectFiles(root)).toEqual(["b.ts", "a/x.ts"])
-  expect(await listProjectFiles(root, { limit: 1 })).toEqual(["b.ts"])
-}, 40_000)
+// Keep the production 15 s operation deadline; allow Windows startup and cleanup separately.
+test(
+  "outside a repository the files are walked, skipping .git and node_modules",
+  async () => {
+    const root = path.join(tmp, "plain")
+    tree(root, ["b.ts", "a/x.ts", "node_modules/m/i.js", "a/node_modules/y.js"])
+    expect(await listFixtureFiles(root)).toEqual(["b.ts", "a/x.ts"])
+    expect(await listFixtureFiles(root, { limit: 1 })).toEqual(["b.ts"])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 const hasGit = Bun.which("git") !== null
 
@@ -443,9 +460,9 @@ test.skipIf(!hasGit)(
     const root = path.join(tmp, "repo")
     tree(root, [".gitignore", "src/app.ts", "dist/out.js", "notes.md"])
     writeFileSync(path.join(root, ".gitignore"), "dist/\n")
-    const init = Bun.spawnSync(["git", "init", "-q"], { cwd: root })
+    const init = Bun.spawnSync(["git", "init", "-q"], { cwd: root, timeout: SPAWN_WAIT_TIMEOUT_MS })
     expect(init.exitCode).toBe(0)
-    expect((await listProjectFiles(root)).sort()).toEqual([".gitignore", "notes.md", "src/app.ts"])
+    expect((await listFixtureFiles(root)).sort()).toEqual([".gitignore", "notes.md", "src/app.ts"])
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )

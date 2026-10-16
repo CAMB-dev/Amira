@@ -5,6 +5,13 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { npmPackOptions, npmTargets, stageNpmPackages } from "./npm-pack.ts"
 import { generateManifest } from "./sign-manifest.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "./spawn-test.ts"
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -219,62 +226,81 @@ async function run(argv: string[], env: Record<string, string | undefined> = {},
     stdout: "pipe",
     stderr: "pipe",
   })
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, code }
+  try {
+    const [stdout, stderr, code] = await waitForSpawnWork(
+      "child output",
+      Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        waitForSpawnExit(child, "launcher/package command"),
+      ]),
+    )
+    return { stdout, stderr, code }
+  } finally {
+    await stopSpawn(child)
+  }
 }
 
 for (const runtime of runtimes) {
-  test(`${runtime.name} launcher honors AMIRA_BINARY, literal arguments, inherited stdio and exit code`, async () => {
-    const fixture = await launcherFixture()
-    const args = ["two words", "$(not-a-command)", "--flag=value", "日本語"]
-    const result = await run([runtime.executable, fixture.launcher, fixture.script, ...args], {
-      AMIRA_BINARY: runtime.executable,
-    })
-    expect(result.code).toBe(37)
-    expect(result.stdout).toContain(JSON.stringify(args))
-    expect(result.stdout).toContain("inherited stdin")
-    expect(result.stderr).toContain("fake stderr")
-  })
-
-  test(`${runtime.name} launcher resolves a local platform package and reports missing package or override`, async () => {
-    const fixture = await launcherFixture()
-    const platform = npmTargets.find((item) => item.os === process.platform && item.cpu === process.arch)
-    expect(platform).toBeDefined()
-    const missing = await run([runtime.executable, fixture.launcher])
-    expect(missing.code).toBe(1)
-    expect(missing.stderr).toContain(platform!.name)
-    expect(missing.stderr).toContain("optional dependencies")
-    expect(missing.stderr).toContain("https://github.com/CAMB-dev/Amira/releases")
-    const override = await run([runtime.executable, fixture.launcher], {
-      AMIRA_BINARY: path.join(fixture.directory, "missing.exe"),
-    })
-    expect(override.code).toBe(1)
-    expect(override.stderr).toContain("could not start")
-    expect(override.stderr).not.toContain("could not find")
-    const folder = path.join(fixture.main, "node_modules", platform!.name)
-    await mkdir(path.join(folder, "bin"), { recursive: true })
-    await writeFile(
-      path.join(folder, "package.json"),
-      JSON.stringify({ name: platform!.name, version: "1.0.0" }),
-    )
-    const executable = path.join(folder, "bin", process.platform === "win32" ? "amira.exe" : "amira")
-    if (process.platform === "win32") {
-      await copyFile(runtime.executable, executable)
-    } else {
-      // Test package lookup without requiring the host runtime to work after relocation.
-      await writeFile(executable, `#!/bin/sh\nexec '${runtime.executable.replaceAll("'", "'\\''")}' "$@"\n`, {
-        mode: 0o755,
+  test(
+    `${runtime.name} launcher honors AMIRA_BINARY, literal arguments, inherited stdio and exit code`,
+    async () => {
+      const fixture = await launcherFixture()
+      const args = ["two words", "$(not-a-command)", "--flag=value", "日本語"]
+      const result = await run([runtime.executable, fixture.launcher, fixture.script, ...args], {
+        AMIRA_BINARY: runtime.executable,
       })
-    }
-    const found = await run([runtime.executable, fixture.launcher, fixture.script, "platform argument"])
-    expect(found.code, JSON.stringify(found)).toBe(37)
-    expect(found.stdout).toContain('["platform argument"]')
-    expect(found.stderr).toContain("fake stderr")
-  })
+      expect(result.code).toBe(37)
+      expect(result.stdout).toContain(JSON.stringify(args))
+      expect(result.stdout).toContain("inherited stdin")
+      expect(result.stderr).toContain("fake stderr")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  test(
+    `${runtime.name} launcher resolves a local platform package and reports missing package or override`,
+    async () => {
+      const fixture = await launcherFixture()
+      const platform = npmTargets.find((item) => item.os === process.platform && item.cpu === process.arch)
+      expect(platform).toBeDefined()
+      const missing = await run([runtime.executable, fixture.launcher])
+      expect(missing.code).toBe(1)
+      expect(missing.stderr).toContain(platform!.name)
+      expect(missing.stderr).toContain("optional dependencies")
+      expect(missing.stderr).toContain("https://github.com/CAMB-dev/Amira/releases")
+      const override = await run([runtime.executable, fixture.launcher], {
+        AMIRA_BINARY: path.join(fixture.directory, "missing.exe"),
+      })
+      expect(override.code).toBe(1)
+      expect(override.stderr).toContain("could not start")
+      expect(override.stderr).not.toContain("could not find")
+      const folder = path.join(fixture.main, "node_modules", platform!.name)
+      await mkdir(path.join(folder, "bin"), { recursive: true })
+      await writeFile(
+        path.join(folder, "package.json"),
+        JSON.stringify({ name: platform!.name, version: "1.0.0" }),
+      )
+      const executable = path.join(folder, "bin", process.platform === "win32" ? "amira.exe" : "amira")
+      if (process.platform === "win32") {
+        await copyFile(runtime.executable, executable)
+      } else {
+        // Test package lookup without requiring the host runtime to work after relocation.
+        await writeFile(
+          executable,
+          `#!/bin/sh\nexec '${runtime.executable.replaceAll("'", "'\\''")}' "$@"\n`,
+          {
+            mode: 0o755,
+          },
+        )
+      }
+      const found = await run([runtime.executable, fixture.launcher, fixture.script, "platform argument"])
+      expect(found.code, JSON.stringify(found)).toBe(37)
+      expect(found.stdout).toContain('["platform argument"]')
+      expect(found.stderr).toContain("fake stderr")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
   test.skipIf(process.platform === "win32").each(["SIGTERM", "SIGHUP"] as const)(
     `${runtime.name} launcher forwards %s and retains signal status`,
@@ -291,21 +317,21 @@ for (const runtime of runtimes) {
         stderr: "pipe",
       })
       try {
-        const reader = child.stdout.getReader()
         let ready = ""
-        while (!ready.includes("ready\n")) {
-          const chunk = await reader.read()
-          if (chunk.done) break
-          ready += new TextDecoder().decode(chunk.value)
-        }
+        const reading = (async () => {
+          for await (const chunk of child.stdout) ready += new TextDecoder().decode(chunk)
+        })()
+        void reading.catch(() => undefined)
+        await waitForSpawnCondition(`${runtime.name} signal handler ready`, () => ready.includes("ready\n"))
         expect(ready).toContain("ready\n")
         child.kill(signal)
-        const code = await child.exited
-        const stderr = await new Response(child.stderr).text()
+        const code = await waitForSpawnExit(child, `${runtime.name} forwarded ${signal}`)
+        await waitForSpawnWork("launcher stdout", reading)
+        const stderr = await waitForSpawnWork("launcher stderr", new Response(child.stderr).text())
         expect(code, JSON.stringify({ signal: child.signalCode, stderr })).toBe(42)
         expect(stderr).toContain(`received ${signal}`)
       } finally {
-        child.kill("SIGKILL")
+        await stopSpawn(child)
       }
       const selfSignal = path.join(fixture.directory, "self-signal.cjs")
       await writeFile(selfSignal, `process.kill(process.pid, "${signal}")\n`)
@@ -314,10 +340,14 @@ for (const runtime of runtimes) {
         stdout: "ignore",
         stderr: "pipe",
       })
-      await signaled.exited
-      expect(signaled.signalCode).toBe(signal)
+      try {
+        await waitForSpawnExit(signaled, `${runtime.name} self ${signal}`)
+        expect(signaled.signalCode).toBe(signal)
+      } finally {
+        await stopSpawn(signaled)
+      }
     },
-    10000,
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }
 
@@ -364,5 +394,5 @@ test.skipIf(!node || !npmCli || !existsSync(npmCli))(
       expect(existsSync(path.join(options.directory, pack.filename))).toBe(true)
     }
   },
-  30000,
+  SPAWN_TEST_TIMEOUT_MS,
 )

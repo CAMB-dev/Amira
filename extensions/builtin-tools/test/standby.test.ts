@@ -30,6 +30,7 @@ function fakePool(opts: { gone?: boolean } = {}) {
       const id = ++n
       log.push(`prepare ${id} ${argv[0]} ${spawn.cwd}`)
       let alive = true
+      const disposed = Promise.resolve()
       const s = {
         disposed: false,
         get alive() {
@@ -45,6 +46,7 @@ function fakePool(opts: { gone?: boolean } = {}) {
           alive = false
           s.disposed = true
           log.push(`dispose ${id}`)
+          return disposed
         },
       }
       standbys.push(s)

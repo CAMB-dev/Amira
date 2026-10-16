@@ -1,10 +1,16 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ToolRegistry } from "../../../packages/core/src/index.ts"
 import { cmdArgv, runCommand } from "../../../packages/proc/src/index.ts"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+} from "../../../scripts/spawn-test.ts"
 import { bashTool, powershellTool } from "../src/bash.ts"
 import {
   availableShellTools,
@@ -18,6 +24,10 @@ import {
   resolveShell,
   shellToolNames,
 } from "../src/shell.ts"
+import { spawnWorkScope, waitForSpawnWork } from "./util.ts"
+
+const work = spawnWorkScope("gate shells cleanup")
+afterEach(() => work.cleanup(), SPAWN_TEST_TIMEOUT_MS)
 
 const norm = (p: string) => p.replaceAll("\\", "/")
 const fakeFs = (...files: string[]) => {
@@ -134,34 +144,52 @@ const gated = shell.kind === "bash" && shell.command(":", process.cwd()).gated
 /** Starts a gated bash command directly or through cmd, and checks it waits for the gate line. */
 async function checkGate(throughCmd: boolean, line: string | undefined, expectRan: boolean) {
   const dir = await mkdtemp(join(tmpdir(), "amira-gate-"))
+  let proc: Bun.Subprocess<"pipe", "pipe", "ignore"> | undefined
+  let reading: Promise<void> | undefined
   try {
     const marker = join(dir, "ran").replaceAll("\\", "/")
     const { argv, env } = shell.command(`echo > "${marker}"; exit 4`, dir)
     const wrapped = throughCmd ? cmdArgv(argv, { cwd: dir, env, gated: true }) : argv
     expect(wrapped).toBeDefined()
-    const proc = Bun.spawn(wrapped!, {
-      cwd: dir,
-      env,
-      stdin: "pipe",
-      stdout: "ignore",
-      stderr: "ignore",
-      windowsVerbatimArguments: throughCmd,
-    })
+    // Observe the shell that owns the gate, not time spent waiting for Windows startup.
+    if (throughCmd) wrapped![wrapped!.length - 1] = wrapped!.at(-1)!.replace(/^"/, '"echo gate-ready&')
+    else wrapped![2] = `echo gate-ready; ${wrapped![2]}`
+    proc = work.own(
+      Bun.spawn(wrapped!, {
+        cwd: dir,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "ignore",
+        windowsVerbatimArguments: throughCmd,
+      }),
+    )
+    let output = ""
+    const stdout = proc.stdout
+    reading = (async () => {
+      for await (const chunk of stdout) output += new TextDecoder().decode(chunk)
+    })()
+    await waitForSpawnCondition("gate shell startup", () => output.includes("gate-ready"))
     await Bun.sleep(1500)
     expect(existsSync(marker)).toBe(false)
     if (line !== undefined) proc.stdin.write(`${line}\n`)
     await proc.stdin.end()
-    expect(await proc.exited).toBe(expectRan ? 4 : 125)
+    expect(await waitForSpawnExit(proc, "gate shell")).toBe(expectRan ? 4 : 125)
     expect(existsSync(marker)).toBe(expectRan)
   } finally {
-    await rm(dir, { recursive: true, force: true })
+    try {
+      if (proc) await stopSpawn(proc, "gate shell cleanup")
+      if (reading) await waitForSpawnWork("gate stdout cleanup", reading)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   }
 }
 
 test.if(gated)(
   "a gated command runs only after a line arrives on stdin",
   () => checkGate(false, "", true),
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 // Direct MSYS startup can block for seconds on Windows, in addition to the gate
@@ -169,10 +197,14 @@ test.if(gated)(
 test.if(gated)(
   "a gated command does not run when stdin closes without a line",
   () => checkGate(false, undefined, false),
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
-test.if(gated)("through cmd, the gate is held by cmd", () => checkGate(true, "go", true), 30_000)
+test.if(gated)(
+  "through cmd, the gate is held by cmd",
+  () => checkGate(true, "go", true),
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test.if(gated)(
   "through cmd, an empty or missing gate line runs nothing",
@@ -180,7 +212,7 @@ test.if(gated)(
     await checkGate(true, "", false)
     await checkGate(true, undefined, false)
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.if(process.platform === "win32")(
@@ -200,7 +232,7 @@ test.if(process.platform === "win32")(
     expect(run.output.split(/\r?\n/).filter(Boolean)).toEqual(['a"b', "c d", "e\\f\\", "$x", 'g"h'])
     expect(ps.label).toMatch(/PowerShell.*\(Git Bash not found\)/)
   },
-  30_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test("finds Git Bash from git.exe on PATH without running git", async () => {

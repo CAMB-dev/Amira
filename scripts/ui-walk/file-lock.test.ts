@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
 import { mkdir, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../spawn-test.ts"
 import { cleanupFile, removeOwnedRoot } from "./ownership.ts"
 import { list, registry, request, sessionRoot, start } from "./session.ts"
 
@@ -21,7 +22,6 @@ async function pendingGeneration() {
 
 async function windowsLockRegression(persistent: boolean) {
   const name = `lock-${randomUUID()}`
-  const session = await start(name, { cols: 100, rows: 32, idleTimeout: 10_000, args: ["--fullscreen"] })
   const { dlopen, FFIType, ptr } = await import("bun:ffi")
   const kernel = dlopen("kernel32.dll", {
     CreateFileW: {
@@ -33,11 +33,15 @@ async function windowsLockRegression(persistent: boolean) {
     TerminateProcess: { args: [FFIType.ptr, FFIType.u32], returns: FFIType.i32 },
     CloseHandle: { args: [FFIType.ptr], returns: FFIType.i32 },
   })
-  const daemon = kernel.symbols.OpenProcess(0x00100001, 0, session.pid)
-  const child = kernel.symbols.OpenProcess(0x00100001, 0, session.childPid)
+  let session: Awaited<ReturnType<typeof start>> | undefined
+  let daemon: ReturnType<typeof kernel.symbols.OpenProcess> = null
+  let child: ReturnType<typeof kernel.symbols.OpenProcess> = null
   let locked: ReturnType<typeof kernel.symbols.CreateFileW> = null
   const alive = (handle: typeof daemon) => !!handle && kernel.symbols.WaitForSingleObject(handle, 0) === 0x102
   try {
+    session = await start(name, { cols: 100, rows: 32, idleTimeout: 10_000, args: ["--fullscreen"] })
+    daemon = kernel.symbols.OpenProcess(0x00100001, 0, session.pid)
+    child = kernel.symbols.OpenProcess(0x00100001, 0, session.childPid)
     expect(daemon).not.toBeNull()
     expect(child).not.toBeNull()
     await request(name, { command: "wait", text: "ui-walk/main", timeout: 10_000 })
@@ -56,8 +60,7 @@ async function windowsLockRegression(persistent: boolean) {
     ).rejects.toThrow()
     expect(await stat(cleanupFile(session.root)).catch(() => undefined)).toBeDefined()
     if (persistent) {
-      const deadline = Date.now() + 8000
-      while (Date.now() < deadline && alive(daemon)) await Bun.sleep(25)
+      await waitForSpawnCondition("locked daemon retry window exhausted", () => !alive(daemon), 8000)
       expect(alive(daemon)).toBe(false)
       expect(await stat(session.root).catch(() => undefined)).toBeDefined()
       const pending = await list()
@@ -73,49 +76,63 @@ async function windowsLockRegression(persistent: boolean) {
     }
     expect(await stat(session.root).catch(() => undefined)).toBeUndefined()
     expect(await stat(cleanupFile(session.root)).catch(() => undefined)).toBeUndefined()
-    const deadline = Date.now() + 5000
-    while (Date.now() < deadline && alive(daemon)) await Bun.sleep(25)
+    await waitForSpawnCondition("unlocked daemon stopped", () => !alive(daemon), 5000)
     expect(alive(daemon)).toBe(false)
   } finally {
     if (locked) kernel.symbols.CloseHandle(locked)
     // Handles were opened immediately for our own fresh processes: cleanup cannot kill a reused PID.
     if (alive(daemon)) kernel.symbols.TerminateProcess(daemon, 1)
     if (alive(child)) kernel.symbols.TerminateProcess(child, 1)
-    if (daemon) kernel.symbols.CloseHandle(daemon)
-    if (child) kernel.symbols.CloseHandle(child)
-    kernel.close()
-    await rm(session.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
-    await rm(cleanupFile(session.root), { force: true })
+    try {
+      if (session && (!daemon || !child)) await request(name, { command: "stop" }).catch(() => undefined)
+      await waitForSpawnCondition("locked session processes stopped", () => !alive(daemon) && !alive(child))
+    } finally {
+      if (daemon) kernel.symbols.CloseHandle(daemon)
+      if (child) kernel.symbols.CloseHandle(child)
+      kernel.close()
+    }
+    if (session) {
+      await rm(session.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+      await rm(cleanupFile(session.root), { force: true })
+    }
   }
 }
 
-test("a temporary lock can be released and stop retried even after config was partially deleted", async () => {
-  const owner = await pendingGeneration()
-  try {
-    await removeOwnedRoot(owner)
-    expect(await stat(owner.root).catch(() => undefined)).toBeUndefined()
-    expect(await stat(cleanupFile(owner.root)).catch(() => undefined)).toBeUndefined()
-  } finally {
-    await rm(owner.root, { recursive: true, force: true })
-    await rm(cleanupFile(owner.root), { force: true })
-  }
-  // POSIX unlink permits open files; the portable ownership assertions run everywhere.
-  // Windows additionally exercises the actual no-delete-sharing OS lock through the real CLI.
-  if (process.platform === "win32") await windowsLockRegression(false)
-}, 30_000)
+test(
+  "a temporary lock can be released and stop retried even after config was partially deleted",
+  async () => {
+    const owner = await pendingGeneration()
+    try {
+      await removeOwnedRoot(owner)
+      expect(await stat(owner.root).catch(() => undefined)).toBeUndefined()
+      expect(await stat(cleanupFile(owner.root)).catch(() => undefined)).toBeUndefined()
+    } finally {
+      await rm(owner.root, { recursive: true, force: true })
+      await rm(cleanupFile(owner.root), { force: true })
+    }
+    // POSIX unlink permits open files; the portable ownership assertions run everywhere.
+    // Windows additionally exercises the actual no-delete-sharing OS lock through the real CLI.
+    if (process.platform === "win32") await windowsLockRegression(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("bounded shutdown leaves recoverable ownership proof, and list cleans it without killing recorded PIDs", async () => {
-  const owner = await pendingGeneration()
-  try {
-    const output = await list()
-    expect(output).toContain(`cleaned leftover ${owner.root}`)
-    expect(await stat(owner.root).catch(() => undefined)).toBeUndefined()
-    expect(await stat(cleanupFile(owner.root)).catch(() => undefined)).toBeUndefined()
-    expect((await request(owner.name, { command: "stop" })).status).toBe(200)
-    expect(registry).not.toBe(owner.root)
-  } finally {
-    await rm(owner.root, { recursive: true, force: true })
-    await rm(cleanupFile(owner.root), { force: true })
-  }
-  if (process.platform === "win32") await windowsLockRegression(true)
-}, 30_000)
+test(
+  "bounded shutdown leaves recoverable ownership proof, and list cleans it without killing recorded PIDs",
+  async () => {
+    const owner = await pendingGeneration()
+    try {
+      const output = await list()
+      expect(output).toContain(`cleaned leftover ${owner.root}`)
+      expect(await stat(owner.root).catch(() => undefined)).toBeUndefined()
+      expect(await stat(cleanupFile(owner.root)).catch(() => undefined)).toBeUndefined()
+      expect((await request(owner.name, { command: "stop" })).status).toBe(200)
+      expect(registry).not.toBe(owner.root)
+    } finally {
+      await rm(owner.root, { recursive: true, force: true })
+      await rm(cleanupFile(owner.root), { force: true })
+    }
+    if (process.platform === "win32") await windowsLockRegression(true)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
