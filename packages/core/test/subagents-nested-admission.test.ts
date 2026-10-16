@@ -1,10 +1,10 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, jest, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockReply, type ModelRequest } from "@amira/ai"
 import { type ChildSession, defineTool, textResult } from "@amira/api"
-import { Agent } from "../src/agent.ts"
+import * as agents from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { AgentTree } from "../src/subagents.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
@@ -56,7 +56,7 @@ async function setup(
   })
   const tree = new AgentTree({ ai, maxConcurrent, maxDepth: 3, sections: () => [] })
   const tools = new ToolRegistry()
-  const root = new Agent({ ai, tree, tools, cwd: dir, model: ai.model("mock/m"), bus: new EventBus() })
+  const root = new agents.Agent({ ai, tree, tools, cwd: dir, model: ai.model("mock/m"), bus: new EventBus() })
   cleanup.push(async () => {
     await root.dispose()
     expect(active).toBe(0)
@@ -372,16 +372,21 @@ test("a parent ending at tools needs no slot held by its live descendant", async
 })
 
 test("a parent at its model step limit ends without reacquiring its held descendant's slot", async () => {
+  const maxSteps = 2
+  const leafStarted = Promise.withResolvers<void>()
   const leafHeld = Promise.withResolvers<void>()
   let parentCalls = 0
   const { root, tree, tools, mock, active, peak } = await setup(
     (request) => {
-      if (promptOf(request) === "leaf") return { text: "held", hold: { chunks: 0, until: leafHeld.promise } }
+      if (promptOf(request) === "leaf") {
+        leafStarted.resolve()
+        return { text: "held", hold: { chunks: 0, until: leafHeld.promise } }
+      }
       parentCalls++
-      return { toolCalls: [{ name: parentCalls === 500 ? "launch" : "noop", args: {} }] }
+      return { toolCalls: [{ name: parentCalls === maxSteps ? "launch" : "noop", args: {} }] }
     },
     1,
-    501,
+    maxSteps + 1,
   )
   cleanup.unshift(async () => leafHeld.resolve())
   let leaf!: ChildSession
@@ -394,7 +399,7 @@ test("a parent at its model step limit ends without reacquiring its held descend
         execute: async (_args, ctx) => {
           if (name === "launch") {
             leaf = ctx.session!.spawn!({ prompt: "leaf", ephemeral: true, maxTurns: 1 })
-            await until(() => active() === 1 && mock.requests.length === 501)
+            await leafStarted.promise
           }
           return textResult("ok")
         },
@@ -402,19 +407,27 @@ test("a parent at its model step limit ends without reacquiring its held descend
       "test",
     )
   }
-  const parent = tree.spawn(root, { prompt: "parent", ephemeral: true, maxTurns: 1 })
-  await until(() => mock.requests.length === 501)
-  await Bun.sleep(20)
-  expect(parentCalls).toBe(500)
-  expect(parent.state).toBe("ended")
+  // SpawnOptions has no maxSteps: configure only this parent, restoring before its turn starts.
+  const Agent = agents.Agent
+  const agentConstructor: jest.SpiedClass<typeof Agent> = jest.spyOn(agents, "Agent")
+  agentConstructor.mockImplementation((options) => new Agent({ ...options, maxSteps }))
+  let parent: ChildSession
+  try {
+    parent = tree.spawn(root, { prompt: "parent", ephemeral: true, maxTurns: 1 })
+  } finally {
+    agentConstructor.mockRestore()
+  }
+  // The leaf stays held: completion proves the parent did not try to reacquire its slot.
   const result = await parent.result()
+  expect(parentCalls).toBe(maxSteps)
+  expect(parent.state).toBe("ended")
   expect(result.status).toBe("error")
-  expect(result.error).toBe("stopped after 500 model calls")
-  expect(result.steps).toBe(500)
+  expect(result.error).toBe(`stopped after ${maxSteps} model calls`)
+  expect(result.steps).toBe(maxSteps)
   expect(active()).toBe(1)
   leafHeld.resolve()
   expect((await leaf.result()).status).toBe("aborted")
-  expect(mock.requests).toHaveLength(501)
+  expect(mock.requests).toHaveLength(maxSteps + 1)
   expect(peak()).toBe(1)
 })
 
