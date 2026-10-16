@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -130,9 +130,10 @@ test(
       })
       expect(result.status).toBe(0)
       expect(result.error).toBeUndefined()
-      expect(JSON.parse(result.stdout)).toEqual({
+      const output = JSON.parse(result.stdout)
+      expect({ ...output, cwd: realpathSync(output.cwd) }).toEqual({
         args: ["argument with spaces", "--wait"],
-        cwd: dir,
+        cwd: realpathSync(dir),
         value: "original environment",
       })
     } finally {
