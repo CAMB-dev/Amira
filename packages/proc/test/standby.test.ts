@@ -1,3 +1,4 @@
+import { dlopen, FFIType } from "bun:ffi"
 import { afterAll, afterEach, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -40,36 +41,55 @@ const release = (gateLine: string, timeoutMs = 30_000) => ({
 const until = (check: () => boolean, ms?: number) => waitForSpawnCondition("standby condition", check, ms)
 
 function isRunning(pid: number): boolean {
-  if (process.platform === "linux") {
-    try {
-      // A lost worker can leave an exited child awaiting Bun's native reaper.
-      // kill(pid, 0) still succeeds for zombies, but they are no longer running.
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8")
-      if (stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z ")) return false
-    } catch {}
-  }
   try {
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false
+    throw error
+  }
+}
+
+function killOwned(pid: number) {
+  try {
+    process.kill(pid, "SIGKILL")
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
   }
 }
 
 const pids = new Set<number>()
+const orphanedPids = new Set<number>()
 afterEach(async () => {
   try {
     await stopCommands()
   } finally {
-    // A lost worker cannot dispose its already-released standby; keep its PID owned.
-    for (const pid of pids) {
-      if (!isRunning(pid)) continue
-      try {
-        process.kill(pid, "SIGKILL")
-      } catch {}
+    // A terminated worker can lose its native exit watcher (kqueue on macOS).
+    // SIGKILL alone leaves zombies: reap only its known children, never a live worker's.
+    const reaper =
+      orphanedPids.size && process.platform !== "win32"
+        ? dlopen(process.platform === "darwin" ? "libc.dylib" : "libc.so.6", {
+            waitpid: { args: [FFIType.i32, FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+          })
+        : undefined
+    try {
+      for (const pid of pids) {
+        // Detached POSIX children lead their own groups, even after worker loss.
+        for (const target of orphanedPids.has(pid) && reaper ? [-pid, pid] : [pid]) killOwned(target)
+      }
+      await waitForSpawnCondition("standby processes cleanup", () =>
+        [...pids].every((pid) => {
+          // WNOHANG: do not wait on the gone worker, or accept a zombie as cleanup.
+          // Bun may have reaped it already (ECHILD); only kill(pid, 0)/ESRCH proves absence.
+          if (orphanedPids.has(pid)) reaper?.symbols.waitpid(pid, null, 1)
+          return !isRunning(pid)
+        }),
+      )
+      pids.clear()
+      orphanedPids.clear()
+    } finally {
+      reaper?.close()
     }
-    await waitForSpawnCondition("standby processes cleanup", () => [...pids].every((pid) => !isRunning(pid)))
-    pids.clear()
   }
 }, SPAWN_TEST_TIMEOUT_MS)
 
@@ -193,13 +213,13 @@ test(
 test(
   "losing the worker after a release is a failure, not a gone standby that may be rerun",
   async () => {
-    // Its tree is no longer contained once the worker is gone, so it must end on its own.
+    // Cleanup owns the OS processes directly once their worker is gone.
     const releasedPid = join(dir, "lost-released.pid")
     const idlePid = join(dir, "lost-idle.pid")
-    const standby = prepareCommand(gated("await Bun.sleep(3000)", releasedPid), { cwd, gated: true })
+    const standby = prepareCommand(gated("await Bun.sleep(60_000)", releasedPid), { cwd, gated: true })
     // Deliberately losing its worker cannot confirm idle disposal; the PID set owns cleanup here.
     const idle = prepareUnowned(gated("", idlePid), { cwd, gated: true })
-    await Promise.all([pidFrom(releasedPid), pidFrom(idlePid)])
+    const lostPids = await Promise.all([pidFrom(releasedPid), pidFrom(idlePid)])
     let output = ""
     const run = standby.run({
       ...release("x"),
@@ -208,6 +228,7 @@ test(
       },
     })
     await until(() => output.includes("got:x"))
+    for (const pid of lostPids) orphanedPids.add(pid)
     resetCommandWorker()
     const err = await run.then(
       () => undefined,
