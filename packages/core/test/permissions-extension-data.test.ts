@@ -13,6 +13,7 @@ import {
 import os from "node:os"
 import path from "node:path"
 import type { ToolDefinition } from "@amira/api"
+import { SPAWN_TEST_TIMEOUT_MS, SPAWN_WAIT_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { extensionDataContainment, extensionDataOwner } from "../src/extension-data.ts"
 import { type PermissionRule, Permissions } from "../src/permissions/policy.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
@@ -26,7 +27,7 @@ const writer: Writer = {
 const dirs: string[] = []
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 function fixture() {
   const cwd = mkdtempSync(path.join(os.tmpdir(), "amira-owned-data-"))
@@ -411,6 +412,8 @@ function shortName(dir: string): string {
   return execSync(`for %I in ("${dir}") do @echo %~sI`, {
     encoding: "utf8",
     shell: "cmd.exe",
+    timeout: SPAWN_WAIT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   }).trim()
 }
 
@@ -426,20 +429,24 @@ function hasShortNames(): boolean {
   }
 }
 
-test.skipIf(!hasShortNames())("native Windows 8.3 aliases expand before ownership comparison", async () => {
-  const { cwd, owner, check } = fixture()
-  const alias = path.join(shortName(owner.dataDir), "missing", "state.json")
-  expect(extensionDataContainment(owner, cwd, alias)).toBe("inside")
-  expect((await check([alias])).decision).toBe("allow")
-  const defaultOwner = extensionDataOwner(path.join(cwd, ".amira"), "short-default-home")
-  const shortRoot = path.join(
-    path.dirname(defaultOwner.dataDir),
-    path.basename(shortName(defaultOwner.dataDir)),
-  )
-  const target = path.join(shortRoot, "state.json")
-  const policy = new Permissions({ protect: { amiraHome: defaultOwner.home } })
-  expect((await policy.check(writer, { paths: [target] }, cwd, defaultOwner)).decision).toBe("allow")
-})
+test.skipIf(!hasShortNames())(
+  "native Windows 8.3 aliases expand before ownership comparison",
+  async () => {
+    const { cwd, owner, check } = fixture()
+    const alias = path.join(shortName(owner.dataDir), "missing", "state.json")
+    expect(extensionDataContainment(owner, cwd, alias)).toBe("inside")
+    expect((await check([alias])).decision).toBe("allow")
+    const defaultOwner = extensionDataOwner(path.join(cwd, ".amira"), "short-default-home")
+    const shortRoot = path.join(
+      path.dirname(defaultOwner.dataDir),
+      path.basename(shortName(defaultOwner.dataDir)),
+    )
+    const target = path.join(shortRoot, "state.json")
+    const policy = new Permissions({ protect: { amiraHome: defaultOwner.home } })
+    expect((await policy.check(writer, { paths: [target] }, cwd, defaultOwner)).decision).toBe("allow")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 // A real writable share is required: POSIX path simulation cannot verify UNC filesystem identity.
 const uncBase = process.env.AMIRA_LIVE_UNC_TEST_DIR

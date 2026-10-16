@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, beforeEach, expect } from "bun:test"
 import {
   cpSync,
   existsSync,
@@ -13,10 +13,15 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
+import {
   activePackages,
   DEFAULT_INDEX_MIRRORS,
   DEFAULT_INDEX_URL,
-  installPackage,
   listInstalled,
   loadIndex,
   PackageError,
@@ -26,14 +31,12 @@ import {
   readLock,
   readManifest,
   removePackage,
-  restorePackages,
   searchIndex,
   splitNpmSpec,
-  updatePackages,
 } from "../src/index.ts"
+import { packageOperations, spawnTest as test } from "./spawn-operations.ts"
 
-// git is slow to start on Windows, especially under load.
-setDefaultTimeout(60_000)
+const { installPackage, restorePackages, updatePackages, start, stop } = packageOperations()
 
 let dir: string
 let home: string
@@ -41,6 +44,7 @@ let cwd: string
 let savedHome: string | undefined
 
 beforeEach(() => {
+  start()
   dir = mkdtempSync(path.join(os.tmpdir(), "amira-packages-"))
   home = path.join(dir, "home")
   cwd = path.join(dir, "project")
@@ -49,13 +53,17 @@ beforeEach(() => {
   // Git repositories are cached under the Amira home.
   savedHome = process.env.AMIRA_HOME
   process.env.AMIRA_HOME = home
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
-afterEach(() => {
-  if (savedHome === undefined) delete process.env.AMIRA_HOME
-  else process.env.AMIRA_HOME = savedHome
+afterEach(async () => {
+  try {
+    await stop()
+  } finally {
+    if (savedHome === undefined) delete process.env.AMIRA_HOME
+    else process.env.AMIRA_HOME = savedHome
+  }
   rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 const user = () => packageScope("user", { home, cwd })
 const project = () => packageScope("project", { home, cwd })
@@ -94,9 +102,20 @@ async function git(at: string, ...args: string[]): Promise<string> {
       stderr: "pipe",
     },
   )
-  const out = await new Response(p.stdout).text()
-  expect(await p.exited).toBe(0)
-  return out.trim()
+  try {
+    const [out, , code] = await waitForSpawnWork(
+      "git fixture output",
+      Promise.all([
+        new Response(p.stdout).text(),
+        new Response(p.stderr).text(),
+        waitForSpawnExit(p, `git ${args.join(" ")}`),
+      ]),
+    )
+    expect(code).toBe(0)
+    return out.trim()
+  } finally {
+    await stopSpawn(p, `git ${args.join(" ")} cleanup`)
+  }
 }
 
 let templateDir: string
@@ -114,9 +133,9 @@ beforeAll(async () => {
   const sub = path.join(templateDir, "sub")
   makePackage(path.join(sub, "packages", "sub-pkg"), "sub-pkg", "0.3.0")
   subPackage = { repo: sub, head: await gitRepo(sub) }
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
-afterAll(() => rmSync(templateDir, { recursive: true, force: true, maxRetries: 3 }))
+afterAll(() => rmSync(templateDir, { recursive: true, force: true, maxRetries: 3 }), SPAWN_TEST_TIMEOUT_MS)
 
 function copyRepo(at: string, template: { repo: string; head: string }): string {
   // The complete copy gives every test its own refs, index and objects.
@@ -187,7 +206,10 @@ test("installs a local directory into the user scope and records it in the lock 
   expect(existsSync(path.join(installed, "index.ts"))).toBe(true)
   expect(existsSync(path.join(installed, "node_modules"))).toBe(false)
   const lock = readLock(path.join(home, "packages.lock"))
-  expect(lock.packages["local-pkg"]).toMatchObject({ version: "1.0.0", source: { type: "path", path: src } })
+  expect(lock.packages["local-pkg"]).toMatchObject({
+    version: "1.0.0",
+    source: { type: "path", path: src },
+  })
   // Nothing is left behind from the work directory.
   expect(existsSync(path.join(home, "packages"))).toBe(true)
   expect(listInstalled({ home, cwd }).map((p) => p.name)).toEqual(["local-pkg"])
@@ -404,7 +426,11 @@ test("update follows the index when a package moved to another directory of its 
   const moved = await git(repo, "rev-parse", "HEAD")
   indexAt("extensions/sub-pkg")
   const [u] = await updatePackages({ scope: user(), cwd, index: { url: indexFile } })
-  expect(u).toMatchObject({ name: "sub-pkg", changed: true, to: { source: { path: "extensions/sub-pkg" } } })
+  expect(u).toMatchObject({
+    name: "sub-pkg",
+    changed: true,
+    to: { source: { path: "extensions/sub-pkg" } },
+  })
   expect(readLock(user().lockFile).packages["sub-pkg"]).toMatchObject({
     source: { path: "extensions/sub-pkg" },
     pinned: { commit: moved },
@@ -479,7 +505,15 @@ test("npm packages are resolved on the registry, checked and pinned to version a
     cwd: dir,
     stderr: "pipe",
   })
-  expect(await tar.exited).toBe(0)
+  try {
+    const [code] = await waitForSpawnWork(
+      "tar fixture output",
+      Promise.all([waitForSpawnExit(tar, "tar fixture"), new Response(tar.stderr).text()]),
+    )
+    expect(code).toBe(0)
+  } finally {
+    await stopSpawn(tar, "tar fixture cleanup")
+  }
   const bytes = readFileSync(tgz)
   const integrity = `sha512-${new Bun.CryptoHasher("sha512").update(bytes).digest("base64")}`
   const meta = {

@@ -14,6 +14,12 @@ import {
   type Settings,
   validateExtensionSetting,
 } from "@amira/api"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+} from "../../../scripts/spawn-test.ts"
 import { loadSettings } from "../src/config/load.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost, type ExtensionHostOptions } from "../src/extensions.ts"
@@ -49,13 +55,13 @@ beforeEach(() => {
   previousHome = process.env.AMIRA_HOME
   process.env.AMIRA_HOME = home
   hosts = []
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 afterEach(() => {
   for (const host of hosts) host.unloadAll()
   if (previousHome === undefined) delete process.env.AMIRA_HOME
   else process.env.AMIRA_HOME = previousHome
   rmSync(dir, { recursive: true, force: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 function makeHost(options: Partial<ExtensionHostOptions> = {}) {
   const host = new ExtensionHost({
@@ -259,9 +265,11 @@ test("live changes notify once, isolate listener errors, and resolve all handles
   expect(() => demo.onChange(() => {})).toThrow("unloaded")
 })
 
-test("async onChange rejections are extension errors, not unhandled process rejections", () => {
-  const core = path.resolve(import.meta.dir, "../src/index.ts")
-  const script = `
+test(
+  "async onChange rejections are extension errors, not unhandled process rejections",
+  async () => {
+    const core = path.resolve(import.meta.dir, "../src/index.ts")
+    const script = `
     import { EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from ${JSON.stringify(core)}
     const bus = new EventBus()
     const errors = []
@@ -278,13 +286,37 @@ test("async onChange rejections are extension errors, not unhandled process reje
     host.unloadAll()
     console.log(JSON.stringify(errors))
   `
-  const result = Bun.spawnSync([process.execPath, "-e", script], { cwd, env: process.env, timeout: 30_000 })
-  expect(result.stderr.toString()).toBe("")
-  expect(result.exitCode).toBe(0)
-  expect(JSON.parse(result.stdout.toString())).toEqual([
-    { source: "async-extension", error: "settings change handler failed: async listener failed" },
-  ])
-})
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      cwd,
+      env: process.env,
+      timeout: 30_000,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    try {
+      let drained = false
+      const output = Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]).finally(() => {
+        drained = true
+      })
+      const [code, [stdout, stderr]] = await Promise.all([
+        waitForSpawnExit(child, "async settings listener"),
+        output,
+        waitForSpawnCondition("async settings listener output", () => drained),
+      ])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+      expect(JSON.parse(stdout)).toEqual([
+        { source: "async-extension", error: "settings change handler failed: async listener failed" },
+      ])
+    } finally {
+      await stopSpawn(child, "async settings listener cleanup")
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("unloading a settings owner cancels pages opened by another caller or without a source", async () => {
   const host = makeHost()

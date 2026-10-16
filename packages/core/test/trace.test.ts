@@ -4,6 +4,12 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { type AnyEvent, type EventMap, emptyUsage, type TraceRecord, textResult } from "@amira/api"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+} from "../../../scripts/spawn-test.ts"
 import { type EmitMeta, EventBus } from "../src/event-bus.ts"
 import { TraceRecorder } from "../src/trace.ts"
 import { TraceFile } from "../src/trace-file.ts"
@@ -14,7 +20,7 @@ const cleanups: (() => Promise<void>)[] = []
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 function setup(persist = true) {
   const dir = mkdtempSync(path.join(tmpdir(), "amira-trace-"))
@@ -564,16 +570,18 @@ test("a loss marker makes first-token timing unknown even if a later delta survi
 
 // This must be a real process.exit, not a mock. Waiting for this native child under
 // parallel Windows load has exceeded 10 s; allow startup and the emergency hook to finish.
-test("process.exit emergency hook saves delivered records without an async flush", async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "amira-trace-exit-"))
-  cleanups.push(async () => {
-    rmSync(dir, { recursive: true, force: true })
-  })
-  const file = path.join(dir, "session.jsonl")
-  writeFileSync(file, "{}\n")
-  const busModule = pathToFileURL(path.resolve(import.meta.dir, "../src/event-bus.ts")).href
-  const recorderModule = pathToFileURL(path.resolve(import.meta.dir, "../src/trace.ts")).href
-  const script = `
+test(
+  "process.exit emergency hook saves delivered records without an async flush",
+  async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "amira-trace-exit-"))
+    cleanups.push(async () => {
+      rmSync(dir, { recursive: true, force: true })
+    })
+    const file = path.join(dir, "session.jsonl")
+    writeFileSync(file, "{}\n")
+    const busModule = pathToFileURL(path.resolve(import.meta.dir, "../src/event-bus.ts")).href
+    const recorderModule = pathToFileURL(path.resolve(import.meta.dir, "../src/trace.ts")).href
+    const script = `
     import { EventBus } from ${JSON.stringify(busModule)};
     import { TraceRecorder } from ${JSON.stringify(recorderModule)};
     const bus = new EventBus();
@@ -584,22 +592,36 @@ test("process.exit emergency hook saves delivered records without an async flush
     await bus.flush();
     process.exit(0);
   `
-  const child = Bun.spawn([process.execPath, "--eval", script], {
-    cwd: path.resolve(import.meta.dir, "../../.."),
-    env: { ...process.env, AMIRA_HOME: path.join(dir, "home") },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
-  expect(stderr).toBe("")
-  expect(code).toBe(0)
-  const lines = readFileSync(`${file}.trace.jsonl`, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line))
-  expect(lines.map((record) => record.type)).toEqual(["trace", "status"])
-  expect(lines[0].sessionId).toBe("exit")
-}, 30_000)
+    const child = Bun.spawn([process.execPath, "--eval", script], {
+      cwd: path.resolve(import.meta.dir, "../../.."),
+      env: { ...process.env, AMIRA_HOME: path.join(dir, "home") },
+      stdout: "ignore",
+      stderr: "pipe",
+    })
+    try {
+      let drained = false
+      const output = new Response(child.stderr).text().finally(() => {
+        drained = true
+      })
+      const [code, stderr] = await Promise.all([
+        waitForSpawnExit(child, "trace emergency exit"),
+        output,
+        waitForSpawnCondition("trace emergency exit stderr", () => drained),
+      ])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+      const lines = readFileSync(`${file}.trace.jsonl`, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+      expect(lines.map((record) => record.type)).toEqual(["trace", "status"])
+      expect(lines[0].sessionId).toBe("exit")
+    } finally {
+      await stopSpawn(child, "trace emergency exit cleanup")
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("opening a session without activity writes no trace file", async () => {
   const { start, recorder, file, bus } = setup()

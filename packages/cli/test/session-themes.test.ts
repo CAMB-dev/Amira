@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { createAi } from "@amira/ai"
 import type { TuiSettings } from "@amira/api"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
 import { shimmerLabel } from "../../tui/src/app/activity-row.ts"
 import { RuntimeThemes } from "../../tui/src/app/themes.ts"
 import { plain } from "../../tui-kit/test/context.ts"
@@ -17,6 +18,7 @@ let home: string
 let cwd: string
 let previousHome: string | undefined
 let session: Session | undefined
+let flushChoices: (() => Promise<void>) | undefined
 
 beforeEach(() => {
   root = mkdtempSync(path.join(os.tmpdir(), "amira-session-themes-"))
@@ -29,15 +31,28 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-  if (session) {
-    await session.agent.dispose()
-    session.host.unloadAll()
-    session = undefined
+  try {
+    // Theme persistence probes Git even outside a repository. Reap the queued save
+    // before restoring its home or removing the temporary project.
+    if (flushChoices) await waitForSpawnWork("theme choices cleanup", flushChoices())
+  } finally {
+    try {
+      if (session) {
+        try {
+          await waitForSpawnWork("theme session disposal", session.agent.dispose())
+        } finally {
+          session.host.unloadAll()
+        }
+      }
+    } finally {
+      session = undefined
+      flushChoices = undefined
+      if (previousHome === undefined) delete process.env.AMIRA_HOME
+      else process.env.AMIRA_HOME = previousHome
+      rmSync(root, { recursive: true, force: true })
+    }
   }
-  if (previousHome === undefined) delete process.env.AMIRA_HOME
-  else process.env.AMIRA_HOME = previousHome
-  rmSync(root, { recursive: true, force: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 test("invalid theme files are startup notices, not session failures", async () => {
   writeFileSync(path.join(home, "themes", "broken.json"), "{invalid")
@@ -91,39 +106,44 @@ test("reload re-reads files and removes themes from extensions no longer loaded"
   expect(session.host.themes.get("example")).toBeUndefined()
 })
 
-test("saved theme and appearance reach the next session and remain paired through reload", async () => {
-  session = await createSession({ cwd, ai: createAi({ providers: [] }), extensions: [], noBuiltins: true })
-  const commands = createCommandHost({ session, cwd, home, interactive: true })
-  commands.rememberTheme("amber", "light")
-  await commands.flushChoices()
-  const config = resolveConfig(parseCliArgs([], cwd, {}), home)
-  expect(config.settings.tui).toMatchObject({ theme: "amber", themeVariant: "light" })
-  await session.agent.dispose()
-  session.host.unloadAll()
-  const seen: unknown[] = []
-  session = await createSession({
-    cwd,
-    ai: createAi({ providers: [] }),
-    extensions: [],
-    noBuiltins: false,
-    builtins: async () => [
-      {
-        source: "test:appearance",
-        extension: (api) => {
-          seen.push(api.settings.tui)
+test(
+  "saved theme and appearance reach the next session and remain paired through reload",
+  async () => {
+    session = await createSession({ cwd, ai: createAi({ providers: [] }), extensions: [], noBuiltins: true })
+    const commands = createCommandHost({ session, cwd, home, interactive: true })
+    flushChoices = () => commands.flushChoices()
+    commands.rememberTheme("amber", "light")
+    await waitForSpawnWork("saved theme choices", commands.flushChoices())
+    const config = resolveConfig(parseCliArgs([], cwd, {}), home)
+    expect(config.settings.tui).toMatchObject({ theme: "amber", themeVariant: "light" })
+    await waitForSpawnWork("saved-theme session disposal", session.agent.dispose())
+    session.host.unloadAll()
+    const seen: unknown[] = []
+    session = await createSession({
+      cwd,
+      ai: createAi({ providers: [] }),
+      extensions: [],
+      noBuiltins: false,
+      builtins: async () => [
+        {
+          source: "test:appearance",
+          extension: (api) => {
+            seen.push(api.settings.tui)
+          },
         },
-      },
-    ],
-    settings: config.settings,
-    reloadSettings: () => ({ settings: config.settings, layers: config.settingsLayers, warnings: [] }),
-  })
-  await session.reload()
-  expect(seen).toEqual([
-    { theme: "amber", themeVariant: "light" },
-    { theme: "amber", themeVariant: "light" },
-  ])
-  expect(session.host.themes.get("amber")).toBeDefined()
-})
+      ],
+      settings: config.settings,
+      reloadSettings: () => ({ settings: config.settings, layers: config.settingsLayers, warnings: [] }),
+    })
+    await session.reload()
+    expect(seen).toEqual([
+      { theme: "amber", themeVariant: "light" },
+      { theme: "amber", themeVariant: "light" },
+    ])
+    expect(session.host.themes.get("amber")).toBeDefined()
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("invalid shimmer settings load and produce one startup notice with valid knobs retained", async () => {
   writeFileSync(

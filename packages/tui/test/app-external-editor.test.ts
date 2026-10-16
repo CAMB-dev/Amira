@@ -3,8 +3,14 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  SPAWN_WAIT_TIMEOUT_MS,
+  waitForSpawnCondition,
+} from "../../../scripts/spawn-test.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
 import { setup, waitFor } from "./app-harness.ts"
+import { boundSpawnSync, waitForSpawnWork } from "./spawn-fixture.ts"
 
 async function editWith(
   choice: "visual" | "editor" | "git" | "notepad",
@@ -25,20 +31,25 @@ async function editWith(
     EDITOR: variables.EDITOR === "editor" ? command("editor") : variables.EDITOR,
     PATH: `${dir};${process.env.PATH ?? ""}`,
   }
-  writeFileSync(env.GIT_CONFIG_GLOBAL, "")
-  writeFileSync(
-    script,
-    'import { appendFileSync } from "node:fs"\n' +
-      'if (process.argv[3] !== "--wait") process.exit(2)\n' +
-      'appendFileSync(process.argv[4]!, " " + process.argv[2] + "\\n")\n',
-  )
-  // Shadow the Windows fallback: never start the real Notepad during a regression.
-  writeFileSync(join(dir, "notepad.cmd"), `@"${process.execPath}" "${script}" notepad --wait %1\r\n`)
   const git = (...args: string[]) => {
-    const result = spawnSync("git", ["-C", dir, ...args], { env, encoding: "utf8" })
+    const result = spawnSync("git", ["-C", dir, ...args], {
+      env,
+      encoding: "utf8",
+      timeout: SPAWN_WAIT_TIMEOUT_MS,
+    })
     expect(result.status).toBe(0)
   }
+  const boundedSpawn = boundSpawnSync()
   try {
+    writeFileSync(env.GIT_CONFIG_GLOBAL, "")
+    writeFileSync(
+      script,
+      'import { appendFileSync } from "node:fs"\n' +
+        'if (process.argv[3] !== "--wait") process.exit(2)\n' +
+        'appendFileSync(process.argv[4]!, " " + process.argv[2] + "\\n")\n',
+    )
+    // Shadow the Windows fallback: never start the real Notepad during a regression.
+    writeFileSync(join(dir, "notepad.cmd"), `@"${process.execPath}" "${script}" notepad --wait %1\r\n`)
     git("init", "--quiet")
     if (gitEditor) git("config", "core.editor", command("git"))
     const { terminal, live, exited } = await setup([], {
@@ -50,16 +61,17 @@ async function editWith(
       terminal.send("draft")
       await waitFor(() => live().includes("│ › draft"), "typed draft")
       terminal.send("\x07")
-      await waitFor(
-        () => /│ › draft (visual|editor|git|notepad)/.test(live()) || live().includes("Cannot start"),
+      await waitForSpawnCondition(
         "external editor result",
+        () => /│ › draft (visual|editor|git|notepad)/.test(live()) || live().includes("Cannot start"),
       )
       expect(live()).toContain(`│ › draft ${choice}`)
     } finally {
       terminal.send("\x03\x03")
-      await exited
+      await waitForSpawnWork(exited, "external editor app cleanup")
     }
   } finally {
+    boundedSpawn.mockRestore()
     rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -71,7 +83,7 @@ windowsTest(
   async () => {
     await editWith("visual", { VISUAL: "visual", EDITOR: "editor" })
   },
-  60_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 windowsTest(
@@ -79,7 +91,7 @@ windowsTest(
   async () => {
     await editWith("editor", { VISUAL: "  ", EDITOR: "editor" })
   },
-  60_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 windowsTest(
@@ -87,7 +99,7 @@ windowsTest(
   async () => {
     await editWith("git", { VISUAL: "  ", EDITOR: "\t" })
   },
-  60_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 windowsTest(
@@ -95,7 +107,7 @@ windowsTest(
   async () => {
     await editWith("git", {}, true, true)
   },
-  60_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 windowsTest(
@@ -103,5 +115,5 @@ windowsTest(
   async () => {
     await editWith("notepad", {}, false)
   },
-  60_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )

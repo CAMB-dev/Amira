@@ -2,16 +2,31 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { runCommand } from "@amira/proc"
+import { resetCommandWorker, runCommand } from "@amira/proc"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
 import { loadAuth, restrictToCurrentUser } from "../src/config/auth.ts"
 import { SettingsError } from "../src/config/schema.ts"
 import { setAuthKey, updateProviderInSettings } from "../src/config/write.ts"
 
 let dir: string
+let abort: AbortController
+let commandRuns: Promise<unknown>[]
 beforeEach(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), "amira-provider-config-"))
+  abort = new AbortController()
+  commandRuns = []
 })
-afterEach(() => rmSync(dir, { recursive: true, force: true }))
+afterEach(async () => {
+  abort.abort()
+  let settled = false
+  void Promise.allSettled(commandRuns).then(() => (settled = true))
+  try {
+    await waitForSpawnCondition("provider ACL commands cleanup", () => settled)
+  } finally {
+    resetCommandWorker()
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, SPAWN_TEST_TIMEOUT_MS)
 
 const read = (file: string) => JSON.parse(readFileSync(file, "utf8"))
 
@@ -212,17 +227,21 @@ test.skipIf(process.platform !== "win32")(
   async () => {
     const file = path.join(dir, "auth.json")
     setAuthKey(file, "a", "sk-a")
-    expect(await restrictToCurrentUser(file)).toBeUndefined()
-    const shown = await runCommand(["icacls", file], {
+    const restricted = restrictToCurrentUser(file)
+    commandRuns.push(restricted)
+    expect(await restricted).toBeUndefined()
+    const showing = runCommand(["icacls", file], {
       cwd: dir,
       timeoutMs: 20_000,
-      signal: new AbortController().signal,
+      signal: abort.signal,
       viaCmd: true,
     })
+    commandRuns.push(showing)
+    const shown = await showing
     const user = process.env.USERNAME!
     expect(shown.output).toContain(`${user}:(F)`)
     expect(shown.output).not.toContain("BUILTIN\\Users")
     expect(loadAuth(file).keys).toEqual({ a: "sk-a" })
   },
-  60_000,
+  SPAWN_TEST_TIMEOUT_MS,
 )

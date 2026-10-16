@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
+import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit } from "../../../scripts/spawn-test.ts"
 import { fileHistoryDir } from "../src/file-rewind.ts"
 import { deleteSession } from "../src/session-list.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
@@ -17,28 +18,36 @@ function setup() {
   return { parent, dir, store }
 }
 
-test("a linked recording is refused before acquiring or recovering its outside deletion lease", () => {
-  const { parent, dir, store } = setup()
-  const outside = SessionStore.create({ cwd: parent, dir: path.join(parent, "outside") })
-  outside.appendMessage(userMessage("outside recording"))
-  const dead = Bun.spawnSync([process.execPath, "-e", ""], { stdout: "ignore", stderr: "pipe" })
-  expect(dead.exitCode).toBe(0)
-  const lease = sessionLockFile(outside.file)
-  const contents = `${dead.pid}\n`
-  fs.writeFileSync(lease, contents)
-  fs.utimesSync(lease, new Date(0), new Date(0))
-  fs.unlinkSync(store.file)
-  fs.symlinkSync(outside.file, store.file, "file")
-  try {
-    expect(() => deleteSession(parent, store.id, undefined, dir)).toThrow("unsafe")
-    expect(fs.existsSync(lease)).toBe(true)
-    expect(fs.readFileSync(lease, "utf8")).toBe(contents)
-    expect(fs.readFileSync(outside.file, "utf8")).toContain("outside recording")
-    expect(fs.lstatSync(store.file).isSymbolicLink()).toBe(true)
-  } finally {
-    fs.rmSync(parent, { recursive: true, force: true })
-  }
-})
+test(
+  "a linked recording is refused before acquiring or recovering its outside deletion lease",
+  async () => {
+    const { parent, dir, store } = setup()
+    const outside = SessionStore.create({ cwd: parent, dir: path.join(parent, "outside") })
+    outside.appendMessage(userMessage("outside recording"))
+    const dead = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" })
+    try {
+      expect(await waitForSpawnExit(dead, "dead deletion-lease owner")).toBe(0)
+    } finally {
+      await stopSpawn(dead, "dead deletion-lease owner cleanup")
+    }
+    const lease = sessionLockFile(outside.file)
+    const contents = `${dead.pid}\n`
+    fs.writeFileSync(lease, contents)
+    fs.utimesSync(lease, new Date(0), new Date(0))
+    fs.unlinkSync(store.file)
+    fs.symlinkSync(outside.file, store.file, "file")
+    try {
+      expect(() => deleteSession(parent, store.id, undefined, dir)).toThrow("unsafe")
+      expect(fs.existsSync(lease)).toBe(true)
+      expect(fs.readFileSync(lease, "utf8")).toBe(contents)
+      expect(fs.readFileSync(outside.file, "utf8")).toContain("outside recording")
+      expect(fs.lstatSync(store.file).isSymbolicLink()).toBe(true)
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("an unrelated parent's invalid child reference does not discard its valid shared descendants", () => {
   const { parent, dir, store } = setup()

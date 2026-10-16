@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test"
 import {
   cpSync,
   existsSync,
@@ -14,6 +14,8 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { runCommand } from "../../../packages/proc/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
+import { spawnWorkScope } from "../../builtin-tools/test/util.ts"
 import { hostGit } from "../src/index.ts"
 import {
   APPLY_PARTIAL,
@@ -39,9 +41,12 @@ import {
 } from "../src/worktree.ts"
 
 // git is slow to start on Windows, especially under load.
-setDefaultTimeout(60_000)
 
-const git = hostGit({ runCommand })
+const gitWork = spawnWorkScope("git runner cleanup")
+const runGitCommand: typeof runCommand = (argv, options) =>
+  gitWork.run((signal) => runCommand(argv, { ...options, signal }), options.signal)
+const git = hostGit({ runCommand: runGitCommand })
+afterEach(() => gitWork.cleanup(), SPAWN_TEST_TIMEOUT_MS)
 const dirs: string[] = []
 async function tempDir(prefix: string) {
   const d = realpathSync.native(await mkdtemp(path.join(os.tmpdir(), prefix)))
@@ -49,8 +54,9 @@ async function tempDir(prefix: string) {
   return d
 }
 afterAll(async () => {
+  await gitWork.cleanup()
   for (const d of dirs) await rm(d, { recursive: true, force: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 async function run(cwd: string, ...args: string[]) {
   const r = await git(args, cwd)
@@ -66,7 +72,7 @@ beforeAll(async () => {
   await run(template, "add", ".")
   const id = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
   await run(template, ...id, "commit", "-q", "-m", "init")
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
 /** A repository with one commit holding f.txt (lines a..e) and src/g.txt, plus an Amira home. */
 async function setup() {
@@ -85,93 +91,113 @@ async function worktree(cwd: string, home: string): Promise<Worktree> {
 
 const read = (file: string) => readFileSync(file, "utf8").replace(/\r\n/g, "\n")
 
-test("a clean change merges back on its own and the worktree is removed", async () => {
-  const { root, home } = await setup()
-  const wt = await worktree(root, home)
-  expect(path.dirname(wt.dir)).toBe(path.join(home, "worktrees", projectKey(root)))
-  expect(read(path.join(wt.cwd, "f.txt"))).toBe("a\nb\nc\nd\ne\n")
-  writeFileSync(path.join(wt.cwd, "f.txt"), "a\nB\nc\nd\ne\n")
-  writeFileSync(path.join(wt.cwd, "new.txt"), "new\n")
-  let reviewed = false
-  const r = await mergeWorktree(git, wt, {
-    review: async () => {
-      reviewed = true
-      return KEEP
-    },
-  })
-  expect(r.outcome).toBe("merged")
-  expect(reviewed).toBe(false)
-  expect(r.stat).toEqual({ files: ["f.txt", "new.txt"], insertions: 2, deletions: 1 })
-  expect(read(path.join(root, "f.txt"))).toBe("a\nB\nc\nd\ne\n")
-  expect(read(path.join(root, "new.txt"))).toBe("new\n")
-  expect(existsSync(wt.dir)).toBe(false)
-  expect(existsSync(wt.patch)).toBe(false)
-})
-
-test("a worktree that cannot be removed still counts as merged, with a note", async () => {
-  const { root, home } = await setup()
-  const wt = await worktree(root, home)
-  writeFileSync(path.join(wt.cwd, "f.txt"), "a\nB\nc\nd\ne\n")
-  // As on Windows when a process still has the worktree as its working directory.
-  const busy: RunGit = (args, cwd, stdoutOnly) =>
-    args[0] === "worktree" && args[1] === "remove"
-      ? Promise.resolve({ output: "error: failed to delete: Device or resource busy", ok: false })
-      : git(args, cwd, stdoutOnly)
-  const pruned: string[][] = []
-  const r = await mergeWorktree(
-    (args, cwd, stdoutOnly) => {
-      if (args[1] === "prune") pruned.push(args)
-      return busy(args, cwd, stdoutOnly)
-    },
-    wt,
-    {
-      rm: (target, opts) => {
-        if (target === wt.dir) throw new Error("EBUSY: resource busy or locked")
-        rmSync(target, opts)
+test(
+  "a clean change merges back on its own and the worktree is removed",
+  async () => {
+    const { root, home } = await setup()
+    const wt = await worktree(root, home)
+    expect(path.dirname(wt.dir)).toBe(path.join(home, "worktrees", projectKey(root)))
+    expect(read(path.join(wt.cwd, "f.txt"))).toBe("a\nb\nc\nd\ne\n")
+    writeFileSync(path.join(wt.cwd, "f.txt"), "a\nB\nc\nd\ne\n")
+    writeFileSync(path.join(wt.cwd, "new.txt"), "new\n")
+    let reviewed = false
+    const r = await mergeWorktree(git, wt, {
+      review: async () => {
+        reviewed = true
+        return KEEP
       },
-    },
-  )
-  expect(r.outcome).toBe("merged")
-  expect(r.cleanup).toBe("EBUSY: resource busy or locked")
-  expect(read(path.join(root, "f.txt"))).toBe("a\nB\nc\nd\ne\n")
-  expect(pruned.length).toBe(1)
-  expect(existsSync(wt.patch)).toBe(false)
-})
+    })
+    expect(r.outcome).toBe("merged")
+    expect(reviewed).toBe(false)
+    expect(r.stat).toEqual({ files: ["f.txt", "new.txt"], insertions: 2, deletions: 1 })
+    expect(read(path.join(root, "f.txt"))).toBe("a\nB\nc\nd\ne\n")
+    expect(read(path.join(root, "new.txt"))).toBe("new\n")
+    expect(existsSync(wt.dir)).toBe(false)
+    expect(existsSync(wt.patch)).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("the worktree starts from uncommitted changes and the child works in the same subdirectory", async () => {
-  const { root, home } = await setup()
-  writeFileSync(path.join(root, "f.txt"), "a\nb\nc\nd\nE\n")
-  const wt = await worktree(path.join(root, "src"), home)
-  expect(wt.cwd).toBe(path.join(wt.dir, "src"))
-  expect(read(path.join(wt.dir, "f.txt"))).toBe("a\nb\nc\nd\nE\n")
-  writeFileSync(path.join(wt.cwd, "g.txt"), "G\n")
-  const r = await mergeWorktree(git, wt)
-  expect(r.outcome).toBe("merged")
-  expect(read(path.join(root, "src", "g.txt"))).toBe("G\n")
-  // The parent's own uncommitted change is untouched.
-  expect(read(path.join(root, "f.txt"))).toBe("a\nb\nc\nd\nE\n")
-})
+test(
+  "a worktree that cannot be removed still counts as merged, with a note",
+  async () => {
+    const { root, home } = await setup()
+    const wt = await worktree(root, home)
+    writeFileSync(path.join(wt.cwd, "f.txt"), "a\nB\nc\nd\ne\n")
+    // As on Windows when a process still has the worktree as its working directory.
+    const busy: RunGit = (args, cwd, stdoutOnly) =>
+      args[0] === "worktree" && args[1] === "remove"
+        ? Promise.resolve({ output: "error: failed to delete: Device or resource busy", ok: false })
+        : git(args, cwd, stdoutOnly)
+    const pruned: string[][] = []
+    const r = await mergeWorktree(
+      (args, cwd, stdoutOnly) => {
+        if (args[1] === "prune") pruned.push(args)
+        return busy(args, cwd, stdoutOnly)
+      },
+      wt,
+      {
+        rm: (target, opts) => {
+          if (target === wt.dir) throw new Error("EBUSY: resource busy or locked")
+          rmSync(target, opts)
+        },
+      },
+    )
+    expect(r.outcome).toBe("merged")
+    expect(r.cleanup).toBe("EBUSY: resource busy or locked")
+    expect(read(path.join(root, "f.txt"))).toBe("a\nB\nc\nd\ne\n")
+    expect(pruned.length).toBe(1)
+    expect(existsSync(wt.patch)).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a parent reached through a directory link keeps the child's subdirectory", async () => {
-  const { root, home } = await setup()
-  const alias = path.join(await tempDir("amira-wt-alias-"), "repo")
-  symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir")
-  const wt = await worktree(path.join(alias, "src"), home)
-  expect(wt.root).toBe(root)
-  expect(wt.cwd).toBe(path.join(wt.dir, "src"))
-  expect(read(path.join(wt.cwd, "g.txt"))).toBe("g\n")
-  expect(projectKey(alias)).toBe(projectKey(root))
-  expect(listKeptWorktrees(home, alias).map((w) => w.dir)).toEqual([wt.dir])
-  expect((await mergeWorktree(git, wt)).outcome).toBe("empty")
-})
+test(
+  "the worktree starts from uncommitted changes and the child works in the same subdirectory",
+  async () => {
+    const { root, home } = await setup()
+    writeFileSync(path.join(root, "f.txt"), "a\nb\nc\nd\nE\n")
+    const wt = await worktree(path.join(root, "src"), home)
+    expect(wt.cwd).toBe(path.join(wt.dir, "src"))
+    expect(read(path.join(wt.dir, "f.txt"))).toBe("a\nb\nc\nd\nE\n")
+    writeFileSync(path.join(wt.cwd, "g.txt"), "G\n")
+    const r = await mergeWorktree(git, wt)
+    expect(r.outcome).toBe("merged")
+    expect(read(path.join(root, "src", "g.txt"))).toBe("G\n")
+    // The parent's own uncommitted change is untouched.
+    expect(read(path.join(root, "f.txt"))).toBe("a\nb\nc\nd\nE\n")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("no changes: nothing to merge, the worktree is removed", async () => {
-  const { root, home } = await setup()
-  const wt = await worktree(root, home)
-  const r = await mergeWorktree(git, wt)
-  expect(r.outcome).toBe("empty")
-  expect(existsSync(wt.dir)).toBe(false)
-})
+test(
+  "a parent reached through a directory link keeps the child's subdirectory",
+  async () => {
+    const { root, home } = await setup()
+    const alias = path.join(await tempDir("amira-wt-alias-"), "repo")
+    symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir")
+    const wt = await worktree(path.join(alias, "src"), home)
+    expect(wt.root).toBe(root)
+    expect(wt.cwd).toBe(path.join(wt.dir, "src"))
+    expect(read(path.join(wt.cwd, "g.txt"))).toBe("g\n")
+    expect(projectKey(alias)).toBe(projectKey(root))
+    expect(listKeptWorktrees(home, alias).map((w) => w.dir)).toEqual([wt.dir])
+    expect((await mergeWorktree(git, wt)).outcome).toBe("empty")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
+
+test(
+  "no changes: nothing to merge, the worktree is removed",
+  async () => {
+    const { root, home } = await setup()
+    const wt = await worktree(root, home)
+    const r = await mergeWorktree(git, wt)
+    expect(r.outcome).toBe("empty")
+    expect(existsSync(wt.dir)).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 /** The child and the parent both change line b. */
 async function conflicting() {
@@ -183,207 +209,243 @@ async function conflicting() {
   return { root, home, wt }
 }
 
-test("a conflict goes to review; keeping it leaves both sides untouched", async () => {
-  const { root, wt } = await conflicting()
-  const asked: { title: string; diff: string; options: string[] }[] = []
-  const r = await mergeWorktree(git, wt, {
-    who: `"Fix it" (coder)`,
-    review: async (title, diff, options) => {
-      asked.push({ title, diff, options })
-      return KEEP
-    },
-  })
-  expect(r.outcome).toBe("kept")
-  expect(r.conflict).toBeTruthy()
-  // The review names whose changes they are.
-  expect(asked[0]?.title).toBe(
-    `The changes of "Fix it" (coder) conflict with the working tree (2 files, +2 -1)`,
-  )
-  expect(asked[0]?.options).toEqual([APPLY_PARTIAL, KEEP, DISCARD])
-  expect(asked[0]?.diff).toContain("+child")
-  expect(read(path.join(root, "f.txt"))).toBe("a\nparent\nc\nd\ne\n")
-  expect(existsSync(path.join(root, "other.txt"))).toBe(false)
-  expect(existsSync(wt.dir)).toBe(true)
-  expect(existsSync(wt.patch)).toBe(true)
-})
+test(
+  "a conflict goes to review; keeping it leaves both sides untouched",
+  async () => {
+    const { root, wt } = await conflicting()
+    const asked: { title: string; diff: string; options: string[] }[] = []
+    const r = await mergeWorktree(git, wt, {
+      who: `"Fix it" (coder)`,
+      review: async (title, diff, options) => {
+        asked.push({ title, diff, options })
+        return KEEP
+      },
+    })
+    expect(r.outcome).toBe("kept")
+    expect(r.conflict).toBeTruthy()
+    // The review names whose changes they are.
+    expect(asked[0]?.title).toBe(
+      `The changes of "Fix it" (coder) conflict with the working tree (2 files, +2 -1)`,
+    )
+    expect(asked[0]?.options).toEqual([APPLY_PARTIAL, KEEP, DISCARD])
+    expect(asked[0]?.diff).toContain("+child")
+    expect(read(path.join(root, "f.txt"))).toBe("a\nparent\nc\nd\ne\n")
+    expect(existsSync(path.join(root, "other.txt"))).toBe(false)
+    expect(existsSync(wt.dir)).toBe(true)
+    expect(existsSync(wt.patch)).toBe(true)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("nobody to review a conflict (print mode) keeps the worktree", async () => {
-  const { wt } = await conflicting()
-  const r = await mergeWorktree(git, wt, { review: async () => undefined })
-  expect(r.outcome).toBe("kept")
-  expect(existsSync(wt.dir)).toBe(true)
-})
+test(
+  "nobody to review a conflict (print mode) keeps the worktree",
+  async () => {
+    const { wt } = await conflicting()
+    const r = await mergeWorktree(git, wt, { review: async () => undefined })
+    expect(r.outcome).toBe("kept")
+    expect(existsSync(wt.dir)).toBe(true)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a conflict can be discarded, or applied as far as it fits with .rej files", async () => {
-  const first = await conflicting()
-  const discarded = await mergeWorktree(git, first.wt, { review: async () => DISCARD })
-  expect(discarded.outcome).toBe("discarded")
-  expect(existsSync(first.wt.dir)).toBe(false)
+test(
+  "a conflict can be discarded, or applied as far as it fits with .rej files",
+  async () => {
+    const first = await conflicting()
+    const discarded = await mergeWorktree(git, first.wt, { review: async () => DISCARD })
+    expect(discarded.outcome).toBe("discarded")
+    expect(existsSync(first.wt.dir)).toBe(false)
 
-  const second = await conflicting()
-  const partial = await mergeWorktree(git, second.wt, { review: async () => APPLY_PARTIAL })
-  expect(partial.outcome).toBe("partial")
-  expect(partial.rejected).toEqual(["f.txt"])
-  expect(read(path.join(second.root, "other.txt"))).toBe("other\n")
-  expect(read(path.join(second.root, "f.txt"))).toBe("a\nparent\nc\nd\ne\n")
-  expect(readdirSync(second.root)).toContain("f.txt.rej")
-})
+    const second = await conflicting()
+    const partial = await mergeWorktree(git, second.wt, { review: async () => APPLY_PARTIAL })
+    expect(partial.outcome).toBe("partial")
+    expect(partial.rejected).toEqual(["f.txt"])
+    expect(read(path.join(second.root, "other.txt"))).toBe("other\n")
+    expect(read(path.join(second.root, "f.txt"))).toBe("a\nparent\nc\nd\ne\n")
+    expect(readdirSync(second.root)).toContain("f.txt.rej")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a clean merge past the review threshold is reviewed first (D38)", async () => {
-  const { root, home } = await setup()
-  const wt = await worktree(root, home)
-  writeFileSync(path.join(wt.cwd, "f.txt"), "1\n2\n3\n")
-  const options: string[][] = []
-  const titles: string[] = []
-  const r = await mergeWorktree(git, wt, {
-    threshold: { lines: 4 },
-    who: `"Fix the bug" (coder)`,
-    review: async (t, _d, o) => {
-      titles.push(t)
-      options.push(o)
-      return MERGE
-    },
-  })
-  expect(options).toEqual([[MERGE, KEEP, DISCARD]])
-  // The review says whose changes they are.
-  expect(titles).toEqual(['Merge the changes of "Fix the bug" (coder) (1 file, +3 -5)?'])
-  expect(r.outcome).toBe("merged")
-  expect(read(path.join(root, "f.txt"))).toBe("1\n2\n3\n")
-})
+test(
+  "a clean merge past the review threshold is reviewed first (D38)",
+  async () => {
+    const { root, home } = await setup()
+    const wt = await worktree(root, home)
+    writeFileSync(path.join(wt.cwd, "f.txt"), "1\n2\n3\n")
+    const options: string[][] = []
+    const titles: string[] = []
+    const r = await mergeWorktree(git, wt, {
+      threshold: { lines: 4 },
+      who: `"Fix the bug" (coder)`,
+      review: async (t, _d, o) => {
+        titles.push(t)
+        options.push(o)
+        return MERGE
+      },
+    })
+    expect(options).toEqual([[MERGE, KEEP, DISCARD]])
+    // The review says whose changes they are.
+    expect(titles).toEqual(['Merge the changes of "Fix the bug" (coder) (1 file, +3 -5)?'])
+    expect(r.outcome).toBe("merged")
+    expect(read(path.join(root, "f.txt"))).toBe("1\n2\n3\n")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("the sweep announces worktrees left behind long ago, deletes them a day later, and keeps recent ones", async () => {
-  const { root, home } = await setup()
-  const old = await createWorktree(git, { cwd: root, home, name: "old" })
-  const fresh = await createWorktree(git, { cwd: root, home, name: "fresh" })
-  if ("error" in old || "error" in fresh) throw new Error("no worktree")
-  writeFileSync(old.patch, "patch")
-  const now = Date.now()
-  const then = new Date(now - STALE_WORKTREE_MS - 60_000)
-  utimesSync(old.dir, then, then)
-  utimesSync(old.patch, then, then)
-  expect(listKeptWorktrees(home, root).map((w) => w.name)).toEqual(["fresh", "old"])
-  // First the user is told; nothing goes yet.
-  const first = await sweepWorktrees(git, { root, home, now })
-  expect(first.removed).toEqual([])
-  expect(first.expiring.map((w) => [w.name, w.patch])).toEqual([["old", old.patch]])
-  expect(existsSync(old.dir)).toBe(true)
-  expect(listKeptWorktrees(home, root).find((w) => w.name === "old")?.expiring).toBe(true)
-  // Told again? No: once is enough, and within a day nothing is deleted.
-  expect(await sweepWorktrees(git, { root, home, now: now + 1000 })).toEqual({ removed: [], expiring: [] })
-  const later = now + STALE_NOTICE_MS + 60_000
-  expect(await sweepWorktrees(git, { root, home, now: later })).toEqual({ removed: ["old"], expiring: [] })
-  expect(existsSync(old.dir)).toBe(false)
-  expect(existsSync(old.patch)).toBe(false)
-  expect(existsSync(fresh.dir)).toBe(true)
-  const list = await git(["worktree", "list", "--porcelain"], root, true)
-  expect(list.output).not.toContain("/old")
-  expect(list.output).toContain("/fresh")
-})
+test(
+  "the sweep announces worktrees left behind long ago, deletes them a day later, and keeps recent ones",
+  async () => {
+    const { root, home } = await setup()
+    const old = await createWorktree(git, { cwd: root, home, name: "old" })
+    const fresh = await createWorktree(git, { cwd: root, home, name: "fresh" })
+    if ("error" in old || "error" in fresh) throw new Error("no worktree")
+    writeFileSync(old.patch, "patch")
+    const now = Date.now()
+    const then = new Date(now - STALE_WORKTREE_MS - 60_000)
+    utimesSync(old.dir, then, then)
+    utimesSync(old.patch, then, then)
+    expect(listKeptWorktrees(home, root).map((w) => w.name)).toEqual(["fresh", "old"])
+    // First the user is told; nothing goes yet.
+    const first = await sweepWorktrees(git, { root, home, now })
+    expect(first.removed).toEqual([])
+    expect(first.expiring.map((w) => [w.name, w.patch])).toEqual([["old", old.patch]])
+    expect(existsSync(old.dir)).toBe(true)
+    expect(listKeptWorktrees(home, root).find((w) => w.name === "old")?.expiring).toBe(true)
+    // Told again? No: once is enough, and within a day nothing is deleted.
+    expect(await sweepWorktrees(git, { root, home, now: now + 1000 })).toEqual({ removed: [], expiring: [] })
+    const later = now + STALE_NOTICE_MS + 60_000
+    expect(await sweepWorktrees(git, { root, home, now: later })).toEqual({ removed: ["old"], expiring: [] })
+    expect(existsSync(old.dir)).toBe(false)
+    expect(existsSync(old.patch)).toBe(false)
+    expect(existsSync(fresh.dir)).toBe(true)
+    const list = await git(["worktree", "list", "--porcelain"], root, true)
+    expect(list.output).not.toContain("/old")
+    expect(list.output).toContain("/fresh")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("outside a repository there is no worktree", async () => {
-  const plain = await tempDir("amira-wt-plain-")
-  const r = await createWorktree(git, { cwd: plain, home: plain, name: "x" })
-  expect(r).toEqual({ error: "not a git repository" })
-})
+test(
+  "outside a repository there is no worktree",
+  async () => {
+    const plain = await tempDir("amira-wt-plain-")
+    const r = await createWorktree(git, { cwd: plain, home: plain, name: "x" })
+    expect(r).toEqual({ error: "not a git repository" })
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a kept worktree knows whose it is; one that no longer applies is not merged; kept, it starts over", async () => {
-  const { root, home } = await setup()
-  const wt = await createWorktree(git, {
-    cwd: root,
-    home,
-    name: "k",
-    about: { title: "Fix it", role: "coder" },
-  })
-  if ("error" in wt) throw new Error(wt.error)
-  writeFileSync(path.join(wt.dir, "f.txt"), "a\nB\nc\nd\ne\n")
-  const [kept] = listKeptWorktrees(home, root)
-  expect(kept).toMatchObject({ name: "k", title: "Fix it", role: "coder", base: wt.base, expiring: false })
-  expect(kept!.deleteAfter).toBe(kept!.modifiedAt + STALE_WORKTREE_MS + STALE_NOTICE_MS)
-  // Collected afresh against its base: the change made after the sub-agent ended counts.
-  const changes = await keptChanges(git, root, kept!)
-  expect(changes.stat).toEqual({ files: ["f.txt"], insertions: 1, deletions: 1 })
-  expect(changes.patch).toContain("+B")
-  // The working tree changed the same line meanwhile: nothing is applied, the worktree stays.
-  writeFileSync(path.join(root, "f.txt"), "a\nX\nc\nd\ne\n")
-  const r = await mergeKept(git, root, kept!)
-  expect(r.outcome).toBe("conflict")
-  expect(read(path.join(root, "f.txt"))).toBe("a\nX\nc\nd\ne\n")
-  expect(existsSync(wt.dir)).toBe(true)
-  // Kept: no longer announced, and old again only STALE_WORKTREE_MS from now.
-  const then = new Date(Date.now() - STALE_WORKTREE_MS - 60_000)
-  utimesSync(wt.dir, then, then)
-  writeFileSync(`${wt.dir}.expiring`, "")
-  const extended = extendKept(listKeptWorktrees(home, root)[0]!)
-  expect(extended.expiring).toBe(false)
-  expect(extended.modifiedAt).toBeGreaterThan(Date.now() - 60_000)
-  expect(await sweepWorktrees(git, { root, home })).toEqual({ removed: [], expiring: [] })
-  // Discarded: the worktree goes with its patch, its record and its mark.
-  expect(await discardKept(git, root, extended)).toBeUndefined()
-  for (const f of [wt.dir, wt.patch, `${wt.dir}.json`, `${wt.dir}.expiring`])
-    expect(existsSync(f)).toBe(false)
-})
+test(
+  "a kept worktree knows whose it is; one that no longer applies is not merged; kept, it starts over",
+  async () => {
+    const { root, home } = await setup()
+    const wt = await createWorktree(git, {
+      cwd: root,
+      home,
+      name: "k",
+      about: { title: "Fix it", role: "coder" },
+    })
+    if ("error" in wt) throw new Error(wt.error)
+    writeFileSync(path.join(wt.dir, "f.txt"), "a\nB\nc\nd\ne\n")
+    const [kept] = listKeptWorktrees(home, root)
+    expect(kept).toMatchObject({ name: "k", title: "Fix it", role: "coder", base: wt.base, expiring: false })
+    expect(kept!.deleteAfter).toBe(kept!.modifiedAt + STALE_WORKTREE_MS + STALE_NOTICE_MS)
+    // Collected afresh against its base: the change made after the sub-agent ended counts.
+    const changes = await keptChanges(git, root, kept!)
+    expect(changes.stat).toEqual({ files: ["f.txt"], insertions: 1, deletions: 1 })
+    expect(changes.patch).toContain("+B")
+    // The working tree changed the same line meanwhile: nothing is applied, the worktree stays.
+    writeFileSync(path.join(root, "f.txt"), "a\nX\nc\nd\ne\n")
+    const r = await mergeKept(git, root, kept!)
+    expect(r.outcome).toBe("conflict")
+    expect(read(path.join(root, "f.txt"))).toBe("a\nX\nc\nd\ne\n")
+    expect(existsSync(wt.dir)).toBe(true)
+    // Kept: no longer announced, and old again only STALE_WORKTREE_MS from now.
+    const then = new Date(Date.now() - STALE_WORKTREE_MS - 60_000)
+    utimesSync(wt.dir, then, then)
+    writeFileSync(`${wt.dir}.expiring`, "")
+    const extended = extendKept(listKeptWorktrees(home, root)[0]!)
+    expect(extended.expiring).toBe(false)
+    expect(extended.modifiedAt).toBeGreaterThan(Date.now() - 60_000)
+    expect(await sweepWorktrees(git, { root, home })).toEqual({ removed: [], expiring: [] })
+    // Discarded: the worktree goes with its patch, its record and its mark.
+    expect(await discardKept(git, root, extended)).toBeUndefined()
+    for (const f of [wt.dir, wt.patch, `${wt.dir}.json`, `${wt.dir}.expiring`])
+      expect(existsSync(f)).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a worktree another process's sub-agent works in is not listed, merged, discarded or swept", async () => {
-  const { root, home } = await setup()
-  const wt = await worktree(root, home)
-  const lock = `${wt.dir}.lock`
-  // Made by this process: its lock names this process, which knows its own worktrees.
-  expect(readFileSync(lock, "utf8")).toBe(String(process.pid))
-  expect(inUseElsewhere(wt.dir)).toBe(false)
-  // The parent of the test runner is alive: as if another Amira ran the sub-agent.
-  writeFileSync(lock, String(process.ppid))
-  expect(inUseElsewhere(wt.dir)).toBe(true)
-  expect(listKeptWorktrees(home, root)).toEqual([])
-  const then = new Date(Date.now() - STALE_WORKTREE_MS - STALE_NOTICE_MS - 60_000)
-  utimesSync(wt.dir, then, then)
-  expect(await sweepWorktrees(git, { root, home })).toEqual({ removed: [], expiring: [] })
-  const kept = { name: "child", dir: wt.dir, modifiedAt: 0, expiring: false, deleteAfter: 0 }
-  await expect(discardKept(git, root, kept)).rejects.toThrow("another Amira session")
-  await expect(mergeKept(git, root, kept)).rejects.toThrow("another Amira session")
-  expect(existsSync(wt.dir)).toBe(true)
-  // A lock of a process that is gone (killed mid-run) no longer counts; released, there is none.
-  writeFileSync(lock, "999999999")
-  expect(listKeptWorktrees(home, root).map((w) => w.name)).toEqual(["child"])
-  releaseWorktree(wt.dir)
-  expect(existsSync(lock)).toBe(false)
-})
+test(
+  "a worktree another process's sub-agent works in is not listed, merged, discarded or swept",
+  async () => {
+    const { root, home } = await setup()
+    const wt = await worktree(root, home)
+    const lock = `${wt.dir}.lock`
+    // Made by this process: its lock names this process, which knows its own worktrees.
+    expect(readFileSync(lock, "utf8")).toBe(String(process.pid))
+    expect(inUseElsewhere(wt.dir)).toBe(false)
+    // The parent of the test runner is alive: as if another Amira ran the sub-agent.
+    writeFileSync(lock, String(process.ppid))
+    expect(inUseElsewhere(wt.dir)).toBe(true)
+    expect(listKeptWorktrees(home, root)).toEqual([])
+    const then = new Date(Date.now() - STALE_WORKTREE_MS - STALE_NOTICE_MS - 60_000)
+    utimesSync(wt.dir, then, then)
+    expect(await sweepWorktrees(git, { root, home })).toEqual({ removed: [], expiring: [] })
+    const kept = { name: "child", dir: wt.dir, modifiedAt: 0, expiring: false, deleteAfter: 0 }
+    await expect(discardKept(git, root, kept)).rejects.toThrow("another Amira session")
+    await expect(mergeKept(git, root, kept)).rejects.toThrow("another Amira session")
+    expect(existsSync(wt.dir)).toBe(true)
+    // A lock of a process that is gone (killed mid-run) no longer counts; released, there is none.
+    writeFileSync(lock, "999999999")
+    expect(listKeptWorktrees(home, root).map((w) => w.name)).toEqual(["child"])
+    releaseWorktree(wt.dir)
+    expect(existsSync(lock)).toBe(false)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
-test("a kept worktree without a record is diffed from its first commit, its commits included", async () => {
-  const { root, home } = await setup()
-  const wt = await worktree(root, home)
-  // Made before worktrees kept a record of their base.
-  rmSync(`${wt.dir}.json`)
-  writeFileSync(path.join(wt.dir, "f.txt"), "a\nB\nc\nd\ne\n")
-  await run(
-    wt.dir,
-    "-c",
-    "user.name=t",
-    "-c",
-    "user.email=t@t",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-qam",
-    "b",
-  )
-  writeFileSync(path.join(wt.dir, "new.txt"), "new\n")
-  const [kept] = listKeptWorktrees(home, root)
-  expect(kept?.base).toBeUndefined()
-  expect((await keptChanges(git, root, kept!)).stat).toEqual({
-    files: ["f.txt", "new.txt"],
-    insertions: 2,
-    deletions: 1,
-  })
-  // Half deleted (its .git gone): not collected, or git would take the enclosing repository;
-  // its last patch is what there is.
-  rmSync(path.join(wt.dir, ".git"))
-  const again = await keptChanges(git, root, listKeptWorktrees(home, root)[0]!)
-  expect(again.stat.files).toEqual(["f.txt", "new.txt"])
-  rmSync(wt.patch)
-  await expect(keptChanges(git, root, listKeptWorktrees(home, root)[0]!)).rejects.toThrow(
-    "no longer a git worktree",
-  )
-})
+test(
+  "a kept worktree without a record is diffed from its first commit, its commits included",
+  async () => {
+    const { root, home } = await setup()
+    const wt = await worktree(root, home)
+    // Made before worktrees kept a record of their base.
+    rmSync(`${wt.dir}.json`)
+    writeFileSync(path.join(wt.dir, "f.txt"), "a\nB\nc\nd\ne\n")
+    await run(
+      wt.dir,
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-qam",
+      "b",
+    )
+    writeFileSync(path.join(wt.dir, "new.txt"), "new\n")
+    const [kept] = listKeptWorktrees(home, root)
+    expect(kept?.base).toBeUndefined()
+    expect((await keptChanges(git, root, kept!)).stat).toEqual({
+      files: ["f.txt", "new.txt"],
+      insertions: 2,
+      deletions: 1,
+    })
+    // Half deleted (its .git gone): not collected, or git would take the enclosing repository;
+    // its last patch is what there is.
+    rmSync(path.join(wt.dir, ".git"))
+    const again = await keptChanges(git, root, listKeptWorktrees(home, root)[0]!)
+    expect(again.stat.files).toEqual(["f.txt", "new.txt"])
+    rmSync(wt.patch)
+    await expect(keptChanges(git, root, listKeptWorktrees(home, root)[0]!)).rejects.toThrow(
+      "no longer a git worktree",
+    )
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("numstat parsing counts binary files without lines", () => {
   expect(parseNumstat("1\t2\ta.txt\n-\t-\timg.png\n")).toEqual({

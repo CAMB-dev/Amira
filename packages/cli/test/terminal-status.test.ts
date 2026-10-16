@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { TerminalProgress } from "@amira/api"
 import terminalStatus from "../../../extensions/terminal-status/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
+import { withoutBuiltinWarmup } from "../../../scripts/test-builtin-tools.ts"
 import { runPrint } from "../src/print.ts"
 import { createSession } from "../src/session.ts"
 
@@ -15,29 +17,48 @@ const mockAi = () =>
   })
 
 for (const noBuiltins of [false, true]) {
-  test(`default terminal-status registration respects noBuiltins=${noBuiltins}`, async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "amira-terminal-builtins-"))
-    const s = await createSession({
-      cwd,
-      noBuiltins,
-      extensions: [],
-      ai: mockAi(),
-      model: "mock/m",
-      autoTitle: false,
-    })
-    try {
-      expect(s.host.loaded.includes("builtin:terminal-status")).toBe(!noBuiltins)
-      const titles: string[] = []
-      s.host.bindTerminal({ setTitle: (title) => titles.push(title), setProgress: () => {}, bell: () => {} })
-      s.agent.start("startup")
-      await s.agent.bus.flush()
-      expect(titles.length > 0).toBe(!noBuiltins)
-    } finally {
-      await s.agent.dispose()
-      s.host.unloadAll()
-      rmSync(cwd, { recursive: true, force: true })
-    }
-  })
+  test(
+    `default terminal-status registration respects noBuiltins=${noBuiltins}`,
+    async () => {
+      const cwd = mkdtempSync(join(tmpdir(), "amira-terminal-builtins-"))
+      const create = () =>
+        createSession({
+          cwd,
+          noBuiltins,
+          extensions: [],
+          ai: mockAi(),
+          model: "mock/m",
+          autoTitle: false,
+        })
+      let s: Awaited<ReturnType<typeof createSession>> | undefined
+      try {
+        s = noBuiltins ? await create() : await withoutBuiltinWarmup(create)
+        expect(s.host.loaded.includes("builtin:terminal-status")).toBe(!noBuiltins)
+        const titles: string[] = []
+        s.host.bindTerminal({
+          setTitle: (title) => titles.push(title),
+          setProgress: () => {},
+          bell: () => {},
+        })
+        s.agent.start("startup")
+        await s.agent.bus.flush()
+        expect(titles.length > 0).toBe(!noBuiltins)
+      } finally {
+        try {
+          if (s) {
+            try {
+              await waitForSpawnWork("terminal-status session disposal", s.agent.dispose())
+            } finally {
+              s.host.unloadAll()
+            }
+          }
+        } finally {
+          rmSync(cwd, { recursive: true, force: true })
+        }
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 }
 
 test("print mode loads terminal status with no terminal output", async () => {

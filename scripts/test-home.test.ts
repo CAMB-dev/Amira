@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { SPAWN_TEST_TIMEOUT_MS, SPAWN_WAIT_TIMEOUT_MS } from "./spawn-test.ts"
 
 const owned: string[] = []
 afterEach(() => {
@@ -60,20 +61,19 @@ function fixture() {
         },
         stdout: "pipe",
         stderr: "pipe",
-        timeout: 30_000,
+        timeout: SPAWN_WAIT_TIMEOUT_MS,
       })
       return { code: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() }
     },
   }
 }
 
-// Each test starts bun subprocesses (30 s limit each); under a loaded machine 5 s is too short.
-setDefaultTimeout(30_000)
-
 describe("test home isolation", () => {
-  test("redirects every home, preserves executable lookup, and removes only its own directory", () => {
-    const files = fixture()
-    const result = files.run(`
+  test(
+    "redirects every home, preserves executable lookup, and removes only its own directory",
+    () => {
+      const files = fixture()
+      const result = files.run(`
       import { strict as assert } from "node:assert";
       import fs from "node:fs";
       import os, { homedir } from "node:os";
@@ -95,16 +95,20 @@ describe("test home isolation", () => {
       fs.writeFileSync(path.join(env.XDG_CONFIG_HOME, "allowed"), "yes");
       console.log(env.HOME);
     `)
-    expect(result.stderr).toBe("")
-    expect(result.code).toBe(0)
-    expect(() => readFileSync(path.join(result.stdout.trim(), ".amira", "allowed"))).toThrow()
-    expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
-    expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("unchanged")
-  })
+      expect(result.stderr).toBe("")
+      expect(result.code).toBe(0)
+      expect(() => readFileSync(path.join(result.stdout.trim(), ".amira", "allowed"))).toThrow()
+      expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
+      expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test("blocks sync, callback, promise, named imports and Bun.write even when errors are caught", () => {
-    const files = fixture()
-    const result = files.run(`
+  test(
+    "blocks sync, callback, promise, named imports and Bun.write even when errors are caught",
+    () => {
+      const files = fixture()
+      const result = files.run(`
       import fs, { writeFileSync } from "node:fs";
       import fsp, { writeFile } from "node:fs/promises";
       import path from "node:path";
@@ -161,16 +165,20 @@ describe("test home isolation", () => {
       await handle.close();
       console.log(caught + "/" + attempts.length);
     `)
-    expect(result.stdout.trim()).toBe("31/31")
-    expect(result.code).toBe(1)
-    expect(result.stderr).toContain("Test home guard blocked")
-    expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
-    expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("unchanged")
-  })
+      expect(result.stdout.trim()).toBe("31/31")
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain("Test home guard blocked")
+      expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
+      expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test("blocks BunFile writers and deletion without blocking reads or isolated-home writers", () => {
-    const files = fixture()
-    const result = files.run(`
+  test(
+    "blocks BunFile writers and deletion without blocking reads or isolated-home writers",
+    () => {
+      const files = fixture()
+      const result = files.run(`
       import { strict as assert } from "node:assert";
       import path from "node:path";
       const file = Bun.file(path.join(process.env.GUARD_PROTECTED, "existing"));
@@ -187,16 +195,20 @@ describe("test home isolation", () => {
       }
       console.log(caught);
     `)
-    expect(result.stdout.trim()).toBe("2")
-    expect(result.code).toBe(1)
-    expect(result.stderr).toContain("Test home guard blocked BunFile.writer")
-    expect(result.stderr).toContain("Test home guard blocked BunFile.delete")
-    expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
-  })
+      expect(result.stdout.trim()).toBe("2")
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain("Test home guard blocked BunFile.writer")
+      expect(result.stderr).toContain("Test home guard blocked BunFile.delete")
+      expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test("blocks recursive copies into a protected home's parent", () => {
-    const files = fixture()
-    const result = files.run(`
+  test(
+    "blocks recursive copies into a protected home's parent",
+    () => {
+      const files = fixture()
+      const result = files.run(`
       import fs from "node:fs";
       import fsp from "node:fs/promises";
       import path from "node:path";
@@ -215,17 +227,21 @@ describe("test home isolation", () => {
       }
       console.log(caught);
     `)
-    expect(result.stdout.trim()).toBe("3")
-    expect(result.code).toBe(1)
-    expect(result.stderr).toContain("Test home guard blocked cpSync:")
-    expect(result.stderr).toContain("Test home guard blocked cp:")
-    expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
-  })
+      expect(result.stdout.trim()).toBe("3")
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain("Test home guard blocked cpSync:")
+      expect(result.stderr).toContain("Test home guard blocked cp:")
+      expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test("fails a passing Bun test run when application code swallows a write violation", () => {
-    const files = fixture()
-    const result = files.run(
-      `
+  test(
+    "fails a passing Bun test run when application code swallows a write violation",
+    () => {
+      const files = fixture()
+      const result = files.run(
+        `
       import { test, expect } from "bun:test";
       import fs, { writeFileSync } from "node:fs";
       test("caught", () => {
@@ -237,19 +253,21 @@ describe("test home isolation", () => {
         expect(true).toBe(true);
       });
     `,
-      true,
-    )
-    expect(result.stderr).toContain("Test home guard blocked writeFileSync")
-    expect(result.stderr).toContain("1 pass")
-    expect(result.code).toBe(1)
-    const home = result.stdout
-      .split(/\r?\n/)
-      .find((line) => line.startsWith("OWNED_HOME="))
-      ?.slice("OWNED_HOME=".length)
-    expect(home).toBeDefined()
-    expect(() => readFileSync(path.join(home ?? "", ".amira", "owned"))).toThrow()
-    expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("unchanged")
-  })
+        true,
+      )
+      expect(result.stderr).toContain("Test home guard blocked writeFileSync")
+      expect(result.stderr).toContain("1 pass")
+      expect(result.code).toBe(1)
+      const home = result.stdout
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("OWNED_HOME="))
+        ?.slice("OWNED_HOME=".length)
+      expect(home).toBeDefined()
+      expect(() => readFileSync(path.join(home ?? "", ".amira", "owned"))).toThrow()
+      expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
   test.each([false, true, "shared"] as const)(
     "keeps default homes usable across two test files (parallel=%s)",
@@ -280,23 +298,30 @@ describe("test home isolation", () => {
       expect(homes).toHaveLength(2)
       for (const home of homes) expect(existsSync(home)).toBe(false)
     },
+    SPAWN_TEST_TIMEOUT_MS,
   )
 
-  test("does not monitor independent processes; children need their own preload for explicit paths", () => {
-    const files = fixture()
-    const result = files.run(`
+  test(
+    "does not monitor independent processes; children need their own preload for explicit paths",
+    () => {
+      const files = fixture()
+      const result = files.run(`
       const source = 'require("node:fs").writeFileSync(process.env.GUARD_INHERITED + "/existing", "independent")';
-      const child = Bun.spawnSync([process.execPath, "-e", source], { stdout: "pipe", stderr: "pipe" });
+      const child = Bun.spawnSync([process.execPath, "-e", source], { stdout: "pipe", stderr: "pipe", timeout: ${SPAWN_WAIT_TIMEOUT_MS} });
       if (child.exitCode !== 0) throw new Error(child.stderr.toString());
     `)
-    expect(result.code).toBe(0)
-    expect(result.stderr).toBe("")
-    expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("independent")
-  })
+      expect(result.code).toBe(0)
+      expect(result.stderr).toBe("")
+      expect(readFileSync(path.join(files.inherited, "existing"), "utf8")).toBe("independent")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test("allows removing and renaming external aliases without changing the protected home", () => {
-    const files = fixture()
-    const result = files.run(`
+  test(
+    "allows removing and renaming external aliases without changing the protected home",
+    () => {
+      const files = fixture()
+      const result = files.run(`
       import fs from "node:fs";
       import fsp from "node:fs/promises";
       import path from "node:path";
@@ -316,17 +341,21 @@ describe("test home isolation", () => {
       }
       console.log("removed aliases");
     `)
-    expect(result.stderr).toBe("")
-    expect(result.code).toBe(0)
-    expect(result.stdout.trim()).toBe("removed aliases")
-    expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
-  })
+      expect(result.stderr).toBe("")
+      expect(result.code).toBe(0)
+      expect(result.stdout.trim()).toBe("removed aliases")
+      expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test.skipIf(process.platform === "win32")("resolves symlinks before parent segments on POSIX", () => {
-    const files = fixture()
-    // This directory must exist before the guard is installed.
-    mkdirSync(path.join(files.protectedHome, "nested"))
-    const result = files.run(`
+  test.skipIf(process.platform === "win32")(
+    "resolves symlinks before parent segments on POSIX",
+    () => {
+      const files = fixture()
+      // This directory must exist before the guard is installed.
+      mkdirSync(path.join(files.protectedHome, "nested"))
+      const result = files.run(`
       import fs from "node:fs";
       import path from "node:path";
       const alias = path.join(process.env.GUARD_FIXTURE, "alias");
@@ -336,14 +365,18 @@ describe("test home isolation", () => {
       catch (error) { if (!String(error).includes("Test home guard blocked")) throw error; caught++; }
       console.log(caught);
     `)
-    expect(result.stdout.trim()).toBe("1")
-    expect(result.code).toBe(1)
-    expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
-  })
+      expect(result.stdout.trim()).toBe("1")
+      expect(result.code).toBe(1)
+      expect(readFileSync(path.join(files.protectedHome, "existing"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  test("resolves existing-parent symlinks and Windows case without blocking sibling paths", () => {
-    const files = fixture()
-    const result = files.run(`
+  test(
+    "resolves existing-parent symlinks and Windows case without blocking sibling paths",
+    () => {
+      const files = fixture()
+      const result = files.run(`
       import fs from "node:fs";
       import path from "node:path";
       const root = process.env.GUARD_PROTECTED;
@@ -368,9 +401,11 @@ describe("test home isolation", () => {
       }
       console.log(caught);
     `)
-    expect(result.code).toBe(1)
-    expect(result.stdout.trim()).toBe(process.platform === "win32" ? "4" : "3")
-    expect(readFileSync(path.join(`${files.protectedHome}-allowed`, "allowed"), "utf8")).toBe("yes")
-    expect(readFileSync(path.join(`${files.protectedHome}-allowed`, "copy"), "utf8")).toBe("unchanged")
-  })
+      expect(result.code).toBe(1)
+      expect(result.stdout.trim()).toBe(process.platform === "win32" ? "4" : "3")
+      expect(readFileSync(path.join(`${files.protectedHome}-allowed`, "allowed"), "utf8")).toBe("yes")
+      expect(readFileSync(path.join(`${files.protectedHome}-allowed`, "copy"), "utf8")).toBe("unchanged")
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 })

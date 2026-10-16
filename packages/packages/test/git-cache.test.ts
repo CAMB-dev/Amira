@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, expect, setDefaultTimeout, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, beforeEach, expect } from "bun:test"
 import {
   cpSync,
   existsSync,
@@ -17,10 +17,15 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { tryFileLock } from "@amira/core"
 import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
+import {
   GitCache,
   gitCacheKey,
   type InstallProgress,
-  installPackage,
   listGitCaches,
   normalizeGitUrl,
   packageScope,
@@ -28,12 +33,10 @@ import {
   readLock,
   readManifest,
   removeGitCache,
-  restorePackages,
-  updatePackages,
 } from "../src/index.ts"
+import { packageOperations, spawnTest as test } from "./spawn-operations.ts"
 
-// git is slow to start on Windows, especially under load.
-setDefaultTimeout(60_000)
+const { installPackage, restorePackages, updatePackages, start, stop } = packageOperations()
 
 let dir: string
 let home: string
@@ -41,15 +44,19 @@ let cwd: string
 let cacheDir: string
 
 beforeEach(() => {
+  start()
   dir = mkdtempSync(path.join(os.tmpdir(), "amira-git-cache-"))
   home = path.join(dir, "home")
   cwd = path.join(dir, "project")
   cacheDir = path.join(home, "cache", "git")
   mkdirSync(home, { recursive: true })
   mkdirSync(cwd, { recursive: true })
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
-afterEach(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }))
+afterEach(async () => {
+  await stop()
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+}, SPAWN_TEST_TIMEOUT_MS)
 
 const user = () => packageScope("user", { home, cwd })
 
@@ -71,10 +78,20 @@ async function git(at: string, ...args: string[]): Promise<string> {
     ],
     { cwd: at, stdout: "pipe", stderr: "pipe" },
   )
-  const out = await new Response(p.stdout).text()
-  const err = await new Response(p.stderr).text()
-  if ((await p.exited) !== 0) throw new Error(`git ${args.join(" ")}: ${err}`)
-  return out.trim()
+  try {
+    const [out, err, code] = await waitForSpawnWork(
+      "git fixture output",
+      Promise.all([
+        new Response(p.stdout).text(),
+        new Response(p.stderr).text(),
+        waitForSpawnExit(p, `git ${args.join(" ")}`),
+      ]),
+    )
+    if (code !== 0) throw new Error(`git ${args.join(" ")}: ${err}`)
+    return out.trim()
+  } finally {
+    await stopSpawn(p, `git ${args.join(" ")} cleanup`)
+  }
 }
 
 function makePackage(at: string, name: string, version: string) {
@@ -103,9 +120,9 @@ beforeAll(async () => {
     await git(repo, "commit", "-q", "-m", "one")
     templates.set(key, { repo, head: await git(repo, "rev-parse", "HEAD") })
   }
-})
+}, SPAWN_TEST_TIMEOUT_MS)
 
-afterAll(() => rmSync(templateDir, { recursive: true, force: true, maxRetries: 3 }))
+afterAll(() => rmSync(templateDir, { recursive: true, force: true, maxRetries: 3 }), SPAWN_TEST_TIMEOUT_MS)
 
 /**
  * A monorepo like amira-extensions: packages under extensions/<name>. It serves partial clones
@@ -264,11 +281,16 @@ test("a subdirectory is checked out byte for byte: CRLF, binary, nested; links b
 
 async function hashText(repo: string, text: string): Promise<string> {
   const p = Bun.spawn(["git", "hash-object", "-w", "--stdin"], { cwd: repo, stdin: "pipe", stdout: "pipe" })
-  p.stdin.write(text)
-  await p.stdin.end()
-  const out = await new Response(p.stdout).text()
-  await p.exited
-  return out.trim()
+  try {
+    p.stdin.write(text)
+    const [out] = await waitForSpawnWork(
+      "git hash-object output",
+      Promise.all([new Response(p.stdout).text(), p.stdin.end(), waitForSpawnExit(p, "git hash-object")]),
+    )
+    return out.trim()
+  } finally {
+    await stopSpawn(p, "git hash-object cleanup")
+  }
 }
 
 test("many packages from one repository: one ls-remote and one download per command", async () => {

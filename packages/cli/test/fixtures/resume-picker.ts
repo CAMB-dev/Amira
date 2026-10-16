@@ -1,19 +1,14 @@
 import { mock } from "bun:test"
 import * as tui from "@amira/tui"
 import { FakeTerminal } from "@amira/tui-kit"
+import { waitForSpawnCondition } from "../../../../scripts/spawn-test.ts"
 
 // Run the real CLI and UI in a child process, replacing only the terminal boundary.
 const runUi = tui.runInteractive
 const terminal = new FakeTerminal(100, 30)
 Object.defineProperty(process.stdin, "isTTY", { value: true })
 Object.defineProperty(process.stdout, "isTTY", { value: true })
-const waitFor = async (check: () => boolean) => {
-  const deadline = Date.now() + 5000
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error("timed out waiting for resume picker")
-    await Bun.sleep(5)
-  }
-}
+const waitFor = (check: () => boolean) => waitForSpawnCondition("resume picker", check)
 mock.module("@amira/tui", () => ({
   ...tui,
   runInteractive: async (opts: tui.InteractiveOptions) => {

@@ -3,6 +3,7 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
+import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { SessionInUseError, SessionStore, sessionLockFile } from "../src/session-store.ts"
 import { finishWorker, startWorker, waitFor } from "./session-ownership-worker.ts"
 
@@ -63,25 +64,31 @@ test("unpublished sessions under directory aliases use the canonical parent befo
   }
 })
 
-test("another process's lease also excludes a file alias", async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "amira-session-alias-process-"))
-  const store = SessionStore.create({ cwd: dir, dir: path.join(dir, "actual") })
-  store.appendMessage(userMessage("existing"))
-  const alias = aliasOf(store.file, dir)
-  const worker = startWorker(dir, store.file, "hold")
-  let view: SessionStore | undefined
-  try {
-    await waitFor(path.join(dir, "claimed"), worker)
-    view = SessionStore.open(alias)
-    expect(() => view!.claim()).toThrow(SessionInUseError)
-    expect(() => view!.append({ type: "display", text: "blocked", level: "info" })).toThrow(SessionInUseError)
-    expect(SessionStore.open(store.file).entries).toHaveLength(1)
-  } finally {
-    view?.release()
-    writeFileSync(path.join(dir, "release"), "cleanup")
-    await finishWorker(worker, dir)
-  }
-}, 8000)
+test(
+  "another process's lease also excludes a file alias",
+  async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "amira-session-alias-process-"))
+    const store = SessionStore.create({ cwd: dir, dir: path.join(dir, "actual") })
+    store.appendMessage(userMessage("existing"))
+    const alias = aliasOf(store.file, dir)
+    const worker = startWorker(dir, store.file, "hold")
+    let view: SessionStore | undefined
+    try {
+      await waitFor(path.join(dir, "claimed"), worker)
+      view = SessionStore.open(alias)
+      expect(() => view!.claim()).toThrow(SessionInUseError)
+      expect(() => view!.append({ type: "display", text: "blocked", level: "info" })).toThrow(
+        SessionInUseError,
+      )
+      expect(SessionStore.open(store.file).entries).toHaveLength(1)
+    } finally {
+      view?.release()
+      writeFileSync(path.join(dir, "release"), "cleanup")
+      await finishWorker(worker, dir)
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("hard-linked session files are refused rather than granting independent lock names", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "amira-session-hardlink-"))

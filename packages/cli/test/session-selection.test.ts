@@ -7,6 +7,7 @@ import { SessionStore, sessionLockFile } from "@amira/core"
 import { runInteractive } from "@amira/tui"
 import { FakeTerminal } from "@amira/tui-kit"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { createCommandHost } from "../src/control.ts"
 import { createSession } from "../src/session.ts"
@@ -67,81 +68,100 @@ function blockClaims(stores: SessionStore[]) {
   }
 }
 
-test("Ctrl+C cancels an actual TUI resume without handing over A's lease, jobs or notices", async () => {
-  const f = await fixture()
-  const old = f.host.agent
-  const target = f.target("B")
-  const claims = blockClaims([target])
-  const handover = spyOn(f.session.host.backgroundJobs, "handoverRoot")
-  const terminal = new FakeTerminal(100, 30)
-  const screen = new VirtualScreen(100, 30)
-  const write = terminal.write.bind(terminal)
-  terminal.write = (text) => {
-    write(text)
-    screen.write(text)
-  }
-  const text = () => [...screen.scrollback, ...screen.lines].join("\n")
-  let ready = false
-  const exited = runInteractive({
-    agent: old,
-    commands: f.host,
-    status: f.session.host.status,
-    ui: f.session.host.ui,
-    terminal,
-    env: {},
-    settings: { images: "off" },
-    setup: async () => ({
-      capabilities: {
-        win32InputMode: false,
-        kittyKeyboard: true,
-        synchronizedOutput: false,
-        shiftEnter: true,
+test(
+  "Ctrl+C cancels an actual TUI resume without handing over A's lease, jobs or notices",
+  async () => {
+    const f = await fixture()
+    const old = f.host.agent
+    const target = f.target("B")
+    const claims = blockClaims([target])
+    const handover = spyOn(f.session.host.backgroundJobs, "handoverRoot")
+    const terminal = new FakeTerminal(100, 30)
+    const screen = new VirtualScreen(100, 30)
+    const write = terminal.write.bind(terminal)
+    terminal.write = (text) => {
+      write(text)
+      screen.write(text)
+    }
+    const text = () => [...screen.scrollback, ...screen.lines].join("\n")
+    let ready = false
+    const exited = runInteractive({
+      agent: old,
+      commands: f.host,
+      status: f.session.host.status,
+      ui: f.session.host.ui,
+      terminal,
+      env: {},
+      settings: { images: "off" },
+      setup: async () => ({
+        capabilities: {
+          win32InputMode: false,
+          kittyKeyboard: true,
+          synchronizedOutput: false,
+          shiftEnter: true,
+        },
+        leftoverInput: "",
+      }),
+      onReady: () => {
+        old.start("startup")
+        ready = true
       },
-      leftoverInput: "",
-    }),
-    onReady: () => {
-      old.start("startup")
-      ready = true
-    },
-  })
-  const notice = old.expectNotice()
-  const job = old.backgroundJobs!.start({
-    command: "selection-owned job",
-    argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
-    cwd: f.dir,
-    env: Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_"))),
-  })
-  try {
-    await until(() => ready && old.backgroundJobs!.get(job.id)?.status === "running")
-    terminal.send(`/resume ${target.id}\r`)
-    await until(() => claims.attempts(target) > 0)
-    terminal.send("\x03")
-    terminal.send("still-responsive")
-    await until(() => text().includes("cancelled") && text().includes("still-responsive"))
-    const attempts = claims.attempts(target)
-    claims.release(target)
-    await Bun.sleep(100)
-    expect(claims.attempts(target)).toBe(attempts)
-    expect(f.host.agent).toBe(old)
-    expect(handover).not.toHaveBeenCalled()
-    expect(f.announcements).toEqual([])
-    expect(fs.existsSync(sessionLockFile(f.store.file))).toBe(true)
-    expect(fs.existsSync(sessionLockFile(target.file))).toBe(false)
-    expect(old.backgroundJobs!.get(job.id)?.status).toBe("running")
-    notice.deliver(userMessage("owned completion"), { wake: false })
-    expect(old.takeNotices()).toEqual([userMessage("owned completion")])
-    f.store.appendDisplay({ type: "display", level: "info", text: "still owned" })
-  } finally {
-    claims.dispose()
-    handover.mockRestore()
-    terminal.send("\x03\x03\x03")
-    await exited
-    await f.session.host.backgroundJobs.stop(job.id, 0)
-    await f.host.agent.dispose()
-    f.session.host.unloadAll()
-    fs.rmSync(f.dir, { recursive: true, force: true })
-  }
-})
+    })
+    let settled = false
+    void exited.then(
+      () => (settled = true),
+      () => (settled = true),
+    )
+    const notice = old.expectNotice()
+    const job = old.backgroundJobs!.start({
+      command: "selection-owned job",
+      argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+      cwd: f.dir,
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
+      ),
+    })
+    try {
+      await until(() => ready && old.backgroundJobs!.get(job.id)?.status === "running")
+      terminal.send(`/resume ${target.id}\r`)
+      await until(() => claims.attempts(target) > 0)
+      terminal.send("\x03")
+      terminal.send("still-responsive")
+      await until(() => text().includes("cancelled") && text().includes("still-responsive"))
+      const attempts = claims.attempts(target)
+      claims.release(target)
+      await Bun.sleep(100)
+      expect(claims.attempts(target)).toBe(attempts)
+      expect(f.host.agent).toBe(old)
+      expect(handover).not.toHaveBeenCalled()
+      expect(f.announcements).toEqual([])
+      expect(fs.existsSync(sessionLockFile(f.store.file))).toBe(true)
+      expect(fs.existsSync(sessionLockFile(target.file))).toBe(false)
+      expect(old.backgroundJobs!.get(job.id)?.status).toBe("running")
+      notice.deliver(userMessage("owned completion"), { wake: false })
+      expect(old.takeNotices()).toEqual([userMessage("owned completion")])
+      f.store.appendDisplay({ type: "display", level: "info", text: "still owned" })
+    } finally {
+      claims.dispose()
+      handover.mockRestore()
+      terminal.send("\x03\x03\x03")
+      try {
+        await waitForSpawnCondition("selection TUI shutdown", () => settled)
+        await exited
+      } finally {
+        await f.session.host.backgroundJobs.stop(job.id, 0)
+        await waitForSpawnCondition(
+          "selection job cleanup",
+          () => !["starting", "running"].includes(f.session.host.backgroundJobs.get(job.id)?.status ?? ""),
+        )
+        await f.host.agent.dispose()
+        f.session.host.unloadAll()
+        fs.rmSync(f.dir, { recursive: true, force: true })
+      }
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("pending C supersedes pending B even when B becomes available first", async () => {
   const f = await fixture()

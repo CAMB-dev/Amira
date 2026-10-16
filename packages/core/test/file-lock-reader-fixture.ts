@@ -1,5 +1,6 @@
 import * as fs from "node:fs"
 import path from "node:path"
+import { waitForSpawnWork } from "../../../scripts/spawn-test.ts"
 import { waitForFileLockWorkerExit } from "./file-lock-test-waits.ts"
 
 // Antivirus can stall a Windows spawn for 4-10s, especially under parallel load.
@@ -31,6 +32,7 @@ try {
 } finally { $stream.Dispose() }`,
     ],
     {
+      windowsHide: true,
       env: {
         ...Object.fromEntries(
           Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
@@ -54,7 +56,7 @@ try {
         if (reader.exitCode === null) reader.kill()
         await boundedExit(reader, "failed reader stop")
         throw new Error(
-          `reader readiness ${reason}: exitCode=${reader.exitCode}, signalCode=${reader.signalCode}\nstderr:\n${await stderr}`,
+          `reader readiness ${reason}: exitCode=${reader.exitCode}, signalCode=${reader.signalCode}\nstderr:\n${await waitForSpawnWork("worker stderr drain", stderr)}`,
         )
       }
       if (fs.existsSync(ready)) return

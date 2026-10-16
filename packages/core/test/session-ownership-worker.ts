@@ -2,19 +2,36 @@ import { expect } from "bun:test"
 import { existsSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import {
+  stopSpawn,
+  waitForSpawnCondition,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 
-export async function waitFor(file: string, worker: ReturnType<typeof startWorker>): Promise<void> {
-  const deadline = Date.now() + 5000
-  while (!existsSync(file)) {
-    if (worker.exitCode !== null) {
+export async function waitFor(
+  file: string,
+  worker: ReturnType<typeof startWorker>,
+  timeoutMs?: number,
+): Promise<void> {
+  await waitForSpawnCondition(
+    `ownership worker ${worker.pid}: ${path.basename(file)}`,
+    () => {
+      if (existsSync(file)) return true
+      if (worker.exitCode !== null)
+        throw new Error(
+          `ownership worker ${worker.pid} exited (${worker.exitCode}) before ${path.basename(file)}`,
+        )
+      return false
+    },
+    timeoutMs,
+  ).catch(async (error) => {
+    if (worker.exitCode !== null)
       throw new Error(
-        `ownership worker exited before ${path.basename(file)}: ${await new Response(worker.stderr).text()}`,
+        `${error.message}: ${await waitForSpawnWork("ownership worker stderr", new Response(worker.stderr).text())}`,
       )
-    }
-    if (Date.now() > deadline)
-      throw new Error(`ownership worker timed out waiting for ${path.basename(file)}`)
-    await Bun.sleep(10)
-  }
+    throw error
+  })
 }
 
 export function startWorker(dir: string, file: string, mode: "resume" | "hold") {
@@ -37,19 +54,16 @@ import { createAi, createMockDialect } from ${module("packages/ai/src/index.ts")
 import { Agent } from ${module("packages/core/src/agent.ts")}
 import { EventBus } from ${module("packages/core/src/event-bus.ts")}
 import { SessionStore } from ${module("packages/core/src/session-store.ts")}
+import { waitForSpawnCondition } from ${module("scripts/spawn-test.ts")}
 const [file, dir, mode] = process.argv.slice(2)
 const mark = (name: string, data: unknown = {}) => {
   const file = path.join(dir, name)
   writeFileSync(file + ".tmp", JSON.stringify(data))
   renameSync(file + ".tmp", file)
 }
-const wait = async (name: string) => {
-  const deadline = Date.now() + 5000
-  while (!existsSync(path.join(dir, name))) {
-    if (Date.now() > deadline) throw new Error("worker protocol timed out: " + name)
-    await Bun.sleep(10)
-  }
-}
+const wait = (name: string) => waitForSpawnCondition("ownership worker protocol: " + name, () =>
+  existsSync(path.join(dir, name)),
+)
 const store = SessionStore.open(file!)
 mark("opened")
 if (mode === "hold") {
@@ -95,34 +109,13 @@ if (mode === "hold") {
 }
 
 export async function finishWorker(worker: ReturnType<typeof startWorker>, dir: string) {
-  // Only this test's exact subprocess is killed if protocol cleanup did not let it exit.
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let deadline: ReturnType<typeof setTimeout> | undefined
   try {
-    await Promise.race([
-      worker.exited,
-      new Promise<void>((resolve, reject) => {
-        timer = setTimeout(() => {
-          try {
-            worker.kill()
-            resolve()
-          } catch (error) {
-            reject(error)
-          }
-        }, 1000)
-      }),
-    ])
-    const code = await Promise.race([
-      worker.exited,
-      new Promise<never>((_, reject) => {
-        deadline = setTimeout(() => reject(new Error("ownership worker did not exit after cleanup")), 1000)
-      }),
-    ])
-    const stderr = await new Response(worker.stderr).text()
+    const code = await waitForSpawnExit(worker, "ownership worker protocol cleanup")
+    const stderr = await waitForSpawnWork("ownership worker stderr", new Response(worker.stderr).text())
     expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
   } finally {
-    clearTimeout(timer)
-    clearTimeout(deadline)
+    // Only this test's exact subprocess is killed if protocol cleanup did not let it exit.
+    await stopSpawn(worker, "ownership worker cleanup")
     rmSync(dir, { recursive: true, force: true })
   }
 }

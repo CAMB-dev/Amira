@@ -3,6 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  SPAWN_WAIT_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "./spawn-test.ts"
 
 const temporary: string[] = []
 afterEach(async () => {
@@ -42,7 +49,7 @@ setTimeout(() => { console.log("child still running"); process.exit(37) }, 750)
 process.env.AMIRA_BINARY = ${JSON.stringify(runtime.executable)}
 process.argv = [process.execPath, ${JSON.stringify(entry)}, ${JSON.stringify(binary)}]
 require(${JSON.stringify(entry)})
-const deadline = setTimeout(() => { throw new Error("Child did not become ready") }, 5000)
+const deadline = setTimeout(() => { throw new Error("Child did not become ready") }, ${SPAWN_WAIT_TIMEOUT_MS})
 const poll = setInterval(() => {
   if (!require("node:fs").existsSync(${JSON.stringify(ready)})) return
   clearInterval(poll)
@@ -53,16 +60,23 @@ const poll = setInterval(() => {
 `,
       )
       const child = Bun.spawn([runtime.executable, bootstrap], { stdout: "pipe", stderr: "pipe" })
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-      ])
-      expect(stderr).toBe("")
-      expect(code).toBe(37)
-      expect(stdout).toContain("child still running")
+      try {
+        const [stdout, stderr, code] = await waitForSpawnWork(
+          "child output",
+          Promise.all([
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+            waitForSpawnExit(child, `${runtime.name} launcher`),
+          ]),
+        )
+        expect(stderr).toBe("")
+        expect(code).toBe(37)
+        expect(stdout).toContain("child still running")
+      } finally {
+        await stopSpawn(child)
+      }
     },
-    10000,
+    SPAWN_TEST_TIMEOUT_MS,
   )
   for (const signal of ["SIGINT", "SIGQUIT"]) {
     test.skipIf(!python)(
@@ -100,25 +114,34 @@ setInterval(() => {}, 1000)
             stderr: "pipe",
           },
         )
-        const [stdout, stderr, code] = await Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ])
-        expect(stderr).toBe("")
-        expect(code).toBe(0)
-        expect(stdout).toContain("one console interrupt; child exit 42 preserved")
+        try {
+          const [stdout, stderr, code] = await waitForSpawnWork(
+            "child output",
+            Promise.all([
+              new Response(child.stdout).text(),
+              new Response(child.stderr).text(),
+              waitForSpawnExit(child, `${runtime.name} launcher`),
+            ]),
+          )
+          expect(stderr).toBe("")
+          expect(code).toBe(0)
+          expect(stdout).toContain("one console interrupt; child exit 42 preserved")
+        } finally {
+          await stopSpawn(child)
+        }
       },
-      15000,
+      SPAWN_TEST_TIMEOUT_MS,
     )
   }
-  test(`${runtime.name} POSIX launcher re-raises child signals after cleanup with a delayed fallback`, async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "amira-signal-exit-"))
-    temporary.push(directory)
-    const harness = path.join(directory, "signals.cjs")
-    await writeFile(
-      harness,
-      `const { EventEmitter } = require("node:events")
+  test(
+    `${runtime.name} POSIX launcher re-raises child signals after cleanup with a delayed fallback`,
+    async () => {
+      const directory = await mkdtemp(path.join(tmpdir(), "amira-signal-exit-"))
+      temporary.push(directory)
+      const harness = path.join(directory, "signals.cjs")
+      await writeFile(
+        harness,
+        `const { EventEmitter } = require("node:events")
 const { runInNewContext } = require("node:vm")
 const results = []
 for (const signal of ["SIGINT", "SIGQUIT", "SIGTERM", "SIGHUP"]) {
@@ -142,33 +165,44 @@ for (const signal of ["SIGINT", "SIGQUIT", "SIGTERM", "SIGHUP"]) {
 }
 console.log(JSON.stringify(results))
 `,
-    )
-    const child = Bun.spawn([runtime.executable, harness], { stdout: "pipe", stderr: "pipe" })
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ])
-    expect(stderr).toBe("")
-    expect(code).toBe(0)
-    const numbers: Record<string, number> = { SIGINT: 2, SIGQUIT: 3, SIGTERM: 15, SIGHUP: 1 }
-    for (const result of JSON.parse(stdout)) {
-      const reraised = { pid: 123, signal: result.signal, remaining: [] }
-      expect(result.immediate).toEqual([reraised])
-      expect(result.calls).toEqual([reraised, { code: 128 + numbers[result.signal]! }])
-    }
-  })
+      )
+      const child = Bun.spawn([runtime.executable, harness], { stdout: "pipe", stderr: "pipe" })
+      try {
+        const [stdout, stderr, code] = await waitForSpawnWork(
+          "child output",
+          Promise.all([
+            new Response(child.stdout).text(),
+            new Response(child.stderr).text(),
+            waitForSpawnExit(child, `${runtime.name} launcher`),
+          ]),
+        )
+        expect(stderr).toBe("")
+        expect(code).toBe(0)
+        const numbers: Record<string, number> = { SIGINT: 2, SIGQUIT: 3, SIGTERM: 15, SIGHUP: 1 }
+        for (const result of JSON.parse(stdout)) {
+          const reraised = { pid: 123, signal: result.signal, remaining: [] }
+          expect(result.immediate).toEqual([reraised])
+          expect(result.calls).toEqual([reraised, { code: 128 + numbers[result.signal]! }])
+        }
+      } finally {
+        await stopSpawn(child)
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
   for (const platform of ["win32", "linux"]) {
     for (const tty of ["none", "stdin", "stdout", "stderr"]) {
-      test(`${runtime.name} launcher ${platform} tty=${tty} avoids duplicate console interrupts and waits for exit`, async () => {
-        const directory = await mkdtemp(path.join(tmpdir(), "amira-signals-"))
-        temporary.push(directory)
-        const harness = path.join(directory, "signals.cjs")
-        // Exercise the actual launcher with console delivery simulated at process.on's seam.
-        // child.kill on Windows is deliberately observable: it must never receive console interrupts.
-        await writeFile(
-          harness,
-          `const { EventEmitter } = require("node:events")
+      test(
+        `${runtime.name} launcher ${platform} tty=${tty} avoids duplicate console interrupts and waits for exit`,
+        async () => {
+          const directory = await mkdtemp(path.join(tmpdir(), "amira-signals-"))
+          temporary.push(directory)
+          const harness = path.join(directory, "signals.cjs")
+          // Exercise the actual launcher with console delivery simulated at process.on's seam.
+          // child.kill on Windows is deliberately observable: it must never receive console interrupts.
+          await writeFile(
+            harness,
+            `const { EventEmitter } = require("node:events")
 const { runInNewContext } = require("node:vm")
 const child = new EventEmitter()
 const kills = []
@@ -199,33 +233,42 @@ for (const signal of ["SIGINT", "SIGBREAK", "SIGQUIT", "SIGTERM", "SIGHUP"]) {
 child.emit("exit", 37, null)
 console.log(JSON.stringify({ received, spawnInterrupts, exitCode: proc.exitCode, remaining: proc.eventNames() }))
 `,
-        )
-        const child = Bun.spawn([runtime.executable, harness], { stdout: "pipe", stderr: "pipe" })
-        const [stdout, stderr, code] = await Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ])
-        expect(stderr).toBe("")
-        expect(code).toBe(0)
-        const result = JSON.parse(stdout)
-        const ignored =
-          platform === "win32" ? ["SIGINT", "SIGBREAK"] : tty !== "none" ? ["SIGINT", "SIGQUIT"] : []
-        const forwarded = [
-          "SIGTERM",
-          "SIGHUP",
-          ...(platform !== "win32" && tty === "none" ? ["SIGINT", "SIGQUIT"] : []),
-        ]
-        for (const signal of ignored) {
-          expect(result.spawnInterrupts[signal]).toBe(true)
-          expect(result.received[signal]).toEqual({ handled: true, forwarded: [], exitCode: null })
-        }
-        for (const signal of forwarded) {
-          expect(result.received[signal]).toEqual({ handled: true, forwarded: [signal], exitCode: null })
-        }
-        expect(result.exitCode).toBe(37)
-        expect(result.remaining).toEqual([])
-      })
+          )
+          const child = Bun.spawn([runtime.executable, harness], { stdout: "pipe", stderr: "pipe" })
+          try {
+            const [stdout, stderr, code] = await waitForSpawnWork(
+              "child output",
+              Promise.all([
+                new Response(child.stdout).text(),
+                new Response(child.stderr).text(),
+                waitForSpawnExit(child, `${runtime.name} launcher`),
+              ]),
+            )
+            expect(stderr).toBe("")
+            expect(code).toBe(0)
+            const result = JSON.parse(stdout)
+            const ignored =
+              platform === "win32" ? ["SIGINT", "SIGBREAK"] : tty !== "none" ? ["SIGINT", "SIGQUIT"] : []
+            const forwarded = [
+              "SIGTERM",
+              "SIGHUP",
+              ...(platform !== "win32" && tty === "none" ? ["SIGINT", "SIGQUIT"] : []),
+            ]
+            for (const signal of ignored) {
+              expect(result.spawnInterrupts[signal]).toBe(true)
+              expect(result.received[signal]).toEqual({ handled: true, forwarded: [], exitCode: null })
+            }
+            for (const signal of forwarded) {
+              expect(result.received[signal]).toEqual({ handled: true, forwarded: [signal], exitCode: null })
+            }
+            expect(result.exitCode).toBe(37)
+            expect(result.remaining).toEqual([])
+          } finally {
+            await stopSpawn(child)
+          }
+        },
+        SPAWN_TEST_TIMEOUT_MS,
+      )
     }
   }
 }

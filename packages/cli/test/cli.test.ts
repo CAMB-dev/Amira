@@ -13,6 +13,12 @@ import {
   textResult,
 } from "@amira/api"
 import { EventBus, UiRequests } from "@amira/core"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 import { parseCliArgs, USAGE, UsageError } from "../src/args.ts"
 import { type PrintIO, runPrint, safeJson } from "../src/print.ts"
 import { createSession } from "../src/session.ts"
@@ -727,33 +733,46 @@ test("an unknown provider is a usage error", async () => {
   ).rejects.toThrow(UsageError)
 })
 
-test("the amira command: help, version and usage errors have the right exit codes and streams", async () => {
-  const main = path.join(here, "..", "src", "main.ts")
-  const run = async (...args: string[]) => {
-    const p = Bun.spawn([process.execPath, main, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-      // An empty home, so the user's own settings cannot pick a model.
-      env: { ...process.env, AMIRA_MODEL: "", AMIRA_HOME: path.join(here, "no-such-home") },
-    })
-    const [out, err, code] = await Promise.all([
-      new Response(p.stdout).text(),
-      new Response(p.stderr).text(),
-      p.exited,
-    ])
-    return { out, err, code }
-  }
-  const help = await run("--help")
-  expect([help.code, help.out.startsWith("Usage: amira"), help.err]).toEqual([0, true, ""])
-  expect((await run("--version")).code).toBe(0)
-  const noModel = await run("-p", "hi")
-  expect([noModel.code, noModel.out]).toEqual([2, ""])
-  expect(noModel.err).toContain('amira: no providers configured; add one with "amira provider add"')
-  expect((await run("-m", "nope/x", "-p", "hi")).code).toBe(2)
-  const badRef = await run("-m", "foo", "-p", "hi")
-  expect(badRef.code).toBe(2)
-  expect(badRef.err).toContain("Run amira --help for usage.")
-}, 60_000)
+test(
+  "the amira command: help, version and usage errors have the right exit codes and streams",
+  async () => {
+    const main = path.join(here, "..", "src", "main.ts")
+    const run = async (...args: string[]) => {
+      const p = Bun.spawn([process.execPath, main, ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        // An empty home, so the user's own settings cannot pick a model.
+        env: { ...process.env, AMIRA_MODEL: "", AMIRA_HOME: path.join(here, "no-such-home") },
+      })
+      const [out, err, code] = await (async () => {
+        try {
+          return await waitForSpawnWork(
+            "CLI output",
+            Promise.all([
+              new Response(p.stdout).text(),
+              new Response(p.stderr).text(),
+              waitForSpawnExit(p, "CLI"),
+            ]),
+          )
+        } finally {
+          await stopSpawn(p, "CLI cleanup")
+        }
+      })()
+      return { out, err, code }
+    }
+    const help = await run("--help")
+    expect([help.code, help.out.startsWith("Usage: amira"), help.err]).toEqual([0, true, ""])
+    expect((await run("--version")).code).toBe(0)
+    const noModel = await run("-p", "hi")
+    expect([noModel.code, noModel.out]).toEqual([2, ""])
+    expect(noModel.err).toContain('amira: no providers configured; add one with "amira provider add"')
+    expect((await run("-m", "nope/x", "-p", "hi")).code).toBe(2)
+    const badRef = await run("-m", "foo", "-p", "hi")
+    expect(badRef.code).toBe(2)
+    expect(badRef.err).toContain("Run amira --help for usage.")
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("json mode includes session.start when the session is announced on ready", async () => {
   const { agent } = await mockSession([{ text: "hi" }])

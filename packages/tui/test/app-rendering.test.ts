@@ -15,8 +15,9 @@ import type {
 } from "@amira/api"
 import type { GraphicsReplies } from "@amira/tui-kit"
 import { extensionCommand } from "../../../extensions/commands/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
-import { FileIndex } from "../src/file-index.ts"
+import { FileIndex, streamProjectFiles } from "../src/file-index.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import {
   exchange,
@@ -26,6 +27,7 @@ import {
   transcriptChecker,
   waitFor,
 } from "./app-harness.ts"
+import { boundSpawnSync, waitForSpawnWork } from "./spawn-fixture.ts"
 
 function testImages(
   size: (input: ImageInput, ctx: ImageOpenContext) => Promise<{ width: number; height: number } | undefined>,
@@ -826,63 +828,84 @@ for (const mode of ["inline", "fullscreen"] as const) {
     }
   })
 
-  test(`${mode}: regression: one Ctrl+Z restores the input before Tab file completion`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), "amira-completion-undo-"))
-    const fileSource = new FileIndex(dir)
-    try {
-      writeFileSync(join(dir, "readme.md"), "Completion fixture\n")
-      const { terminal, live, exited } = await setup([], { settings: { mode }, fileSource })
-      const input = () =>
-        live()
-          .split("\n")
-          .find((line) => line.startsWith("│ › "))
-          ?.slice(2)
-          .replace(/ *│$/, "")
+  test(
+    `${mode}: regression: one Ctrl+Z restores the input before Tab file completion`,
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "amira-completion-undo-"))
+      let listing: Promise<boolean> | undefined
+      const fileSource = new FileIndex(dir, {
+        list: (cwd, emit, signal) => (listing = streamProjectFiles(cwd, emit, { signal })),
+      })
       try {
-        terminal.send("review @rea")
-        await waitFor(() => live().includes("› readme.md"), "fixture selected in the @ file list")
-        expect(input()).toBe("› review @rea")
-        expect(live()).toContain("tab/enter insert")
-        terminal.send("\t")
-        await waitFor(() => input() === "› review @readme.md", "file completion inserted")
-        expect(live()).not.toContain("tab/enter insert")
-        terminal.send("\x1a") // Ctrl+Z: undo the entire completion in one step.
-        await waitFor(() => input() !== "› review @readme.md", "undo rendered")
-        expect(input()).toBe("› review @rea")
+        writeFileSync(join(dir, "readme.md"), "Completion fixture\n")
+        const { terminal, live, exited } = await setup([], { settings: { mode }, fileSource })
+        const input = () =>
+          live()
+            .split("\n")
+            .find((line) => line.startsWith("│ › "))
+            ?.slice(2)
+            .replace(/ *│$/, "")
+        try {
+          terminal.send("review @rea")
+          await waitForSpawnCondition("fixture selected in the @ file list", () =>
+            live().includes("› readme.md"),
+          )
+          expect(input()).toBe("› review @rea")
+          expect(live()).toContain("tab/enter insert")
+          terminal.send("\t")
+          await waitFor(() => input() === "› review @readme.md", "file completion inserted")
+          expect(live()).not.toContain("tab/enter insert")
+          terminal.send("\x1a") // Ctrl+Z: undo the entire completion in one step.
+          await waitFor(() => input() !== "› review @readme.md", "undo rendered")
+          expect(input()).toBe("› review @rea")
+        } finally {
+          terminal.send("\x03\x03")
+          await waitForSpawnWork(exited, "file completion app cleanup")
+        }
       } finally {
-        terminal.send("\x03\x03")
-        await exited
+        fileSource.dispose()
+        try {
+          if (listing) await waitForSpawnWork(listing, "file completion listing cleanup")
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
       }
-    } finally {
-      fileSource.dispose()
-      rmSync(dir, { recursive: true, force: true })
-    }
-  })
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 }
 
-test("Ctrl+G edits the message in $VISUAL and takes the text back", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "amira-editor-"))
-  const script = join(dir, "fake-editor.ts")
-  writeFileSync(
-    script,
-    'import { appendFileSync } from "node:fs"\nappendFileSync(process.argv[2]!, " and more\\n")\n',
-  )
-  try {
-    const { terminal, live, exited } = await setup([], {
-      cwd: dir,
-      env: { VISUAL: `"${process.execPath}" "${script}"` },
-    })
-    terminal.send("draft")
-    await waitFor(() => live().includes("│ › draft"), "typed")
-    terminal.send("\x07")
-    await waitFor(() => live().includes("│ › draft and more"), "edited")
-    terminal.send("\x03")
-    terminal.send("\x03")
-    await exited
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
+test(
+  "Ctrl+G edits the message in $VISUAL and takes the text back",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "amira-editor-"))
+    const script = join(dir, "fake-editor.ts")
+    const boundedSpawn = boundSpawnSync()
+    try {
+      writeFileSync(
+        script,
+        'import { appendFileSync } from "node:fs"\nappendFileSync(process.argv[2]!, " and more\\n")\n',
+      )
+      const { terminal, live, exited } = await setup([], {
+        cwd: dir,
+        env: { VISUAL: `"${process.execPath}" "${script}"` },
+      })
+      try {
+        terminal.send("draft")
+        await waitFor(() => live().includes("│ › draft"), "typed")
+        terminal.send("\x07")
+        await waitForSpawnCondition("external editor result", () => live().includes("│ › draft and more"))
+      } finally {
+        terminal.send("\x03\x03")
+        await waitForSpawnWork(exited, "external editor app cleanup")
+      }
+    } finally {
+      boundedSpawn.mockRestore()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("full screen, the input box stays put while the list under it gets shorter", async () => {
   const { terminal, live, screen, exited } = await setup([], {

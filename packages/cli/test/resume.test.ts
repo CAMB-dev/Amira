@@ -5,6 +5,12 @@ import path from "node:path"
 import { createAi, createMockDialect, userMessage } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { listSessions, SessionStore } from "@amira/core"
+import {
+  SPAWN_TEST_TIMEOUT_MS,
+  stopSpawn,
+  waitForSpawnExit,
+  waitForSpawnWork,
+} from "../../../scripts/spawn-test.ts"
 import { parseCliArgs, UsageError } from "../src/args.ts"
 import { runPrint } from "../src/print.ts"
 import { chooseStore, exitNote, formatSessionList } from "../src/resume.ts"
@@ -31,74 +37,87 @@ const pickerKeys = { Esc: "\x1b", "Ctrl+C": "\x03", Enter: "\r" }
 for (const mode of ["startup", "slash", "select"] as const) {
   for (const name of mode === "select" ? (["Enter"] as const) : (["Esc", "Ctrl+C"] as const)) {
     const key = pickerKeys[name]
-    test(`${mode} resume picker with ${name} leaves sessions unchanged`, async () => {
-      const cwd = await mkdtemp(path.join(os.tmpdir(), "amira-resume-cancel-"))
-      const store = SessionStore.create({ cwd })
-      store.append({ type: "model_change", model: { provider: "local", model: "test" } })
-      store.appendMessage(userMessage("keep this session"))
-      if (mode === "slash") {
-        SessionStore.create({ cwd }).appendMessage(userMessage("another session to pick"))
-      }
-      const dir = path.dirname(store.file)
-      const before = await readdir(dir)
-      const contents = await Promise.all(before.map((f) => readFile(path.join(dir, f), "utf8")))
-      const ids = listSessions(cwd)
-        .map((s) => s.id)
-        .sort()
-      await writeFile(
-        path.join(home, "settings.json"),
-        JSON.stringify({
-          model: "local/test",
-          providers: {
-            local: { dialect: "openai-chat", baseUrl: "http://127.0.0.1:1", models: [{ id: "test" }] },
-          },
-        }),
-      )
-      try {
-        const child = Bun.spawn(
-          [
-            process.execPath,
-            path.join(here, "fixtures/resume-picker.ts"),
-            "-r",
-            ...(mode === "slash" ? [store.id] : []),
-            "-C",
-            cwd,
-            "--no-packages",
-          ],
-          {
-            stdout: "pipe",
-            stderr: "pipe",
-            env: {
-              ...process.env,
-              AMIRA_HOME: home,
-              HOME: home,
-              USERPROFILE: home,
-              AMIRA_MODEL: "",
-              TEST_PICKER_MODE: mode,
-              TEST_PICKER_KEY: key,
+    test(
+      `${mode} resume picker with ${name} leaves sessions unchanged`,
+      async () => {
+        const cwd = await mkdtemp(path.join(os.tmpdir(), "amira-resume-cancel-"))
+        const store = SessionStore.create({ cwd })
+        store.append({ type: "model_change", model: { provider: "local", model: "test" } })
+        store.appendMessage(userMessage("keep this session"))
+        if (mode === "slash") {
+          SessionStore.create({ cwd }).appendMessage(userMessage("another session to pick"))
+        }
+        const dir = path.dirname(store.file)
+        const before = await readdir(dir)
+        const contents = await Promise.all(before.map((f) => readFile(path.join(dir, f), "utf8")))
+        const ids = listSessions(cwd)
+          .map((s) => s.id)
+          .sort()
+        await writeFile(
+          path.join(home, "settings.json"),
+          JSON.stringify({
+            model: "local/test",
+            providers: {
+              local: { dialect: "openai-chat", baseUrl: "http://127.0.0.1:1", models: [{ id: "test" }] },
             },
-          },
+          }),
         )
-        const [out, err, code] = await Promise.all([
-          new Response(child.stdout).text(),
-          new Response(child.stderr).text(),
-          child.exited,
-        ])
-        expect({ code, err }, out).toEqual({ code: 0, err: "" })
-        expect(out).toContain(`startup stored: ${mode === "slash"}`)
-        expect(out).toContain("picker exited: 0")
-        expect(await readdir(dir)).toEqual(before)
-        expect(await Promise.all(before.map((f) => readFile(path.join(dir, f), "utf8")))).toEqual(contents)
-        expect(
-          listSessions(cwd)
-            .map((s) => s.id)
-            .sort(),
-        ).toEqual(ids)
-      } finally {
-        await rm(cwd, { recursive: true, force: true })
-        await rm(path.join(home, "settings.json"), { force: true })
-      }
-    }, 20_000)
+        try {
+          const child = Bun.spawn(
+            [
+              process.execPath,
+              path.join(here, "fixtures/resume-picker.ts"),
+              "-r",
+              ...(mode === "slash" ? [store.id] : []),
+              "-C",
+              cwd,
+              "--no-packages",
+            ],
+            {
+              stdout: "pipe",
+              stderr: "pipe",
+              env: {
+                ...process.env,
+                AMIRA_HOME: home,
+                HOME: home,
+                USERPROFILE: home,
+                AMIRA_MODEL: "",
+                TEST_PICKER_MODE: mode,
+                TEST_PICKER_KEY: key,
+              },
+            },
+          )
+          const [out, err, code] = await (async () => {
+            try {
+              return await waitForSpawnWork(
+                "CLI output",
+                Promise.all([
+                  new Response(child.stdout).text(),
+                  new Response(child.stderr).text(),
+                  waitForSpawnExit(child, "CLI"),
+                ]),
+              )
+            } finally {
+              await stopSpawn(child, "CLI cleanup")
+            }
+          })()
+          expect({ code, err }, out).toEqual({ code: 0, err: "" })
+          expect(out).toContain(`startup stored: ${mode === "slash"}`)
+          expect(out).toContain("picker exited: 0")
+          expect(await readdir(dir)).toEqual(before)
+          expect(await Promise.all(before.map((f) => readFile(path.join(dir, f), "utf8")))).toEqual(contents)
+          expect(
+            listSessions(cwd)
+              .map((s) => s.id)
+              .sort(),
+          ).toEqual(ids)
+        } finally {
+          await rm(cwd, { recursive: true, force: true })
+          await rm(path.join(home, "settings.json"), { force: true })
+        }
+      },
+      SPAWN_TEST_TIMEOUT_MS,
+    )
   }
 }
 
@@ -199,24 +218,37 @@ test("quitting says how to continue the session, then a blank line before the sh
   expect(exitNote({ session: undefined, messages: [1] }, 0, here)).toBe("")
 })
 
-test("amira -p -r lists this directory's sessions and exits", async () => {
-  const main = path.join(here, "..", "src", "main.ts")
-  const run = async (...args: string[]) => {
-    const p = Bun.spawn([process.execPath, main, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, AMIRA_MODEL: "", AMIRA_HOME: home },
-    })
-    const [out, err, code] = await Promise.all([
-      new Response(p.stdout).text(),
-      new Response(p.stderr).text(),
-      p.exited,
-    ])
-    return { out, err, code }
-  }
-  const listed = await run("-p", "-r", "-C", here)
-  expect(listed.code).toBe(0)
-  expect(listed.out).toContain("what is 2+2?")
-  const empty = await run("-p", "-r", "-C", os.tmpdir())
-  expect([empty.code, empty.err]).toEqual([1, `amira: no sessions in ${os.tmpdir()}\n`])
-}, 60_000)
+test(
+  "amira -p -r lists this directory's sessions and exits",
+  async () => {
+    const main = path.join(here, "..", "src", "main.ts")
+    const run = async (...args: string[]) => {
+      const p = Bun.spawn([process.execPath, main, ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, AMIRA_MODEL: "", AMIRA_HOME: home },
+      })
+      const [out, err, code] = await (async () => {
+        try {
+          return await waitForSpawnWork(
+            "CLI output",
+            Promise.all([
+              new Response(p.stdout).text(),
+              new Response(p.stderr).text(),
+              waitForSpawnExit(p, "CLI"),
+            ]),
+          )
+        } finally {
+          await stopSpawn(p, "CLI cleanup")
+        }
+      })()
+      return { out, err, code }
+    }
+    const listed = await run("-p", "-r", "-C", here)
+    expect(listed.code).toBe(0)
+    expect(listed.out).toContain("what is 2+2?")
+    const empty = await run("-p", "-r", "-C", os.tmpdir())
+    expect([empty.code, empty.err]).toEqual([1, `amira: no sessions in ${os.tmpdir()}\n`])
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

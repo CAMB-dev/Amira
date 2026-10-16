@@ -1,6 +1,7 @@
 import { spyOn } from "bun:test"
 import * as fs from "node:fs"
 import path from "node:path"
+import { SPAWN_WAIT_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { type FileLock, tryFileLock } from "../src/file-lock.ts"
 import { filesystemGatePath } from "./file-lock-fixtures.ts"
 import { fileLockWorkerReady } from "./file-lock-test-waits.ts"
@@ -8,11 +9,12 @@ import { fileLockWorkerReady } from "./file-lock-test-waits.ts"
 const [file, dir, mode, startup] = process.argv.slice(2)
 if (!file || !dir || !mode) throw new Error("missing file-lock worker arguments")
 const mark = (name: string) => fs.writeFileSync(path.join(dir, name), "ready")
-const wait = (name: string, timeoutMs = 30_000) => {
-  const deadline = Date.now() + timeoutMs
+const wait = (name: string, timeoutMs = SPAWN_WAIT_TIMEOUT_MS) => {
+  const deadline = realNow() + timeoutMs
   const pause = new Int32Array(new SharedArrayBuffer(4))
   while (!fs.existsSync(path.join(dir, name))) {
-    if (Date.now() > deadline) throw new Error(`file-lock worker timed out: ${name}`)
+    if (realNow() > deadline)
+      throw new Error(`file-lock worker ${process.pid} timed out after ${timeoutMs}ms: ${name}`)
     Atomics.wait(pause, 0, 0, 10)
   }
 }

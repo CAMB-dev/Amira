@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, userMessage } from "@amira/ai"
+import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { pendingOwnedLockCleanup, SessionWriteGuardError, tryFileLock } from "../src/file-lock.ts"
 import { takeFilesystemGate } from "../src/file-lock-gate.ts"
@@ -110,44 +111,48 @@ for (const kind of [
   })
 }
 
-test("awaited acquisition fails a verified live foreign-process lease without sleeping", async () => {
-  const { dir, store, file } = fixture()
-  store.appendMessage(userMessage("saved"))
-  const worker = startWorker(dir, store.file, "hold")
-  try {
-    await waitForFileLockCondition(`ownership worker ${worker.pid}: claimed`, () => {
-      if (fs.existsSync(path.join(dir, "claimed"))) return true
-      if (worker.exitCode !== null)
-        throw new Error(`ownership worker ${worker.pid} exited (${worker.exitCode}) before claim`)
-      return false
-    })
-    expect(worker.exitCode).toBeNull()
-    expect(fs.readFileSync(file, "utf8").split("\n")[0]).toBe(String(worker.pid))
-    const timers = spyOn(globalThis, "setTimeout")
-    const atomicWait = spyOn(Atomics, "wait")
-    const sleepSync = spyOn(Bun, "sleepSync")
+test(
+  "awaited acquisition fails a verified live foreign-process lease without sleeping",
+  async () => {
+    const { dir, store, file } = fixture()
+    store.appendMessage(userMessage("saved"))
+    const worker = startWorker(dir, store.file, "hold")
     try {
-      const pending = Promise.resolve().then(() => store.withClaim(() => "never constructed"))
-      await expect(pending).rejects.toThrow(SessionInUseError)
-      await expect(pending).rejects.toThrow(`pid ${worker.pid}`)
-      // Reject scheduled and synchronous sleeps without relying on wall-clock timing.
-      expect(timers).not.toHaveBeenCalled()
-      expect(atomicWait).not.toHaveBeenCalled()
-      expect(sleepSync).not.toHaveBeenCalled()
+      await waitForFileLockCondition(`ownership worker ${worker.pid}: claimed`, () => {
+        if (fs.existsSync(path.join(dir, "claimed"))) return true
+        if (worker.exitCode !== null)
+          throw new Error(`ownership worker ${worker.pid} exited (${worker.exitCode}) before claim`)
+        return false
+      })
+      expect(worker.exitCode).toBeNull()
+      expect(fs.readFileSync(file, "utf8").split("\n")[0]).toBe(String(worker.pid))
+      const timers = spyOn(globalThis, "setTimeout")
+      const atomicWait = spyOn(Atomics, "wait")
+      const sleepSync = spyOn(Bun, "sleepSync")
+      try {
+        const pending = Promise.resolve().then(() => store.withClaim(() => "never constructed"))
+        await expect(pending).rejects.toThrow(SessionInUseError)
+        await expect(pending).rejects.toThrow(`pid ${worker.pid}`)
+        // Reject scheduled and synchronous sleeps without relying on wall-clock timing.
+        expect(timers).not.toHaveBeenCalled()
+        expect(atomicWait).not.toHaveBeenCalled()
+        expect(sleepSync).not.toHaveBeenCalled()
+      } finally {
+        timers.mockRestore()
+        atomicWait.mockRestore()
+        sleepSync.mockRestore()
+      }
     } finally {
-      timers.mockRestore()
-      atomicWait.mockRestore()
-      sleepSync.mockRestore()
+      fs.writeFileSync(path.join(dir, "release"), "release")
+      try {
+        await waitForFileLockWorkerExit(worker, "ownership worker release")
+      } finally {
+        await finishWorker(worker, dir)
+      }
     }
-  } finally {
-    fs.writeFileSync(path.join(dir, "release"), "release")
-    try {
-      await waitForFileLockWorkerExit(worker, "ownership worker release")
-    } finally {
-      await finishWorker(worker, dir)
-    }
-  }
-}, 65_000)
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("an own pending lease does not make a foreign blocking gate retryable", () => {
   const { dir, store, file } = fixture()

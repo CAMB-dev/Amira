@@ -5,6 +5,7 @@ import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import { SessionStore, sessionLockFile } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
 import { createCommandHost } from "../src/control.ts"
 import { createSession } from "../src/session.ts"
 
@@ -64,52 +65,66 @@ async function until(check: () => boolean) {
   }
 }
 
-test("a waiting slash resume cannot overwrite a newer direct resume or steal its jobs/notices", async () => {
-  const { dir, store, session, host, target, announcements } = await fixture()
-  const old = host.agent
-  const release = holdAcquisition(target)
-  const pending = host.run(`/resume ${target.id}`, { frontend: "rpc" })
-  let job: ReturnType<NonNullable<typeof old.backgroundJobs>["start"]> | undefined
-  try {
-    expect(host.agent).toBe(old)
-    const winning = SessionStore.create({ cwd: dir, dir })
-    winning.appendMessage(userMessage("winning session"))
-    await host.control.resume!(winning.id)
-    const current = host.agent
-    job = current.backgroundJobs!.start({
-      command: "overlap-owned job",
-      argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
-      cwd: dir,
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
-      ),
-    })
-    const notice = current.expectNotice()
-    await until(() => current.backgroundJobs!.get(job!.id)?.status === "running")
-    release()
-    expect(await pending).toMatchObject({ ok: false, error: "cancelled" })
-    // Cancellation stops acquisition retries; the pre-existing requested release finishes
-    // on its own bounded cleanup chain after the reader is released.
-    await until(() => !fs.existsSync(sessionLockFile(target.file)))
-    expect(host.agent).toBe(current)
-    expect(announcements).toEqual([winning.id])
-    expect(current.backgroundJobs!.get(job.id)?.status).toBe("running")
-    expect(fs.existsSync(sessionLockFile(winning.file))).toBe(true)
-    expect(fs.existsSync(sessionLockFile(target.file))).toBe(false)
-    notice.deliver(userMessage("winning completion"), { wake: false })
-    expect(current.takeNotices()).toEqual([userMessage("winning completion")])
-    expect(old.takeNotices()).toEqual([])
-  } finally {
-    release()
-    await pending
-    if (job) await session.host.backgroundJobs.stop(job.id, 0)
-    await host.agent.dispose()
-    await old.dispose()
-    store.claim()
-    store.release()
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
+test(
+  "a waiting slash resume cannot overwrite a newer direct resume or steal its jobs/notices",
+  async () => {
+    const { dir, store, session, host, target, announcements } = await fixture()
+    const old = host.agent
+    const release = holdAcquisition(target)
+    const pending = host.run(`/resume ${target.id}`, { frontend: "rpc" })
+    let job: ReturnType<NonNullable<typeof old.backgroundJobs>["start"]> | undefined
+    try {
+      expect(host.agent).toBe(old)
+      const winning = SessionStore.create({ cwd: dir, dir })
+      winning.appendMessage(userMessage("winning session"))
+      await host.control.resume!(winning.id)
+      const current = host.agent
+      job = current.backgroundJobs!.start({
+        command: "overlap-owned job",
+        argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+        cwd: dir,
+        env: Object.fromEntries(
+          Object.entries(process.env).filter(([name]) => !name.startsWith("AMIRA_LIVE_")),
+        ),
+      })
+      const notice = current.expectNotice()
+      await until(() => current.backgroundJobs!.get(job!.id)?.status === "running")
+      release()
+      expect(await pending).toMatchObject({ ok: false, error: "cancelled" })
+      // Cancellation stops acquisition retries; the pre-existing requested release finishes
+      // on its own bounded cleanup chain after the reader is released.
+      await until(() => !fs.existsSync(sessionLockFile(target.file)))
+      expect(host.agent).toBe(current)
+      expect(announcements).toEqual([winning.id])
+      expect(current.backgroundJobs!.get(job.id)?.status).toBe("running")
+      expect(fs.existsSync(sessionLockFile(winning.file))).toBe(true)
+      expect(fs.existsSync(sessionLockFile(target.file))).toBe(false)
+      notice.deliver(userMessage("winning completion"), { wake: false })
+      expect(current.takeNotices()).toEqual([userMessage("winning completion")])
+      expect(old.takeNotices()).toEqual([])
+    } finally {
+      release()
+      try {
+        await pending
+      } finally {
+        if (job) {
+          const id = job.id
+          await session.host.backgroundJobs.stop(id, 0)
+          await waitForSpawnCondition(
+            "overlap job cleanup",
+            () => !["starting", "running"].includes(session.host.backgroundJobs.get(id)?.status ?? ""),
+          )
+        }
+        await host.agent.dispose()
+        await old.dispose()
+        store.claim()
+        store.release()
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)
 
 test("a fast clear redirects a queued microtask notice before delivery, without old-agent consumption", async () => {
   const { dir, host, mock } = await fixture([{ text: "noticed" }])
