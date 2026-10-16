@@ -68,35 +68,52 @@ jobs:
               print("Main has no commits since the last nightly; skipping checks and publication.")
           PY
 
-  check:
-    name: Check (${{ matrix.os }})
+  ci:
+    name: Require successful CI for the selected main commit
     needs: plan
     if: needs.plan.outputs.changed == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    defaults:
-      run:
-        shell: bash
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    outputs:
+      success: ${{ steps.ci.outputs.success }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.2
-      - run: bun install --frozen-lockfile
-      # check invokes test with the isolated test-home preload, never live-test opt-ins.
-      - run: bun run check
+      - name: Gate publication on CI, never rerun a divergent check matrix
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          echo "success=false" >> "$GITHUB_OUTPUT"
+          if ! gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&branch=main&event=push&per_page=100" > "$RUNNER_TEMP/ci-runs.json"; then
+            echo "::notice::Skipping nightly for $SHA: could not query CI runs."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+
+          sha = os.environ["SHA"]
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "ci-runs.json")) as file:
+              runs = [run for page in json.load(file) for run in page["workflow_runs"]
+                      if run["head_sha"] == sha and run["head_branch"] == "main" and run["event"] == "push"]
+          # Do not accept an older success if a newer run/rerun is pending or failed.
+          latest = max(runs, key=lambda run: (run["run_number"], run["run_attempt"]), default=None)
+          success = bool(latest and latest["status"] == "completed" and latest["conclusion"] == "success")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as file:
+              file.write(f"success={str(success).lower()}\n")
+          if success:
+              print(f"CI succeeded for {sha}.")
+          else:
+              reason = f"latest CI run is {latest['status']} ({latest['conclusion']})" if latest else "no CI push run found on main"
+              print(f"::notice::Skipping nightly for {sha}: {reason}.")
+          PY
 
   build:
     name: Cross-compile all seven targets
-    needs: [plan, check]
+    needs: [plan, ci]
+    if: needs.ci.outputs.success == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
