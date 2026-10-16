@@ -56,6 +56,12 @@ Shift+Enter inserts a newline where the terminal supports it; Ctrl+Enter is the 
 
 Esc stops the current turn; while a slash command such as `/ext install` is still running, it cancels that command first and keeps your draft. If steering or queued messages are waiting, they are combined in the order you typed them and sent together. Background sub-agents keep running; [Sub-agents](subagents.md) explains how to stop them. Ctrl+C likewise cancels a running command first, otherwise stops a turn, otherwise clears a nonempty input, otherwise quits. `/quit` also exits.
 
+## Step limit
+
+The main agent allows up to 500 model calls per turn by default. Set `agent.maxSteps` in [Settings](settings.md#general) to a nonnegative integer; `0` removes the step limit. `--max-steps <n>` overrides the setting for one run in both interactive and print modes, without saving it.
+
+This limit applies only to the main agent; sub-agents do not inherit it. Removing the step limit does not change how aborts, budget limits or context errors stop a turn.
+
 ## Images
 
 Messages can carry PNG, JPEG, GIF and WebP images, in both terminal modes:

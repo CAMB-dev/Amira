@@ -44,6 +44,20 @@ const userFile = () => path.join(home, "settings.json")
 const projectFile = () => path.join(cwd, ".amira", "settings.json")
 const localFile = () => path.join(cwd, ".amira", "settings.local.json")
 
+test("agent.maxSteps accepts non-negative integers, including unlimited", () => {
+  for (const maxSteps of [0, 1, 200, 500]) {
+    expect(validateSettings({ agent: { maxSteps } }, "settings.json")).toEqual({
+      settings: { agent: { maxSteps } },
+      warnings: [],
+    })
+  }
+  for (const maxSteps of [-1, 1.5, NaN, Infinity, "0", null, true]) {
+    expect(() => validateSettings({ agent: { maxSteps } }, "settings.json")).toThrow(
+      '"agent.maxSteps" must be a whole number of at least 0',
+    )
+  }
+})
+
 test("terminal notifications accept auto/off independently of the bell", () => {
   for (const notify of ["auto", "off"] as const) {
     expect(validateSettings({ tui: { notify, bell: false } }, "settings.json")).toEqual({

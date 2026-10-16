@@ -248,6 +248,7 @@ const settings = object({
   tools: object({ disabled: list(string) }),
   fileRewind: object({ enabled: boolean, maxFileBytes: integer(1), quotaBytes: integer(1) }),
   commandAliases,
+  agent: object({ maxSteps: integer(0) }),
   maxParallelTools: concurrency(DEFAULT_MAX_PARALLEL_TOOLS),
   compact: object({ threshold: number, model: modelRef, layout: oneOf("tail", "recent-user") }),
   context: object({

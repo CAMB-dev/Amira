@@ -5,6 +5,7 @@ import {
   type ModelInfo,
   modelMessages,
   type ToolSpec,
+  type Usage,
   type UserMessage,
   userMessage,
 } from "@amira/ai"
@@ -24,7 +25,7 @@ import type {
   ToolDefinition,
   ToolSession,
 } from "@amira/api"
-import { DEFAULT_MAX_PARALLEL_TOOLS } from "@amira/api"
+import { DEFAULT_AGENT_MAX_STEPS, DEFAULT_MAX_PARALLEL_TOOLS } from "@amira/api"
 import { ApprovalGate } from "./agent/approvals.ts"
 import {
   type ArtifactSession,
@@ -217,7 +218,9 @@ export class Agent {
       this.#compaction = opts.compaction ?? {}
       this.#context = opts.context ?? {}
       const ai = withCallableServerTools(opts.ai, this.callableTools)
-      const maxSteps = opts.maxSteps ?? 200
+      const maxSteps = opts.maxSteps ?? DEFAULT_AGENT_MAX_STEPS
+      if (!Number.isInteger(maxSteps) || maxSteps < 0)
+        throw new Error("maxSteps must be a non-negative integer (0 means unlimited)")
       const maxTokens = opts.maxTokens
       const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
       this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
@@ -326,7 +329,8 @@ export class Agent {
           buildContext: (signal) => this.#buildContext(signal),
           renderSections: () => renderPrompt(this.#sections),
           offeredTools: () => this.#offeredTools(),
-          recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+          recordTreeUsage: (usage) => this.#recordAuxiliaryUsage(usage),
+          budgetExceeded: () => this.tree?.budgetExceeded !== undefined,
           emit: (turn, type, data) => this.#emit(turn, type, data),
         },
         tokens,
@@ -379,7 +383,7 @@ export class Agent {
           const entry = { model: message.model, usage: message.usage, label: "request retry" }
           if (!this.session) this.#retryUsage.push(entry)
           this.#history.store({ type: "side_usage", ...entry })
-          this.tree?.recordUsage(this, message.usage)
+          this.#recordAuxiliaryUsage(message.usage)
         },
         recordSpeed: (speed, pricingUnknown) => {
           this.lastSpeed = speed
@@ -400,6 +404,7 @@ export class Agent {
         ownsIdleNotices: () => !!this.#onIdleNotice,
         endTurn: () => this.#endTurn?.(),
         recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+        budgetExceeded: () => this.tree?.budgetExceeded !== undefined,
       })
     } catch (error) {
       this.#releaseSessionLease?.()
@@ -862,6 +867,12 @@ export class Agent {
   /** What this session's compactions cost, one entry each (SessionControl.compactions). */
   get compactionUsage(): CompactionUsage[] {
     return this.#compactor.usage
+  }
+
+  /** Compaction and retries have no tool batch to finish before stopping. */
+  #recordAuxiliaryUsage(usage: Usage): void {
+    this.tree?.recordUsage(this, usage)
+    if (this.tree?.budgetExceeded) this.abort()
   }
 
   #setStatus(turn: Turn, status: SessionStatus, reason?: string) {

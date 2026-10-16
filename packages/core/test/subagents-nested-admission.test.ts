@@ -378,10 +378,10 @@ test("a parent at its model step limit ends without reacquiring its held descend
     (request) => {
       if (promptOf(request) === "leaf") return { text: "held", hold: { chunks: 0, until: leafHeld.promise } }
       parentCalls++
-      return { toolCalls: [{ name: parentCalls === 200 ? "launch" : "noop", args: {} }] }
+      return { toolCalls: [{ name: parentCalls === 500 ? "launch" : "noop", args: {} }] }
     },
     1,
-    201,
+    501,
   )
   cleanup.unshift(async () => leafHeld.resolve())
   let leaf!: ChildSession
@@ -394,7 +394,7 @@ test("a parent at its model step limit ends without reacquiring its held descend
         execute: async (_args, ctx) => {
           if (name === "launch") {
             leaf = ctx.session!.spawn!({ prompt: "leaf", ephemeral: true, maxTurns: 1 })
-            await until(() => active() === 1 && mock.requests.length === 201)
+            await until(() => active() === 1 && mock.requests.length === 501)
           }
           return textResult("ok")
         },
@@ -403,18 +403,18 @@ test("a parent at its model step limit ends without reacquiring its held descend
     )
   }
   const parent = tree.spawn(root, { prompt: "parent", ephemeral: true, maxTurns: 1 })
-  await until(() => mock.requests.length === 201)
+  await until(() => mock.requests.length === 501)
   await Bun.sleep(20)
-  expect(parentCalls).toBe(200)
+  expect(parentCalls).toBe(500)
   expect(parent.state).toBe("ended")
   const result = await parent.result()
   expect(result.status).toBe("error")
-  expect(result.error).toBe("stopped after 200 model calls")
-  expect(result.steps).toBe(200)
+  expect(result.error).toBe("stopped after 500 model calls")
+  expect(result.steps).toBe(500)
   expect(active()).toBe(1)
   leafHeld.resolve()
   expect((await leaf.result()).status).toBe("aborted")
-  expect(mock.requests).toHaveLength(201)
+  expect(mock.requests).toHaveLength(501)
   expect(peak()).toBe(1)
 })
 

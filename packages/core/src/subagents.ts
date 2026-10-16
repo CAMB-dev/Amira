@@ -189,6 +189,11 @@ export class AgentTree {
     this.#scopes.delete(this)
   }
 
+  /** Why the tree's budget was exhausted, latched even if later usage is corrected. */
+  get budgetExceeded(): string | undefined {
+    return this.#ledger.exceeded
+  }
+
   /** What the whole tree has used so far. */
   get usage(): Readonly<Usage> {
     return this.#ledger.usage
@@ -528,12 +533,7 @@ export class AgentTree {
   }
 
   /** A consultation retains its accounting child until late terminal usage arrives. */
-  #recordUsage(
-    agent: Agent,
-    usage: Usage,
-    model: Child["model"] | undefined,
-    child: Child | undefined,
-  ): void {
+  #recordUsage(agent: Agent, usage: Usage, model: Child["model"] | undefined, child?: Child): void {
     this.#ledger.add(usage)
     if (child) {
       addUsage(child.usage, usage)

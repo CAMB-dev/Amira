@@ -3,6 +3,7 @@ import * as d from "../packages/api/src/settings-defaults.ts"
 /** Fixed fallbacks, keyed exactly as the settings reference. Inherited/unset values stay prose. */
 export const settingsDefaults = {
   shell: d.DEFAULT_SHELL,
+  "agent.maxSteps": d.DEFAULT_AGENT_MAX_STEPS,
   "tools.disabled": d.DEFAULT_DISABLED_TOOLS,
   maxParallelTools: d.DEFAULT_MAX_PARALLEL_TOOLS,
   "backgroundJobs.maxRunning": d.DEFAULT_BACKGROUND_MAX_RUNNING,

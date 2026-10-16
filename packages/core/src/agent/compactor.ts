@@ -57,6 +57,7 @@ interface CompactorDeps {
   renderSections: () => string
   offeredTools: () => ToolSpec[]
   recordTreeUsage: (usage: Usage) => void
+  budgetExceeded: () => boolean
   emit: Emit
 }
 
@@ -141,7 +142,7 @@ export class Compactor {
   ): Promise<boolean | undefined> {
     // What is compacted must be readable by this model first (an earlier checkpoint of another).
     const unreadable = await this.fillSummaries(turn, signal)
-    if (unreadable || signal.aborted) {
+    if (unreadable || signal.aborted || this.#deps.budgetExceeded()) {
       this.#deps.emit(turn, "compact.failed", { error: unreadable ?? "aborted" })
       return false
     }
@@ -176,7 +177,7 @@ export class Compactor {
         { messages: split.older, kept: split.kept },
         { sessionId: this.#deps.sessionId, signal },
       )
-      if (signal.aborted) throw new Error("aborted")
+      if (signal.aborted || this.#deps.budgetExceeded()) throw new Error("aborted")
       if (gate.blocked) {
         this.#deps.emit(turn, "compact.failed", { error: gate.reason, blocked: true })
         return false
@@ -229,7 +230,7 @@ export class Compactor {
         // The same tools a reply would get: the client web_search stays hidden from a model
         // with the hosted search, which the dialect adds beside them as in every request.
         if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
-        if (signal.aborted) throw new Error("aborted")
+        if (signal.aborted || this.#deps.budgetExceeded()) throw new Error("aborted")
         writer = this.#deps.model()
         requested = true
         const r = await this.#deps.ai.compact(
@@ -244,7 +245,7 @@ export class Compactor {
         )
         count(r.usage)
         usageIncomplete ||= !!r.usageIncomplete
-        if (signal.aborted) throw new Error("aborted")
+        if (signal.aborted || this.#deps.budgetExceeded()) throw new Error("aborted")
         if (r.ok) {
           summary = r.summary ?? ""
           checkpoint = r.checkpoint
@@ -256,7 +257,7 @@ export class Compactor {
       if (summary === undefined) {
         try {
           if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
-          if (signal.aborted) throw new Error("aborted")
+          if (signal.aborted || this.#deps.budgetExceeded()) throw new Error("aborted")
           if (!supplied) requested = true
           const written = supplied
             ? { summary: supplied }
@@ -282,7 +283,7 @@ export class Compactor {
           throw err
         }
       }
-      if (signal.aborted) throw new Error("aborted")
+      if (signal.aborted || this.#deps.budgetExceeded()) throw new Error("aborted")
       // A text summary replaces the older part and keeps the tail, whatever the layout.
       const recent = checkpoint && layout === "recent-user"
       const replacedMessages = recent ? older : split.older
@@ -437,7 +438,7 @@ export class Compactor {
       let written: { summary: string; usage?: Usage }
       try {
         if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
-        if (signal.aborted) return undefined
+        if (signal.aborted || this.#deps.budgetExceeded()) return undefined
         written = await summarize(
           this.#deps.ai,
           writer,
@@ -446,7 +447,7 @@ export class Compactor {
         )
       } catch (err) {
         if (err instanceof SummaryError) this.#recordCompactionUsage(err.usage, modelRef(writer), false)
-        if (signal.aborted) return undefined
+        if (signal.aborted || this.#deps.budgetExceeded()) return undefined
         const why = err instanceof Error ? err.message : String(err)
         return `${target} cannot read the server-side compaction made by ${cp.provider} for ${cp.model}, and writing a text summary for it failed: ${why}`
       }

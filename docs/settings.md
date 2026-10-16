@@ -167,6 +167,7 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Which shell tools the model gets on Windows: `"auto"` offers both `bash` and `powershell`, `"bash"` or `"powershell"` hides the other one. Elsewhere only `bash` exists. `--shell` wins. |  |
 | `tools.disabled` | `string[]` | `[]` | Tool names to hide from the model. `--disable-tools` replaces the list for one run; `/tools` changes the current session only. |  |
 | `maxParallelTools` | `number` | `8` | Most tool calls running at once. Use a whole number of at least 1; invalid values warn and use the default, even over a valid value in a lower-precedence file. |  |
+| `agent.maxSteps` | `number` | `500` | Maximum model calls per turn for the main agent. Use a nonnegative integer; `0` removes the step limit. `--max-steps <n>` overrides it for one run in interactive and print modes. Sub-agents do not inherit it. Aborts, budget limits and context errors still stop a turn. |  |
 | `backgroundJobs.maxRunning` | `number` | `8` | Background jobs (commands the shell tools start with `background: true`, such as dev servers and watchers) running at once. |  |
 | `backgroundJobs.bufferChars` | `number` | `1000000` | Characters of output each job keeps in memory for reading; at least 1000. |  |
 | `backgroundJobs.maxLogBytes` | `number` | `52428800` (50 MiB) | Bytes of each job's output written to its log file. |  |

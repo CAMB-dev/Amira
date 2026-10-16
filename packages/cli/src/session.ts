@@ -357,6 +357,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ai,
       model: m,
       providerSettings: settings.providers,
+      maxSteps: settings.agent?.maxSteps,
       fastMode: settings.fastMode,
       defaultThinking: settings.thinking === "default" ? undefined : settings.thinking,
       thinking:

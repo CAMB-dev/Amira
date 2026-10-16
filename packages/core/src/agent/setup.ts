@@ -131,6 +131,7 @@ interface ContextSetup {
   renderSections: () => string
   offeredTools: () => ToolSpec[]
   recordTreeUsage: (usage: Usage) => void
+  budgetExceeded: () => boolean
   emit: Emit
 }
 
@@ -166,6 +167,7 @@ export function setupContext(deps: ContextSetup, tokens: number | undefined) {
     renderSections: deps.renderSections,
     offeredTools: deps.offeredTools,
     recordTreeUsage: deps.recordTreeUsage,
+    budgetExceeded: deps.budgetExceeded,
     emit: deps.emit,
   })
   return { contextManager, compactor }

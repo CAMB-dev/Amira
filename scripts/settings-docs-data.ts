@@ -54,6 +54,7 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
       "shell",
       "tools",
       "maxParallelTools",
+      "agent",
       "backgroundJobs",
       "commandAliases",
       "sessions",
@@ -195,6 +196,12 @@ export const annotations: Record<string, Annotation> = {
     en: "Most tool calls running at once. Use a whole number of at least 1; invalid values warn and use the default, even over a valid value in a lower-precedence file.",
     zh: "同时运行的工具调用数上限。必须是至少为 1 的整数；无效值会发出警告并使用默认值，即使优先级较低的文件中已有有效值。",
     ja: "同時に実行できるツール呼び出しの最大数です。1 以上の整数を指定してください。無効な値には警告を表示し、優先順位の低いファイルに有効な値があってもデフォルトを使用します。",
+  },
+  "agent.maxSteps": {
+    default: documentedDefault("agent.maxSteps"),
+    en: "Maximum model calls per turn for the main agent. Use a nonnegative integer; `0` removes the step limit. `--max-steps <n>` overrides it for one run in interactive and print modes. Sub-agents do not inherit it. Aborts, budget limits and context errors still stop a turn.",
+    zh: "主 agent 每轮调用模型的次数上限。使用非负整数；`0` 表示不限制步数。`--max-steps <n>` 在单次运行中覆盖此设置，适用于交互模式和打印模式。子 agent 不会继承。中止、预算限制和上下文错误仍会停止轮次。",
+    ja: "メインエージェントが 1 ターンでモデルを呼び出せる最大回数です。0 以上の整数を指定し、`0` でステップ数を無制限にします。`--max-steps <n>` は対話モードと print モードで、1 回の実行に限って上書きします。サブエージェントには引き継がれません。中断、予算の上限、コンテキストエラーでは引き続きターンが停止します。",
   },
   "backgroundJobs.maxRunning": {
     default: documentedDefault("backgroundJobs.maxRunning"),

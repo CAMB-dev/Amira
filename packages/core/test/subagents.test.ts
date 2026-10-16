@@ -362,7 +362,7 @@ test("going over the budget aborts running children and refuses new ones", async
   )
   const slow = tree.spawn(root, { prompt: "wait", systemPrompt: "ROLE slow" })
   const spender = tree.spawn(root, { prompt: "spend", systemPrompt: "ROLE spender" })
-  expect((await spender.result()).status).toBe("done")
+  expect((await spender.result()).status).toBe("aborted")
   const r = await slow.result()
   expect(r.status).toBe("aborted")
   expect(r.error).toContain("budget ran out (120 tokens used, limit 100)")

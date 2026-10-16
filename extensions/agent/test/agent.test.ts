@@ -823,7 +823,7 @@ test(
 )
 
 test("a spent budget is reported for tasks that cannot start", async () => {
-  const { root } = await setup(
+  const { root, mock } = await setup(
     (req) =>
       req.messages.at(-1)?.role === "toolResult"
         ? { text: "ok" }
@@ -837,10 +837,11 @@ test("a spent budget is reported for tasks that cannot start", async () => {
           : { text: "x" },
     { budget: { tokens: 100 } },
   )
-  await root.prompt("go")
+  expect(await root.prompt("go")).toEqual({ reason: "aborted", steps: 1 })
   expect(agentResult(root)).toContain(
     "did not start: the agent tree's budget is spent (500 tokens used, limit 100)",
   )
+  expect(mock.requests).toHaveLength(1)
 })
 
 test(

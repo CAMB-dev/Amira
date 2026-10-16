@@ -69,6 +69,17 @@ test("monitor jobs add an optional kind to the public job contract", () => {
   `)
 })
 
+test("the public agent settings allow an unlimited model-call limit", () => {
+  const settings: Pick<Settings, "agent"> = { agent: { maxSteps: 0 } }
+  expect(settings).toMatchInlineSnapshot(`
+    {
+      "agent": {
+        "maxSteps": 0,
+      },
+    }
+  `)
+})
+
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
   const actual = Object.keys(api).sort()
@@ -77,6 +88,7 @@ test("the public API exports stay stable", async () => {
     "AGENT_STATUS_BADGES",
     "API_VERSION",
     "ARTIFACT_HEADER",
+    "DEFAULT_AGENT_MAX_STEPS",
     "DEFAULT_AGING_AFTER_TURNS",
     "DEFAULT_AGING_ENABLED",
     "DEFAULT_AGING_KEEP_STEPS",
