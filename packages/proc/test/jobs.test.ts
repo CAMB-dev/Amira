@@ -73,7 +73,7 @@ afterEach(async () => {
   }
 }, SPAWN_TEST_TIMEOUT_MS)
 
-const waitUntil = (check: () => boolean, what: string, timeoutMs?: number) =>
+const waitUntil = (check: () => boolean, what: string, timeoutMs = 20_000) =>
   waitForSpawnCondition(what, check, timeoutMs)
 
 function alive(pid: number): boolean {
@@ -88,7 +88,7 @@ function alive(pid: number): boolean {
 /** The pids a tree.ts run wrote, once all three are up. */
 async function treePids(file: string): Promise<number[]> {
   const read = () => (existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean) : [])
-  await waitUntil(() => read().length >= 3, "the process tree to start")
+  await waitUntil(() => read().length >= 3, "the process tree to start", SPAWN_WAIT_TIMEOUT_MS)
   return read().map(Number)
 }
 
@@ -377,7 +377,11 @@ test(
   "a SIGINT someone handles leaves jobs running; one nobody handles kills them and exits 130",
   async () => {
     const job = backgroundJobs.start({ command: "idle", argv: script("setInterval(() => {}, 1000)"), cwd })
-    await waitUntil(() => backgroundJobs.get(job.id)!.status === "running", "the job to run")
+    await waitUntil(
+      () => backgroundJobs.get(job.id)!.status === "running",
+      "the job to run",
+      SPAWN_WAIT_TIMEOUT_MS,
+    )
     const pid = backgroundJobs.get(job.id)!.pid!
     let handled = 0
     const handler = () => void handled++
@@ -401,7 +405,7 @@ test(
       process.exit = exit
     }
     expect(code).toBe(130)
-    await waitUntil(() => !alive(pid), "the job to be killed")
+    await waitUntil(() => !alive(pid), "the job to be killed", 20_000)
   },
   SPAWN_TEST_TIMEOUT_MS,
 )

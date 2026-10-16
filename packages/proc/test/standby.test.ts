@@ -8,7 +8,7 @@ import {
   waitForSpawnExit,
   waitForSpawnWork,
 } from "../../../scripts/spawn-test.ts"
-import { resetCommandWorker, StandbyGoneError } from "../src/index.ts"
+import { prepareCommand as prepareUnowned, resetCommandWorker, StandbyGoneError } from "../src/index.ts"
 
 import { ownSpawn, prepareCommand, prepareCommandInline, stopCommands } from "./spawn-fixture.ts"
 
@@ -197,7 +197,8 @@ test(
     const releasedPid = join(dir, "lost-released.pid")
     const idlePid = join(dir, "lost-idle.pid")
     const standby = prepareCommand(gated("await Bun.sleep(3000)", releasedPid), { cwd, gated: true })
-    const idle = prepareCommand(gated("", idlePid), { cwd, gated: true })
+    // Deliberately losing its worker cannot confirm idle disposal; the PID set owns cleanup here.
+    const idle = prepareUnowned(gated("", idlePid), { cwd, gated: true })
     await Promise.all([pidFrom(releasedPid), pidFrom(idlePid)])
     let output = ""
     const run = standby.run({
@@ -216,6 +217,9 @@ test(
     expect(err).not.toBeInstanceOf(StandbyGoneError)
     expect(idle.alive).toBe(false)
     await expect(idle.run(release("x"))).rejects.toBeInstanceOf(StandbyGoneError)
+    const disposing = idle.dispose()
+    expect(idle.dispose()).toBe(disposing)
+    await expect(disposing).rejects.toThrow("before confirming the standby process exited")
   },
   SPAWN_TEST_TIMEOUT_MS,
 )

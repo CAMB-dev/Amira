@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import {
   SPAWN_TEST_TIMEOUT_MS,
+  SPAWN_WAIT_TIMEOUT_MS,
   stopSpawn,
   waitForSpawnCondition,
   waitForSpawnExit,
@@ -67,13 +68,21 @@ function startWorker(mode: string) {
   return worker
 }
 
-async function waitFor(worker: ReturnType<typeof startWorker>, marker: string) {
-  await waitForSpawnCondition(`legacy lease worker ${worker.pid}: ${marker}`, () => {
-    if (fs.existsSync(path.join(dir, marker))) return true
-    if (worker.exitCode !== null)
-      throw new Error(`legacy lease worker ${worker.pid} exited (${worker.exitCode}) before ${marker}`)
-    return false
-  }).catch(async (error) => {
+async function waitFor(
+  worker: ReturnType<typeof startWorker>,
+  marker: string,
+  timeoutMs = SPAWN_WAIT_TIMEOUT_MS,
+) {
+  await waitForSpawnCondition(
+    `legacy lease worker ${worker.pid}: ${marker}`,
+    () => {
+      if (fs.existsSync(path.join(dir, marker))) return true
+      if (worker.exitCode !== null)
+        throw new Error(`legacy lease worker ${worker.pid} exited (${worker.exitCode}) before ${marker}`)
+      return false
+    },
+    timeoutMs,
+  ).catch(async (error) => {
     if (worker.exitCode !== null)
       throw new Error(
         `${error.message}: ${await waitForSpawnWork(`worker stderr (pid ${worker.pid})`, new Response(worker.stderr).text())}`,
@@ -138,7 +147,7 @@ test(
     const contenders = [startWorker("session-contend"), startWorker("session-contend")]
     await Promise.all(contenders.map((worker) => waitFor(worker, `ready-${worker.pid}`)))
     fs.writeFileSync(path.join(dir, "contend"), "go")
-    await Promise.all(contenders.map((worker) => waitFor(worker, `result-${worker.pid}`)))
+    await Promise.all(contenders.map((worker) => waitFor(worker, `result-${worker.pid}`, 4000)))
     const winners = contenders.filter(
       (worker) => JSON.parse(fs.readFileSync(path.join(dir, `result-${worker.pid}`), "utf8")).held,
     )

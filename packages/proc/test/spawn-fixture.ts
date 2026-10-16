@@ -1,4 +1,4 @@
-import { stopSpawn, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
+import { stopSpawn, waitForSpawnCondition, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
 import {
   prepareCommand as prepare,
   prepareCommandInline as prepareInline,
@@ -31,7 +31,14 @@ function own(standby: Standby): Standby {
       return standby.alive
     },
     run: (opts) => track(standby.run({ ...opts, signal: AbortSignal.any([opts.signal, abort.signal]) })),
-    dispose: () => standby.dispose(),
+    dispose() {
+      const work = standby.dispose()
+      void work.then(
+        () => prepared.delete(standby),
+        () => {},
+      )
+      return work
+    },
   }
 }
 
@@ -54,8 +61,8 @@ export async function stopCommands() {
   abort.abort()
   try {
     await cleanupProcWork([
-      ...[...prepared].map((standby) => () => {
-        standby.dispose()
+      ...[...prepared].map((standby) => async () => {
+        await waitForSpawnWork("idle standby native exit", standby.dispose())
         prepared.delete(standby)
       }),
       ...[...children].map((child) => async () => {

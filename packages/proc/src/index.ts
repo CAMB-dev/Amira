@@ -71,14 +71,19 @@ const pending = new Map<number, Pending>()
 let keepAlive: ReturnType<typeof setInterval> | undefined
 
 function trackPending() {
-  if (pending.size && !keepAlive) keepAlive = setInterval(() => {}, 1 << 30)
-  else if (!pending.size && keepAlive) {
+  const active = pending.size + disposing.size
+  if (active) worker?.ref()
+  else worker?.unref()
+  if (active && !keepAlive) keepAlive = setInterval(() => {}, 1 << 30)
+  else if (!active && keepAlive) {
     clearInterval(keepAlive)
     keepAlive = undefined
   }
 }
-/** Prepared commands not yet released, by id; called when the worker reports them gone. */
-const standbys = new Map<number, () => void>()
+/** Prepared commands not yet released, by id; an error means exit could not be confirmed. */
+const standbys = new Map<number, (error?: Error) => void>()
+/** A disposal keeps the worker alive until its native-exit acknowledgement arrives. */
+const disposing = new Set<number>()
 
 interface OpenPipe {
   spec: PipeSpec
@@ -140,7 +145,9 @@ function onWorkerGone(w: Worker) {
  * its command, so it must not look gone (its caller would run it a second time).
  */
 function abandonWorker(neverLoaded: boolean) {
-  for (const gone of [...standbys.values()]) gone()
+  for (const gone of [...standbys.values()]) {
+    gone(new Error("the command worker stopped before confirming the standby process exited"))
+  }
   for (const [id, p] of pipes) {
     pipes.delete(id)
     if (neverLoaded) {
@@ -212,6 +219,8 @@ function onMessage(m: FromWorker) {
     return
   }
   if (m.type === "gone") return standbys.get(m.id)?.()
+  if (m.type === "disposed")
+    return standbys.get(m.id)?.(m.error !== undefined ? new Error(m.error) : undefined)
   const p = pending.get(m.id)
   if (!p) return
   if (m.type === "chunk") {
@@ -224,7 +233,6 @@ function onMessage(m: FromWorker) {
   }
   pending.delete(m.id)
   trackPending()
-  if (pending.size === 0) worker?.unref()
   p.opts.signal.removeEventListener("abort", p.onAbort)
   if (m.type === "done") p.resolve(m.result)
   else p.reject(m.gone ? new StandbyGoneError(m.error) : new Error(m.error))
@@ -281,8 +289,11 @@ export interface Standby {
    * process is gone, so the caller can run the command cold instead.
    */
   run(opts: ReleaseOptions): Promise<RunResult>
-  /** Kills the process tree unless it was already run. */
-  dispose(): void
+  /**
+   * Kills an idle process tree and waits for its native exit; a released command belongs to run.
+   * Rejects if the worker is lost before exit can be confirmed.
+   */
+  dispose(): Promise<void>
 }
 
 /**
@@ -293,29 +304,40 @@ export interface Standby {
 export function prepareCommand(argv: string[], opts: Omit<SpawnOptions, "trackTree">): Standby {
   outputCharLimit(opts.maxOutputChars)
   const w = getWorker()
-  let state: "idle" | "released" | "gone" = w ? "idle" : "gone"
+  let state: "idle" | "released" | "disposing" | "gone" = w ? "idle" : "gone"
   const id = nextId++
-  const markGone = () => {
-    if (state !== "idle") return
+  let resolveExit!: () => void
+  let rejectExit!: (error: Error) => void
+  const exit = new Promise<void>((resolve, reject) => {
+    resolveExit = resolve
+    rejectExit = reject
+  })
+  // Most host callers intentionally ignore disposal. Awaiters still receive failures.
+  void exit.catch(() => {})
+  const markGone = (error?: Error) => {
     state = "gone"
     standbys.delete(id)
+    disposing.delete(id)
+    trackPending()
+    if (error) rejectExit(error)
+    else resolveExit()
   }
   if (w) {
     standbys.set(id, markGone)
     w.postMessage({ type: "prepare", id, request: spawnRequest(argv, opts) } satisfies ToWorker)
-  }
+  } else resolveExit()
   return {
     get alive() {
       return state === "idle"
     },
     run(release) {
       const current = worker
-      if (state !== "idle" || !current) {
-        markGone()
+      if (state !== "idle" || !current || current !== w) {
         return Promise.reject(new StandbyGoneError("the standby process is gone"))
       }
       state = "released"
       standbys.delete(id)
+      resolveExit()
       const request = {
         timeoutMs: release.timeoutMs,
         ...(release.gateLine !== undefined ? { gateLine: release.gateLine } : {}),
@@ -323,9 +345,17 @@ export function prepareCommand(argv: string[], opts: Omit<SpawnOptions, "trackTr
       return start(current, id, { type: "release", id, request }, release)
     },
     dispose() {
-      if (state !== "idle") return
-      markGone()
-      worker?.postMessage({ type: "dispose", id } satisfies ToWorker)
+      if (state === "idle") {
+        state = "disposing"
+        disposing.add(id)
+        trackPending()
+        try {
+          w?.postMessage({ type: "dispose", id } satisfies ToWorker)
+        } catch (error) {
+          markGone(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+      return exit
     },
   }
 }

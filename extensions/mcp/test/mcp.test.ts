@@ -408,7 +408,7 @@ test(
 
     await agent.prompt("crash it")
     expect(toolResults(agent)[0]).toMatchObject({ isError: true })
-    await waitForSpawnCondition("crashed MCP server state", () => mcp.servers()[1]!.state !== "ready")
+    await waitForSpawnCondition("crashed MCP server state", () => mcp.servers()[1]!.state !== "ready", 5000)
     expect(mcp.servers()[1]!.state).toBe("failed")
     expect(tools.get("mcp__fx__echo")).toBeUndefined()
     const lost = (await errors()).find((e) => e.includes('"fx"'))

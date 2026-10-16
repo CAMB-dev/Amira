@@ -151,7 +151,7 @@ function alive(pid: number): boolean {
   }
 }
 
-async function waitUntil(check: () => boolean, what: string, timeoutMs = SPAWN_WAIT_TIMEOUT_MS) {
+async function waitUntil(check: () => boolean, what: string, timeoutMs = 20_000) {
   await waitForSpawnCondition(what, check, timeoutMs)
 }
 
@@ -187,7 +187,7 @@ test.if(hasBash)(
     const stop = await jobStopTool.execute({ job_id: d.jobId }, ctxIn(main))
     expect(textOf(stop)).toStartWith(`Stopped job ${d.jobId}`)
     expect(detailsOf(stop).status).toBe("stopped")
-    await waitUntil(() => !alive(d.pid!), "the job's process to end")
+    await waitUntil(() => !alive(d.pid!), "the job's process to end", 20_000)
     expect(readFileSync(d.logPath!, "utf8")).toContain("ready on port 3000")
     const again = await jobStopTool.execute({ job_id: d.jobId }, ctxIn(main))
     expect(textOf(again)).toBe(`Job ${d.jobId} had already ended: it was stopped.`)
@@ -225,7 +225,7 @@ test.if(hasBash)(
     )
     const read = () =>
       existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean) : []
-    await waitUntil(() => read().length >= 3, "the process tree")
+    await waitUntil(() => read().length >= 3, "the process tree", SPAWN_WAIT_TIMEOUT_MS)
     const pids = read().map(Number)
     await jobStopTool.execute({ job_id: detailsOf(r).jobId }, ctxIn(session("s_main")))
     await waitUntil(() => pids.every((p) => !alive(p)), "every process of the tree to end", 10_000)
@@ -243,12 +243,16 @@ test.if(hasBash && onWindows)(
     )
     const read = () =>
       existsSync(pidFile) ? readFileSync(pidFile, "utf8").trim().split("\n").filter(Boolean) : []
-    await waitUntil(() => read().length >= 3, "the process tree")
+    await waitUntil(() => read().length >= 3, "the process tree", SPAWN_WAIT_TIMEOUT_MS)
     const pids = read().map(Number)
     // taskkill /T cannot follow MSYS's broken parent chain; only the Job Object reaches them all.
     resetCommandWorker()
     const { jobId } = detailsOf(r)
-    await waitUntil(() => backgroundJobs.get(jobId)!.status === "failed", "the job to be reported lost")
+    await waitUntil(
+      () => backgroundJobs.get(jobId)!.status === "failed",
+      "the job to be reported lost",
+      20_000,
+    )
     expect(backgroundJobs.get(jobId)!.error).toBe("the command worker stopped unexpectedly")
     await waitUntil(() => pids.every((p) => !alive(p)), "every process of the tree to end", 10_000)
   },
@@ -327,7 +331,7 @@ test.if(onWindows)(
     )
     expect(textOf(out)).toContain("Matched: ps ready")
     await jobStopTool.execute({ job_id: d.jobId }, ctxIn(session("s_main")))
-    await waitUntil(() => !alive(d.pid!), "PowerShell to end")
+    await waitUntil(() => !alive(d.pid!), "PowerShell to end", 20_000)
   },
   SPAWN_TEST_TIMEOUT_MS,
 )
@@ -351,8 +355,12 @@ test.if(hasBash)(
     const api = fakeApi()
     registerJobs(api.api)
     await jobRegistry.closeSession("s_child", 0)
-    await waitUntil(() => backgroundJobs.get(jobId)!.status === "stopped", "the sub-agent's job to stop")
-    await waitUntil(() => !alive(pid!), "its process to end")
+    await waitUntil(
+      () => backgroundJobs.get(jobId)!.status === "stopped",
+      "the sub-agent's job to stop",
+      20_000,
+    )
+    await waitUntil(() => !alive(pid!), "its process to end", 20_000)
     expect(api.notices).toEqual([])
   },
   SPAWN_TEST_TIMEOUT_MS,
@@ -369,13 +377,13 @@ test.if(hasBash)(
       ctxIn(session("s_main", 0, delivered)),
     )
     const { jobId } = detailsOf(r)
-    await waitUntil(() => delivered.length > 0, "the notice to the model")
+    await waitUntil(() => delivered.length > 0, "the notice to the model", 20_000)
     expect(delivered[0]!.opts).toEqual({ wake: true })
     const text = (delivered[0]!.message.content[0] as { text: string }).text
     expect(text).toStartWith(`Background job ${jobId} (${bun} late-fail.js) exited with code 4.`)
     expect(text).toContain("boom")
     expect(delivered[0]!.message.display).toMatchObject({ origin: "job" })
-    await waitUntil(() => api.notices.length > 0, "the user's notice")
+    await waitUntil(() => api.notices.length > 0, "the user's notice", 20_000)
     expect(api.notices[0]).toEqual({
       text: `Background job ${jobId} exited with code 4: ${bun} late-fail.js`,
       level: "warning",

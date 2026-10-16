@@ -80,8 +80,8 @@ export interface PreparedCommand {
   readonly alive: boolean
   /** Releases the gate and collects the command. Rejects with StandbyGoneError if it cannot run. */
   run(opts: ReleaseOptions): Promise<RunResult>
-  /** Kills the process tree unless it was already released. */
-  dispose(): void
+  /** Kills an idle process tree and waits for its native exit; a released command belongs to run. */
+  dispose(): Promise<void>
 }
 
 /**
@@ -197,13 +197,34 @@ function spawnCommand(
     if (state !== "idle") return false
     state = "closed"
     tree.kill()
-    close()
     return true
   }
-  proc.exited.then(
-    () => closeIdle() && onIdleExit?.(),
-    () => {},
+  const idleExit = proc.exited.then(
+    () => {
+      if (state === "released") return
+      const wasIdle = state === "idle"
+      try {
+        closeIdle()
+      } finally {
+        close()
+      }
+      if (wasIdle) onIdleExit?.()
+    },
+    (error) => {
+      if (state !== "released") {
+        state = "closed"
+        try {
+          tree.kill()
+        } finally {
+          close()
+        }
+      }
+      throw error
+    },
   )
+  // dispose is also used as a fire-and-forget host API; rejection is still visible to awaiters.
+  void idleExit.catch(() => {})
+  let disposal: Promise<void> | undefined
 
   return {
     get alive() {
@@ -233,7 +254,20 @@ function spawnCommand(
       )
     },
     dispose() {
-      closeIdle()
+      if (state === "released") {
+        disposal ??= Promise.resolve()
+        return disposal
+      }
+      if (!disposal) {
+        try {
+          closeIdle()
+          disposal = idleExit
+        } catch (error) {
+          disposal = Promise.reject(error)
+          void disposal.catch(() => {})
+        }
+      }
+      return disposal
     },
   }
 }

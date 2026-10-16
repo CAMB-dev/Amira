@@ -62,10 +62,21 @@ export async function waitForSpawnExit(
   }
 }
 
-/** Only stop the exact child we own, and reap it before the next test starts. */
-export async function stopSpawn(child: Child & Pick<Bun.Subprocess, "kill">, label = "child cleanup") {
+/** Give the owned child a bounded grace period, then force-kill and reap it. */
+export async function stopSpawn(
+  child: Child & Pick<Bun.Subprocess, "kill">,
+  label = "child cleanup",
+  graceMs = 1000,
+) {
   try {
-    if (child.exitCode === null) child.kill()
+    if (child.exitCode === null) {
+      try {
+        child.kill("SIGTERM")
+        await waitForSpawnExit(child, `${label} graceful shutdown`, graceMs)
+      } catch {
+        if (child.exitCode === null) child.kill("SIGKILL")
+      }
+    }
   } finally {
     await waitForSpawnExit(child, label)
   }

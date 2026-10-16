@@ -43,6 +43,8 @@ export type FromWorker =
   | { type: "failed"; id: number; error: string; gone?: boolean }
   /** A prepared command failed to start or exited before it was released. */
   | { type: "gone"; id: number }
+  /** Disposal completed after the native child exited, or failed without confirming its exit. */
+  | { type: "disposed"; id: number; error?: string }
   /** An event of a piped process; `exit` is its last. */
   | { type: "pipe"; id: number; event: PipeEvent }
   /** An event of a background job; `exit` is its last. */
