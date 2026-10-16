@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -89,6 +89,8 @@ interface Report {
   cases: TestCase[]
   failures: TestCase[]
   files: string[]
+  errorFiles: string[]
+  crashed?: boolean
 }
 
 function count(node: XmlNode, attr: string): number {
@@ -129,10 +131,6 @@ export function parseJUnit(xml: string): Report {
         "Unknown testcase outcome",
       )
       const status = outcome?.tag === "failure" ? "fail" : outcome ? "skip" : "pass"
-      requireValid(
-        status !== "fail" || (node.attrs.name !== "(unnamed)" && node.attrs.name !== "(worker crashed)"),
-        "Hook/worker failure is not safely retryable",
-      )
       cases.push({ file, name: [...names, node.attrs.name].join(" > "), status })
       return
     }
@@ -189,6 +187,7 @@ export function parseJUnit(xml: string): Report {
     cases,
     failures: cases.filter((entry) => entry.status === "fail"),
     files,
+    errorFiles: [],
   }
 }
 
@@ -201,23 +200,48 @@ export interface TestRun {
 }
 
 export function inspectRun(run: TestRun, xml: string): Report {
-  requireValid(
-    !run.signalCode && (run.exitCode === 0 || run.exitCode === 1),
-    "Test process crashed or exited abnormally",
-  )
   const report = parseJUnit(xml)
   const output = Bun.stripANSI(run.output).replaceAll("\r\n", "\n")
   const stderr = Bun.stripANSI(run.stderr ?? run.output).replaceAll("\r\n", "\n")
+  if (
+    run.signalCode ||
+    (run.exitCode !== 0 && run.exitCode !== 1) ||
+    /worker crashed:|panic:|Bun has crashed|Segmentation fault/m.test(output)
+  ) {
+    // A crash may lose the human summary, but a complete, file-attributed failure
+    // report is still usable for retrying those files. Never infer a file from a stack trace.
+    requireValid(report.failures.length, "Crash has no file-attributed JUnit failures")
+    report.crashed = true
+    return report
+  }
+  // Bun reports afterAll rejections only in stderr, not as failed testcases.
+  // Attribute each error to a safe file already present in the complete report.
+  let file: string | undefined
+  let errors = 0
+  for (const line of stderr.split("\n")) {
+    const header = /^(?:::group::)?([^\s].*):$/.exec(line)
+    if (header) {
+      const candidate = header[1]!.replaceAll("\\", "/").replace(/^\.\//, "")
+      const reported = report.files.find((entry) => entry === candidate)
+      // Diagnostics such as "Cleanup:" are not file boundaries.
+      if (reported || line.startsWith("::group::") || /\.[cm]?[jt]sx?$/.test(candidate)) file = reported
+    }
+    if (line === "::endgroup::") file = undefined
+    if (line === "# Unhandled error between tests") {
+      requireValid(file, "Unhandled error is not attributed to a reported test file")
+      report.errorFiles.push(file)
+      errors++
+    }
+  }
   requireValid(
-    !/^# Unhandled error between tests|^\s*\d+ errors?\s*$|worker crashed:|panic:|Bun has crashed|Segmentation fault/m.test(
-      output,
-    ),
-    "Non-test errors in Bun output",
+    (output.match(/^# Unhandled error between tests$/gm)?.length ?? 0) === errors,
+    "Unhandled errors outside Bun stderr",
   )
+  report.errorFiles = [...new Set(report.errorFiles)]
   // JUnit can omit import errors and lost workers. Require the complete human
   // summary too, with matching counts and nothing unexpected after completion.
   const summary =
-    /\n (\d+) pass\n(?: (\d+) skip\n)?(?: (\d+) todo\n)? (\d+) fail\n(?:snapshots: (?:\d+ (?:passed|failed)|\+\d+ added)(?:, (?:\d+ (?:passed|failed)|\+\d+ added))*\n)?(?: (?:\d+ snapshots, )?\d+ expect\(\) calls\n)?Ran (\d+) tests? across (\d+) files?\. \[[^\]\n]+\]\n(?:error: script "test" exited with code 1\n)?$/.exec(
+    /\n (\d+) pass\n(?: (\d+) skip\n)?(?: (\d+) todo\n)? (\d+) fail\n(?: (\d+) errors?\n)?(?:snapshots: (?:\d+ (?:passed|failed)|\+\d+ added)(?:, (?:\d+ (?:passed|failed)|\+\d+ added))*\n)?(?: (?:\d+ snapshots, )?\d+ expect\(\) calls\n)?Ran (\d+) tests? across (\d+) files?\. \[[^\]\n]+\]\n(?:error: script "test" exited with code 1\n)?$/.exec(
       stderr,
     )
   requireValid(summary, "Missing/incomplete Bun summary or unexpected output after report")
@@ -225,11 +249,15 @@ export function inspectRun(run: TestRun, xml: string): Report {
     Number(summary[1]) === report.tests - report.failures.length - report.skipped &&
       Number(summary[2] ?? 0) + Number(summary[3] ?? 0) === report.skipped &&
       Number(summary[4]) === report.failures.length &&
-      Number(summary[5]) === report.tests &&
-      Number(summary[6]) >= report.files.length,
+      Number(summary[5] ?? 0) === errors &&
+      Number(summary[6]) === report.tests &&
+      Number(summary[7]) >= report.files.length,
     "Bun summary does not match JUnit report",
   )
-  requireValid(run.exitCode === (report.failures.length ? 1 : 0), "Exit status does not match test failures")
+  requireValid(
+    run.exitCode === (report.failures.length || errors ? 1 : 0),
+    "Exit status does not match test failures/errors",
+  )
   return report
 }
 
@@ -239,6 +267,23 @@ export function warning(test: TestCase): string {
     .replaceAll("\r", "%0D")
     .replaceAll("\n", "%0A")
   return `::warning title=flaky test::${data}`
+}
+
+export function annotations(log: string, summary: string): string[] {
+  const lines = Bun.stripANSI(log).replaceAll("\r", "").split("\n").filter(Boolean)
+  const failureName = (line: string) => /^\(fail\)\s+(.+?)(?:\s+\[[^\]]+\])?$/.exec(line)?.[1]
+  const failures = [...new Set(lines.map(failureName).filter((name) => name !== undefined))]
+  const selected = [
+    summary.split(/\r?\n/).find(Boolean) ??
+      "retry skipped: no summary (checks failed before tests or run interrupted)",
+  ]
+  const tail = lines.filter((line) => !failureName(line) && !selected.includes(line))
+  selected.push(...failures.slice(0, tail.length ? 7 : 8).map((name) => `(fail) ${name}`))
+  const room = 9 - selected.length
+  if (room) selected.push(...tail.slice(-room))
+  return selected.map(
+    (line) => `::error title=bun run check::${line.replaceAll("%", "%25").replaceAll("\r", "%0D")}`,
+  )
 }
 
 async function runCommand(command: string[], cwd: string): Promise<TestRun> {
@@ -272,11 +317,17 @@ export async function runCiTests(
     cwd?: string
     run?: (command: string[], cwd: string) => Promise<TestRun>
     emit?: (line: string) => void
+    summaryFile?: string | null
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd()
   const run = options.run ?? runCommand
   const emit = options.emit ?? console.log
+  const summaryFile =
+    options.summaryFile === null ? undefined : (options.summaryFile ?? process.env.CI_TEST_SUMMARY_FILE)
+  function summarize(message: string) {
+    if (summaryFile) writeFileSync(summaryFile, `CI test retry summary: ${message.replace(/[\r\n]/g, " ")}\n`)
+  }
   const temp = mkdtempSync(path.join(tmpdir(), "amira-ci-junit-"))
   let attempt = 0
   async function execute(args: string[]): Promise<Report> {
@@ -288,41 +339,81 @@ export async function runCiTests(
     return inspectRun(outcome, readFileSync(outfile, "utf8"))
   }
   try {
+    summarize("initial run in progress")
     const first = await execute(["run", "test"])
-    if (!first.failures.length) return 0
-    const files = [...new Set(first.failures.map((entry) => entry.file))]
+    const files = [...new Set([...first.failures.map((entry) => entry.file), ...first.errorFiles])]
+    if (!files.length) {
+      summarize("passed without retries")
+      return 0
+    }
     let failed = false
+    const outcomes: string[] = []
     for (const file of files) {
+      summarize(`retrying ${file}${outcomes.length ? `; ${outcomes.join("; ")}` : ""}`)
       emit(`Retrying failed test file once: ${file}`)
       // Same cwd, environment, .env loading and bunfig preload as bun run test;
       // explicit ./ paths select only this file. No parallel workers on retries.
       const retry = await execute(["test", `./${file}`])
       const original = first.cases.filter((entry) => entry.file === file)
-      const identities = (entries: TestCase[]) => entries.map((entry) => entry.name).sort()
+      const synthetic = (entry: TestCase) => /(?:^| > )\((?:unnamed|worker crashed)\)$/.test(entry.name)
+      const identities = (entries: TestCase[]) =>
+        entries
+          .filter((entry) => !synthetic(entry))
+          .map((entry) => entry.name)
+          .sort()
+      const names = identities(original)
+      const retriedNames = identities(retry.cases)
+      const sameCases =
+        first.crashed || original.some(synthetic)
+          ? names.every((name) => retriedNames.includes(name))
+          : JSON.stringify(names) === JSON.stringify(retriedNames)
       requireValid(
-        retry.files.length === 1 &&
-          retry.files[0] === file &&
-          JSON.stringify(identities(original)) === JSON.stringify(identities(retry.cases)),
+        retry.files.length === 1 && retry.files[0] === file && sameCases,
         "Retry did not execute the same test file/cases",
       )
-      const originallyFailed = new Set(
-        original.filter((entry) => entry.status === "fail").map((entry) => entry.name),
+      const mustPass = new Set(
+        original
+          .filter(
+            (entry) =>
+              entry.status === "fail" || (first.errorFiles.includes(file) && entry.status === "pass"),
+          )
+          .map((entry) => entry.name),
       )
-      if (
+      const retryFailed = Boolean(
         retry.failures.length ||
-        retry.cases.some((entry) => originallyFailed.has(entry.name) && entry.status !== "pass")
+          retry.errorFiles.length ||
+          retry.cases.some((entry) => mustPass.has(entry.name) && entry.status !== "pass"),
       )
-        failed = true
+      if (retryFailed) failed = true
+      outcomes.push(`${file}: ${retryFailed ? "failed" : "passed"}`)
     }
+    summarize(`${failed ? "failed after retry" : "passed after retry"}; ${outcomes.join("; ")}`)
     if (failed) return 1
-    for (const failure of first.failures) emit(warning(failure))
+    emit(
+      `::warning title=CI test retry::retry: ${files.length} ${files.length === 1 ? "file" : "files"} passed on retry`,
+    )
+    const recovered = [
+      ...first.failures,
+      ...first.errorFiles.map(
+        (file): TestCase => ({ file, name: "unhandled error between tests", status: "fail" }),
+      ),
+    ]
+    const unique = new Map(recovered.map((entry) => [JSON.stringify([entry.file, entry.name]), entry]))
+    for (const failure of [...unique.values()].slice(0, 8)) emit(warning(failure))
     return 0
   } catch (error) {
-    emit(`error: CI test retry refused: ${error instanceof Error ? error.message : String(error)}`)
+    const reason = error instanceof Error ? error.message : String(error)
+    summarize(`retry refused: ${reason}`)
+    emit(`error: CI test retry refused: ${reason}`)
     return 1
   } finally {
     rmSync(temp, { recursive: true, force: true })
   }
 }
 
-if (import.meta.main) process.exitCode = await runCiTests()
+if (import.meta.main) {
+  if (process.argv[2] === "--annotate") {
+    const read = (file: string | undefined) => (file && existsSync(file) ? readFileSync(file, "utf8") : "")
+    for (const line of annotations(read(process.argv[3]), read(process.argv[4]))) console.log(line)
+  } else process.exitCode = await runCiTests()
+}

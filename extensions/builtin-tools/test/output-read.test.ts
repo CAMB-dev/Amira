@@ -1,12 +1,20 @@
-import { afterAll, beforeAll, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, test as bunTest, expect, spyOn } from "bun:test"
+import * as fs from "node:fs/promises"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { ArtifactInfo, OutputStore, ToolContext, ToolSession } from "@amira/api"
+import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnWork } from "../../../scripts/spawn-test.ts"
 import { globTool } from "../src/glob.ts"
 import { grepTool } from "../src/grep.ts"
 import { outputReadTool } from "../src/output-read.ts"
 import { TempOutputStore } from "../src/truncate.ts"
-import { makeCtx, tempDirs, textOf } from "./util.ts"
+import { asyncTestScope, makeCtx, tempDirs, textOf } from "./util.ts"
+
+const scope = asyncTestScope()
+const test = (name: string, work: (signal: AbortSignal) => Promise<void>, timeout = 30_000) =>
+  bunTest(name, () => scope.run(work), timeout)
+afterEach(() => scope.cleanup(), 30_000)
 
 const temps = tempDirs()
 let dir: string
@@ -20,8 +28,8 @@ function ctxWith(outputs: OutputStore, cwd = dir): ToolContext {
 beforeAll(async () => {
   dir = await temps.make()
   store = new TempOutputStore(join(dir, "artifacts"), { saveAbove: 2000, previewChars: 1000 })
-})
-afterAll(() => temps.cleanup())
+}, 30_000)
+afterAll(() => temps.cleanup(), 30_000)
 
 const run = (args: Parameters<typeof outputReadTool.execute>[0], outputs: OutputStore = store) =>
   outputReadTool.execute(args, ctxWith(outputs))
@@ -131,16 +139,117 @@ test("grep saves all its results before head_limit cuts them; the preview is cut
   expect(defaultText).not.toContain("first 250 (head_limit)")
 })
 
-test("glob saves every path when the list is long", async () => {
+test("glob saves every path when the list is long, waiting for the final write", async (signal) => {
   const many = join(dir, "many")
   await mkdir(many, { recursive: true })
-  await Promise.all(
-    Array.from({ length: 300 }, (_, i) => writeFile(join(many, `file-with-a-long-name-${i}.ts`), "")),
-  )
-  const r = await globTool.execute({ pattern: "**/*.ts", path: "many" }, ctxWith(store))
-  const d = r.details as { artifact?: string; count: number; fullOutputPath?: string }
-  expect(d.count).toBe(300)
-  expect(d.artifact).toBeDefined()
-  expect((await readFile(d.fullOutputPath!, "utf8")).split("\n")).toHaveLength(300)
-  expect(textOf(r)).toContain("300 files, newest first")
+  const paths = Array.from({ length: 300 }, (_, i) => `many/file-with-a-long-name-${i}.ts`)
+  // Bound fixture I/O rather than queueing hundreds of writes on Windows CI.
+  for (const path of paths) await writeFile(join(dir, path), "")
+
+  const writing = Promise.withResolvers<{ id: string; path: string }>()
+  const release = Promise.withResolvers<void>()
+  const original = fs.writeFile
+  const spy = spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+    const [path, text] = args
+    if (typeof path === "string" && path.endsWith(".txt.tmp") && typeof text === "string") {
+      // Leave exactly the last path unwritten until the test releases the writer.
+      await original(path, text.slice(0, text.lastIndexOf("\n")))
+      writing.resolve({ id: path.split(/[\\/]/).at(-1)!.slice(0, -8), path })
+      await release.promise
+    }
+    return original(...args)
+  })
+  const abort = () => {
+    release.resolve()
+    writing.reject(new Error("artifact write aborted"))
+  }
+  signal.addEventListener("abort", abort, { once: true })
+  let settled = false
+  const work = globTool
+    .execute({ pattern: "**/*.ts", path: "many" }, { ...ctxWith(store), signal })
+    .finally(() => {
+      settled = true
+    })
+  try {
+    const partial = await Promise.race([
+      writing.promise,
+      work.then(() => {
+        throw new Error("glob returned before writing an artifact")
+      }),
+    ])
+    expect((await readFile(partial.path, "utf8")).split("\n")).toHaveLength(299)
+    expect(settled).toBe(false)
+    expect(store.find(partial.id)).toBeUndefined()
+    expect((await run({ id: partial.id })).isError).toBe(true)
+    release.resolve()
+    const r = await work
+    const d = r.details as { artifact?: string; count: number; fullOutputPath?: string }
+    expect(d.count).toBe(300)
+    expect(d.artifact).toBe(partial.id)
+    const saved = (await readFile(d.fullOutputPath!, "utf8")).split("\n")
+    expect([...saved].sort()).toEqual([...paths].sort())
+    expect(store.find(d.artifact!)).toMatchObject({ lines: 300, complete: true })
+    expect(textOf(await run({ id: d.artifact!, offset: 300 }))).toContain(`   300\t${saved[299]}`)
+    expect(textOf(r)).toContain("300 files, newest first")
+  } finally {
+    release.resolve()
+    await work.catch(() => {})
+    spy.mockRestore()
+    signal.removeEventListener("abort", abort)
+  }
 })
+
+test(
+  "a timed-out output test drains its save without leaking a late rejection to the next test",
+  async () => {
+    const fixture = await temps.make()
+    const source = (relative: string) => JSON.stringify(new URL(relative, import.meta.url).href)
+    await writeFile(
+      join(fixture, "bunfig.toml"),
+      `[test]\npreload = [${JSON.stringify(fileURLToPath(new URL("../../../scripts/test-env.ts", import.meta.url)))}]\n`,
+    )
+    await writeFile(
+      join(fixture, "timeout.test.ts"),
+      `import { afterEach, expect, test } from "bun:test"
+import { TempOutputStore } from ${source("../src/truncate.ts")}
+import { asyncTestScope } from ${source("./util.ts")}
+const scope = asyncTestScope()
+const gate = Promise.withResolvers()
+const store = new TempOutputStore("artifacts", { saveAbove: 1 })
+let saved = false
+afterEach(() => scope.cleanup(), 30_000)
+test("blocked save", () => scope.run(async (signal) => {
+  signal.addEventListener("abort", () => gate.resolve(), { once: true })
+  await gate.promise
+  await store.save({ text: "first path\\nlast path", tool: "glob" })
+  saved = true
+  throw new Error("late output failure")
+}), 20)
+test("next test sees the save drained", () => expect(saved).toBe(true))
+`,
+    )
+    const child = Bun.spawn([process.execPath, "test", "./timeout.test.ts"], {
+      cwd: fixture,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+    })
+    try {
+      const [code, stdout, stderr] = await waitForSpawnWork(
+        "output timeout fixture",
+        Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]),
+      )
+      expect(code).toBe(1)
+      const output = stdout + stderr
+      expect(output).toContain("timed out after 20ms")
+      expect(output).toContain("1 pass")
+      expect(output).toContain("1 fail")
+      expect(output).not.toContain("Unhandled error between tests")
+      expect(output).not.toContain("late output failure")
+    } finally {
+      await stopSpawn(child)
+    }
+  },
+  SPAWN_TEST_TIMEOUT_MS,
+)

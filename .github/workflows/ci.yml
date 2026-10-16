@@ -52,6 +52,8 @@ jobs:
       - name: Run checks and tests
         # A hang should fail this step with a visible log tail, not cancel the whole job.
         timeout-minutes: 20
+        env:
+          CI_TEST_SUMMARY_FILE: ${{ runner.temp }}/ci-test-summary.txt
         run: |
           set -o pipefail
           (bun run architecture:check && bun run typecheck && bun run lint && bun scripts/ci-test.ts) 2>&1 | tee "$RUNNER_TEMP/check.log"
@@ -61,14 +63,8 @@ jobs:
         if: failure() || cancelled()
         run: |
           log="$RUNNER_TEMP/check.log"
-          [ -f "$log" ] || exit 0
-          grep -E '^\(fail\)|^error|[Ee]rror:|^ *[0-9]+ fail|timed out|Unhandled' "$log" | tail -n 25 > "$RUNNER_TEMP/failures.txt" || true
-          # The last lines show where a hung run stopped.
-          { echo "-- last log lines --"; tail -n 12 "$log"; } >> "$RUNNER_TEMP/failures.txt"
-          while IFS= read -r line; do
-            line=${line//%/%25}
-            echo "::error title=bun run check::${line//$'\r'/}"
-          done < "$RUNNER_TEMP/failures.txt"
+          # One nine-line budget: retry outcome, unique failing names, then the log tail.
+          bun scripts/ci-test.ts --annotate "$log" "$RUNNER_TEMP/ci-test-summary.txt"
       - name: Compile the runner's native target
         env:
           TARGET: ${{ matrix.target }}

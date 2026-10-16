@@ -82,6 +82,33 @@ export function textOf(r: ToolResult): string {
   return r.content.map((b) => (b.type === "text" ? b.text : `[image ${b.mimeType}]`)).join("")
 }
 
+/** Drain timed-out async tests before teardown; Bun otherwise reports their late rejections globally. */
+export function asyncTestScope() {
+  const pending = new Set<Promise<void>>()
+  let controller = new AbortController()
+  return {
+    run(work: (signal: AbortSignal) => Promise<void>): Promise<void> {
+      const signal = controller.signal
+      const result = work(signal).catch((error) => {
+        // After teardown starts, the runner has already recorded the timeout.
+        if (!signal.aborted) throw error
+      })
+      pending.add(result)
+      void result.then(
+        () => pending.delete(result),
+        () => pending.delete(result),
+      )
+      return result
+    },
+    async cleanup() {
+      const current = controller
+      controller = new AbortController()
+      current.abort()
+      await Promise.allSettled([...pending])
+    },
+  }
+}
+
 /** Creates temp dirs and removes them all in `cleanup`. */
 export function tempDirs() {
   const dirs: string[] = []
