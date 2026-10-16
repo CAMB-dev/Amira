@@ -56,6 +56,12 @@ amira --cwd /path/to/project "Explain this repository"
 
 Esc 停止当前轮次；如果 `/ext install` 等斜杠命令仍在运行，会先取消该命令并保留输入框中的草稿。如果有等待中的引导或排队消息，它们会按输入顺序合并为一条消息并一起发送。后台子 agent 会继续工作，停止方法见[子 agent](subagents.md)。Ctrl+C 同样先取消正在运行的命令，其次停止轮次，空闲时先清空非空输入，输入为空则退出；也可以用 `/quit` 退出。
 
+## 步数限制
+
+主 agent 默认每轮最多调用模型 500 次。在[设置](settings.md#常规)中将 `agent.maxSteps` 设为非负整数；`0` 表示不限制步数。`--max-steps <n>` 在单次运行中覆盖该设置，适用于交互模式和打印模式，不会保存。
+
+此限制仅适用于主 agent，子 agent 不会继承。取消步数限制不会改变中止、预算限制或上下文错误停止轮次的行为。
+
 ## 图片
 
 两种终端模式中，消息都可以附带 PNG、JPEG、GIF 和 WebP 图片：

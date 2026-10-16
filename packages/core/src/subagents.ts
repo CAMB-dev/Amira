@@ -525,6 +525,7 @@ export class AgentTree {
   /** Adds a reply's usage to the tree and its groups, reports it, and stops what went over budget. */
   recordUsage(agent: Agent, usage: Usage, model?: Child["model"]): void {
     this.#recordUsage(agent, usage, model, this.#live.get(agent.sessionId))
+    if (this.#ledger.exceeded) agent.abort() // Main sessions bypass root admission.
   }
 
   /** A consultation retains its accounting child until late terminal usage arrives. */

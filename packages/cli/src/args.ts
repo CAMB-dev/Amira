@@ -13,6 +13,8 @@ export interface CliArgs {
   jsonOut?: string
   model?: string
   thinking?: ReasoningEffort
+  /** Model calls per turn; 0 means unlimited. Unset: from settings. */
+  maxSteps?: number
   cwd: string
   extensions: string[]
   noBuiltins: boolean
@@ -60,6 +62,8 @@ Options:
       --thinking <level>
                         Reasoning effort: low, medium, high, xhigh or max
                         (overrides settings; no configured effort sends none)
+      --max-steps <n>   Maximum model calls per turn; 0 means unlimited
+                        (overrides "agent.maxSteps" in settings.json; default 500)
   -e, --extension <f>   Load an extension file (repeatable; relative to where
                         amira is run, not to --cwd)
       --no-builtins     Do not load the built-in tools
@@ -153,6 +157,14 @@ export function parseCliArgs(
   if (values.inline) args.mode = "inline"
   if (values.fullscreen) args.mode = "fullscreen"
   if (values.shell !== undefined) args.shell = parseShell(values.shell)
+  if (values["max-steps"] !== undefined) {
+    const value = values["max-steps"]
+    const maxSteps = Number(value)
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(maxSteps)) {
+      throw new UsageError(`--max-steps must be a nonnegative integer (0 means unlimited), got "${value}"`)
+    }
+    args.maxSteps = maxSteps
+  }
   if (values.thinking !== undefined) {
     const effort = values.thinking
     if (
@@ -257,6 +269,7 @@ function parse(argv: string[]) {
       "json-coalesce": { type: "boolean" },
       model: { type: "string", short: "m" },
       thinking: { type: "string" },
+      "max-steps": { type: "string" },
       extension: { type: "string", short: "e", multiple: true },
       "no-builtins": { type: "boolean" },
       "no-packages": { type: "boolean" },

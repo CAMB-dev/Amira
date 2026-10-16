@@ -84,6 +84,39 @@ test("--model beats $AMIRA_MODEL, which is the fallback", () => {
   expect(parseCliArgs(["x"], here, {}).model).toBeUndefined()
 })
 
+test("--max-steps parses nonnegative integers and leaves an omitted limit to settings", () => {
+  expect(parseCliArgs([], here, {}).maxSteps).toBeUndefined()
+  expect(parseCliArgs(["--max-steps", "12"], here, {}).maxSteps).toBe(12)
+  expect(parseCliArgs(["--max-steps=0"], here, {}).maxSteps).toBe(0)
+  expect(USAGE).toContain("--max-steps <n>")
+  expect(USAGE).toContain("0 means unlimited")
+  expect(USAGE).toContain('overrides "agent.maxSteps" in settings.json; default 500')
+})
+
+test("--max-steps rejects invalid and unsafe integers", () => {
+  for (const value of [
+    "",
+    "-1",
+    "1.5",
+    "NaN",
+    "Infinity",
+    "abc",
+    "1e3",
+    "0x10",
+    "+1",
+    " 2 ",
+    "9007199254740992",
+  ]) {
+    expect(() => parseCliArgs([`--max-steps=${value}`], here, {})).toThrow(UsageError)
+    expect(() => parseCliArgs([`--max-steps=${value}`], here, {})).toThrow(/nonnegative integer/)
+  }
+})
+
+test("--max-steps requires a value", () => {
+  expect(() => parseCliArgs(["--max-steps"], here, {})).toThrow(UsageError)
+  expect(() => parseCliArgs(["--max-steps", "--help"], here, {})).toThrow(UsageError)
+})
+
 test("--cwd is resolved to an absolute directory and validated", () => {
   expect(parseCliArgs(["-C", ".."], here, {}).cwd).toBe(path.dirname(here))
   expect(() => parseCliArgs(["-C", "definitely-not-here"], here, {})).toThrow(/not a directory/)

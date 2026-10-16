@@ -51,6 +51,32 @@ test("the model comes from --model, then $AMIRA_MODEL, then settings", () => {
   expect(config(["-m", "flag/m"], { AMIRA_MODEL: "env/m" }).settings.model).toBe("flag/m")
 })
 
+test("--max-steps overrides every agent.maxSteps settings layer, including with 0", () => {
+  expect(config([]).settings.agent?.maxSteps).toBeUndefined()
+  expect(config(["--max-steps", "0"]).settings.agent?.maxSteps).toBe(0)
+  put(userSettingsFile(), { agent: { maxSteps: 10 } })
+  expect(config([]).settings.agent?.maxSteps).toBe(10)
+  put(projectSettingsFile(), { agent: { maxSteps: 20 } })
+  expect(config([]).settings.agent?.maxSteps).toBe(20)
+  put(path.join(cwd, ".amira", "settings.local.json"), { agent: { maxSteps: 0 } })
+  expect(config([]).settings.agent?.maxSteps).toBe(0)
+  expect(config(["--max-steps", "30"]).settings.agent?.maxSteps).toBe(30)
+  put(path.join(cwd, ".amira", "settings.local.json"), { agent: { maxSteps: 40 } })
+  const c = config(["--max-steps", "0"])
+  expect(c.settings.agent?.maxSteps).toBe(0)
+  expect(c.settingsLayers.agent).toEqual([
+    { scope: "user", file: userSettingsFile(), value: { maxSteps: 10 } },
+    { scope: "project", file: projectSettingsFile(), value: { maxSteps: 20 } },
+    {
+      scope: "project-local",
+      file: path.join(cwd, ".amira", "settings.local.json"),
+      value: { maxSteps: 40 },
+    },
+    { scope: "flags", file: "--flags", value: { maxSteps: 0 } },
+  ])
+  expect(c.warnings).toEqual([])
+})
+
 test("shell and tools.disabled come from settings unless the flags are given", () => {
   put(path.join(cwd, ".amira", "settings.json"), { shell: "bash", tools: { disabled: ["glob"] } })
   // The shell mode hides tools by their declared shell once they are registered (toolsToDisable).

@@ -124,8 +124,14 @@ export class TurnRunner {
           result = { reason: "aborted", steps }
           break
         }
-        if (steps >= this.#deps.maxSteps) {
-          result = { reason: "error", steps, error: `stopped after ${this.#deps.maxSteps} model calls` }
+        if (this.#deps.maxSteps > 0 && steps >= this.#deps.maxSteps) {
+          result = {
+            reason: "error",
+            steps,
+            error: `stopped after ${this.#deps.maxSteps} model calls${
+              this.#deps.depth === 0 ? "; raise agent.maxSteps or use --max-steps 0" : ""
+            }`,
+          }
           break
         }
         const ready = this.#deps.execution.beforeModel(abort.signal)
@@ -308,7 +314,7 @@ export class TurnRunner {
     this.#deps.emit(turn, "message.end", { message })
     if (message.usage) this.#deps.recordTreeUsage(message.usage)
 
-    if (aborted) return { kind: "aborted" }
+    if (aborted || turn.signal.aborted) return { kind: "aborted" }
     if (error) return { kind: "error", error, ...(modelError ? { model: modelError } : {}) }
     return { kind: "ok", message }
   }

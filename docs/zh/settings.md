@@ -167,6 +167,7 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | `shell` | `"auto" \| "bash" \| "powershell"` | `"auto"` | Windows 上模型可用的 shell 工具：`"auto"` 同时提供 `bash` 和 `powershell`，`"bash"` 或 `"powershell"` 会隐藏另一个。其他平台只有 `bash`。`--shell` 优先。 |  |
 | `tools.disabled` | `string[]` | `[]` | 对模型隐藏的工具名。`--disable-tools` 在单次运行中替换这个列表，`/tools` 只修改当前会话。 |  |
 | `maxParallelTools` | `number` | `8` | 同时运行的工具调用数上限。必须是至少为 1 的整数；无效值会发出警告并使用默认值，即使优先级较低的文件中已有有效值。 |  |
+| `agent.maxSteps` | `number` | `500` | 主 agent 每轮调用模型的次数上限。使用非负整数；`0` 表示不限制步数。`--max-steps <n>` 在单次运行中覆盖此设置，适用于交互模式和打印模式。子 agent 不会继承。中止、预算限制和上下文错误仍会停止轮次。 |  |
 | `backgroundJobs.maxRunning` | `number` | `8` | 同时运行的后台任务数上限（shell 工具以 `background: true` 启动的命令，如开发服务器和文件监视进程）。 |  |
 | `backgroundJobs.bufferChars` | `number` | `1000000` | 每个后台任务在内存中保留、供读取的输出字符数，最少 1000。 |  |
 | `backgroundJobs.maxLogBytes` | `number` | `52428800` (50 MiB) | 每个后台任务写入日志文件的输出字节数上限。 |  |

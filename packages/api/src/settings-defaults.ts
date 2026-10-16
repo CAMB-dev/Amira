@@ -8,6 +8,7 @@
  */
 export const DEFAULT_SHELL = "auto"
 export const DEFAULT_DISABLED_TOOLS: readonly string[] = Object.freeze([])
+export const DEFAULT_AGENT_MAX_STEPS = 500
 export const DEFAULT_MAX_PARALLEL_TOOLS = 8
 export const DEFAULT_BACKGROUND_MAX_RUNNING = 8
 export const DEFAULT_BACKGROUND_BUFFER_CHARS = 1_000_000

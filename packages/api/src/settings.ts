@@ -90,6 +90,8 @@ export interface Settings {
    * Commands and the aliases they declare win over these.
    */
   commandAliases?: Record<string, string>
+  /** Main agent's model calls per turn; a non-negative integer. 0 disables the limit. */
+  agent?: { maxSteps?: number }
   /** Most tool calls running at once (D71). */
   maxParallelTools?: number
   /**

@@ -99,7 +99,7 @@ export interface AgentOptions {
   writeRoots?: readonly string[]
   /** Per-provider and per-model choices, shared with sub-agents. */
   providerSettings?: Record<string, ProviderSettings>
-  /** Upper bound on model calls per turn. Default 200. */
+  /** Non-negative integer bound on model calls per turn. Default 500; 0 means unlimited. */
   maxSteps?: number
   maxTokens?: number
   /** How long tools get to stop after an abort before they are abandoned. Default 2000 ms. */

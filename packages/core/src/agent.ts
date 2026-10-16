@@ -24,7 +24,7 @@ import type {
   ToolDefinition,
   ToolSession,
 } from "@amira/api"
-import { DEFAULT_MAX_PARALLEL_TOOLS } from "@amira/api"
+import { DEFAULT_AGENT_MAX_STEPS, DEFAULT_MAX_PARALLEL_TOOLS } from "@amira/api"
 import { ApprovalGate } from "./agent/approvals.ts"
 import {
   type ArtifactSession,
@@ -217,7 +217,9 @@ export class Agent {
       this.#compaction = opts.compaction ?? {}
       this.#context = opts.context ?? {}
       const ai = withCallableServerTools(opts.ai, this.callableTools)
-      const maxSteps = opts.maxSteps ?? 200
+      const maxSteps = opts.maxSteps ?? DEFAULT_AGENT_MAX_STEPS
+      if (!Number.isInteger(maxSteps) || maxSteps < 0)
+        throw new Error("maxSteps must be a non-negative integer (0 means unlimited)")
       const maxTokens = opts.maxTokens
       const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
       this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
