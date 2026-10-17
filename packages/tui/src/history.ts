@@ -9,15 +9,12 @@ import type {
 import { isSummaryMessage } from "@amira/core"
 import {
   type Glyphs as MarkdownGlyphs,
-  type MarkdownNodes,
-  MarkdownStream,
-  type MarkdownStreamOptions,
   renderMarkdown,
   type Theme,
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import { DisplayBlock } from "./blocks/display.ts"
+import { DisplayBlock, displayEnv } from "./blocks/display.ts"
 import type { DisplayHistory } from "./display-history.ts"
 import {
   compactionReason,
@@ -30,7 +27,6 @@ import {
   userLines,
 } from "./format.ts"
 import { glyphs } from "./glyphs.ts"
-import { displayEnv } from "./inline-display.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import {
   explorationOf,
@@ -43,8 +39,6 @@ import { type BlockKind, noticeLines, replyEndNotice, Transcript } from "./trans
 
 export interface HistoryOptions {
   displays?: readonly DisplayHistory[]
-  /** Allows inline resume to retain semantic display blocks instead of immutable rows. */
-  onDisplay?: (display: DisplayHistory, preceding: string[]) => void
   presenters?: PresenterSource
   width: number
   detail?: ToolDetailLevel
@@ -52,11 +46,7 @@ export interface HistoryOptions {
   session?: SessionBoundary
   /** Make links in replies clickable (OSC 8); default: what the terminal is known to support. */
   hyperlinks?: boolean
-  /** Images and what extensions render (D88), committed as the inline transcript does. */
-  nodes?: MarkdownNodes
   glyphs?: MarkdownGlyphs
-  /** Spacing continues from the blocks committed before; a fresh one when left out. */
-  transcript?: Transcript
   /** Output lines a successful shell command shows at `summary` detail (tui.shellOutputLines). */
   outputLines?: number
   /** Why a compaction happened, by its summary's user message (Agent.compactionInfo). */
@@ -76,7 +66,7 @@ function localTime(ms: number): string {
  * which history does not keep). A compaction's summary is one folded line.
  */
 export function historyLines(theme: Theme, messages: Message[], opts: HistoryOptions): string[] {
-  const t = opts.transcript ?? new Transcript()
+  const t = new Transcript()
   const out: string[] = [
     ...t.block("history", [sessionBoundary(theme, opts.session ?? { resumed: true }, opts.width)]),
   ]
@@ -134,14 +124,12 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
     for (const d of opts.displays ?? []) {
       if (d.before !== before) continue
       flush()
-      if (opts.onDisplay) opts.onDisplay(d, out.splice(0))
-      else
-        block(
-          "notice",
-          new DisplayBlock(d.level, d.text, d.options).lines(
-            displayEnv(theme, opts.width, detail, opts.hyperlinks),
-          ),
-        )
+      block(
+        "notice",
+        new DisplayBlock(d.level, d.text, d.options).lines(
+          displayEnv(theme, opts.width, detail, opts.hyperlinks),
+        ),
+      )
     }
   }
   for (const [index, m] of messages.entries()) {
@@ -182,16 +170,15 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
           const text = i === lastText ? b.text + sources : b.text
           const markerRows = new Set<string>()
           const markdown = {
-            ...markdownOptions(opts),
+            glyphs: opts.glyphs,
+            hyperlinks: opts.hyperlinks,
             firstRowWidth,
             markerOutset: 2,
             onMarkerRow: (row: string) => {
               markerRows.add(row)
             },
           }
-          const rows = opts.nodes
-            ? committedMarkdown(text, width, theme, markdown)
-            : renderMarkdown(text, width, theme, markdown)
+          const rows = renderMarkdown(text, width, theme, markdown)
           const lines = replyRows(rows, markerRows)
           if (lines.length) {
             assistantSeen = true
@@ -341,26 +328,4 @@ export function summaryLines(
     glyphs: markdownGlyphs,
   })
   return [head, ...detail, "", ...replyRows(body)]
-}
-
-/**
- * A whole Markdown text as rows to commit, as the live transcript commits a reply: images and
- * what extensions render go as they are ready, or as markers the renderer resolves in order.
- */
-function committedMarkdown(text: string, width: number, theme: Theme, opts: MarkdownStreamOptions): string[] {
-  const m = new MarkdownStream(opts)
-  const rows: string[] = []
-  m.append(text)
-  m.render(width, { theme, color: true, rows: Number.POSITIVE_INFINITY, commit: (r) => rows.push(...r) })
-  rows.push(...m.take(width))
-  while (rows.length > 0 && rows[rows.length - 1]!.trim() === "") rows.pop()
-  return rows
-}
-
-function markdownOptions(opts: HistoryOptions): MarkdownStreamOptions {
-  return {
-    glyphs: opts.glyphs,
-    ...(opts.hyperlinks === undefined ? {} : { hyperlinks: opts.hyperlinks }),
-    ...(opts.nodes ? { nodes: opts.nodes } : {}),
-  }
 }

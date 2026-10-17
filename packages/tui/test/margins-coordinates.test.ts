@@ -24,19 +24,19 @@ test("configured margins follow the prototype formula at every narrow-width boun
     for (let columns = 1; columns <= 100; columns++) {
       const expected =
         columns - 2 * configured >= 60 ? configured : Math.max(0, Math.floor((columns - 60) / 2))
-      const geometry = contentGeometry(columns, 30, { margin: configured, marginRows: 2 }, true)
+      const geometry = contentGeometry(columns, 30, { margin: configured, marginRows: 2 })
       expect(geometry.left).toBe(expected)
       expect(geometry.width).toBe(columns - 2 * expected)
       expect(geometry.rows).toBe(2)
       expect(geometry.height).toBe(26)
     }
   }
-  expect(contentGeometry(100, 23, { marginRows: 2 }, true).rows).toBe(0)
-  expect(contentGeometry(100, 24, { marginRows: 2 }, true).rows).toBe(2)
+  expect(contentGeometry(100, 23, { marginRows: 2 }).rows).toBe(0)
+  expect(contentGeometry(100, 24, { marginRows: 2 }).rows).toBe(2)
 })
 
 test("overlay pointer coordinates subtract both edges; margin presses cannot activate widgets", () => {
-  const geometry = contentGeometry(100, 30, {}, true)
+  const geometry = contentGeometry(100, 30, {})
   expect(contentMouse(press, geometry)).toMatchObject({ x: 0, y: 0 })
   for (const position of [{ x: 2 }, { x: 97 }, { y: 0 }, { y: 29 }])
     expect(contentMouse({ ...press, ...position }, geometry)).toBeUndefined()
@@ -46,7 +46,7 @@ test("overlay pointer coordinates subtract both edges; margin presses cannot act
 
 test("outer frame clipping keeps an over-wide extension surface out of the right margin", () => {
   const component = { render: () => [`\x1b[48;2;32;32;32m${"x".repeat(100)}\x1b[49m`] }
-  const lines = marginView(component, {}, true).render(70, {
+  const lines = marginView(component, {}).render(70, {
     ...plain,
     color: true,
     rows: 30,
@@ -86,7 +86,7 @@ test("clicking a sticky band inside the margin reveals its real user message", (
   )
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: app overlay wheel hit-testing uses content coordinates, not its margin`, async () => {
     let state: UiState | undefined
     const app = await setup([], {

@@ -7,7 +7,7 @@ import { askUserTool } from "../../../extensions/builtin-tools/src/ask-user.ts"
 import { OwnedConversationManager } from "../../core/src/owned-conversations.ts"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const beforeFocus of [false, true]) {
     test(`${mode}: a real restricted descendant question is answered in its owned conversation, started before focus=${beforeFocus}`, async () => {
       const home = mkdtempSync(join(tmpdir(), "amira-native-descendant-"))

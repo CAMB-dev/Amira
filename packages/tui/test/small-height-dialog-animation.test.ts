@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test"
 import { Spinner } from "@amira/tui-kit"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: short dialogs keep essential rows while only visible working badges animate`, async () => {
     const app = await setup([], {
       cols: 50,

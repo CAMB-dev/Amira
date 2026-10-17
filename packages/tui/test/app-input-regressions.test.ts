@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { closeImageApp, inputImage, setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const [key, name] of [
     ["\x1b[27u", "Esc"],
     ["\x03", "Ctrl+C"],

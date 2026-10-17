@@ -4,7 +4,7 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 
 const F6 = "\x1b[17~"
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: main stays working and interrupt only stops the focused conversation`, async () => {
     const s = await focusFixture(mode, [
       { text: "Main keeps working", delayMs: 150 },

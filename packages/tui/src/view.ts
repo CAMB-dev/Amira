@@ -4,7 +4,9 @@ import type {
   CompactionInfo,
   Message,
   PrintOptions,
+  ToolApproval,
   ToolDetailLevel,
+  ToolRejection,
   ToolResult,
   TuiSettings,
   UserMessage,
@@ -25,7 +27,6 @@ import type { DisplayHistory } from "./display-history.ts"
 import type { SessionBoundary } from "./history.ts"
 import type { Keybindings } from "./keybindings.ts"
 import type { ReplyRenderers } from "./markdown-nodes.ts"
-import type { TrackedCall } from "./tool-calls.ts"
 import type { PresenterSource } from "./tool-view.ts"
 import type { NoticeLevel } from "./transcript.ts"
 
@@ -37,40 +38,21 @@ export class View implements Component {
   }
 }
 
-/** Batches inline commits into one frame, retaining semantic rows for renderer redraws. */
-export class PendingCommits {
-  private blocks: ({ lines: string[] } | { redraw: (width: number, ctx: RenderContext) => string[] })[] = []
-
-  constructor(private requestRender: () => void) {}
-
-  get length(): number {
-    return this.blocks.length
-  }
-
-  commit = (lines: string[]): void => {
-    if (lines.length) this.push({ lines })
-    this.requestRender()
-  }
-
-  push(block: { lines: string[] } | { redraw: (width: number, ctx: RenderContext) => string[] }): void {
-    this.blocks.push(block)
-  }
-
-  flush(width: number, ctx: RenderContext): void {
-    for (const block of this.blocks.splice(0)) {
-      if ("lines" in block) ctx.commit?.(block.lines)
-      else ctx.commit?.(block.redraw(width, ctx), block.redraw)
-    }
-  }
-}
-
 /** Focus labels are presentation chrome, never session identifiers. */
 export function activationBoundary(label: string, width: number, theme: Theme): string[] {
   return [theme.muted(truncateToWidth(label.replace(/\p{Cc}/gu, " "), Math.max(1, width), ""))]
 }
 
 /** How a tool call ended, as the controller hands it over. */
-export type CallEnd = NonNullable<TrackedCall["end"]>
+export interface CallEnd {
+  result: ToolResult
+  durationMs: number
+  rejected?: ToolRejection
+  /** The user had interrupted the turn when it ended. */
+  interrupted?: boolean
+  /** Who let it run, when it needed approval. */
+  approval?: ToolApproval
+}
 
 /** A tool call a reply asked for. */
 export interface CallRef {
@@ -90,8 +72,7 @@ export interface ViewHost {
   /** Links in replies are clickable (OSC 8). */
   hyperlinks: boolean
   /**
-   * Loads the images of replies where the terminal can draw them (D83): the inline view commits
-   * them to the scrollback, the full-screen view draws them in its transcript. Full-screen
+   * Loads the images of replies where the terminal can draw them in the transcript (D83). Full-screen
    * overlays (forms, the sub-agent viewer) show their alt text. Asked each time: undefined while
    * no image provider is installed (D88).
    */
@@ -107,18 +88,14 @@ export interface ViewHost {
   detail(): ToolDetailLevel
   /**
    * The area under the transcript: the activity line, pending messages, the input box (or the
-   * dialog in its place), the lists below it or the status bar, and the key hints. `top` goes
-   * first. A dialog gets what the rest leaves of `budget` rows.
+   * dialog in its place), the lists below it or the status bar, and the key hints.
+   * A dialog gets what the rest leaves of `budget` rows.
    */
-  bottom(width: number, ctx: RenderContext, budget: number, top?: Component): string[]
-  /** Mandatory bottom rows reserved before optional inline tools; unset means no reservation. */
-  essentialBottomRows?(): number
-  /** Fullscreen's fixed header; inline carries these facts in its bottom area. */
+  bottom(width: number, ctx: RenderContext, budget: number): string[]
+  /** The fixed header above the transcript. */
   header?(width: number, ctx: RenderContext): string[]
   /** The full-screen view open over the conversation: a form or the sub-agent viewer. */
   overlay: Component
-  /** Whether a dock is part of the live bottom area. */
-  dockOpen?(): boolean
   /** Whether the input box is empty. */
   editorEmpty(): boolean
   /** Shows a short note in place of the key hints for a few seconds. */
@@ -128,9 +105,8 @@ export interface ViewHost {
 }
 
 /**
- * Draws the conversation: inline (finished blocks go to the terminal's scrollback) or full
- * screen (the whole conversation is kept and redrawn). The controller turns bus events and
- * keys into these calls; everything else (the input, dialogs, the queue) it keeps itself.
+ * Draws the conversation full screen, keeping and redrawing its blocks. The controller turns
+ * bus events and keys into these calls; everything else (the input, dialogs, the queue) it keeps itself.
  */
 export interface TranscriptView {
   /** The names of the tool calls running now, in call order, for the activity line. */
@@ -155,8 +131,6 @@ export interface TranscriptView {
   /** Clears the screen and draws the overlay again (Ctrl+L over a form or a viewer). */
   redrawOverlay(): void
   renderOverlay(): void
-  /** Maps content-relative screen input to the bottom area's logical coordinates in inline mode. */
-  dockInput?(event: InputEvent): InputEvent
   /** Leaves the terminal with the conversation in its normal screen; the UI is quitting. */
   stop(): void
 
@@ -192,9 +166,9 @@ export interface TranscriptView {
   dialogEcho(draw: (width: number) => string[]): void
   /**
    * The UI follows a session from here: a boundary naming it, then its conversation so far.
-   * `switched` (a command switched sessions: /clear, /resume): full screen, the transcript
-   * starts afresh first (the banner stays), so finding, copying, selecting and the exit
-   * printout see this session only; inline, the boundary follows what was committed.
+   * `switched` (a command switched sessions: /clear, /resume): the transcript starts afresh
+   * first (the banner stays), so finding, copying, selecting and the exit printout see this
+   * session only.
    */
   openSession(
     boundary: SessionBoundary,

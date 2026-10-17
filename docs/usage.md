@@ -37,16 +37,17 @@ The default is off. Set `"fastMode": true` in [Settings](settings.md#fast-mode) 
 ## Terminal modes and the transcript
 
 ```sh
-amira --fullscreen
-amira --inline
+amira
 amira --cwd /path/to/project "Explain this repository"
 ```
 
-Full-screen mode is the default. Amira keeps the transcript on the alternate screen, scrolls and searches it itself, and prints the displayed session to the normal terminal on exit. Inline mode leaves completed messages and tool calls in the terminal's scrollback; use the terminal's scrolling, search and text selection. This is useful over SSH or in tmux. The flags override `tui.mode` in [Settings](settings.md).
+Amira always uses a full-screen interface. It keeps the transcript on the alternate screen, scrolls and searches it itself, and prints the displayed session to the normal terminal on exit. For plain output without the interface, use `amira -p "your prompt"`. `TERM=dumb` cannot run the interactive interface; use `-p` instead.
+
+The [setting](settings.md) `tui.mode` is deprecated and ignored. For one release, `tui.mode: "inline"` and `--inline` emit this notice and run fullscreen: `inline mode was removed; running fullscreen. Use -p for plain output.` The `--fullscreen` flag remains accepted as a no-op.
 
 The transcript contains your messages, streamed replies, thinking where the model supplies it, tool activity, questions and notices. In full-screen mode, PgUp/PgDn scroll; End returns to the newest output when the input is empty. Ctrl+F searches the transcript. Ctrl+Up selects a block; ↑/↓ move between blocks, Enter folds or unfolds, and `y` copies. Some terminals need the alternate bindings listed in [Keybindings](keybindings.md).
 
-Ctrl+O toggles summary and full tool output in either mode; from collapsed it returns to summary. `/verbose collapsed` selects collapsed, and `/verbose` without an argument still cycles all three levels. Alt+C copies the last reply as Markdown. In full-screen mode dragging selects and copies text; Shift+drag uses the terminal's own selection. Type `?` with an empty input to see the keys currently bound.
+Ctrl+O toggles summary and full tool output; from collapsed it returns to summary. `/verbose collapsed` selects collapsed, and `/verbose` without an argument still cycles all three levels. Alt+C copies the last reply as Markdown. In full-screen mode dragging selects and copies text; Shift+drag uses the terminal's own selection. Type `?` with an empty input to see the keys currently bound.
 
 ## Sending, steering and queueing
 
@@ -64,7 +65,7 @@ This limit applies only to the main agent; sub-agents do not inherit it. Removin
 
 ## Images
 
-Messages can carry PNG, JPEG, GIF and WebP images, in both terminal modes:
+Messages can carry PNG, JPEG, GIF and WebP images:
 
 - **Paste or drop paths.** A paste made only of paths to existing image files (absolute or relative to the working directory, quoted when they contain spaces, or with backslash-escaped spaces as macOS and Linux terminals write dropped paths, or `file://` URIs) attaches them. Anything else, such as prose or other files, is pasted as text, and so is an image that cannot be attached, with a notice saying why.
 - **Pick one in the `@` file list.** An image attaches; other files keep their `@path` reference.
@@ -161,7 +162,7 @@ A blocked legacy lease instead says an older Amira build appears to hold the ses
 
 Automatic compaction normally starts at 80% of the model's context window. It reduces older context while keeping recent conversation. Compatible providers can use native compaction; otherwise Amira writes a text summary. Instructions passed to `/compact` force a text summary. See [Providers](providers.md) and [Settings](settings.md) for the conditions and options. `/context` shows what occupies the context window.
 
-Press Esc twice in succession, or run `/rewind`, to open the rewind picker in either fullscreen or inline mode. Select a previous user message, then choose **Restore files too** or **Conversation only**. File restoration is selected by default when there are captured changes after that message; the picker previews how many files will be restored or removed and lists conflicts. That message and everything after it leave the active conversation, and the prompt returns to the editor for changes and resubmission. In the picker, F forks instead: a new session ends before the selected message on the current branch, so messages abandoned by earlier rewinds are not copied; the current one stays whole, and no files are restored. Only messages still present after compaction can be selected; a stored session is required. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
+Press Esc twice in succession, or run `/rewind`, to open the rewind picker. Select a previous user message, then choose **Restore files too** or **Conversation only**. File restoration is selected by default when there are captured changes after that message; the picker previews how many files will be restored or removed and lists conflicts. That message and everything after it leave the active conversation, and the prompt returns to the editor for changes and resubmission. In the picker, F forks instead: a new session ends before the selected message on the current branch, so messages abandoned by earlier rewinds are not copied; the current one stays whole, and no files are restored. Only messages still present after compaction can be selected; a stored session is required. A popup, text selection or dialog can consume Esc first, so follow the current hint line.
 
 `/rewind <n>` goes directly to before the n-th most recent user message and asks for confirmation showing that message, the number of messages it will cut, file restore/remove counts and conflicts. Like the picker's default, it restores captured files when there are any; a conflict refuses the whole rewind. In print mode, and when an RPC client cannot answer the confirmation, it refuses without changing the session; use `/rewind <n> --yes` only after checking the preview you intend to apply. `/rewind` without a number is available in the terminal UI because it needs the picker.
 

@@ -21,7 +21,7 @@ test("legacy overlays still receive three wheel arrows; declarative routing reta
   expect(overlayKeys({ ...wheel, action: "press" })).toEqual([])
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: SGR wheel scrolls the widget under the pointer, preserves focus, and restores mouse ownership`, async () => {
     let state!: UiState
     let api!: ExtensionAPI
@@ -100,8 +100,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       s.terminal.clearWrites()
       s.terminal.send("q")
       await waitFor(() => !s.screen.text.includes("Updated via requestRender"), "view closed")
-      if (mode === "inline") expect(s.terminal.output).toContain(modes.mouse.off)
-      else expect(s.terminal.output).not.toContain(modes.mouse.off)
+      expect(s.terminal.output).not.toContain(modes.mouse.off)
     } finally {
       s.terminal.send("\x1b[27u")
       s.terminal.send("\x03\x03")

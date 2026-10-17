@@ -232,7 +232,7 @@ test(
   }),
 )
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: the border never retains token speed; live rate and contextual keys remain reachable`, async () => {
     const s = await setup([{ text: "answer", delayMs: 60 }], { cols: 120, settings: { mode } })
     try {
@@ -258,7 +258,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
   })
 }
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: the running rule disappears at turn end and never enters scrollback`, async () => {
     const s = await setup(
       [{ text: "Finished part", toolCalls: [{ name: "slow", args: {} }] }, { text: "All done" }],

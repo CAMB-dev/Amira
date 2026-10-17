@@ -7,7 +7,7 @@ import { animationProbe, visibilityHarness } from "./animation-visibility-harnes
 beforeEach(() => void jest.useFakeTimers())
 afterEach(() => void jest.useRealTimers())
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: hidden transcript children have no intervals, wakes or redraw requests`, () => {
     const probe = animationProbe()
     const s = visibilityHarness(mode, {

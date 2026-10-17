@@ -56,7 +56,7 @@
 | `edit.redo` | `ctrl+shift+z` | 重做。没有 kitty keyboard protocol 的终端可能把它报告为 Ctrl+Z，需要另行绑定 |
 | `edit.external` | `ctrl+g` | 依次使用 `$VISUAL`、`$EDITOR`、Git 的 `core.editor` 指定的命令编辑消息（如 `code --wait`）；均未指定则 Windows 使用 Notepad，其他系统使用 vi。编辑器退出后，保存的文本回到输入框 |
 
-[扩展拥有的持久会话](extensions.md#扩展拥有的持久会话)在内联或全屏模式获得原生焦点时，F6（`view.focus`，或自定义绑定）返回主会话，不停止任何会话。已聚焦会话空闲且输入框为空时，Esc（`interrupt`）也返回；工作期间，Esc/Ctrl+C（`interrupt`/`cancel`）只停止此会话，不停止后台主会话。对话框、补全列表和历史搜索保留按键优先级。草稿、提示词历史、图片和粘贴内容按会话隔离；`@` 文件补全使用此会话的工作目录。斜杠命令和 skill 只显示提示，不执行：先返回主会话，再显式执行。
+[扩展拥有的持久会话](extensions.md#扩展拥有的持久会话)获得原生焦点时，F6（`view.focus`，或自定义绑定）返回主会话，不停止任何会话。已聚焦会话空闲且输入框为空时，Esc（`interrupt`）也返回；工作期间，Esc/Ctrl+C（`interrupt`/`cancel`）只停止此会话，不停止后台主会话。对话框、补全列表和历史搜索保留按键优先级。草稿、提示词历史、图片和粘贴内容按会话隔离；`@` 文件补全使用此会话的工作目录。斜杠命令和 skill 只显示提示，不执行：先返回主会话，再显式执行。
 
 ## 补全列表
 
@@ -121,7 +121,7 @@
 | `view.scroll-up` | `up` | 向上滚动视图文本一行 |
 | `view.scroll-down` | `down` | 向下滚动视图文本一行 |
 
-终端能传递 F6 时，F6（`view.focus`）在所有扩展视图与主输入框之间切换焦点，包括默认视图和内联模式中打开的全屏覆盖层。终端能传递 Ctrl+Tab 时，它也是此 action 的别名。Windows Terminal 可能截获 Ctrl+Tab，旧式终端可能将其报告为普通 Tab。F6 可避开这些 Ctrl+Tab 问题，但 VS Code 集成终端默认会截获 F6，因为 `terminal.integrated.commandsToSkipShell` 中包含 `workbench.action.focusNextPart`。可在 VS Code 设置的 `terminal.integrated.commandsToSkipShell` 中添加 `"-workbench.action.focusNextPart"`，或将 Amira 的 `view.focus` 重新绑定到终端能传递的按键。单独的 Shift+Tab 不能绑定到 `view.focus`；它保留用于权限模式切换和视图反向导航。默认视图仍可用 Tab，提示继续显示 `tab→input/view`，不显示 F6。声明 `ViewDefinition.needsTab: true` 的视图保留 Tab 和 Shift+Tab 用于组件或视图导航；默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。子 agent 查看器使用此选项，所以 Tab/Shift+Tab 仍切换子 agent。宿主焦点切换从不占用 Shift+Tab。
+终端能传递 F6 时，F6（`view.focus`）在所有扩展视图与主输入框之间切换焦点，包括默认视图。终端能传递 Ctrl+Tab 时，它也是此 action 的别名。Windows Terminal 可能截获 Ctrl+Tab，旧式终端可能将其报告为普通 Tab。F6 可避开这些 Ctrl+Tab 问题，但 VS Code 集成终端默认会截获 F6，因为 `terminal.integrated.commandsToSkipShell` 中包含 `workbench.action.focusNextPart`。可在 VS Code 设置的 `terminal.integrated.commandsToSkipShell` 中添加 `"-workbench.action.focusNextPart"`，或将 Amira 的 `view.focus` 重新绑定到终端能传递的按键。单独的 Shift+Tab 不能绑定到 `view.focus`；它保留用于权限模式切换和视图反向导航。默认视图仍可用 Tab，提示继续显示 `tab→input/view`，不显示 F6。声明 `ViewDefinition.needsTab: true` 的视图保留 Tab 和 Shift+Tab 用于组件或视图导航；默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。子 agent 查看器使用此选项，所以 Tab/Shift+Tab 仍切换子 agent。宿主焦点切换从不占用 Shift+Tab。
 
 视图获得焦点时，`/` 聚焦主输入框并输入 `/`，开始输入命令；`i` 只聚焦主输入框，不输入 `i`。视图处理的可打印快捷键（如 `m`、`p`、`s`）保持原样；其他未处理的可打印键会聚焦主输入框并输入该字符。已激活的视图内文本框和输入提示仍接收输入，包括 `/` 和 `i`。历史搜索期间，Esc 先取消搜索并恢复草稿；主输入框为空时，再按 Esc 将焦点返回视图或有可选择内容的停靠视图。不在搜索中时，空输入框中的 Esc 立即返回焦点；有文本时，Esc 保持原有行为，焦点切换不会截获它。视图中的 Esc 仍返回或关闭。点击主输入框会聚焦它。扩展视图旁获得焦点的输入框边框使用强调色角色，未获得焦点时使用弱化的边框；声明式视图中的选中行在视图非活动时变暗。
 
@@ -131,7 +131,7 @@
 
 ## 对话记录（全屏模式）
 
-全屏模式由 Amira 保存和滚动对话记录，下面的按键先于输入框处理。Home、End 和普通字符只在输入为空时操作对话记录，否则交给输入框。鼠标滚轮每格滚动三行，拖动选择文本；点击没有其他操作，键盘仍用于输入。选中对话块使用 `select.start`。inline 模式由终端保存滚动历史，首次按查找、翻页或选择按键时会提示这些操作仅用于全屏模式，请使用终端自己的滚动和查找。
+全屏模式由 Amira 保存和滚动对话记录，下面的按键先于输入框处理。Home、End 和普通字符只在输入为空时操作对话记录，否则交给输入框。鼠标滚轮每格滚动三行，拖动选择文本；点击没有其他操作，键盘仍用于输入。选中对话块使用 `select.start`。
 
 默认跟随最新输出。向上滚动后，新增内容不会改变当前位置，提示行显示下面还有多少行，如 `↓ 124 rows below`；新增内容后显示 `↓ new output · 124 rows below`。滚到底部或按 End 会恢复跟随。
 
@@ -162,7 +162,7 @@
 | `select.back` | `left` | 从代码块返回整条回复 |
 | `select.exit` | `escape` | 退出选择；代码块中先返回整条回复 |
 
-Ctrl+O（`tool-output`）在摘要 ↔ 完整之间切换；折叠级别会返回摘要。`/verbose collapsed` 仍可选择折叠，不带参数的 `/verbose` 仍按摘要 → 完整 → 折叠循环。完整级别也显示思考文本：两种模式中正在进行的思考，以及全屏模式保留的思考。行内模式已写入滚动缓冲区的思考无法再展开。思考提示仅在下一次按键可以显示文本时出现，并使用当前绑定的按键。手动折叠或展开过的块保留自己的显示级别。
+Ctrl+O（`tool-output`）在摘要 ↔ 完整之间切换；折叠级别会返回摘要。`/verbose collapsed` 仍可选择折叠，不带参数的 `/verbose` 仍按摘要 → 完整 → 折叠循环。完整级别也显示思考文本：正在进行的思考和保留的思考。思考提示仅在下一次按键可以显示文本时出现，并使用当前绑定的按键。手动折叠或展开过的块保留自己的显示级别。
 
 ## 文本选择与复制
 
@@ -176,7 +176,7 @@ Ctrl+O（`tool-output`）在摘要 ↔ 完整之间切换；折叠级别会返�
 | --- | --- | --- |
 | `text.clear` | `escape` | 清除文本选区。除正在回答对话框外，Esc 优先清除选区，再处理关闭列表、查找、历史搜索或中断等操作 |
 
-复制快捷键使用 OSC 52，Windows Terminal、VS Code、iTerm2、kitty、WezTerm 等支持；tmux 需要 `set-clipboard on`。Amira 无法确认剪贴板是否实际收到了内容。全屏模式开启鼠标报告；要使用终端自己的文本选择，在 Windows Terminal、Windows/Linux 的 VS Code、xterm 中按住 Shift 拖动。macOS 的 VS Code 使用 Option，或设置 `terminal.integrated.macOptionClickForcesSelection`。鼠标粘贴也可能被报告给 Amira：Windows Terminal 中可按住 Shift 右键，Linux 终端可用 Shift+鼠标中键，也可按 Ctrl+V。inline 模式直接使用终端的选择和粘贴。
+复制快捷键使用 OSC 52，Windows Terminal、VS Code、iTerm2、kitty、WezTerm 等支持；tmux 需要 `set-clipboard on`。Amira 无法确认剪贴板是否实际收到了内容。全屏模式开启鼠标报告；要使用终端自己的文本选择，在 Windows Terminal、Windows/Linux 的 VS Code、xterm 中按住 Shift 拖动。macOS 的 VS Code 使用 Option，或设置 `terminal.integrated.macOptionClickForcesSelection`。鼠标粘贴也可能被报告给 Amira：Windows Terminal 中可按住 Shift 右键，Linux 终端可用 Shift+鼠标中键，也可按 Ctrl+V。
 
 VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 VS Code 的 `terminal.integrated.commandsToSkipShell` 中），不会传给终端程序，所以 Amira 在该环境优先显示 Alt+F、Alt+Home、Alt+End、Alt+↑。输入框的方向键、Home/End、Ctrl+A/Ctrl+E、单词移动和删除，以及 `/agents` 的 `p` 和查看器快捷键目前不能配置：←/→、Tab 切换，`x` 停止，`p` 关闭查看器并打印当前快照，`q` 或 Esc 关闭。
 
@@ -196,16 +196,16 @@ VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 V
 
 | 设置 | 默认值 | 行为 |
 | --- | --- | --- |
-| `tui.mode` | `"fullscreen"` | `"fullscreen"` 使用 alternate screen，由 Amira 滚动、查找、折叠和复制，窗口改变时重绘，退出或崩溃时打印到普通屏幕；`"inline"` 将完成的输出留在终端滚动历史中。`--inline` 和 `--fullscreen` 优先 |
-| `tui.margin` | `3` | 两种模式的左右留白宽度，单位为字符格（整数 0–12）；窄终端会自动缩小，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边输出 |
-| `tui.marginRows` | `1` | 全屏模式标题栏上方和按键提示行下方的空行数（整数 0–2）；终端不足 24 行时取消。行内模式没有上下留白 |
+| `tui.mode` | `"fullscreen"` | 已弃用并被忽略；UI 始终在备用屏幕上全屏运行。在一个发布版本内，`"inline"` 和 `--inline` 会提示 `inline mode was removed; running fullscreen. Use -p for plain output.`。`--fullscreen` 仍被接受，但不执行任何操作。本次提示滚出视口后固定在标题栏下方；恢复的历史记录不显示固定提示。 |
+| `tui.margin` | `3` | 左右留白宽度，单位为字符格（整数 0–12）；窄终端会自动缩小，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边输出 |
+| `tui.marginRows` | `1` | 全屏模式标题栏上方和按键提示行下方的空行数（整数 0–2）；终端不足 24 行时取消 |
 | `tui.theme` | `"auto"` | [主题名称](themes.md)，或 `"auto"` 根据终端背景选择（无法判断时使用深色）；`"dark"` 和 `"light"` 显式指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色 |
 | `tui.themeVariant` | `"auto"` | 命名主题的深浅：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定。缺少变体时使用所选外观的默认 Amira 配色 |
 | `tui.colorDepth` | `"auto"` | 颜色深度：`"auto"` 检测终端支持情况；`"truecolor"`、`"256"` 和 `"16"` 手动指定。`"256"` 和 `"16"` 必须写成字符串，而不是数字 |
 | `tui.title` | `true` | 设置终端标题；会话有标题时为 `Amira · <folder> · <session title> ⎇ <branch>`，运行期间显示 `●`，退出时恢复旧标题。标题栏使用系统字体，输入框状态不使用部分终端字体缺少的 `⎇` |
 | `tui.progress` | `true` | 运行时显示终端标签或任务栏进度，对话框等待时显示暂停状态；使用 OSC 9;4，支持终端包括 Windows Terminal、ConEmu、VS Code、Ghostty |
 | `tui.bell` | `true` | 终端在后台时，轮次结束或对话框打开会响铃；无法报告焦点的终端中，只在持续至少 15 秒的轮次之后响铃 |
-| `tui.reflow` | `"auto"` | inline 模式中，`"off"` 用于缩窄时不会重新折行的终端，以避免擦除输入框上方的记录；`"auto"` 和 `"on"` 假定终端会重新折行 |
+| `tui.reflow` | `"auto"` | 已弃用并忽略；全屏模式会按当前终端宽度重新绘制对话 |
 | `tui.submitWhileWorking` | `"steer"` | `"steer"` 让 Enter 引导当前轮次，`"queue"` 让 Enter 排队；排队键始终执行另一种行为。提示行同步更新，slash 命令始终立即执行 |
 | `tui.images` | `"auto"` | 安装可选的 [`images`](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/images/README.md) 扩展后（`amira ext install images`；它读取本地文件，也能下载 http(s) 图片，沿用 web_fetch 的内网访问防护，单张最大 10 MB），在终端中绘制回复里独占一行的图片：`"auto"` 在终端声明支持时绘制，例如 Windows Terminal 1.22+（Sixel）、开启 `terminal.integrated.enableImages` 的 VS Code、iTerm2、WezTerm、kitty、Ghostty；`"on"` 始终绘制；`"off"` 从不绘制。其他情况下，以及图片加载失败或超过 3 秒时，显示为 `🖼` 加替代文本，并链接到图片 |
 | `tui.shellOutputLines` | `3` | 成功的 shell 命令显示末尾若干行，运行时同样显示这些行；`0` 不显示。失败时显示首尾输出，Ctrl+O 切到 `full` 会显示全部 |

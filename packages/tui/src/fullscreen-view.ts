@@ -51,17 +51,17 @@ const MIN_TRANSCRIPT_ROWS = 3
 
 /**
  * The full-screen view (D84): the conversation is kept as blocks on the alternate screen and
- * drawn into a scrollable viewport above the same bottom area the inline view has. Blocks
+ * drawn into a scrollable viewport above the input and status area. Blocks
  * change in place (a call finishing, its sub-agents moving on, also in the background after
  * the turn), fold and unfold, and are drawn again at any width. The wheel, PgUp/PgDn and
  * Home/End scroll; Ctrl+F finds; Ctrl+↑ selects blocks to fold or copy (OSC 52); dragging the
  * mouse selects text (D86), copied when it is released. On exit the whole conversation is
- * printed to the normal screen, as the inline view would have left it.
+ * printed to the normal screen.
  */
 export function createFullscreenView(host: ViewHost): TranscriptView {
   const { terminal, keys } = host
   let theme = host.theme
-  const geometry = () => contentGeometry(terminal.columns, terminal.rows, host.settings, true)
+  const geometry = () => contentGeometry(terminal.columns, terminal.rows, host.settings)
   const pane = new TranscriptPane()
   const boundary = runningBoundary(pane)
   /** Tool calls by id, for their sub-agents; kept after their turn. */
@@ -216,7 +216,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         )
     return [...header, ...rows, below, ...bar, ...bottom]
   })
-  const renderer = new FullScreenRenderer(terminal, marginView(root, host.settings, true), {
+  const renderer = new FullScreenRenderer(terminal, marginView(root, host.settings), {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     theme,
     glyphs: host.glyphs,

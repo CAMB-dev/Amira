@@ -88,7 +88,7 @@ const webhookForm = (calls: string[]): FormSpec => ({
   ],
 })
 
-test("a form opens full screen, queues a dialog behind it, and gives the inline UI back as it was", async () => {
+test("a form opens full screen, queues a dialog behind it, and restores the fullscreen conversation", async () => {
   const { host, terminal, screen, live, all, events, bus, agent, exited } = await setup([
     { toolCalls: [{ name: "hook", args: {} }] },
     { text: "saved" },
@@ -126,7 +126,7 @@ test("a form opens full screen, queues a dialog behind it, and gives the inline 
   expect(calls).toEqual(["ping https://ci.example/hook"])
   terminal.send("\x13")
   // Back on the main screen: the transcript is intact and the queued dialog shows inline.
-  await waitFor(() => !screen.inAltScreen && live().includes("Deploy too? (other)"), "inline dialog")
+  await waitFor(() => live().includes("Deploy too? (other)"), "queued dialog")
   expect(all()).toContain("› set it up")
   terminal.send("\x1b[B\r")
   expect(await later).toBe(true)
@@ -142,9 +142,9 @@ test("a form opens full screen, queues a dialog behind it, and gives the inline 
 })
 
 test("Esc on a changed form asks first; the form closes when its request is resolved elsewhere", async () => {
-  const { host, terminal, screen, live, exited } = await setup([])
+  const { host, terminal, live, exited } = await setup([])
   const first = host.ui.api("x").form(webhookForm([]))
-  await waitFor(() => screen.inAltScreen, "form")
+  await waitFor(() => live().includes("Webhook"), "form")
   terminal.send("h")
   terminal.send("\x1b[27u")
   await waitFor(() => live().includes("Discard your changes?"), "confirm")
@@ -152,13 +152,13 @@ test("Esc on a changed form asks first; the form closes when its request is reso
   terminal.send("\x1b[27u")
   terminal.send("y")
   expect(await first).toBeUndefined()
-  await waitFor(() => !screen.inAltScreen, "closed")
+  await waitFor(() => live().includes("│ › Message Amira"), "closed")
 
   const second = host.ui.api("x").form(webhookForm([]))
-  await waitFor(() => screen.inAltScreen, "second form")
+  await waitFor(() => live().includes("Webhook"), "second form")
   host.ui.cancelAll("x")
   expect(await second).toBeUndefined()
-  await waitFor(() => !screen.inAltScreen, "closed by cancel")
+  await waitFor(() => live().includes("│ › Message Amira"), "closed by cancel")
   terminal.send("\x03")
   await exited
 })

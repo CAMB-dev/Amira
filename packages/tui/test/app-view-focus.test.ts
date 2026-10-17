@@ -20,7 +20,7 @@ test("composer focus uses accent beside a view, muted when inactive, and restore
   expect(box.render(60, ctx)[0]).toBe(defaultTheme.borderFocused(edge))
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const declarative of [false, true]) {
     test(`${mode}: ${declarative ? "widget" : "line"} view and composer focus round-trip`, async () => {
       let focused = true

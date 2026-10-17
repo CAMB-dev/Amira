@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { CommandContext, Extension, UiControl, ViewDefinition } from "@amira/api"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const placement of ["dock", "fullscreen"] as const) {
     test(`${mode}: reload closes the ${placement} before unregistering and mounts a fresh instance`, async () => {
       const calls: string[] = []

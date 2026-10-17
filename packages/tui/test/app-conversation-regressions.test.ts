@@ -4,7 +4,7 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 
 const F6 = "\x1b[17~"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: dropped main steering restores only into the main draft`, async () => {
     const s = await focusFixture(mode)
     try {

@@ -5,7 +5,7 @@ import { ScrollView } from "../src/components/scroll-view.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
 import { key } from "../src/keys.ts"
 import { LiveRenderer } from "../src/renderer.ts"
-import { discardLive, pauseFullScreen } from "../src/renderer-controls.ts"
+import { pauseFullScreen } from "../src/renderer-controls.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { plain } from "./context.ts"
 import { VirtualScreen } from "./screen.ts"
@@ -241,27 +241,6 @@ test("stop resumes a suspended renderer, so held lines are not lost", () => {
   inline.commit(["held"])
   inline.stop({ clear: true })
   expect(screen.mainText).toBe("held")
-})
-
-test("discarding a suspended live renderer stops it without printing held output", async () => {
-  const { term } = setup()
-  const inline = new LiveRenderer(term, new Lines(["live"]))
-  inline.start()
-  inline.suspend()
-  inline.commit(["held"])
-  term.clearWrites()
-  discardLive(inline)
-  term.setSize(24, 8)
-  inline.requestRender()
-  inline.render()
-  inline.commit(["too late"])
-  await Bun.sleep(25)
-  expect(term.output).toBe("")
-  inline.start()
-  expect(term.output).toContain("live")
-  expect(term.output).not.toContain("held")
-  expect(term.output).not.toContain("too late")
-  inline.stop({ clear: true })
 })
 
 function scrollView(n: number, height: number) {

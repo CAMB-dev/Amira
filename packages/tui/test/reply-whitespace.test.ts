@@ -5,11 +5,10 @@ import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { localClock } from "../src/format.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
 
-function setup(mode: "inline" | "fullscreen") {
+function setup(_mode: "fullscreen") {
   const terminal = new FakeTerminal(80, 30)
   const screen = new VirtualScreen(80, 30)
   const write = terminal.write.bind(terminal)
@@ -17,7 +16,7 @@ function setup(mode: "inline" | "fullscreen") {
     write(data)
     screen.write(data)
   }
-  const view = (mode === "inline" ? createInlineView : createFullscreenView)({
+  const view = createFullscreenView({
     terminal,
     theme: plain.theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -41,7 +40,7 @@ function setup(mode: "inline" | "fullscreen") {
 const at = new Date(2026, 9, 10, 20, 9, 58).getTime()
 const fence = "```ts\n    const answer = 42\n    ```"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: leading whitespace preserves indented fence rendering across source chunking`, () => {
     const clock = spyOn(Date, "now").mockReturnValue(at)
     const render = (chunks: string[]) => {

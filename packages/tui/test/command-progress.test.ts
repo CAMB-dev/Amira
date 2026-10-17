@@ -35,7 +35,6 @@ async function setup(admin: ExtensionAdmin, extra: Partial<SessionControl> = {})
   const runner = createCommandRunner({
     commands,
     keys: new Keybindings(defaultKeys({ vscode: false })),
-    mode: "fullscreen",
     reaches: () => true,
     commandEcho: () => {},
     commandOutput: () => {},

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { visibleWidth } from "@amira/tui-kit"
 import { closeImageApp, setup, testCommands, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const [cols, rows] of [
     [7, 30],
     [8, 30],

@@ -138,7 +138,7 @@ export class MarkdownRendererRegistry {
     return this.#imageAlternatives.has(result)
   }
 
-  /** How long the inline transcript waits for the node's async result: the longest its renderers ask. */
+  /** How long print mode waits for the node's async result: the longest its renderers ask. */
   waitMs(node: MarkdownNode): number {
     const asked = this.#matching(node).map((e) => {
       const ms = e.def.waitMs

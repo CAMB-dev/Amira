@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { type RenderContext, stripAnsi, visibleWidth } from "@amira/tui-kit"
+import { stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { Dialog } from "../src/dialog.ts"
 import { contentGeometry, insetLines, marginView } from "../src/margins.ts"
@@ -8,19 +8,13 @@ import { marginFrame, zeroMargins } from "./margins-fixture.ts"
 
 for (const columns of [100, 70]) {
   test(`default geometry at ${columns}x30 reserves three cells and one fullscreen row per edge`, () => {
-    expect(contentGeometry(columns, 30, {}, true)).toEqual({
+    expect(contentGeometry(columns, 30, {})).toEqual({
       left: 3,
       width: columns - 6,
       rows: 1,
       height: 28,
     })
-    expect(contentGeometry(columns, 30, {}, false)).toEqual({
-      left: 3,
-      width: columns - 6,
-      rows: 0,
-      height: 30,
-    })
-    expect(contentGeometry(columns, 30, zeroMargins, true)).toEqual({
+    expect(contentGeometry(columns, 30, zeroMargins)).toEqual({
       left: 0,
       width: columns,
       rows: 0,
@@ -28,8 +22,8 @@ for (const columns of [100, 70]) {
     })
   })
 
-  for (const fullscreen of [true, false]) {
-    test(`${fullscreen ? "fullscreen" : "inline"} real ${columns}x30 live and committed frames stay inside the margin`, () => {
+  for (const fullscreen of [true]) {
+    test(`fullscreen real ${columns}x30 live and committed frames stay inside the margin`, () => {
       const frame = marginFrame(fullscreen, columns, 30, {})
       for (const state of [frame.live, frame.committed]) {
         for (const row of [...state.scrollback, ...state.grid]) {
@@ -91,9 +85,9 @@ test("narrow margins shrink just enough to preserve sixty content columns", () =
     [65, 2, 61],
     [66, 3, 60],
   ]) {
-    expect(contentGeometry(columns!, 30, {}, true)).toMatchObject({ left, width })
+    expect(contentGeometry(columns!, 30, {})).toMatchObject({ left, width })
   }
-  expect(contentGeometry(70, 30, { margin: 12, marginRows: 2 }, true)).toEqual({
+  expect(contentGeometry(70, 30, { margin: 12, marginRows: 2 })).toEqual({
     left: 5,
     width: 60,
     rows: 2,
@@ -101,11 +95,11 @@ test("narrow margins shrink just enough to preserve sixty content columns", () =
   })
 })
 
-for (const fullscreen of [true, false]) {
-  test(`${fullscreen ? "fullscreen" : "inline"} real narrow and short frames keep input and committed text within content bounds`, () => {
+for (const fullscreen of [true]) {
+  test(`fullscreen real narrow and short frames keep input and committed text within content bounds`, () => {
     for (const columns of [40, 50, 62, 64]) {
       for (const rows of [12, 23]) {
-        const geometry = contentGeometry(columns, rows, {}, fullscreen)
+        const geometry = contentGeometry(columns, rows, {})
         const frame = marginFrame(fullscreen, columns, rows, {})
         expect(frame.live.grid.join("\n")).toContain("Check the changes")
         for (const state of [frame.live, frame.committed]) {
@@ -119,18 +113,16 @@ for (const fullscreen of [true, false]) {
   })
 }
 
-test("narrow terminals keep at least one content cell; short fullscreen and inline have no row margins", () => {
+test("narrow terminals keep at least one content cell; short fullscreen has no row margins", () => {
   for (const columns of [1, 2, 5, 10, 20, 40, 50, 64]) {
     for (const rows of [1, 5, 12, 23]) {
-      for (const fullscreen of [true, false]) {
-        const geometry = contentGeometry(columns, rows, {}, fullscreen)
-        expect(geometry.left).toBeGreaterThanOrEqual(0)
-        expect(geometry.left).toBeLessThanOrEqual(3)
-        expect(geometry.width).toBeGreaterThanOrEqual(1)
-        expect(geometry.width + geometry.left * 2).toBe(columns)
-        expect(geometry.rows).toBe(0)
-        expect(geometry.height).toBe(rows)
-      }
+      const geometry = contentGeometry(columns, rows, {})
+      expect(geometry.left).toBeGreaterThanOrEqual(0)
+      expect(geometry.left).toBeLessThanOrEqual(3)
+      expect(geometry.width).toBeGreaterThanOrEqual(1)
+      expect(geometry.width + geometry.left * 2).toBe(columns)
+      expect(geometry.rows).toBe(0)
+      expect(geometry.height).toBe(rows)
     }
   }
 })
@@ -140,11 +132,11 @@ test("insetting preserves ANSI byte-for-byte and zero margins preserve both comp
   expect(insetLines(lines, 3)).toEqual([`   ${lines[0]}`, "", "   code"])
   expect(insetLines(lines, 0)).toEqual(lines)
   const component = { render: () => lines }
-  expect(marginView(component, zeroMargins, true).render(70, { ...plain, rows: 30 })).toEqual(lines)
+  expect(marginView(component, zeroMargins).render(70, { ...plain, rows: 30 })).toEqual(lines)
 })
 
-for (const fullscreen of [true, false]) {
-  test(`${fullscreen ? "fullscreen" : "inline"} real dialog overlay uses the reduced viewport`, () => {
+for (const fullscreen of [true]) {
+  test(`fullscreen real dialog overlay uses the reduced viewport`, () => {
     const dialog = new Dialog(
       { kind: "select", requestId: "margin-dialog", title: "Choose model", options: ["mock/m1", "mock/m2"] },
       () => {},
@@ -216,30 +208,9 @@ test("a margin-wrapped component gets reduced columns and row context, not merel
       return ["x".repeat(width)]
     },
   }
-  const lines = marginView(component, {}, true).render(70, { ...plain, rows: 30 })
+  const lines = marginView(component, {}).render(70, { ...plain, rows: 30 })
   expect(calls).toEqual([{ width: 64, rows: 28 }])
   expect(lines[0]).toBe("")
   expect(lines[1]).toBe(`   ${"x".repeat(64)}`)
   expect(lines.at(-1)).toBe("")
 })
-
-for (const columns of [60, 80]) {
-  test(`queued semantic commits retain dynamic margins after starting at ${columns} columns`, () => {
-    let redraw: Parameters<NonNullable<RenderContext["commit"]>>[1]
-    const component = {
-      render(width: number, ctx: RenderContext) {
-        const draw = (width: number) => [`semantic head at ${width} columns`]
-        ctx.commit?.(draw(width), draw)
-        return []
-      },
-    }
-    marginView(component, { margin: 3 }, false).render(columns, {
-      ...plain,
-      commit: (_lines, draw) => {
-        redraw = draw
-      },
-    })
-    expect(redraw?.(80, plain)).toEqual(["   semantic head at 74 columns"])
-    expect(redraw?.(60, plain)).toEqual(["semantic head at 60 columns"])
-  })
-}

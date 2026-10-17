@@ -37,11 +37,6 @@ export interface SubagentNode extends SubagentLine {
     durationMs: number
     tokens: number
   }
-  /**
-   * Its call was committed while it ran (inline): it returned at once (the sub-agent runs in
-   * the background and a notice reports it) or it was cut short (its end line is committed alone).
-   */
-  detached?: "background" | "interrupted"
 }
 
 /** The node a subagent.start event describes, not placed anywhere yet. */
@@ -136,21 +131,6 @@ export function childrenOf(
 /** A sub-agent and the ones under it, depth first, each after its parent. */
 export function subtree(nodes: Map<string, SubagentNode>, n: SubagentNode): SubagentNode[] {
   return [n, ...childrenOf(nodes, n.id).flatMap((c) => subtree(nodes, c))]
-}
-
-/** The call of `session` a sub-agent hangs under: its top ancestor's, when that is known. */
-export function rootCall(
-  nodes: Map<string, SubagentNode>,
-  session: string,
-  n: SubagentNode,
-): string | undefined {
-  let top = n
-  while (top.parent !== session) {
-    const up = nodes.get(top.parent)
-    if (!up) return undefined
-    top = up
-  }
-  return top.toolCallId
 }
 
 /** A sub-agent's rows: live ones while it runs, its end line once it ended. */
@@ -269,7 +249,7 @@ function trackGroupNode(groups: SpawnGroups, node: SubagentNode): void {
   let member = state.members.get(node.id)
   if (!member) {
     // Capture ancestor membership while the parent is present, so nested groups still count
-    // against their ancestors after inline prunes the parent row.
+    // against their ancestors even if a parent row is no longer present.
     member = { groups: new Set(state.members.get(node.parent)?.groups) }
     if (node.groupId !== undefined) member.groups.add(node.groupId)
     state.members.set(node.id, member)

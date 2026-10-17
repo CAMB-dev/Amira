@@ -6,7 +6,7 @@ import { list, positiveInteger, request, type StartOptions, start } from "./sess
 const usage = `Usage: bun scripts/ui-walk/walk.ts <command>
   start <name> [--cols 100 --rows 32] [--theme name] [--scenario file]
                [--extension local-dir ...] [--idle-timeout ms]
-               [-- --fullscreen|--inline ...amira args]
+               [-- ...amira args]
   --extension loads trusted local test code only, copied into the temporary home.
   keys <name> <keys...>         enter esc ctrl+o alt+v up tab text:/model paste:...
   resize <name> <cols> <rows>
@@ -19,7 +19,7 @@ const usage = `Usage: bun scripts/ui-walk/walk.ts <command>
 
 function amiraArgs(args: string[]): string[] {
   // Keep cwd, providers, extensions, package loading and resume under harness control.
-  const boolean = new Set(["--fullscreen", "--inline", "--no-builtins"])
+  const boolean = new Set(["--fullscreen", "--no-builtins"])
   const valued = new Set(["--thinking", "--permission-mode", "--disable-tools", "--shell"])
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!

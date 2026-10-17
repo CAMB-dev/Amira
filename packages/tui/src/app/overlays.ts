@@ -41,7 +41,6 @@ export interface OverlayManagerDeps {
   images?: () => ImageStore | undefined
   previewTheme?: ExtensionSettingsViewOptions["previewTheme"]
   toolDetail?: () => ToolDetailLevel
-  mode: "inline" | "fullscreen"
   env: Record<string, string | undefined>
   reaches: (spec: KeySpec) => boolean
   view: () => TranscriptView
@@ -57,8 +56,6 @@ export interface OverlayManagerDeps {
   searchHint: (theme: Theme, width: number) => string | undefined
   inputFocused: (focused: boolean) => void
   renderInput: (width: number, ctx: RenderContext, budget: number) => string[]
-  /** Inline mode enables pointer reports only while a dock or fullscreen view uses them. */
-  dockChanged?: (open: boolean) => void
   commandActivity?: () => Pick<CommandRunner, "animationActive" | "tickAnimation">
 }
 
@@ -66,10 +63,7 @@ export interface OverlayManagerDeps {
 export class OverlayManager {
   /** Open extension dialogs; the first one has the keyboard. */
   readonly dialogs: Dialog[] = []
-  /**
-   * An extension's full-screen view, open over the conversation. Inline,
-   * the UI is suspended meanwhile: what the main session commits is held and printed when it closes.
-   */
+  /** An extension's full-screen view, open over the conversation. */
   private viewer: ExtensionViewer | KeyReference | undefined
   dock: DockedView | undefined
   private inputTop = 0
@@ -207,7 +201,6 @@ export class OverlayManager {
         })
         if (previous) this.disposeViewer(previous.viewer)
         if (this.dock?.viewer === next) next.mount()
-        if (this.dock?.viewer === next) this.deps.dockChanged?.(true)
       }
       this.syncAnimation()
       this.deps.view().requestRender()
@@ -373,7 +366,6 @@ export class OverlayManager {
     if (!this.hasFullscreen) this.deps.inputFocused(true)
     this.syncAnimation()
     this.disposeViewer(previous.viewer)
-    this.deps.dockChanged?.(false)
     this.deps.view().requestRender()
   }
 
@@ -410,9 +402,8 @@ export class OverlayManager {
   /** Opens the key reference over the conversation (the help key); a form keeps the screen. */
   openKeyReference() {
     if (this.form) return
-    const { keys, mode, reaches } = this.deps
+    const { keys, reaches } = this.deps
     const next = new KeyReference(keys, {
-      fullscreen: mode === "fullscreen",
       onClose: () => this.viewer === next && this.closeView(),
       usable: (action, s) => action !== "newline" || reaches(s),
     })
@@ -442,7 +433,6 @@ export class OverlayManager {
     this.deps.inputFocused(!this.dock?.viewer.focused)
     this.syncAnimation()
     this.deps.view().closeOverlay()
-    if (this.dock) this.deps.dockChanged?.(true)
     if (previous instanceof ExtensionViewer) this.disposeViewer(previous)
     this.openNextForm()
     this.waitingChanged("visibility")
@@ -491,7 +481,6 @@ export class OverlayManager {
     if (this.form !== form) return
     this.form = undefined
     this.deps.view().closeOverlay()
-    if (this.dock) this.deps.dockChanged?.(true)
     this.openNextForm()
     this.waitingChanged("resolved")
   }

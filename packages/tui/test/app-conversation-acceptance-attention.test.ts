@@ -5,7 +5,7 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 
 const F6 = "\x1b[17~"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const mainWorking of [false, true]) {
     for (const key of ["\x1b", "\x03"]) {
       test(`${mode}: owned approval cancellation targets owned only, main working=${mainWorking}, key=${JSON.stringify(key)}`, async () => {

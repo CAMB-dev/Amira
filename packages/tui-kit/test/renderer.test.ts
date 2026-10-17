@@ -3,7 +3,6 @@ import { cursor, syncOutput } from "../src/ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "../src/component.ts"
 import { Text } from "../src/components/text.ts"
 import { LiveRenderer } from "../src/renderer.ts"
-import { prependLiveBoundary } from "../src/renderer-controls.ts"
 import { bold, defaultTheme, red } from "../src/style.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { truncateToWidth } from "../src/width.ts"
@@ -416,42 +415,6 @@ test("redraw does nothing while suspended, and resuming does not clear the scree
   r.resume()
   expect(writes.join("")).not.toContain(cursor.to(0))
   expect(screen.lines.slice(0, 2)).toEqual(["one", "live"])
-})
-
-test("internal destination chrome precedes held commits and commits from the resumed root", () => {
-  const term = new FakeTerminal(40, 10)
-  let pending: string[] = []
-  const renderer = new LiveRenderer(term, {
-    render(_width, ctx) {
-      if (pending.length) ctx.commit?.(pending.splice(0))
-      return ["live"]
-    },
-  })
-  try {
-    renderer.start()
-    renderer.commit(["previous history"])
-    renderer.suspend()
-    renderer.commit(["held background"])
-    pending = ["root queued"]
-    term.clearWrites()
-    prependLiveBoundary(renderer, ["— main —"])
-    expect(term.output).toBe("")
-    renderer.resume()
-    const output = term.output
-    expect(output.indexOf("— main —")).toBeGreaterThanOrEqual(0)
-    expect(output.indexOf("held background")).toBeGreaterThan(output.indexOf("— main —"))
-    expect(output.indexOf("root queued")).toBeGreaterThan(output.indexOf("held background"))
-    expect(output).not.toContain("previous history")
-    term.clearWrites()
-    renderer.suspend()
-    term.clearWrites()
-    renderer.resume()
-    expect(term.output).not.toContain("held background")
-    expect(term.output).not.toContain("root queued")
-    expect(term.output).not.toContain("— main —")
-  } finally {
-    renderer.stop({ clear: true })
-  }
 })
 
 test("history keeps at most historyLines lines, dropping the oldest blocks", () => {

@@ -49,7 +49,7 @@ async function close(s: Fixture) {
   await closeImageApp(s)
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: owned undo snapshots cannot enter main and owned drafts remain scoped`, async () => {
     const s = await focusFixture(mode)
     try {

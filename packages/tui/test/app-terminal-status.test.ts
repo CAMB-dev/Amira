@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: real focus reports govern completion titles and alerts`, async () => {
     const s = await setup(
       ["unknown", "focused", "returned", "background"].map((text) => ({ text, delayMs: 50 })),

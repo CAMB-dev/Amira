@@ -340,13 +340,52 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   expect(await exited).toBe(0)
   expect(screen.inAltScreen).toBe(false)
   expect(terminal.output).toContain("\x1b[?1006l\x1b[?1000l")
-  // The normal screen holds the conversation as the inline UI would have left it, no input box,
+  // The normal screen holds the conversation without an input box,
   // a blank line before it (under the command that started Amira) and after it (above the prompt).
   expect(withoutClocks(screen.mainText)).toBe(`\n${conversation}`)
   expect(screen.lines[screen.y]).toBe("")
   expect(screen.lines[screen.y - 1]).toBe("")
   expect(withoutClocks(screen.lines[screen.y - 2]!)).toBe("  The file has three lines.")
   expect(screen.altSwitches).toEqual([true, false])
+})
+
+test("exiting a scrolled fullscreen conversation prints every turn once on the normal screen", async () => {
+  const replyRows = Array.from({ length: 40 }, (_, i) => `exit row ${String(i + 1).padStart(2, "0")}`)
+  const { terminal, screen, view, shows, idle, exited } = await setup([
+    { text: replyRows.join("\n") },
+    { text: "exit final reply" },
+  ])
+  try {
+    terminal.send("first exit prompt\r")
+    await shows("exit row 40")
+    await idle()
+    terminal.send("second exit prompt\r")
+    await shows("exit final reply")
+    await idle()
+    expect(screen.inAltScreen).toBe(true)
+    expect(screen.mainText).toBe("")
+    terminal.send(PAGE_UP)
+    await waitFor(() => !view().includes("exit final reply"), "scrolled away from the final reply")
+    terminal.send("\x03")
+    expect(await exited).toBe(0)
+    expect(screen.inAltScreen).toBe(false)
+    expect(screen.altSwitches).toEqual([true, false])
+    const printed = withoutClocks(screen.mainText)
+    const rows = printed.split("\n").map((row) => row.trim())
+    for (const row of ["› first exit prompt", ...replyRows, "› second exit prompt", "exit final reply"])
+      expect(rows.filter((text) => text === row)).toHaveLength(1)
+    expect(printed.indexOf("first exit prompt")).toBeLessThan(printed.indexOf("exit row 01"))
+    expect(printed.indexOf("exit row 40")).toBeLessThan(printed.indexOf("second exit prompt"))
+    expect(printed.indexOf("second exit prompt")).toBeLessThan(printed.indexOf("exit final reply"))
+    expect(printed).not.toContain("Message Amira")
+    expect(printed).not.toContain("shift+tab mode")
+    expect(printed).not.toContain("rows below")
+    expect(screen.lines[screen.y]).toBe("")
+    expect(screen.lines[screen.y - 1]).toBe("")
+  } finally {
+    terminal.send("\x03\x03")
+    await exited
+  }
 })
 
 test("a streaming reply follows the end; scrolling up keeps its place and says there is new output", async () => {
@@ -688,7 +727,7 @@ test("blocks fold and unfold: a tool call's output, a reply's details; Ctrl+O ap
   expect(view()).not.toContain("line 3")
   terminal.send("\x03")
   await exited
-  // What was folded by hand prints as the inline transcript shows it: nothing is lost.
+  // What was folded by hand prints in the normal-screen transcript: nothing is lost.
   expect(screen.mainText).toContain("hidden body")
   expect(screen.mainText).toContain("  line 3")
   expect(screen.mainText).not.toContain("▌")

@@ -42,45 +42,6 @@ test("the UI follows the session a command switches to, and /quit leaves", async
   expect(await exited).toBe(0)
 })
 
-test("inline: a blank line sets the conversation apart from the shell, above the banner and after /quit", async () => {
-  const { terminal, screen, shows, idle, exited } = await setup([{ text: "the answer" }], {
-    commands: testCommands([]),
-  })
-  expect(screen.lines[0]).toBe("")
-  expect(screen.lines[1]).toContain("Amira")
-  terminal.send("hello\r")
-  await shows("the answer")
-  await idle()
-  terminal.send("/quit\r")
-  expect(await exited).toBe(0)
-  // The cursor, where the shell's prompt goes, is a blank line under the last of it.
-  expect(screen.lines[screen.y]).toBe("")
-  expect(screen.lines[screen.y - 1]).toBe("")
-  // No band padding: the echo is followed by exactly the two blank shell rows.
-  expect(screen.lines[screen.y - 2]).toBe("› /quit")
-})
-
-test("inline: Alt+C copies the last reply; a key of the full-screen view says so once", async () => {
-  const { terminal, shows, idle, exited } = await setup([{ text: "Use **bold** here." }])
-  terminal.send("\x1bc")
-  await shows("Nothing to copy in the last reply.")
-  terminal.send("go\r")
-  await shows("Use bold here.")
-  await idle()
-  terminal.send("\x1bc")
-  await shows("Copied the last reply")
-  expect(terminal.output).toContain(`\x1b]52;c;${Buffer.from("Use **bold** here.").toString("base64")}\x07`)
-  // With text in the input, Ctrl+↑ is the input's (it moves up in it): no note yet.
-  terminal.send("draft")
-  await shows("draft")
-  terminal.send("\x1b[1;5A")
-  terminal.send("\x03")
-  terminal.send("\x1b[5~")
-  await shows("pgup is for full-screen mode")
-  terminal.send("\x03\x03")
-  await exited
-})
-
 test("a diff review shows the diff above its options", async () => {
   const { host, terminal, live, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "review", args: {} }] },
@@ -154,7 +115,7 @@ function reviewTool(lines: number) {
 test("a diff review taller than the terminal keeps its title, options and keys in view", async () => {
   const { host, terminal, live, idle, exited } = await setup(
     [{ toolCalls: [{ name: "review", args: {} }] }, { text: "reviewed" }],
-    { rows: 14 },
+    { rows: 16 },
   )
   await host.load(reviewTool(54), "reviewer")
   const at = Date.now()
@@ -208,7 +169,7 @@ test("↑ on an empty editor recalls what was sent, and ↓ goes back to empty",
   await exited
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: recalled skills still run and dollar-prefixed prose still sends`, async () => {
     const history = new PromptHistory()
     history.add(["$100 is the price"])
@@ -400,7 +361,7 @@ test("Ctrl+L clears the screen and draws the latest transcript and the live regi
   expect(live()).toContain("› hello")
   expect(live()).toContain("the answer")
   expect(live()).toContain("│ › draft")
-  expect(screen.lines[1]).toContain("Amira")
+  expect(screen.lines[0]).toContain("/work/proj")
   terminal.send("\x03\x03")
   await exited
 })
@@ -462,7 +423,7 @@ test("typing @ while the project is still listed shows a status row at once, the
   await exited
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`the terminal title uses the session title instead of the folder in ${mode} mode`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "amira-terminal-title-"))
     const session = SessionStore.create({ cwd: "/work/proj", dir })
@@ -624,6 +585,7 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   const keys = new Keybindings({
     ...defaultKeys({ vscode: false }),
     "history.search": ["ctrl+f"],
+    find: [],
     "search.cancel": ["ctrl+x"],
     "popup.close": ["ctrl+x"],
     "tool-output": ["ctrl+t"],
@@ -663,21 +625,6 @@ test("history, the history search, the file list and Ctrl+O take their keys from
   expect(live()).toContain("ctrl+t toggles")
   terminal.send("\x03")
   await exited
-})
-
-test("with tui.reflow off, a narrower terminal does not move up past the live region", async () => {
-  for (const reflow of ["on", "off"] as const) {
-    const { terminal, all, exited } = await setup([], { settings: { reflow }, cols: 60, rows: 20 })
-    await waitFor(() => all().includes("Message Amira"), "input box")
-    terminal.clearWrites()
-    terminal.setSize(40, 20)
-    await waitFor(() => terminal.writes.length > 0, "a frame")
-    // Above the editor are the box top, inline header and blank row. Reflow adds one
-    // row for each full-width header and border; without reflow all three stay one row.
-    expect(terminal.writes[0]!).toContain(`\r\x1b[${reflow === "on" ? 5 : 3}A\x1b[J`)
-    terminal.send("\x03")
-    await exited
-  }
 })
 
 /**

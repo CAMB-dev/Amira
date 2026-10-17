@@ -258,12 +258,7 @@ export interface PackageSettings {
 }
 
 export interface TuiSettings {
-  /**
-   * "fullscreen" keeps the conversation on the alternate screen, scrolled and searched by
-   * Amira, and prints it to the normal screen on exit; "inline" leaves finished output in the
-   * terminal's own scrollback (for SSH, tmux, or native scrolling and copying). See
-   * DEFAULT_TUI_MODE; the --inline and --fullscreen flags win.
-   */
+  /** @deprecated Ignored: the UI always runs fullscreen. "inline" shows a removal notice. */
   mode?: "fullscreen" | "inline"
   /** Side margin in cells (integer 0–12); shrinks on narrow terminals. See DEFAULT_TUI_MARGIN. */
   margin?: number
@@ -301,10 +296,7 @@ export interface TuiSettings {
   progress?: boolean
   /** Show live token speed and thinking time in the status bar. See DEFAULT_TUI_TOKEN_SPEED. */
   tokenSpeed?: boolean
-  /**
-   * Whether the terminal re-wraps lines when it gets narrower. "off" for terminals that do not
-   * (legacy conhost with wrap-on-resize off, some tmux setups). See DEFAULT_TUI_REFLOW.
-   */
+  /** @deprecated Ignored: fullscreen redraws the conversation at the current terminal width. */
   reflow?: "auto" | "on" | "off"
   /**
    * What plain Enter does while a turn runs: "steer" sends the message into the running turn,

@@ -22,7 +22,6 @@ type Entry = {
 }
 
 interface FocusDeps {
-  mode: "inline" | "fullscreen"
   editor: Editor
   mainView: TranscriptView
   mainHistory: PromptHistory
@@ -218,7 +217,7 @@ export class ConversationFocus {
     this.pendingCommand = undefined
     this.deps.activate(entry)
     this.restoreDraft(entry.draft)
-    if (fresh && this.deps.mode === "fullscreen") {
+    if (fresh) {
       entry.view.openSession({ id: conversation.id, resumed: true }, [...initialHistory], true)
     }
     entry.view.activate(`— ${conversation.name.replace(/\p{Cc}/gu, " ")} —`)
@@ -258,7 +257,7 @@ export class ConversationFocus {
     const draft = this.mainDraft.length ? this.mainDraft : (pending?.parts ?? [])
     this.pendingCommand = undefined
     this.restoreDraft(draft)
-    // The destination boundary precedes every held commit, without replaying history.
+    // Retained conversations show destination chrome without replaying history.
     this.deps.mainView.activate("— main —")
     this.deps.mainView.setVisible(true)
     this.syncDialogs()
@@ -405,12 +404,11 @@ export class ConversationFocus {
         seq = event.seq
         if (this.onUiEvent(event)) continue
         if (event.type === "events.lost") {
-          if (this.deps.mode === "fullscreen")
-            entry.view.openSession(
-              { id: entry.conversation.id, resumed: true },
-              [...entry.conversation.history()],
-              true,
-            )
+          entry.view.openSession(
+            { id: entry.conversation.id, resumed: true },
+            [...entry.conversation.history()],
+            true,
+          )
           renderer.reset(entry.conversation.history())
           if (entry.conversation.status().busy) entry.activity.beginSend()
           entry.view.notice("warning", "Live events were lost; conversation history refreshed.")

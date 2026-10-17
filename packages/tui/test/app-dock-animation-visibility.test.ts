@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { animationProbe } from "./animation-visibility-harness.ts"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: final app dock fitting stops all animation wakes and restarts on resize`, async () => {
     let writes = 0
     let state: "working" | "done" = "working"

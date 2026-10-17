@@ -9,8 +9,6 @@ import type {
   ImageInput,
   ImageOpenContext,
   ImageProvider,
-  MarkdownRendererDefinition,
-  Message,
   SessionControl,
 } from "@amira/api"
 import type { GraphicsReplies } from "@amira/tui-kit"
@@ -19,14 +17,7 @@ import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/s
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { FileIndex, streamProjectFiles } from "../src/file-index.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
-import {
-  exchange,
-  type SetupOptions,
-  setup,
-  testCommands,
-  transcriptChecker,
-  waitFor,
-} from "./app-harness.ts"
+import { exchange, type SetupOptions, setup, testCommands, waitFor } from "./app-harness.ts"
 import { boundSpawnSync, waitForSpawnWork } from "./spawn-fixture.ts"
 
 function testImages(
@@ -44,54 +35,6 @@ function testImages(
 const CHART = { width: 30, height: 40 }
 const SIXEL: GraphicsReplies = { answered: true, sixel: true, kitty: false }
 const WT = { WT_SESSION: "1" }
-
-test("an image mid-reply is drawn in its place: every row once, in order, the rest waiting for it", async () => {
-  const markers: string[] = []
-  const m = () => {
-    const id = `L${markers.length + 1}`
-    markers.push(id)
-    return id
-  }
-  const parts = [
-    ...Array.from({ length: 6 }, () => `line ${m()}`),
-    "",
-    "![chart](https://img.test/chart.png)",
-    "",
-    ...Array.from({ length: 6 }, () => `line ${m()}`),
-  ]
-  const check = transcriptChecker(markers)
-  let fetched = 0
-  const { terminal, screen, shows, idle, exited } = await setup([{ text: parts.join("\n"), delayMs: 2 }], {
-    cols: 40,
-    rows: 24,
-    env: WT,
-    graphics: SIXEL,
-    onWrite: (s) => check.onWrite(s),
-    images: testImages(async (input, ctx) => {
-      fetched++
-      expect(input).toEqual({ url: "https://img.test/chart.png" })
-      expect(ctx).toMatchObject({ protocol: "sixel", cwd: "/work/proj" })
-      // Slower than the lines after it take to stream: they wait for it.
-      await Bun.sleep(60)
-      return CHART
-    }),
-  })
-  terminal.send("go\r")
-  await shows(`line ${markers.at(-1)}`)
-  await idle()
-  await waitFor(() => screen.images.length > 0, "the image")
-  await Bun.sleep(30)
-  expect(check.problems).toEqual([])
-  check.final(screen)
-  expect(fetched).toBe(1)
-  expect(screen.images).toEqual([expect.objectContaining({ protocol: "sixel", col: 2, rows: 2, cols: 3 })])
-  const all = [...screen.scrollback, ...screen.lines]
-  const row = screen.images[0]!.row
-  expect(all.slice(row - 2, row + 4)).toEqual(["  line L6", "", "  ▓▓▓", "  ▓▓▓", "", "  line L7"])
-  expect(all.join("\n")).not.toContain("🖼\uFE0F chart")
-  terminal.send("\x03")
-  await exited
-})
 
 test("without an image provider, one that cannot open it, or tui.images off, an image is its alt text", async () => {
   const setups: ({ images?: boolean; background?: boolean } | undefined)[] = []
@@ -121,7 +64,7 @@ test("without an image provider, one that cannot open it, or tui.images off, an 
     }),
   })
   expect(failing.images).toBe(0)
-  expect(failing.text).toContain("  🖼\uFE0F gone\n\n  done")
+  expect(failing.text).toMatch(/^ {2}🖼\uFE0F gone +\d{2}:\d{2}\n\n {2}done$/m)
   const off = await run("![chart](https://img.test/chart.png)\n\ndone", {
     settings: { images: "off" },
     images: testImages(async () => CHART),
@@ -141,194 +84,8 @@ test("without an image provider, one that cannot open it, or tui.images off, an 
   expect(text.images).toBe(0)
 })
 
-test("an image slower than its time is committed as its alt text, and what follows goes on", async () => {
-  const { terminal, screen, all, shows, idle, exited } = await setup(
-    [{ text: "![slow](https://img.test/slow.png)\n\nafter it" }],
-    {
-      env: WT,
-      graphics: SIXEL,
-      images: testImages(
-        (_input, { signal }) =>
-          new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
-      ),
-    },
-  )
-  terminal.send("go\r")
-  await shows("after it")
-  await idle()
-  // Both show in the live region while waiting, then go to the scrollback as they were.
-  await Bun.sleep(3300)
-  expect(all()).toContain("  🖼\uFE0F slow\n\n  after it")
-  expect(screen.images).toEqual([])
-  terminal.send("\x03")
-  await exited
-}, 10_000)
-
-// --- Markdown renderers of extensions (D88)
-
-/** A renderer of ```box blocks: each line of the code in a frame, after `delayMs` when given. */
-function boxRenderer(calls: { code: string; width: number }[], delayMs?: number): MarkdownRendererDefinition {
-  const draw = (code: string) => {
-    const lines = code.split("\n")
-    const w = Math.max(...lines.map((l) => l.length))
-    return {
-      lines: [
-        { kind: "accent" as const, text: `┌${"─".repeat(w + 2)}┐` },
-        ...lines.map((l) => ({ kind: "code" as const, text: `│ ${l.padEnd(w)} │` })),
-        { kind: "accent" as const, text: `└${"─".repeat(w + 2)}┘` },
-      ],
-    }
-  }
-  return {
-    id: "box",
-    match: { codeLang: ["box"] },
-    render: (node, ctx) => {
-      if (node.type !== "code") return undefined
-      calls.push({ code: node.code, width: ctx.width })
-      return delayMs === undefined ? draw(node.code) : Bun.sleep(delayMs).then(() => draw(node.code))
-    },
-  }
-}
-
-test("inline: a code block an extension renders is committed once as its lines, in order; others stay code", async () => {
-  const calls: { code: string; width: number }[] = []
-  const markers = ["L1", "L2", "L3"]
-  const check = transcriptChecker(markers)
-  const text = "line L1\n\n```box\nA --> B\nB --> C\n```\n\nline L2\n\n```js\nx()\n```\n\nline L3"
-  const { terminal, screen, all, shows, idle, exited } = await setup([{ text, delayMs: 2 }], {
-    cols: 40,
-    rows: 24,
-    markdown: [boxRenderer(calls)],
-    onWrite: (s) => check.onWrite(s),
-  })
-  terminal.send("go\r")
-  await shows("line L3")
-  await idle()
-  expect(check.problems).toEqual([])
-  check.final(screen)
-  expect(all().replace(/(?:[01]\d|2[0-3]):[0-5]\d(?=\n|$)/g, "<time>")).toContain(
-    [
-      "  line L1                          <time>",
-      "",
-      "  ┌─────────┐",
-      "  │ A --> B │",
-      "  │ B --> C │",
-      "  └─────────┘",
-      "",
-      "  line L2",
-    ].join("\n"),
-  )
-  // B: fallback code is fill-only; its label ends at the shared right edge, unlike renderer-authored boxes.
-  expect(all()).toContain(["  line L2", "", `${" ".repeat(38)}js`, "  x()", "", "", "  line L3"].join("\n"))
-  expect(all()).not.toContain("╭─ box")
-  // Asked once, when it closed: later nodes use the full width minus the reply gutter.
-  expect(calls).toEqual([{ code: "A --> B\nB --> C", width: 38 }])
-  terminal.send("\x03")
-  await exited
-})
-
-test("inline: a rendering on its way holds what follows; one that takes too long goes as the code", async () => {
-  const calls: { code: string; width: number }[] = []
-  const late = await setup([{ text: "```box\nlate\n```\n\nafter it" }], {
-    markdown: [boxRenderer(calls, 80)],
-  })
-  late.terminal.send("go\r")
-  await late.shows("after it")
-  await late.idle()
-  await waitFor(() => late.all().includes("│ late │"), "the rendering")
-  const text = late.all()
-  expect(text.indexOf("│ late │")).toBeLessThan(text.indexOf("after it"))
-  expect(text).not.toContain("╭─ box")
-  late.terminal.send("\x03")
-  await late.exited
-  // Slower than its renderer's time: the code block is committed, and what follows goes on.
-  const slow = await setup([{ text: "```box\nslow\n```\n\nafter it" }], {
-    markdown: [{ ...boxRenderer([], 5000), waitMs: 100 }],
-  })
-  slow.terminal.send("go\r")
-  await slow.shows("after it")
-  await slow.idle()
-  await Bun.sleep(200)
-  expect(slow.all()).toContain(`${" ".repeat(57)}box\n  slow\n\n\n  after it`)
-  slow.terminal.send("\x03")
-  await slow.exited
-})
-
-test("inline: a resumed history renders its blocks through extensions too, in order, waiting for late ones", async () => {
-  const calls: { code: string; width: number }[] = []
-  const reply = (text: string): Message => ({
-    role: "assistant",
-    content: [{ type: "text", text }],
-    model: { provider: "mock", model: "m1" },
-  })
-  const { terminal, all, exited } = await setup([], {
-    rows: 40,
-    markdown: [boxRenderer(calls, 60)],
-    history: [
-      { role: "user", content: [{ type: "text", text: "draw" }] },
-      reply("First:\n\n```box\nA\n```\n\nafter A"),
-      reply("```box\nB\n```\n\nafter B"),
-    ],
-  })
-  await waitFor(() => all().includes("── resumed"), "history")
-  // Meanwhile what waits for them shows below as it is, the blocks as code.
-  await waitFor(() => all().includes("│ B │"), "the renderings")
-  await Bun.sleep(50)
-  const text = all()
-  expect(text).toContain("  First:\n\n  ┌───┐\n  │ A │\n  └───┘\n\n  after A")
-  expect(text).toContain("  ┌───┐\n  │ B │\n  └───┘\n\n  after B")
-  expect(text).not.toContain("╭─ box")
-  expect(calls.map((c) => c.code)).toEqual(["A", "B"])
-  terminal.send("\x03")
-  await exited
-})
-
-test("inline: a renderer's image goes to the image providers; a renderer that throws leaves the code", async () => {
-  const opened: string[] = []
-  const errors: string[] = []
-  const { terminal, screen, all, shows, idle, exited, bus } = await setup(
-    [{ text: "```chart\npie\n```\n\n```broken\nx\n```\n\ndone" }],
-    {
-      env: WT,
-      graphics: SIXEL,
-      images: testImages(async (input) => {
-        opened.push("data" in input ? new TextDecoder().decode(input.data) : input.url)
-        return CHART
-      }),
-      markdown: [
-        {
-          id: "chart",
-          match: { codeLang: ["chart"] },
-          render: async () => ({ image: { data: new TextEncoder().encode("png of pie") } }),
-        },
-        {
-          id: "broken",
-          match: { codeLang: ["broken"] },
-          render: () => {
-            throw new Error("no parser")
-          },
-        },
-      ],
-    },
-  )
-  bus.subscribe((e) => {
-    if (e.type === "extension.error") errors.push((e.data as { error: string }).error)
-  })
-  terminal.send("go\r")
-  await shows("done")
-  await idle()
-  await waitFor(() => screen.images.length > 0, "the image")
-  expect(opened).toEqual(["png of pie"])
-  expect(screen.images).toEqual([expect.objectContaining({ protocol: "sixel", rows: 2, cols: 3 })])
-  expect(all()).toContain([`${" ".repeat(54)}broken`, "  x", "", "", "  done"].join("\n"))
-  await waitFor(() => errors.length > 0, "the error")
-  expect(errors).toEqual(['markdown renderer "broken" failed: no parser'])
-  terminal.send("\x03")
-  await exited
-})
-
-test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at 120/60 columns in both modes", async () => {
-  for (const mode of ["fullscreen", "inline"] as const)
+test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at 120/60 columns in fullscreen", async () => {
+  for (const mode of ["fullscreen"] as const)
     for (const cols of [120, 60])
       for (const stop of ["\x1b", "\x03"]) {
         let progress!: (p: ExtensionProgress) => void
@@ -419,8 +176,8 @@ test("extension installs stay responsive and cancel through actual Esc/Ctrl+C at
       }
 })
 
-test("extension picker sections filter and show details at 120/60 columns in both modes", async () => {
-  for (const mode of ["fullscreen", "inline"] as const)
+test("extension picker sections filter and show details at 120/60 columns in fullscreen", async () => {
+  for (const mode of ["fullscreen"] as const)
     for (const cols of [120, 60]) {
       const admin: ExtensionAdmin = {
         list: () => [
@@ -554,8 +311,8 @@ test("cancelling an extension operation leaves concurrent compaction alone; comp
   }
 })
 
-test("live panels sit above the input in both modes, fold with Ctrl+T and follow their state", async () => {
-  for (const mode of ["inline", "fullscreen"] as const) {
+test("live panels sit above the input in fullscreen, fold with Ctrl+T and follow their state", async () => {
+  for (const mode of ["fullscreen"] as const) {
     let items = ["✓ write the parser", "› test it", "• ship it"]
     let seen: { sessionId: string; hasData: boolean } | undefined
     const { terminal, live, host, exited } = await setup([], {
@@ -609,7 +366,7 @@ test("live panels sit above the input in both modes, fold with Ctrl+T and follow
 })
 
 test("live panels give way on a short screen: folded, then cut, the input box always shown", async () => {
-  for (const mode of ["fullscreen", "inline"] as const) {
+  for (const mode of ["fullscreen"] as const) {
     const items = Array.from({ length: 9 }, (_, i) => `• step ${i + 1}`)
     const { terminal, live, exited } = await setup([], {
       cols: 70,
@@ -648,7 +405,7 @@ test("an extension's notice shows in the transcript", async () => {
 })
 
 test("the status stays below the intact frame when a dialog takes the input box's place and closes", async () => {
-  for (const mode of ["inline", "fullscreen"] as const) {
+  for (const mode of ["fullscreen"] as const) {
     const { terminal, live, host, bus, agent, exited } = await setup([], { settings: { mode } })
     bus.emit(
       "workspace.changed",
@@ -695,8 +452,8 @@ test("a command list below the input box leaves the separate status below its pl
   await exited
 })
 
-test("the right-aligned model stays below the plain border; workspace, cost and context fit the header in both modes", async () => {
-  for (const mode of ["inline", "fullscreen"] as const) {
+test("the right-aligned model stays below the plain border; workspace, cost and context fit the header in fullscreen", async () => {
+  for (const mode of ["fullscreen"] as const) {
     for (const cols of [100, 44, 34, 12]) {
       const { terminal, live, agent, bus, idle, exited } = await setup(
         [{ text: "ok", usage: { input: 108_800, output: 0, cost: 0.042 } }],
@@ -745,7 +502,7 @@ test("the right-aligned model stays below the plain border; workspace, cost and 
 })
 
 test("? opens the key reference on an empty input; it lists every action with its keys and Esc closes it", async () => {
-  for (const mode of ["inline", "fullscreen"] as const) {
+  for (const mode of ["fullscreen"] as const) {
     const keys = new Keybindings({ ...defaultKeys({ vscode: false }), queue: ["ctrl+t"] })
     const { terminal, live, exited } = await setup([], { settings: { mode }, keybindings: keys, rows: 20 })
     await waitFor(
@@ -800,7 +557,7 @@ test("the input's editing keys: Ctrl+W and Ctrl+U cut, Ctrl+Y pastes back, Ctrl+
   await exited
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: regression: a yank ends the kill sequence before the next Ctrl+W`, async () => {
     const { terminal, live, exited } = await setup([], { settings: { mode } })
     const input = () =>
@@ -929,7 +686,7 @@ test("full screen, the input box stays put while the list under it gets shorter"
 })
 
 test("commands get the common keys as bound now, for /help; the transcript's only full screen", async () => {
-  for (const mode of ["inline", "fullscreen"] as const) {
+  for (const mode of ["fullscreen"] as const) {
     const { terminal, shows, all, exited } = await setup([], {
       cols: 120,
       rows: 32,
@@ -958,7 +715,7 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
   }
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: a hosted web search shows as a row, then the reply and the sources it cited`, async () => {
     const { ai, terminal, all, shows, idle, exited } = await setup([], {
       settings: { mode },

@@ -5,7 +5,7 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 const BEGIN = "\x1b[200~"
 const END = "\x1b[201~"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const origin of ["main", "owned"] as const) {
     test(`${mode}: partial ${origin} paste never enters the other conversation or replaces its origin draft`, async () => {
       const s = await focusFixture(mode, [{ text: "Target reply" }, { text: "Origin reply" }])

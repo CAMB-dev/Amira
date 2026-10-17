@@ -3,7 +3,7 @@ import { visibleWidth } from "@amira/tui-kit"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { setup, testCommands, waitFor } from "./app-harness.ts"
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: images use the content's left coordinate in the real app and exit printout`, async () => {
     const app = await setup([{ text: "before\n\n![chart](https://img.test/chart.png)\n\nafter" }], {
       cols: 70,

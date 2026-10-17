@@ -857,21 +857,21 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.mode": {
     default: documentedDefault("tui.mode"),
-    en: '`"fullscreen"` keeps the conversation on the alternate screen, scrolled and searched by Amira; `"inline"` leaves finished output in the terminal\'s scrollback. `--inline` and `--fullscreen` win. Fullscreen pins live prompts below the header when scrolled away; resumed history has no sticky prompt.',
-    zh: '`"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。全屏模式下，本次输入的提示滚出视口后固定在标题栏下方；恢复的历史记录不显示固定提示。',
-    ja: '`"fullscreen"` は代替画面に会話を表示し、Amira がスクロールと検索を処理します。`"inline"` は完了した出力を端末のスクロールバックに残します。`--inline` と `--fullscreen` が優先されます。全画面モードでは、現在のプロンプトが画面外にスクロールするとヘッダーの下に固定表示します。再開した履歴のプロンプトは固定表示しません。',
+    en: 'Deprecated and ignored: the interactive TUI always runs fullscreen and prints the conversation to the normal screen on exit. For one release, `"inline"` and `--inline` are accepted with the notice: "inline mode was removed; running fullscreen. Use -p for plain output." `--fullscreen` is accepted as a no-op.',
+    zh: '已弃用并忽略：交互式 TUI 始终使用全屏模式，退出时将对话打印到普通屏幕。在一个过渡版本内，仍接受 `"inline"` 和 `--inline`，并提示："inline mode was removed; running fullscreen. Use -p for plain output." `--fullscreen` 仍被接受，但不执行任何操作。',
+    ja: '非推奨で無視されます。対話型 TUI は常に全画面で動作し、終了時に会話を通常画面へ出力します。移行期間の 1 リリースでは `"inline"` と `--inline` を受け付け、"inline mode was removed; running fullscreen. Use -p for plain output." と通知します。`--fullscreen` は受け付けますが、何も変更しません。',
   },
   "tui.margin": {
     default: documentedDefault("tui.margin"),
-    en: "Side margin in cells, in both modes (integer 0–12). Narrow terminals shrink it to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for the edge-to-edge layout.",
-    zh: "两种模式的左右留白宽度，单位为字符格（整数 0–12）。窄终端会自动缩小留白，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边布局。",
-    ja: "両モードの左右の余白幅をセル数（整数 0–12）で指定します。狭い端末では、可能な限りコンテンツの幅を 60 列以上確保するために余白を縮めます。この値と `tui.marginRows` を `0` にすると、端まで使うレイアウトになります。",
+    en: "Side margin in cells (integer 0–12). Narrow terminals shrink it to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for the edge-to-edge layout.",
+    zh: "左右留白宽度，单位为字符格（整数 0–12）。窄终端会自动缩小留白，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边布局。",
+    ja: "左右の余白幅をセル数（整数 0–12）で指定します。狭い端末では、可能な限りコンテンツの幅を 60 列以上確保するために余白を縮めます。この値と `tui.marginRows` を `0` にすると、端まで使うレイアウトになります。",
   },
   "tui.marginRows": {
     default: documentedDefault("tui.marginRows"),
-    en: "Empty rows above the header and below the key-hint line, fullscreen only (integer 0–2). Terminals shorter than 24 rows omit them; inline mode has no vertical margin.",
-    zh: "全屏模式标题栏上方和按键提示行下方的空行数（整数 0–2）。终端不足 24 行时自动取消；行内模式没有上下留白。",
-    ja: "全画面モードで、ヘッダーの上とキー操作のヒント行の下に設ける空行数（整数 0–2）です。24 行未満の端末では空行を省きます。インラインモードには上下の余白はありません。",
+    en: "Empty rows above the header and below the key-hint line (integer 0–2). Terminals shorter than 24 rows omit them.",
+    zh: "标题栏上方和按键提示行下方的空行数（整数 0–2）。终端不足 24 行时自动取消。",
+    ja: "ヘッダーの上とキー操作のヒント行の下に設ける空行数（整数 0–2）です。24 行未満の端末では空行を省きます。",
   },
   "tui.theme": {
     default: documentedDefault("tui.theme"),
@@ -933,9 +933,9 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.reflow": {
     default: documentedDefault("tui.reflow"),
-    en: '`"off"` for terminals that do not re-wrap lines when they get narrower (legacy conhost, some tmux setups).',
-    zh: '终端在变窄时不会重新折行（旧版 conhost、部分 tmux 配置）时设为 `"off"`。',
-    ja: '幅が狭くなったときに行を折り返し直さない端末（従来の conhost、一部の tmux 設定）では `"off"` にします。',
+    en: "Deprecated and ignored: fullscreen redraws the conversation at the current terminal width.",
+    zh: "已弃用并忽略：全屏模式会按当前终端宽度重新绘制对话。",
+    ja: "非推奨で無視されます。全画面モードは現在の端末の幅で会話を描画し直します。",
   },
   "tui.submitWhileWorking": {
     default: documentedDefault("tui.submitWhileWorking"),

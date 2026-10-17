@@ -101,7 +101,7 @@ const SHIFT_DOWN = "\x1b[1;2B"
 
 for (const cols of [50, 80, 120]) {
   for (const margin of [0, 3]) {
-    for (const mode of ["fullscreen", "inline"] as const) {
+    for (const mode of ["fullscreen"] as const) {
       test(`keyboard reveal ignores uncovered user-band padding: ${mode} ${cols}/${margin}`, async () => {
         const app = await setup([{ text: "reply tail\n".repeat(50) }], {
           cols,
@@ -115,26 +115,6 @@ for (const cols of [50, 80, 120]) {
           await app.idle()
           expect(app.screen.inAltScreen).toBe(mode === "fullscreen")
           expect(app.terminal.output).toContain("\x1b[48;2;")
-          if (mode === "inline") {
-            // Inline keeps the full prompt in native scrollback; block selection is not supported.
-            app.terminal.clearWrites()
-            app.terminal.send(SELECT)
-            await waitFor(() => app.live().includes("is for full-screen mode"), "inline key hint")
-            app.terminal.send(SELECT)
-            await Bun.sleep(40)
-            for (const word of ["One", "Two", "Three", "Four"])
-              expect(
-                app
-                  .all()
-                  .split("\n")
-                  .filter((row) => row.includes(word)),
-              ).toHaveLength(1)
-            for (const word of ["Two", "Three", "Four"])
-              expect(app.all().split("\n")).toContain(`${prefix}  ${word}`)
-            expect(app.terminal.output).not.toContain("\x1b[7m›")
-            expect(app.live()).not.toMatch(/› message \d+ of/)
-            return
-          }
 
           // Select the reply, then the prompt: its natural entry includes all four text rows.
           app.terminal.send(SELECT)

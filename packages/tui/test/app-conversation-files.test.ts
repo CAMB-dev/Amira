@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { closeImageApp, userTexts, waitFor } from "./app-harness.ts"
 import { focusFixture } from "./conversation-focus-fixture.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: @file completion follows owned cwd and restores the host main source`, async () => {
     const cwd = mkdtempSync(join(tmpdir(), "amira-focus-files-"))
     writeFileSync(join(cwd, "design-only.ts"), "export const design = true\n")

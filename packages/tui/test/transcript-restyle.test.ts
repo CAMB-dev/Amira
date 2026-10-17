@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import { type AssistantMessage, type Message, textResult, type UserMessage } from "@amira/api"
-import { defaultTheme, pendingBlock, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
+import { defaultTheme, stripAnsi, surfaceTheme, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { type BlockEnv, LinesBlock, ReasoningBlock, ReplyBlock, ToolBlock, userBlock } from "../src/blocks.ts"
 import {
@@ -232,7 +232,7 @@ test("fill-only code keeps its top-right language and blank bottom out of copy a
   expect(pane.matchCount).toBe(1)
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: live reply continuation and code/table rows use full available width`, async () => {
     const text =
       "x".repeat(65) +
@@ -416,9 +416,7 @@ test("partial selections stop at actual timestamp metadata and respect wide disp
   expect(select(0, 39)).toBe("界界 20:19")
 })
 
-test("timestamp decoration preserves pending extension markers and oversized extension rows", () => {
-  const marker = `  ${pendingBlock(Promise.resolve(["diagram"]), ["loading"])}`
-  expect(timestampRow(marker, defaultTheme, 80, at)).toBe(marker)
+test("timestamp decoration preserves oversized extension rows", () => {
   const extension = "x".repeat(100)
   expect(timestampRow(extension, defaultTheme, 80, at)).toBe(extension)
   expect(timestampRoom(80, undefined)).toBe(80)

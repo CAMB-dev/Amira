@@ -113,7 +113,7 @@ for (const error of [new AgentBusyError("busy"), new Error("old session failure"
   })
 }
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: /resume names the resumed session once in its boundary`, async () => {
     let next!: Agent
     const s = await setup([], {
@@ -367,7 +367,7 @@ const subagentNotice = (text: string) =>
     origin: "subagent",
   })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const variant of [
     "captured",
     "disabled",
@@ -604,7 +604,7 @@ test("extension dialogs are answered inline: confirm, select and input", async (
   await exited
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`both local rewind questions emit waiting and pause progress in ${mode}`, async () => {
     const s = await setup([], {
       settings: { mode },

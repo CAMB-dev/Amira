@@ -4,7 +4,6 @@ import { FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
 import type { ViewHost } from "../src/view.ts"
@@ -37,10 +36,7 @@ function setup() {
   return { terminal, screen, host }
 }
 
-for (const [mode, create] of [
-  ["inline", createInlineView],
-  ["fullscreen", createFullscreenView],
-] as const) {
+for (const [mode, create] of [["fullscreen", createFullscreenView]] as const) {
   test(`${mode}: activation names the destination before queued and background output, without replay`, () => {
     const { terminal, screen, host } = setup()
     const main = create(host("main-raw-id"))
@@ -72,7 +68,6 @@ for (const [mode, create] of [
       expect(screen.text.indexOf("main background output")).toBeLessThan(
         screen.text.indexOf("main queued output"),
       )
-      if (mode === "inline") expect(terminal.output).not.toContain("main history")
 
       owned.notice("info", "owned hidden output")
       main.setVisible(false)
@@ -87,8 +82,7 @@ for (const [mode, create] of [
         screen.text.indexOf("owned hidden output"),
       )
       expect(terminal.output).not.toContain("owned-raw-id")
-      if (mode === "inline") expect(terminal.output).not.toContain("owned queued output")
-      else expect(screen.text).not.toContain("— design: Design · fixture —")
+      expect(screen.text).not.toContain("— design: Design · fixture —")
       terminal.clearWrites()
       main.stop()
       expect(terminal.output).toBe("")

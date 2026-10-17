@@ -7,7 +7,7 @@ import { OverlayManager } from "../src/app/overlays.ts"
 import { defaultKeybindings } from "../src/keybindings.ts"
 import type { TranscriptView } from "../src/view.ts"
 
-function setup(mode: "inline" | "fullscreen" = "fullscreen") {
+function setup(_mode: "fullscreen" = "fullscreen") {
   const errors: unknown[] = []
   const bus = new EventBus((error) => errors.push(error))
   const ui = new UiRequests(bus)
@@ -16,7 +16,6 @@ function setup(mode: "inline" | "fullscreen" = "fullscreen") {
     ui,
     keys: defaultKeybindings(),
     theme: ctx.theme,
-    mode,
     env: {},
     reaches: () => true,
     view: () => ({ requestRender: () => {}, dialogEcho: () => {} }) as unknown as TranscriptView,
@@ -60,7 +59,7 @@ const external: EventMap["ui.request"] = {
   options: ["first", "second"],
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`fresh externally announced request opens once and refreshes in ${mode}`, async () => {
     const app = setup(mode)
     try {

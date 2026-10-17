@@ -181,12 +181,12 @@ export abstract class Block {
     return []
   }
 
-  /** Whether it was folded or unfolded by hand, so it shows other than it would inline. */
+  /** Whether its default fold state was changed by hand. */
   get refolded(): boolean {
     return false
   }
 
-  /** Its lines as the inline transcript shows them, whatever it was folded to: what exiting prints. */
+  /** Its default-detail lines for the conversation printed on exit. */
   printLines(env: BlockEnv): string[] {
     return this.lines(env)
   }

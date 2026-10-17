@@ -19,7 +19,7 @@ test("commands use plain muted rows while actual model messages retain the user 
   expect(rows[2]).toBe(rows[0])
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const name of ["swarm", "workflow"]) {
     test(`${mode}: /${name} task is echoed once when the command sends its display line`, async () => {
       const line = `/${name} fix the build`

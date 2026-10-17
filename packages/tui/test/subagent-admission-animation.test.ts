@@ -5,11 +5,10 @@ import { FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: admission restarts animation after the last working child and parent ended`, async () => {
     const terminal = new FakeTerminal(100, 32)
     const screen = new VirtualScreen(100, 32)
@@ -19,7 +18,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       screen.write(data)
     }
     const spinner = new Spinner()
-    const view = (mode === "inline" ? createInlineView : createFullscreenView)({
+    const view = createFullscreenView({
       terminal,
       theme: plain.theme,
       capabilities: {
@@ -36,7 +35,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       spinner,
       sessionId: () => "main",
       detail: () => "summary",
-      bottom: (width, ctx, _budget, top) => [...(top?.render(width, ctx) ?? []), "input"],
+      bottom: () => ["input"],
       overlay: { render: () => [] },
       editorEmpty: () => true,
       showNote: () => {},

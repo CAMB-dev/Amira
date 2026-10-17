@@ -340,7 +340,7 @@ test("narrow ASCII layouts keep focused controls, wrapped muted descriptions and
   }
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: settings use the overlay, queue dialogs, draw preview images and restore the composer`, async () => {
     const provider = fakeProvider()
     const s = await setup([], {

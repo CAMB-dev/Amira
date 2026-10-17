@@ -71,8 +71,8 @@ export function createConversationEvents(
       textSinceRow = !!text
       return
     }
-    // Inline rows may already be immutable. Never join a missing prefix onto its suffix:
-    // explicitly end the partial output and show the authoritative reply as a whole once.
+    // Mixed thinking/tool content may not be replaceable in place. End the partial output
+    // and show the authoritative reply as a whole once, rather than joining mismatched parts.
     if (view.replyEnd([])) turnShowedOutput = true
     view.notice("info", "Complete reply (earlier live output was partial):")
     textSinceRow = true

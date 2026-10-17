@@ -3,7 +3,7 @@ import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { closeImageApp, waitFor } from "./app-harness.ts"
 import { focusFixture } from "./conversation-focus-fixture.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: extension unload ends the focus subscription and returns to main`, async () => {
     let release = () => {}
     const s = await focusFixture(mode, [], "/work/design", {

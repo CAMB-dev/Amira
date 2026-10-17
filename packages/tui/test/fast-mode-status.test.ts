@@ -6,9 +6,8 @@ import { setup, waitFor } from "./app-harness.ts"
 const marker = /\bfast\b/
 
 test.each([
-  ["inline", "anthropic-messages"],
   ["fullscreen", "anthropic-messages"],
-  ["inline", "openai-responses"],
+
   ["fullscreen", "openai-responses"],
 ] as const)(
   "%s bottom status shows the ASCII fast marker for %s only while fast mode is applied",

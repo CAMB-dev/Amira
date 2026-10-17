@@ -1,12 +1,7 @@
 import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult } from "@amira/api"
 import {
   type ImageOpener,
-  type ImageStore,
   type MarkdownNodeRef,
-  type MarkdownNodes,
-  type PendingResult,
-  pendingBlock,
-  pendingImage,
   stripAnsi,
   type Theme,
   truncateToWidth,
@@ -39,9 +34,6 @@ export interface ImageSource {
 export interface Rendering {
   readonly done: boolean
   readonly result: MarkdownRenderResult | undefined
-  readonly promise: Promise<MarkdownRenderResult | undefined>
-  /** How long the inline transcript waits for it. */
-  readonly waitMs: number
   /** Calls `fn` once when it is done; never when it is already. */
   onDone(fn: () => void): void
 }
@@ -49,22 +41,17 @@ export interface Rendering {
 class Entry implements Rendering {
   done = false
   result: MarkdownRenderResult | undefined
-  promise: Promise<MarkdownRenderResult | undefined>
   private listeners = new Set<() => void>()
 
-  constructor(
-    out: MarkdownRenderResult | undefined | Promise<MarkdownRenderResult | undefined>,
-    readonly waitMs: number,
-  ) {
+  constructor(out: MarkdownRenderResult | undefined | Promise<MarkdownRenderResult | undefined>) {
     if (out && typeof (out as Promise<unknown>).then === "function") {
-      this.promise = (out as Promise<MarkdownRenderResult | undefined>).then(
+      void (out as Promise<MarkdownRenderResult | undefined>).then(
         (r) => this.settle(r),
         () => this.settle(undefined),
       )
     } else {
       this.done = true
       this.result = out as MarkdownRenderResult | undefined
-      this.promise = Promise.resolve(this.result)
     }
   }
 
@@ -131,7 +118,7 @@ export class ReplyRenderers {
   /** The node's rendering at `ctx`, started now or kept from before. */
   get(node: MarkdownNode, ctx: MarkdownRenderContext): Rendering {
     const source = this.source
-    if (!source) return new Entry(undefined, 0)
+    if (!source) return new Entry(undefined)
     if (source.version !== this.version) {
       this.cache.clear()
       this.version = source.version
@@ -143,7 +130,7 @@ export class ReplyRenderers {
       this.cache.set(key, hit)
       return hit
     }
-    const entry = new Entry(source.render(node, ctx), source.waitMs(node))
+    const entry = new Entry(source.render(node, ctx))
     this.cache.set(key, entry)
     for (const k of this.cache.keys()) {
       if (this.cache.size <= KEPT) break
@@ -197,77 +184,4 @@ export function imageFallback(
   if (out.fallback) return nodeRows(out.fallback, theme, width)
   if (out.alt !== undefined) return nodeRows([{ kind: "text", text: out.alt }], theme, width)
   return rows
-}
-
-export interface InlineNodesOptions {
-  renders: ReplyRenderers
-  /** Where images are drawn from now, when the terminal draws them and a provider is installed. */
-  images: () => ImageStore | undefined
-  theme: Theme
-  /** How long a committed image may take to load before its alt text goes instead. Default 3 s. */
-  imageWaitMs?: number
-}
-
-/**
- * The nodes of the inline transcript's stream: images and the code blocks extensions render.
- * A node that is ready when its line is committed goes as it is (an extension's lines, or an
- * image marker the renderer turns into the image once encoded); one still on its way is
- * committed as a marker that becomes it, what follows waiting for it up to its renderer's
- * time, after which the node goes as Markdown renders it. Live, it shows as Markdown.
- */
-export function inlineNodes(opts: InlineNodesOptions): MarkdownNodes {
-  const { renders } = opts
-  return {
-    images: true,
-    claimsCode: (lang) => renders.claimsCode(lang),
-    claimsMath: (display) => renders.claimsMath(display),
-    inline(node, fallback, width) {
-      const r = renders.get(apiNode(node), {
-        width,
-        images: false,
-        maxImageRows: 0,
-        theme: renders.theme,
-      })
-      return r.result && "segments" in r.result
-        ? nodeRows(r.result.segments, opts.theme, width, true).join("")
-        : fallback
-    },
-    render(node, rows, col, width, commit) {
-      const room = Math.max(1, width - col)
-      const store = opts.images()
-      const indent = " ".repeat(col)
-      const bare = () => rows.map((r) => (r.startsWith(indent) ? r.slice(col) : r))
-      const image = (input: { url: string } | { data: Uint8Array }, fallback = bare()) => {
-        const shown = fallback.map((row) => indent + row)
-        if (!store) return shown
-        // Asked for while it is live too, so it is often ready by the time it is committed.
-        const load = store.inline(input, room)
-        return commit ? [indent + pendingImage(load, fallback, opts.imageWaitMs ?? 3000)] : shown
-      }
-      if (node.type === "image" && !renders.claimsImages) return image({ url: node.url })
-      const r = renders.get(apiNode(node), {
-        width: room,
-        images: !!store,
-        maxImageRows: store?.maxRows() ?? 0,
-        theme: renders.theme,
-      })
-      if (r.done) {
-        const out = r.result
-        if (!out) return node.type === "image" ? image({ url: node.url }) : rows
-        if ("lines" in out) return nodeRows(out.lines, opts.theme, room).map((row) => indent + row)
-        if ("segments" in out) return rows
-        return image(out.image, imageFallback(out, bare(), opts.theme, room))
-      }
-      if (!commit) return rows
-      let fallback = bare()
-      const load = r.promise.then((out): PendingResult | undefined | Promise<PendingResult | undefined> => {
-        if (!out) return node.type === "image" && store ? store.inline({ url: node.url }, room) : undefined
-        if ("lines" in out) return nodeRows(out.lines, opts.theme, room)
-        if ("segments" in out) return undefined
-        fallback = imageFallback(out, fallback, opts.theme, room)
-        return store ? store.inline(out.image, room) : fallback
-      })
-      return [indent + pendingBlock(load, () => fallback, r.waitMs)]
-    },
-  }
 }

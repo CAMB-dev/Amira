@@ -12,7 +12,7 @@ const agentViews: Extension = (api) => {
   api.registerView(subagentView(api))
 }
 
-async function agentsFixture(mode: "inline" | "fullscreen") {
+async function agentsFixture(mode: "fullscreen") {
   const child: SubagentInfo = {
     id: "main-child",
     parentSessionId: "main",
@@ -102,7 +102,7 @@ function delayedView(placement: "fullscreen" | "dock") {
   return { extension, release, opened, immediate, started: () => started }
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: /agents picker continuation cannot show a main child over owned focus or steal input`, async () => {
     const s = await agentsFixture(mode)
     try {

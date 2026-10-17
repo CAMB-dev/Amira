@@ -6,7 +6,7 @@ import { animationProbe, visibilityHarness } from "./animation-visibility-harnes
 beforeEach(() => void jest.useFakeTimers())
 afterEach(() => void jest.useRealTimers())
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const placement of ["fullscreen", "dock"] as const) {
     for (const widgets of [false, true]) {
       test(`${mode} ${placement} ${widgets ? "widgets" : "lines"}: only visible badges request animation`, () => {

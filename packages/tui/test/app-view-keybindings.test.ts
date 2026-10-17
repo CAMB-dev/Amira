@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: extension overlays receive configured host keys and keep wheel scrolling`, async () => {
     const s = await setup([], {
       settings: { mode },

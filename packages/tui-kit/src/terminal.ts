@@ -11,6 +11,9 @@ export const PASSIVE_SIGNAL_LISTENER = Symbol.for("amira.passiveSignalListener")
 
 type Listener<T extends unknown[]> = (...args: T) => void
 
+// Shared with synchronous emergency cleanup without changing the subclass restore-sequence hook.
+const restoreWrites = new WeakMap<BaseTerminal, (write: (sequence: string) => void) => void>()
+
 class Emitter<T extends unknown[]> {
   private listeners = new Set<Listener<T>>()
   on(fn: Listener<T>): () => void {
@@ -55,6 +58,21 @@ export abstract class BaseTerminal implements Terminal {
   private active: TerminalMode[] = []
   private raw = false
 
+  constructor() {
+    restoreWrites.set(this, (write) => {
+      const active = [...this.active]
+      let sequence: string
+      try {
+        sequence = this.takeRestoreSequence()
+      } finally {
+        // Existing overrides may call super, which consumes the modes. Retain them until written.
+        this.active = active
+      }
+      write(sequence)
+      this.active = []
+    })
+  }
+
   get isRaw(): boolean {
     return this.raw
   }
@@ -82,8 +100,8 @@ export abstract class BaseTerminal implements Terminal {
   disableMode(mode: TerminalMode): void {
     const i = this.active.indexOf(mode)
     if (i === -1) return
-    this.active.splice(i, 1)
     this.write(mode.off)
+    this.active.splice(i, 1)
   }
 
   enterAltScreen(): void {
@@ -95,8 +113,11 @@ export abstract class BaseTerminal implements Terminal {
   }
 
   restore(): void {
-    this.write(this.takeRestoreSequence())
-    this.setRawMode(false)
+    try {
+      restoreWrites.get(this)?.((sequence) => this.write(sequence))
+    } finally {
+      this.setRawMode(false)
+    }
   }
 
   suspend(): () => void {
@@ -203,9 +224,11 @@ export class ProcessTerminal extends BaseTerminal {
 
   /** Stops reading input and restores the terminal. */
   stop(): void {
-    this.restore()
-    for (const fn of this.cleanup) fn()
-    this.cleanup = []
+    try {
+      this.restore()
+    } finally {
+      for (const fn of this.cleanup.splice(0)) fn()
+    }
   }
 
   protected applyRawMode(on: boolean): void {
@@ -248,7 +271,7 @@ export class ProcessTerminal extends BaseTerminal {
       const fd = (this.stdout as { fd?: number }).fd ?? 1
       try {
         this.codePage.ensure()
-        writeSync(fd, this.outputFilter(this.takeRestoreSequence()))
+        restoreWrites.get(this)?.((sequence) => writeSync(fd, this.outputFilter(sequence)))
       } catch {}
       this.setRawMode(false)
       const words = [...this.lastWords]

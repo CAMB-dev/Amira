@@ -1,6 +1,6 @@
-// Owns interactive terminal selection and plain-text output for dumb terminals.
+// Owns interactive terminal selection and fullscreen lifecycle cleanup.
 import { modelLabel } from "@amira/api"
-import { ProcessTerminal, stripAnsi, type Terminal, type Theme } from "@amira/tui-kit"
+import { ProcessTerminal, type Terminal, type Theme } from "@amira/tui-kit"
 import { glyphs } from "../glyphs.ts"
 
 /** The brand is interactive accent; a working-directory reference is not. */
@@ -12,21 +12,36 @@ export function interactiveBanner(
   return `${theme.accent("Amira")} ${theme.muted(`${glyphs.separator} ${modelLabel({ provider: model.provider, model: model.id })} ${glyphs.separator} `)}${theme.path(cwd)}`
 }
 
-/** No escapes, carriage returns or bell: a dumb terminal gets plain text only. */
-const plain = (data: string) => stripAnsi(data).replace(/\r\n?/g, "\n").replaceAll("\x07", "")
-
-/** Apply the same output policy to real terminals and terminals supplied by a host. */
-export function interactiveTerminal(
-  supplied: Terminal | undefined,
+/**
+ * Guard the whole interactive lifecycle, including setup before the app's quit handler exists.
+ * Dumb terminals are rejected without emitting escapes; failures always suggest plain output.
+ */
+export async function withFullscreenTerminal<T>(
+  terminal: Terminal,
   env: Record<string, string | undefined>,
-): Terminal {
-  const terminal = supplied ?? new ProcessTerminal()
+  run: () => Promise<T>,
+): Promise<T> {
   if (env.TERM === "dumb") {
-    if (terminal instanceof ProcessTerminal) terminal.setOutputFilter(plain)
-    else {
-      const write = terminal.write.bind(terminal)
-      terminal.write = (data) => write(plain(data))
-    }
+    throw new Error('TERM=dumb cannot run the fullscreen UI; use amira -p "<prompt>" for plain output.')
   }
-  return terminal
+  try {
+    return await run()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Cannot run the fullscreen UI: ${message}; use amira -p "<prompt>" for plain output.`, {
+      cause: error,
+    })
+  } finally {
+    // A transient output failure gets one retry; cleanup must not replace the startup error.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (terminal instanceof ProcessTerminal) terminal.stop()
+        else terminal.restore()
+        break
+      } catch {}
+    }
+    try {
+      terminal.setRawMode(false)
+    } catch {}
+  }
 }

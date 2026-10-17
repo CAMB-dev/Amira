@@ -37,7 +37,7 @@ All commands use `bun scripts/ui-walk/walk.ts`:
 
 | Command | Meaning |
 | --- | --- |
-| `start <name> [--cols 100 --rows 32] [--theme dark] [--scenario file] [--extension local-dir ...] [--idle-timeout 600000] [-- amira args]` | Create a named isolated session. Names: 1–64 letters, digits, `-`, `_`. Default scenario: `transcript.json`; default mode: fullscreen. Prints daemon PID, application PID and temp root as JSON. |
+| `start <name> [--cols 100 --rows 32] [--theme dark] [--scenario file] [--extension local-dir ...] [--idle-timeout 600000] [-- amira args]` | Create a named isolated session. Names: 1–64 letters, digits, `-`, `_`. Default scenario: `transcript.json`; fullscreen interface. Prints daemon PID, application PID and temp root as JSON. |
 | `keys <name> <keys...>` | Type named keys/chords or literal text, in order. |
 | `resize <name> <cols> <rows>` | Resize both PTY and xterm; wait for the application's redraw afterward. |
 | `wait <name> [--idle ms \| --text string] [--timeout ms]` | Wait for output silence (default 300 ms) or visible text. Default timeout 30 seconds. Timeout errors include numbered screen text. |
@@ -59,7 +59,7 @@ Dimensions are bounded to 500 columns × 200 rows. Millisecond arguments are pos
 
 `paste:` sends bracketed-paste start/end markers. `text:` sends literal bytes. Arrow/home/end encoding follows xterm's application-cursor mode. A standalone `esc` token includes a short delay for the input reader's Escape/Alt ambiguity timeout, so `esc text:hello enter` cancels a picker and then sends a prompt rather than becoming Alt+h. Unknown keys and unsupported chords fail rather than silently typing a typo. If invoking through a JSON client rather than a shell, `text:"..."` and `paste:"..."` accept JSON-string payloads.
 
-After `--`, supported Amira arguments are `--fullscreen`, `--inline`, `--no-builtins`, `--thinking <level>`, `--permission-mode <mode>`, `--disable-tools <names>`, `--shell <mode>` and an initial prompt. A second `--` introduces a dash-prefixed prompt. Provider/model selection, cwd, extensions, package loading, resume and noninteractive modes are deliberately not overridable through passthrough arguments. Use the harness's `start --extension` option before `--` to opt into local test extensions.
+After `--`, supported Amira arguments are `--fullscreen` (accepted as a no-op), `--no-builtins`, `--thinking <level>`, `--permission-mode <mode>`, `--disable-tools <names>`, `--shell <mode>` and an initial prompt. A second `--` introduces a dash-prefixed prompt. Provider/model selection, cwd, extensions, package loading, resume and noninteractive modes are deliberately not overridable through passthrough arguments. Use the harness's `start --extension` option before `--` to opt into local test extensions.
 
 ### Trusted local test extensions
 

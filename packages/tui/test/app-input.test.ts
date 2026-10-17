@@ -9,7 +9,7 @@ import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
 import { closeImageApp, INPUT_PNG, inputImage, paste, setup, testCommands, waitFor } from "./app-harness.ts"
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: clipboard image-only messages send real image blocks and show placeholders`, async () => {
     const s = await setup([{ text: "Image received." }], {
       acceptsImages: true,

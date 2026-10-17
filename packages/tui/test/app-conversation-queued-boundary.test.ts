@@ -4,7 +4,7 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 
 const F6 = "\x1b[17~"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: real queued main and background owned replies drain after their activation divider`, async () => {
     const mainGate = Promise.withResolvers<void>()
     const ownedGate = Promise.withResolvers<void>()
@@ -41,7 +41,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await s.bus.flush()
       s.terminal.send(F6)
       await s.shows("MAIN_QUEUED_REPLY")
-      const main = mode === "inline" ? s.all() : s.live()
+      const main = s.live()
       expect(main).toContain("MAIN_BACKGROUND_REPLY")
       expect(main.lastIndexOf("— main —")).toBeLessThan(main.indexOf("MAIN_BACKGROUND_REPLY"))
       expect(main.indexOf("MAIN_BACKGROUND_REPLY")).toBeLessThan(main.indexOf("MAIN_QUEUED_REPLY"))
@@ -55,7 +55,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
       await s.ownedBus.flush()
       s.terminal.send("/design\r")
       await s.shows("OWNED_BACKGROUND_REPLY")
-      const owned = mode === "inline" ? s.all() : s.live()
+      const owned = s.live()
       expect(owned.lastIndexOf("— design: Design · fixture —")).toBeLessThan(
         owned.indexOf("OWNED_BACKGROUND_REPLY"),
       )
