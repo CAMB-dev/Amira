@@ -503,9 +503,11 @@ for (const scenario of [
         })`,
         )
         if (scenario === "import error") writeFileSync(join(dir, "c.test.ts"), 'import "./does-not-exist"')
-        // Bun 1.4.2 can omit aggregate snapshot statistics with multiple parallel files.
-        // Keep the snapshot fixtures single-file so both initial and retry formats are observed.
-        if (!scenario.startsWith("snapshot"))
+        // Bun 1.4.2 can omit aggregate snapshot statistics with multiple parallel files, and
+        // under load may attribute an unhandled error to a neighbouring parallel file. Keep the
+        // snapshot and unhandled fixtures single-file so the formats and attribution are stable.
+        const singleFile = scenario.startsWith("snapshot") || scenario.startsWith("unhandled")
+        if (!singleFile)
           writeFileSync(
             join(dir, "b.test.ts"),
             'import {describe,test} from "bun:test";import {appendFileSync} from "node:fs";describe("suite",()=>test("passes",()=>appendFileSync("runs", "b")))',
@@ -563,7 +565,7 @@ for (const scenario of [
         )
         if (scenario !== "early exit")
           expect([...runs].filter((char) => char === "b")).toHaveLength(
-            scenario.startsWith("snapshot") ? 0 : 1,
+            scenario.startsWith("snapshot") || scenario.startsWith("unhandled") ? 0 : 1,
           )
       } finally {
         try {

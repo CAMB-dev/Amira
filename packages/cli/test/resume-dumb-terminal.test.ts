@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
@@ -14,7 +14,8 @@ import { projectKey } from "../../core/src/session-project.ts"
 import { formatSessionList } from "../src/resume.ts"
 
 async function resume(args: string[], tty: boolean) {
-  const home = mkdtempSync(path.join(os.tmpdir(), "amira-resume-dumb-"))
+  // macOS temp paths are symlinks (/var -> /private/var); sessions are keyed by the real cwd.
+  const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), "amira-resume-dumb-")))
   const cwd = path.join(home, "project")
   mkdirSync(cwd)
   const dir = path.join(home, "sessions", projectKey(cwd))
