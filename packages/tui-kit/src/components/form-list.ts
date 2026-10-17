@@ -38,6 +38,7 @@ export function renderFormList(
   on: (o: FormChoice) => boolean,
   boxes = false,
   indent = INDENT,
+  onRow?: (index: number, row: number, x: number, width: number) => void,
 ): string[] {
   const { theme } = ctx
   const chrome = chromeGlyphs(ctx.glyphs)
@@ -61,11 +62,14 @@ export function renderFormList(
           Math.max(0, Math.floor((available - gap) / 2)),
         )
       : 0
+  let row = 0
   const out = rows.slice(state.top, state.top + LIST_ROWS).flatMap((o, j) => {
     const heading =
       o.group && (j === 0 || rows[state.top + j - 1]?.group !== o.group)
         ? [truncateToWidth(`${indent}  ${theme.muted(o.group)}`, width, chrome.more)]
         : []
+    row += heading.length
+    onRow?.(state.top + j, row++, visibleWidth(indent), Math.max(0, width - visibleWidth(indent)))
     return [...heading, renderRow()]
 
     function renderRow(): string {

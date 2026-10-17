@@ -184,6 +184,8 @@ export interface TranscriptView {
   detailNote(level: ToolDetailLevel): string
   /** Keys the view takes before the input (scrolling, find, selecting); true when taken. */
   handleInput(e: InputEvent): boolean
+  /** A visible modal takes pointer ownership without completing a transcript drag or copying it. */
+  cancelPointer?(): void
   /**
    * Whether the view holds the keyboard now (a find bar, a block selection): then keys go to
    * `handleInput` first, after an open dialog.

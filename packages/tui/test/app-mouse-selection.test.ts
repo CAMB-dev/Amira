@@ -44,7 +44,8 @@ for (const margin of [0, 3]) {
           ] as const)
             s.terminal.send(`\x1b[<${code};${end + 1};${y + 1}${action}`)
           await Bun.sleep(60)
-          expect(s.terminal.output.slice(before)).toContain(osc.clipboard("selection"))
+          if (open) expect(s.terminal.output.slice(before)).not.toContain("\x1b]52;")
+          else expect(s.terminal.output.slice(before)).toContain(osc.clipboard("selection"))
           if (open) {
             expect(s.screen.text).toContain("Model")
             // Interactive dialog rows are outside the transcript selection pane.

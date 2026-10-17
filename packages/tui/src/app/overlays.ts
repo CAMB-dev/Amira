@@ -10,10 +10,13 @@ import type { UiRequests } from "@amira/core"
 import {
   type ImageStore,
   type InputEvent,
+  type MouseInput,
   matchesKey,
   type RenderContext,
   Spinner,
   type Theme,
+  translateMouse,
+  truncateToWidth,
 } from "@amira/tui-kit"
 import { Dialog, type DialogAnswer, dialogEchoLines } from "../dialog.ts"
 import {
@@ -50,12 +53,14 @@ export interface OverlayManagerDeps {
   interrupt: () => void
   approvalCancelled?: (request: EventMap["ui.request"]) => void
   conversationChrome?: (width: number, ctx: RenderContext) => string[]
+  pointerHint?: () => string | undefined
   quitting: () => boolean
   editorEmpty: () => boolean
   searchActive: () => boolean
   searchHint: (theme: Theme, width: number) => string | undefined
   inputFocused: (focused: boolean) => void
   renderInput: (width: number, ctx: RenderContext, budget: number) => string[]
+  handleInputPointer?: (event: MouseInput) => boolean
   commandActivity?: () => Pick<CommandRunner, "animationActive" | "tickAnimation">
 }
 
@@ -112,6 +117,8 @@ export class OverlayManager {
 
   render(width: number, ctx: RenderContext): string[] {
     const chrome = this.deps.conversationChrome?.(width, ctx) ?? []
+    const hint = this.deps.pointerHint?.()
+    if (hint) chrome.push(ctx.theme.muted(truncateToWidth(hint, width)))
     if (!chrome.length) {
       this.chromeStart = undefined
       return this.renderContent(width, ctx)
@@ -145,6 +152,7 @@ export class OverlayManager {
   }
 
   waitingChanged(change: EventMap["ui.waiting"]["change"]) {
+    if (this.dialogs.length && !this.hasFullscreen) this.deps.view().cancelPointer?.()
     if (this.dialogs.length && !this.hasFullscreen && this.dock?.viewer.focused)
       this.focusView(this.dock.viewer, false)
     const pending = this.dialogs.length + this.forms.length
@@ -245,7 +253,6 @@ export class OverlayManager {
       return []
     }
     const rows = this.dock?.render(width, ctx, available) ?? []
-    if (this.dock?.viewer.focused && !this.dock.viewer.selectable) this.focusView(this.dock.viewer, false)
     this.syncAnimation()
     return rows
   }
@@ -295,9 +302,13 @@ export class OverlayManager {
   handleDockInput(e: InputEvent): boolean {
     if (!this.dock || this.hasFullscreen) return false
     // Visible dialogs own keyboard and pointer activation; only wheel scrolling reaches the dock.
-    if (this.dialogs.length) return e.type === "mouse" && e.action === "wheel" && this.dock.handleInput(e)
+    if (this.dialogs.length) {
+      // Cancel a covered dock's pending gesture without letting the dialog click reach its controls.
+      if (e.type === "mouse" && e.button === "left") this.dock.handleInput({ ...e, x: -1, y: -1 })
+      return e.type === "mouse" && e.action === "wheel" && this.dock.handleInput(e)
+    }
     if (e.type === "mouse" && e.action === "press" && e.button === "left") {
-      if (this.dock.focusable) this.focusView(this.dock.viewer, this.dock.contains(e))
+      if (this.dock.focusable && this.dock.contains(e)) this.focusView(this.dock.viewer, true)
     }
     if (this.dock.focusable && e.type !== "mouse" && this.handleViewInput(this.dock.viewer, e)) return true
     // Cancel a search before applying the input's ordinary dock-close action.
@@ -306,7 +317,10 @@ export class OverlayManager {
       this.closeDock()
       return true
     }
-    return this.dock.handleInput(e)
+    const focused = this.dock.viewer.focused
+    const handled = this.dock.handleInput(e)
+    if (this.dock.viewer.focused !== focused) this.focusView(this.dock.viewer, this.dock.viewer.focused)
+    return handled
   }
 
   /** One clock for visible view, dialog and command demand; hidden content never wakes it. */
@@ -582,10 +596,13 @@ export class OverlayManager {
 
   handleInput(e: InputEvent): boolean {
     // A form or the viewer owns the keyboard while open: the rest is hidden. Ctrl+L repaints it.
-    // Forms and the key reference use wheel arrows; extension views receive pointer coordinates.
+    // Interactive forms and extension views receive pointer coordinates; the key reference uses wheel arrows.
     if (!this.hasFullscreen) return false
     // Chrome is reserved after the overlay; content and caret origins never shift.
-    if (e.type === "mouse" && this.chromeStart !== undefined && e.y >= this.chromeStart) return true
+    if (e.type === "mouse" && this.chromeStart !== undefined && e.y >= this.chromeStart) {
+      ;(this.form ?? this.viewer)?.handleInput(e)
+      return true
+    }
     if (this.deps.keys.is(e, "redraw")) {
       this.deps.view().redrawOverlay()
       return true
@@ -593,11 +610,14 @@ export class OverlayManager {
     if (!this.form && this.viewer instanceof ExtensionViewer) {
       const viewer = this.viewer
       if (e.type === "mouse") {
-        if (e.y >= this.inputTop && e.y < this.inputBottom) {
-          if (e.action === "press" && e.button === "left") this.focusView(viewer, false)
+        if (this.deps.handleInputPointer?.(translateMouse(e, 0, this.inputTop)))
+          this.deps.view().requestOverlayRender()
+        if (e.y >= this.inputTop) {
+          viewer.handleInput(e) // Outside reports cancel a pending widget press before the composer consumes them.
+          if (e.y < this.inputBottom && e.action === "press" && e.button === "left")
+            this.focusView(viewer, false)
           return true
         }
-        if (e.y >= this.inputTop) return true
         if (e.action === "press" && e.button === "left") this.focusView(viewer, true)
         // Wheel scrolling over the view need not steal focus from a draft.
         viewer.handleInput(e)
@@ -608,10 +628,8 @@ export class OverlayManager {
       this.deps.view().requestOverlayRender()
       return handled
     }
-    for (const k of overlayKeys(e, false)) {
-      if (this.form) this.form.handleInput(k)
-      else this.viewer?.handleInput(k)
-    }
+    if (this.form) this.form.handleInput(e)
+    else for (const k of overlayKeys(e, false)) this.viewer?.handleInput(k)
     this.deps.view().requestOverlayRender()
     return true
   }

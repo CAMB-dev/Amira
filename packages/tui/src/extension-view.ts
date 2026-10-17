@@ -57,6 +57,7 @@ import {
   viewInputHint,
 } from "./view-keys.ts"
 import { renderViewLines, viewTitle } from "./view-lines.ts"
+import { confirmationText, ViewPromptHits } from "./view-pointer.ts"
 
 export { wrapViewLines } from "./extension-view-rendering.ts"
 
@@ -147,7 +148,9 @@ export class ExtensionViewer implements Component {
   /** A line of text a key handler asked for (ViewControl.prompt), while it is open. */
   #prompt: { title: string; input: LineInput; resolve: (text: string | undefined) => void } | undefined
   /** A question a key handler asked to confirm (ViewControl.confirm), until the next key answers. */
-  #confirm: { text: string; resolve: (yes: boolean) => void } | undefined
+  #confirm: { text: string; yes: number; no: number; resolve: (yes: boolean) => void } | undefined
+  #promptHits = new ViewPromptHits()
+  #footerText = ""
 
   constructor(view: ViewDefinition, data: unknown, opts: ExtensionViewerOptions = {}) {
     this.kind = view.kind
@@ -330,8 +333,14 @@ export class ExtensionViewer implements Component {
       return true
     }
     if (this.#uiDirty && this.#uiFrame) this.render(this.#uiFrame.width, this.#uiFrame.ctx)
+    if (e.type === "mouse" && (this.#confirm || this.#prompt)) {
+      const hit = this.#promptHits.handle(e)
+      if (hit?.id === "yes" || hit?.id === "no") this.#confirmed(hit.id === "yes")
+      else if (hit?.id === "input") this.#prompt?.input.placeCursor(hit.x)
+      this.#opts.requestRender?.()
+      return true
+    }
     if (this.#confirm) {
-      if (e.type === "mouse") return true
       // y confirms; any other key says no.
       this.#confirmed(matchesKey(e, "y"))
       this.#opts.requestRender?.()
@@ -450,9 +459,9 @@ export class ExtensionViewer implements Component {
         if (this.#opts.placement === "dock") return Promise.resolve(false)
         this.#answer(undefined)
         this.#confirmed(false)
-        const text = `${oneLine(question)} y ${oneLine(opts?.yes ?? "yes")} ${glyphs.separator} any other key ${oneLine(opts?.no ?? "cancels")}`
+        const content = confirmationText(question, opts?.yes, opts?.no)
         return new Promise<boolean>((resolve) => {
-          this.#confirm = { text, resolve }
+          this.#confirm = { ...content, resolve }
           this.#opts.requestRender?.()
         })
       },
@@ -464,6 +473,7 @@ export class ExtensionViewer implements Component {
     const asking = this.#prompt
     if (!asking) return
     this.#prompt = undefined
+    this.#promptHits.reset()
     const value = text?.trim()
     asking.resolve(value ? value : undefined)
   }
@@ -473,6 +483,7 @@ export class ExtensionViewer implements Component {
     const asking = this.#confirm
     if (!asking) return
     this.#confirm = undefined
+    this.#promptHits.reset()
     asking.resolve(yes)
   }
 
@@ -493,7 +504,10 @@ export class ExtensionViewer implements Component {
   render(width: number, ctx: RenderContext): string[] {
     this.#animating = false
     this.#refreshIntervalMs = undefined
-    return this.#finishFrame(this.#ui ? this.#renderUi(width, ctx) : this.#renderBody(width, ctx))
+    this.#footerText = ""
+    const rows = this.#finishFrame(this.#ui ? this.#renderUi(width, ctx) : this.#renderBody(width, ctx))
+    this.#promptHits.prepare(rows, width, this.#footerText, this.#confirm, this.#prompt?.title)
+    return rows
   }
 
   #finishFrame(rows: string[]): string[] {
@@ -760,7 +774,9 @@ export class ExtensionViewer implements Component {
   }
 
   #footer(theme: Theme, width: number): string[] {
-    return this.#footerHeight ? [`  ${this.#keyBar(theme, Math.max(1, width - 2))}`] : []
+    const rows = this.#footerHeight ? [`  ${this.#keyBar(theme, Math.max(1, width - 2))}`] : []
+    this.#footerText = stripAnsi(rows[0] ?? "")
+    return rows
   }
 
   #navigationLabel(action: "view.back" | "view.close", typing = !!this.#ui?.typing): string | undefined {

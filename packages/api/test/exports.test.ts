@@ -30,6 +30,8 @@ import type {
   ToolResult,
   ToolResultMessage,
   TuiSettings,
+  UiEvent,
+  UiNode,
   UiRequest,
   UiRequestOptions,
   Usage,
@@ -78,6 +80,15 @@ test("the public agent settings allow an unlimited model-call limit", () => {
       },
     }
   `)
+})
+
+test("declarative buttons reuse the existing activation event without a version bump", async () => {
+  const button: UiNode = { type: "button", id: "run", label: "Run", key: "execute", tone: "accent" }
+  const fallback: UiNode = { type: "button", id: "close", label: "Close" }
+  const event: UiEvent = { type: "activate", id: button.id, key: button.key ?? button.id }
+  expect(event).toEqual({ type: "activate", id: "run", key: "execute" })
+  expect(fallback.key ?? fallback.id).toBe("close")
+  expect((await import("../src/index.ts")).API_VERSION).toBe("0.1.57")
 })
 
 test("the public API exports stay stable", async () => {

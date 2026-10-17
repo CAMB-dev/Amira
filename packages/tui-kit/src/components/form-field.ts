@@ -1,5 +1,6 @@
 import { CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
+import type { HitRect } from "../hit-test.ts"
 import { keyLabel } from "../keys.ts"
 import { bold, inverse, type Theme } from "../style.ts"
 import { graphemes, truncateToWidth, visibleWidth, wrapText } from "../width.ts"
@@ -28,6 +29,13 @@ export interface FormFieldState {
 const pointer = (ctx: RenderContext) => ctx.glyphs?.pointer ?? defaultGlyphs.pointer ?? "›"
 const separator = (ctx: RenderContext) => ctx.glyphs?.separator ?? defaultGlyphs.separator ?? "·"
 
+/** A rendered control target, relative to the field's first line. */
+export interface FormFieldHit extends HitRect {
+  kind: "focus" | "activate" | "input" | "list" | "option"
+  index?: number
+  value?: string
+}
+
 /** Draws controls without owning focus, validation, or state transitions. */
 export function renderFormField(
   f: FormFieldState,
@@ -38,6 +46,7 @@ export function renderFormField(
   focused: boolean,
   error: string | undefined,
   lists: { filtered: FormChoice[]; checklist: FormChoice[]; total: number },
+  onHit?: (hit: FormFieldHit) => void,
 ): { lines: string[]; active: number } {
   const { theme } = ctx
   const chrome = chromeGlyphs(ctx.glyphs)
@@ -64,6 +73,28 @@ export function renderFormField(
       active = out.length
       out.push(indent + text)
     } else out.push(`${label}  ${text}`)
+    const kind = ["select", "checkbox", "action"].includes(f.def.type) ? "activate" : "focus"
+    for (const [y, line] of out.entries())
+      onHit?.({ kind, x: 0, y, width: Math.min(width, visibleWidth(line)), height: 1 })
+  }
+  const list = (rows: FormChoice[], on: (o: FormChoice) => boolean, boxes: boolean) => {
+    const x = Math.max(0, column - 2)
+    const y = out.length
+    const options: FormFieldHit[] = []
+    const lines = renderFormList(f, rows, room + 2, ctx, on, boxes, "", (index, row, left, size) => {
+      options.push({
+        kind: "option",
+        index,
+        value: rows[index]?.value,
+        x: x + left,
+        y: y + row,
+        width: size,
+        height: 1,
+      })
+    })
+    onHit?.({ kind: "list", x, y, width: width - x, height: lines.length })
+    for (const hit of options) onHit?.(hit)
+    return lines.map((line) => " ".repeat(x) + line)
   }
   const hint = (text: string, style = theme.muted) => {
     for (const line of wrapText(text, contentRoom)) out.push(`${indent} ${style(line)}`)
@@ -82,6 +113,13 @@ export function renderFormField(
           ),
         ),
       )
+      onHit?.({
+        kind: "input",
+        x: (stacked ? column : visibleWidth(label) + 2) + (edge ? 1 : 0),
+        y: stacked ? 1 : 0,
+        width: contentRoom,
+        height: 1,
+      })
       if (f.def.type === "secret" && f.input!.value) hint(`${graphemes(f.input!.value).length} chars`)
       break
     }
@@ -90,7 +128,10 @@ export function renderFormField(
       editor.focused = focused
       const rows = editor.render(contentRoom, ctx)
       first(control(rows[0] ?? ""))
-      for (const line of rows.slice(1)) out.push(indent + control(line))
+      for (const line of rows.slice(1)) {
+        onHit?.({ kind: "focus", x: column, y: out.length, width: room, height: 1 })
+        out.push(indent + control(line))
+      }
       active = Math.max(
         0,
         out.findIndex((line) => line.includes(CURSOR_MARKER)),
@@ -107,11 +148,11 @@ export function renderFormField(
       if (chosen?.description && !f.open) hint(chosen.description)
       if (f.open) {
         if (f.filter) hint(`filter: ${f.filter}${CURSOR_MARKER}`)
-        const list = lists.filtered
-        if (!list.length) hint("no match")
-        const rows = renderFormList(f, list, room + 2, ctx, (o) => o.value === f.value, false, "")
+        const filtered = lists.filtered
+        if (!filtered.length) hint("no match")
+        const rows = list(filtered, (o) => o.value === f.value, false)
         active = out.length + listActiveRow(rows)
-        out.push(...rows.map((line) => " ".repeat(Math.max(0, column - 2)) + line))
+        out.push(...rows)
       }
       break
     }
@@ -141,13 +182,14 @@ export function renderFormField(
         Math.max(0, contentRoom - 1),
         chrome.more,
       )
+      onHit?.({ kind: "focus", x: column, y: out.length, width: room, height: 1 })
       out.push(indent + control(query + CURSOR_MARKER))
       if (adds) hint(`${keyLabel({ name: "enter" })} adds it`)
       if (!rows.length) hint(f.filter ? "no match" : "(no options yet)")
       else {
-        const list = renderFormList(f, rows, room + 2, ctx, (o) => checked.includes(o.value), true, "")
-        active = out.length + listActiveRow(list)
-        out.push(...list.map((line) => " ".repeat(Math.max(0, column - 2)) + line))
+        const lines = list(rows, (o) => checked.includes(o.value), true)
+        active = out.length + listActiveRow(lines)
+        out.push(...lines)
       }
       break
     }

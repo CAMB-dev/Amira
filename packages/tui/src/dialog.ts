@@ -5,20 +5,28 @@ import {
   type Component,
   Editor,
   type InputEvent,
+  key,
   LineInput,
+  type MouseInput,
   type RenderContext,
   Spinner,
-  type StyleFn,
   stripAnsi,
   type Theme,
   truncateToWidth,
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { dialogFrame } from "./dialog-frame.ts"
+import {
+  cutEnd,
+  cutMiddle,
+  type DialogHints,
+  DialogTargets,
+  fitTitle,
+  renderDialogInput,
+} from "./dialog-render.ts"
 import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
 import { glyphs } from "./glyphs.ts"
-import { fitHint, type HintItem } from "./hint.ts"
+import type { HintItem } from "./hint.ts"
 import { type Action, defaultKeybindings, type Keybindings, keyLabel } from "./keybindings.ts"
 import { styledStatusBadge } from "./status-badge.ts"
 
@@ -107,6 +115,7 @@ interface Fit {
 export class Dialog implements Component {
   /** Rows the dialog may take; set by the app before each render. */
   maxRows = Number.POSITIVE_INFINITY
+  #mouse = new DialogTargets()
   #request: DialogRequest
   #pages: Page[]
   #page = 0
@@ -191,10 +200,12 @@ export class Dialog implements Component {
     this.#field = undefined
     this.#filter = ""
     this.#pages = []
+    this.#mouse.reset()
   }
 
   handleInput(e: InputEvent): boolean {
     if (this.#done) return false
+    if (e.type === "mouse") return this.handleMouse(e)
     const keys = this.keys
     if (this.#field) return this.#fieldKey(e)
     if (keys.is(e, "dialog.cancel")) {
@@ -268,7 +279,58 @@ export class Dialog implements Component {
     return true
   }
 
+  /** Handles cells relative to the last rendered frame. */
+  handleMouse(e: MouseInput): boolean {
+    if (this.#done) return false
+    if (e.action === "wheel") {
+      if (e.button !== "up" && e.button !== "down") return false
+      if (!this.#mouse.contains(e)) return false
+      const choices = this.#choices()
+      const page = this.#current
+      page.selected = Math.max(0, Math.min(choices.length - 1, page.selected + (e.button === "up" ? -3 : 3)))
+      const option = choices[page.selected]?.label
+      if (option !== undefined) this.selection.changed?.(option)
+      return true
+    }
+    const hit = this.#mouse.handle(e)
+    if (hit) {
+      if (hit.key) return this.handleInput(hit.key)
+      if (hit.row !== undefined) {
+        this.#editor?.placeCursor(e.x, hit.row)
+        return true
+      }
+      if (hit.id === "secret") {
+        this.#secret?.placeCursor(e.x - (hit.column ?? 0))
+        return true
+      }
+      const page = this.#current
+      const choice = this.#choices()[hit.index]
+      if (!choice) return false
+      if (this.#field && choice.other && page.selected === hit.index) {
+        this.#field.placeCursor(e.x - (hit.column ?? 0))
+        return true
+      }
+      if (this.#field) {
+        const draft = this.#field.value.trim()
+        if (draft) page.other = draft
+        this.#field = undefined
+      }
+      page.selected = hit.index
+      this.selection.changed?.(choice.label)
+      if (page.multi) {
+        // Clicking a checkbox toggles it; a second click submits without toggling it back.
+        if (hit.double) return this.#submitPage()
+        this.#toggle(hit.index)
+      } else if (this.request.kind === "confirm" || this.request.kind === "diff-review" || hit.double) {
+        return this.#choose(hit.index)
+      }
+      return true
+    }
+    return this.#mouse.contains(e)
+  }
+
   render(width: number, ctx: RenderContext): string[] {
+    this.#mouse.begin(width)
     if (!this.#pages.length) return []
     const { theme } = ctx
     this.#animatedRows.clear()
@@ -279,59 +341,30 @@ export class Dialog implements Component {
       if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
       this.#spinnerFrame = frame
     }
-    const border = barStyle(this.request, theme)
+    // Border semantics: approvals warn, other live questions use the interactive accent.
+    const border = this.request.source === "approval" ? theme.warning : theme.accent
     const inner = Math.max(1, width - 3)
     const title = this.#titleRows(inner, theme)[0] ?? ""
     // Body producers include their two-cell gutter; the frame absorbs one into its side.
     const body =
-      this.request.kind === "input" ? this.#renderInput(inner + 2, ctx) : this.#renderList(inner + 2, ctx)
-    // Match the frame's clipping, including the one-row fallback which shows only the hint.
-    const room = Math.max(0, this.maxRows - 2)
-    const kept =
-      width < 5 || this.maxRows < 4
-        ? [title, ...body].slice(-Math.max(1, this.maxRows))
-        : body.length <= room
-          ? body
-          : [...body.slice(0, room - 1), body.at(-1)!]
+      this.request.kind === "input"
+        ? renderDialogInput(inner + 2, ctx, {
+            budget: this.#bodyBudget,
+            title: this.#titleRows(inner, theme).slice(1),
+            targets: this.#mouse,
+            hints: this.#footer(),
+            editor: this.#editor,
+            secret: this.#secret,
+            placeholder: this.request.placeholder,
+          })
+        : this.#renderList(inner + 2, ctx)
+    const { rows, kept } = this.#mouse.frame(title, body, width, ctx, border, this.maxRows)
     if (kept.some((row) => this.#animatedRows.has(row))) this.#refreshIntervalMs = Spinner.INTERVAL_MS
-    return dialogFrame(title, body, width, ctx, border, this.maxRows)
+    return rows
   }
 
   get #bodyBudget(): number {
     return this.maxRows < 4 ? Math.max(1, this.maxRows - 1) : Math.max(2, this.maxRows - 2)
-  }
-
-  #renderInput(width: number, ctx: RenderContext): string[] {
-    const { theme } = ctx
-    const r = this.request as Extract<DialogRequest, { kind: "input" }>
-    const hint = theme.muted(
-      fitHint(
-        [this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "cancel", 3)],
-        Math.max(1, width - 2),
-      ),
-    )
-    const title = this.#titleRows(Math.max(1, width - 2), theme).slice(1)
-    const editor = this.#editor
-    editor?.setPrompt(`${glyphs.pointer} `)
-    // The whole text, to see whether it fits with the title.
-    if (editor) editor.maxRows = Number.POSITIVE_INFINITY
-    const render = () =>
-      this.#secret
-        ? [
-            `${glyphs.pointer} ${this.#secret.render(Math.max(4, width - 2), theme, { focused: true, placeholder: r.placeholder ?? "" })}`,
-          ]
-        : editor!.render(width, ctx)
-    let body = render()
-    // A blank row before the keys goes first, then the title gives way, then the text scrolls
-    // inside the rows left (the caret stays in view): a row of title stays while two are left.
-    const blank = title.length + body.length + 2 <= this.#bodyBudget ? [""] : []
-    const room = Math.max(1, this.#bodyBudget - 1 - blank.length)
-    if (editor && body.length > room - 1) {
-      editor.maxRows = Math.max(1, room - (room > 1 ? 1 : 0))
-      body = render()
-    }
-    const titleRoom = room - body.length
-    return [...(titleRoom > 0 ? fitTitle(title, titleRoom) : []), ...body, ...blank, hint]
   }
 
   #renderList(width: number, ctx: RenderContext): string[] {
@@ -368,7 +401,6 @@ export class Dialog implements Component {
       this.#filter && this.#bodyBudget >= 3
         ? [truncateToWidth(`${theme.muted("filter:")} ${this.#filter}`, Math.max(1, width - 2), glyphs.more)]
         : []
-    const hint = theme.muted(fitHint(this.#footer(), Math.max(1, width - 2)))
     const fit: Fit = {
       blanks: 2,
       inlineDescriptions: false,
@@ -386,9 +418,12 @@ export class Dialog implements Component {
       out.push(...cutEnd(message, fit.message, theme))
       if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme, Math.max(1, width - 2)))
       if (fit.blanks > 1) out.push("")
-      out.push(...filter, ...this.#optionRows(choices, width, fit, theme))
+      out.push(...filter)
+      const offset = out.length
+      out.push(...this.#optionRows(choices, width, fit, theme))
+      this.#mouse.placeOptions(offset)
       if (fit.blanks > 0) out.push("")
-      out.push(hint)
+      out.push(this.#mouse.footer(out.length, this.#footer(), Math.max(1, width - 2), theme))
       return out
     }
     // The diff takes what the rest leaves, and a diff cut short is worth more than blank rows.
@@ -412,14 +447,18 @@ export class Dialog implements Component {
     const room = this.#bodyBudget - layout(0).length
     const rows = layout(Number.isFinite(room) ? Math.max(0, room) : diff.length)
     // Local pickers keep their explicit control hints even below the usual three-row minimum.
-    return this.selection.footer?.length && rows.length > this.#bodyBudget
-      ? rows.slice(-Math.max(1, this.#bodyBudget))
-      : rows
+    if (this.selection.footer?.length && rows.length > this.#bodyBudget) {
+      const cut = rows.length - Math.max(1, this.#bodyBudget)
+      this.#mouse.trimBody(cut)
+      return rows.slice(cut)
+    }
+    return rows
   }
 
   /** The options around the selected one, as many as `fit` allows, then where the window is. */
   #optionRows(choices: Choice[], width: number, fit: Fit, theme: Theme): string[] {
     const page = this.#current
+    this.#mouse.beginOptions()
     if (!choices.length) return [theme.muted("  no match")]
     const shown = Math.min(fit.options, choices.length)
     const start = Math.min(Math.max(0, page.selected - shown + 1), Math.max(0, choices.length - shown))
@@ -444,7 +483,7 @@ export class Dialog implements Component {
       const label = digits && display.startsWith(`${i + 1}. `) ? display.slice(`${i + 1}. `.length) : display
       const typed = c.other && page.other ? `${label} ${theme.muted(JSON.stringify(page.other))}` : label
       const description = c.description?.replace(/\s+/g, " ").trim() ?? ""
-      return { c, selected, lead, badge, typed, description, status }
+      return { c, i, selected, lead, badge, typed, description, status }
     })
     // Descriptions line up in a column after the labels when every one fits there; else each
     // goes under its label, unless the rows are too few for that.
@@ -458,15 +497,19 @@ export class Dialog implements Component {
       (!(this.request.kind === "select" && this.request.searchTexts) &&
         described.every((it) => column + 2 + visibleWidth(it.description) <= width))
     const rows: string[] = []
-    for (const { c, selected, lead, badge, typed, description, status } of items) {
+    for (const { c, i, selected, lead, badge, typed, description, status } of items) {
       const heading = this.#heading(c)
       if (heading && fit.headings) rows.push(truncateToWidth(`  ${theme.muted(heading)}`, width, glyphs.more))
       const leadWidth = visibleWidth(lead)
+      const id = `choice:${this.#page}:${c.index ?? i}`
+      const target = { id, index: i, ...(c.other ? { column: leadWidth } : {}) }
+      const firstRow = rows.length
       if (c.other && this.#field && selected) {
         const field = this.#field.render(Math.max(4, width - leadWidth), theme, {
           focused: true,
           placeholder: "Type your answer",
         })
+        this.#mouse.option(rows.length, rows.length + 1, target)
         rows.push(`${lead}${field}`)
         continue
       }
@@ -483,6 +526,7 @@ export class Dialog implements Component {
         for (const l of wrapText(description, Math.max(1, width - leadWidth)))
           rows.push(`${indent}${theme.muted(l)}`)
       }
+      this.#mouse.option(firstRow, rows.length, target)
       if (status === "working" && leadWidth < width - 1) this.#animatedRows.add(rows[optionRow]!)
     }
     if (shown < choices.length && fit.position) {
@@ -507,9 +551,11 @@ export class Dialog implements Component {
   }
 
   /** The keys at the bottom, the most useful kept longest as the width shrinks. */
-  #footer(): Parameters<typeof fitHint>[0] {
+  #footer(): DialogHints {
     const r = this.request
     const page = this.#current
+    if (r.kind === "input")
+      return [this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "cancel", 3)]
     if (this.#field) {
       return [this.#hint("dialog.choose", "submit", 5), this.#hint("dialog.cancel", "back", 4)]
     }
@@ -547,8 +593,12 @@ export class Dialog implements Component {
 
   /** A footer item for an action's key; none when the action has no key bound. */
   #hint(action: Action, what: string, priority: number) {
-    const key = this.keys.label(action)
-    return key ? { text: `${key} ${what}`, priority } : undefined
+    const label = this.keys.label(action)
+    const spec =
+      action === "dialog.choose" || action === "dialog.cancel" ? this.keys.keys(action)[0] : undefined
+    return label
+      ? { text: `${label} ${what}`, priority, ...(spec ? { key: key(spec.name, spec) } : {}) }
+      : undefined
   }
 
   /** The section of a select that a choice is in, by its place in the whole list. */
@@ -693,6 +743,7 @@ export class Dialog implements Component {
   }
 
   #goTo(i: number) {
+    this.#mouse.reset()
     this.#page = i
     const page = this.#current
     // Back on an answered question, the cursor is on its answer.
@@ -707,6 +758,7 @@ export class Dialog implements Component {
   }
 
   #setFilter(filter: string) {
+    this.#mouse.reset()
     this.#filter = filter
     this.#current.selected = 0
   }
@@ -714,6 +766,7 @@ export class Dialog implements Component {
   #finish(answer: DialogAnswer): true {
     if (!this.#done) {
       this.#done = true
+      this.#mouse.reset()
       this.onDone(answer)
     }
     return true
@@ -782,11 +835,6 @@ function pagesOf(r: DialogRequest): Page[] {
   }
 }
 
-/** Border semantics: approvals warn, other live questions use the interactive accent. */
-function barStyle(r: DialogRequest, theme: Theme): StyleFn {
-  return r.source === "approval" ? theme.warning : theme.accent
-}
-
 /**
  * What stays in the transcript once a dialog is answered: a line per question under the same
  * empty marker gutter, "  Allow bash? › Yes". A secret answer is never shown.
@@ -837,42 +885,4 @@ export function dialogEchoLines(
 function askAnswerText(a: AskAnswer): string {
   const parts = [...a.selected, ...(a.other !== undefined ? [JSON.stringify(a.other)] : [])]
   return parts.length ? parts.join(", ") : "(none)"
-}
-
-/** A wrapped title cut to `rows`, its last row ending in an ellipsis when cut. */
-function fitTitle(title: string[], rows: number): string[] {
-  if (rows <= 0) return []
-  if (title.length <= rows) return title
-  const kept = title.slice(0, Math.max(1, rows))
-  kept[kept.length - 1] = `${kept[kept.length - 1]}${glyphs.more}`
-  return kept
-}
-
-/** Lines cut to `rows` from the end, the last kept one marking the cut. */
-function cutEnd(lines: string[], rows: number, theme: Theme): string[] {
-  if (lines.length <= rows) return lines
-  if (rows <= 0) return []
-  const kept = lines.slice(0, rows)
-  kept[rows - 1] = `${kept[rows - 1]}${theme.muted(` ${glyphs.more}`)}`
-  return kept
-}
-
-/**
- * Lines cut to `rows`: the start and the end, with a marker in the middle saying how many
- * were left out. The start (file names, first hunk) gets the extra row.
- */
-function cutMiddle(lines: string[], rows: number, theme: Theme, width: number): string[] {
-  if (lines.length <= rows) return lines
-  if (rows <= 0) return []
-  if (rows === 2) {
-    // Keep both ends even when a standalone omission row would consume the tail.
-    const marker = theme.muted(`${glyphs.more} ${lines.length - 2} more lines ${glyphs.more}`)
-    const head = truncateToWidth(lines[0]!, Math.max(1, width - visibleWidth(marker) - 1), glyphs.more)
-    return [`${head} ${marker}`, lines.at(-1)!]
-  }
-  const keep = rows - 1
-  const head = Math.ceil(keep / 2)
-  const tail = keep - head
-  const marker = theme.muted(`${glyphs.more} ${lines.length - keep} more lines ${glyphs.more}`)
-  return [...lines.slice(0, head), marker, ...lines.slice(lines.length - tail)]
 }

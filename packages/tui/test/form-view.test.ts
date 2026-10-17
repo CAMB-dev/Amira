@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AnyEvent, defineTool, type FormSpec, type FormValues, textResult } from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import { FakeTerminal, key, textKey } from "@amira/tui-kit"
+import { FakeTerminal, key, modes, textKey } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
@@ -192,6 +192,29 @@ test("narrow and short terminals: the form scrolls and resizes while editing", a
   terminal.send("\x13")
   expect(await done).toEqual({ url: "https://a.b", token: "", note: "日本語👍" })
   expect(screen.inAltScreen).toBe(false)
+})
+
+test("standalone provider forms enable button reporting and accept SGR Save without any-motion reporting", async () => {
+  const { terminal, screen } = screenFor(70, 20)
+  const done = runFormScreen(
+    { title: "Provider", fields: [{ id: "name", type: "text", label: "Name", default: "local" }] },
+    { terminal, setup: noProbe },
+  )
+  await waitFor(() => screen.lines.some((line) => line.includes("[ Save ]")), "standalone form")
+  expect(terminal.output).toContain(modes.mouse.on)
+  expect(terminal.output).not.toContain("\x1b[?1003h")
+  for (const button of [1, 2]) {
+    terminal.send(`\x1b[<${button};5;5M`)
+    await waitFor(
+      () => screen.lines.some((line) => line.includes("Clicks go to Amira here:")),
+      "standalone paste hint",
+    )
+  }
+  const y = screen.lines.findIndex((line) => line.includes("[ Save ]"))
+  const x = screen.lines[y]!.indexOf("[ Save ]")
+  terminal.send(`\x1b[<0;${x + 1};${y + 1}M\x1b[<0;${x + 1};${y + 1}m`)
+  expect(await done).toEqual({ name: "local" })
+  expect(terminal.output).toContain(modes.mouse.off)
 })
 
 test("FormView with a spec backend reports refused values and aborts actions on close", async () => {

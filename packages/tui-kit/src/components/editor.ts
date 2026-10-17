@@ -232,6 +232,24 @@ export class Editor implements Component {
     this.moveTo({ line, col: Math.min(Math.max(0, pos.col), this.lines[line]!.length) })
   }
 
+  /** Place the caret at cells in the last rendered viewport, respecting wrapping and graphemes. */
+  placeCursor(column: number, row = 0): void {
+    const total = this.totalRows()
+    const target = this.rowAt(Math.max(0, Math.min(total - 1, this.top + Math.floor(row))))
+    const text = this.lines[target.line]!
+    const goal = Math.max(0, column - this.promptWidth)
+    let col = target.start
+    let used = 0
+    for (const g of graphemes(text.slice(target.start, target.end))) {
+      const width = this.cellWidth(g, used)
+      if (used + width > goal) break
+      used += width
+      col += g.length
+    }
+    if (!target.last && col === target.end) col = lastBoundary(text.slice(0, target.end))
+    this.moveTo({ line: target.line, col })
+  }
+
   /** The caret's line up to the caret; cheap, for completions that look at the word being typed. */
   textBeforeCaret(): string {
     return this.current.slice(0, this.col)

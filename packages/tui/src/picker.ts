@@ -18,7 +18,8 @@ const LABEL_SHARE = 0.4
  * (none while `selected` is -1), and descriptions in a column after the labels. The column is
  * as wide as the longest label of the whole list, so it stays put while the list scrolls, but
  * at most 40% of the width: a longer label is cut with "…" rather than pushing every
- * description out of view.
+ * description out of view. `onRow` reports each drawn item's original index and local row;
+ * the position counter is not an item.
  */
 export function pickerRows(
   rows: PickerRow[],
@@ -26,6 +27,7 @@ export function pickerRows(
   width: number,
   theme: Theme,
   maxRows = Number.POSITIVE_INFINITY,
+  onRow?: (index: number, y: number) => void,
 ): string[] {
   const n = rows.length
   const roomRows = Math.max(0, Math.floor(maxRows))
@@ -39,6 +41,7 @@ export function pickerRows(
   const room = Math.max(8, Math.floor((width - 2) * LABEL_SHARE))
   const col = Math.min(room, Math.max(...rows.map((r) => visibleWidth(r.label))))
   const lines = shown.map((r, i) => {
+    onRow?.(start + i, i)
     const label =
       described && visibleWidth(r.label) > col ? truncateToWidth(r.label, col, glyphs.more) : r.label
     const pad = r.description ? " ".repeat(Math.max(0, col - visibleWidth(label))) : ""

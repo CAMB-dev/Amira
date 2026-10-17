@@ -33,6 +33,7 @@ import { createMainRewind } from "./app/main-rewind.ts"
 import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
+import { activePointerHint, routePointer } from "./app/pointer.ts"
 import { showAgentSession } from "./app/session-display.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
@@ -56,7 +57,7 @@ import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { headerLine } from "./header.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
-import { contentGeometry, contentMouse } from "./margins.ts"
+import { contentGeometry } from "./margins.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { mouseLabels } from "./mouse-labels.ts"
 import { PromptHistory } from "./prompt-history.ts"
@@ -261,11 +262,13 @@ async function runFullscreen(
     editorEmpty: () => editor.isEmpty,
     searchActive: () => composer.search.active,
     searchHint: bottomArea.searchHint,
+    pointerHint: () => activePointerHint(hint.current()),
     inputFocused: (focused) => {
       if (!focused) composer.search.cancel()
       editor.focused = focused
     },
     renderInput: bottomArea.overlayInput,
+    handleInputPointer: (event) => bottomArea.handleOverlayPointer(event, composer.handleCompletionKey),
   })
   // Turn display state: the detail level read by the transcript view.
   let detail: ToolDetailLevel = "summary"
@@ -743,25 +746,21 @@ async function runFullscreen(
       focus.unfocus()
       return redraw()
     }
-    if (overlays.hasFullscreen && e.type === "mouse") {
-      const translated = contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings))
-      if (!translated) return
-      e = translated
+    if (e.type === "mouse") {
+      const geometry = contentGeometry(terminal.columns, terminal.rows, settings)
+      if (routePointer(e, geometry, overlays, bottomArea, composer, showNote)) return redraw()
     }
     if (overlays.handleInput(e)) return shimmerClock.sync()
-    // Docks use content-relative pointer coordinates, but leave transcript events unchanged.
-    const dockEvent =
-      e.type === "mouse" ? contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings)) : e
-    if (dockEvent && overlays.handleDockInput(dockEvent)) return redraw()
+    if (e.type !== "mouse" && overlays.handleDockInput(e)) return redraw()
     // Fullscreen extension views keep pending dialogs behind their visible composer.
     const dialog = overlays.hasFullscreen ? undefined : overlays.dialogs[0]
-    if (!dialog) composer.prepareInput(e)
+    if (!dialog && e.type !== "mouse") composer.prepareInput(e)
     if (keys.is(e, "redraw")) {
       // Also over a dialog or the search: they are part of the screen.
       return view.redraw()
     }
-    // Text dragging does not capture the keyboard: visible transcript rows remain selectable
-    // while a dialog or history search owns keys. Pane hit-testing excludes the bottom area.
+    // Text dragging does not capture the keyboard. Visible dialogs own pointer activation;
+    // history search leaves transcript selection available. Pane hit-testing excludes the bottom area.
     // The mouse is the transcript's; keys go to the view first while it holds the keyboard.
     // Keys it leaves (Ctrl+C, typing, a paste) go on through the chain below as usual.
     // Esc with text selected clears it before closing a list or the search, or interrupting.

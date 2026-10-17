@@ -24,6 +24,7 @@ import {
   FullScreenRenderer,
   type InputEvent,
   InputReader,
+  modes,
   ProcessTerminal,
   type RenderContext,
   type SetupResult,
@@ -32,6 +33,7 @@ import {
   type Theme,
 } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
+import { mousePasteHint } from "./mouse-labels.ts"
 
 /** Where a form's checks and actions run, and where its answer goes. */
 export interface FormBackend {
@@ -433,16 +435,20 @@ export async function runFormScreen(
     ...(opts.theme ? { theme: opts.theme } : {}),
   })
   const reader = new InputReader(terminal, (e) => {
-    view.handleInput(e)
+    const hint = mousePasteHint(e)
+    if (hint) view.form.setStatus(hint)
+    else view.handleInput(e)
     screen.requestRender()
   })
   screen.open()
+  terminal.enableMode(modes.mouse)
   reader.start()
   if (leftoverInput) reader.feed(leftoverInput)
   try {
     return await done
   } finally {
     reader.stop()
+    terminal.disableMode(modes.mouse)
     screen.close()
     if (terminal instanceof ProcessTerminal) terminal.stop()
     else terminal.restore()

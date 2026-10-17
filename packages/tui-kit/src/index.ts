@@ -55,6 +55,13 @@ export { StreamText } from "./components/stream-text.ts"
 export { Text } from "./components/text.ts"
 export { FullScreenRenderer } from "./fullscreen.ts"
 export { type ChromeGlyphs, chromeGlyphs, defaultGlyphs, type Glyphs } from "./glyphs.ts"
+export {
+  type HitActivation,
+  type HitRect,
+  HitRegions,
+  MULTI_CLICK_MS,
+  translateMouse,
+} from "./hit-test.ts"
 export { fitImage } from "./images/fit.ts"
 export { type PendingResult, pendingBlock, pendingImage, placeImage } from "./images/placement.ts"
 export { type ImagePlacement, ScreenImage } from "./images/screen.ts"

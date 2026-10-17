@@ -1,5 +1,5 @@
 import { DEFAULT_TUI_MARGIN, DEFAULT_TUI_MARGIN_ROWS, type TuiSettings } from "@amira/api"
-import { type Component, type MouseInput, truncateToWidth } from "@amira/tui-kit"
+import { type Component, type MouseInput, translateMouse, truncateToWidth } from "@amira/tui-kit"
 
 /** One content column shared by transcript, chrome and full-screen overlays. */
 export function contentGeometry(columns: number, rows: number, settings: TuiSettings) {
@@ -55,9 +55,9 @@ export function contentMouse(
   event: MouseInput,
   geometry: ReturnType<typeof contentGeometry>,
 ): MouseInput | undefined {
-  const x = event.x - geometry.left
-  const y = event.y - geometry.rows
+  const translated = translateMouse(event, geometry.left, geometry.rows)
+  const { x, y } = translated
   if (event.action === "press" && (x < 0 || x >= geometry.width || y < 0 || y >= geometry.height))
     return undefined
-  return { ...event, x, y }
+  return translated
 }

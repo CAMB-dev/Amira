@@ -556,6 +556,10 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       if (pane.selected && findSelect.selectKey(e)) return true
       return findSelect.transcriptKey(e)
     },
+    cancelPointer() {
+      mouseHandlers.stopDrag()
+      mouseHandlers.disarm()
+    },
     takeFirst(e) {
       // Esc clears selected text before it does anything else (closing the find bar or a list,
       // leaving the search, stopping a turn).
