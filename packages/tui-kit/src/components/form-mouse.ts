@@ -12,6 +12,7 @@ export interface FormHit extends HitRect {
 }
 
 interface FormViewport {
+  x?: number
   y: number
   rows: number
   width: number

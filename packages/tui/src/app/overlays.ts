@@ -115,7 +115,16 @@ export class OverlayManager {
     )
   }
 
+  /** Uses terminal geometry, matching Form's fallback without transcript margins or chrome. */
+  overlayCard(width: number, ctx: Pick<RenderContext, "rows">): boolean {
+    return this.form instanceof FormView && this.form.form.cardLayout && width >= 60 && ctx.rows >= 20
+  }
+
   render(width: number, ctx: RenderContext): string[] {
+    if (this.overlayCard(width, ctx)) {
+      this.chromeStart = undefined
+      return this.renderContent(width, ctx)
+    }
     const chrome = this.deps.conversationChrome?.(width, ctx) ?? []
     const hint = this.deps.pointerHint?.()
     if (hint) chrome.push(ctx.theme.muted(truncateToWidth(hint, width)))

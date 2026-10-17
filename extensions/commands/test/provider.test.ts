@@ -182,7 +182,7 @@ test("/provider add opens one form immediately with editable vendor and protocol
   expect(result.ok).toBe(true)
   expect(loads).toBe(0)
   const form = asked[0] as Extract<Request, { kind: "form" }>
-  expect(form.title).toBe("Add a provider")
+  expect(form.title).toBe("Add provider")
   expect(form.fields[0]).toMatchObject({ id: "vendor", type: "select" })
   expect(form.fields.find((f) => f.id === "dialect")).toMatchObject({ type: "select" })
   expect(drafts[0]).toMatchObject({
@@ -364,7 +364,7 @@ test("an explicit protocol wins a vendor-id clash without fetching the catalog",
 test("older admins without vendors open a Custom form without a network wait", async () => {
   const { run, asked } = await setup(() => undefined, { admin: { vendors: undefined } })
   expect((await run("/provider add")).text).toBe("Cancelled; nothing was saved.")
-  expect(asked[0]).toMatchObject({ kind: "form", title: "Add a provider" })
+  expect(asked[0]).toMatchObject({ kind: "form", title: "Add provider" })
 })
 
 test("/provider edit preserves catalog identity, including explicit opt-out", async () => {
@@ -482,7 +482,7 @@ test("management Add opens the single provider form and returns with the saved i
     { providers: [] },
   )
   expect((await session.run("/provider")).text).toBe('Saved provider "new".')
-  expect(session.asked.map((r) => r.title)).toEqual(["Providers", "Add a provider", "Providers"])
+  expect(session.asked.map((r) => r.title)).toEqual(["Providers", "Add provider", "Providers"])
   expect(session.asked.at(-1)).toMatchObject({ initial: "new" })
   expect(session.calls).toEqual(["save new"])
 })
@@ -508,7 +508,7 @@ test("management Edit and Set key reuse existing forms and masked input", async 
       options: ["Use a model from it", "Edit", "Set key", "Test connection", "Remove"],
     })
     if (action === "Edit") {
-      expect(session.asked[2]).toMatchObject({ kind: "form", title: "Edit provider deepseek" })
+      expect(session.asked[2]).toMatchObject({ kind: "form", title: "Edit provider · deepseek" })
       expect(session.calls).toEqual(["test deepseek-chat", "save deepseek"])
       expect(session.drafts[0]).toMatchObject({
         id: "deepseek",
@@ -981,7 +981,7 @@ test("/provider edit prefills the form, without the key", async () => {
   })
   const r = await run("/provider edit deepseek")
   expect(r.ok).toBe(true)
-  expect(seen!.title).toBe("Edit provider deepseek")
+  expect(seen!.title).toBe("Edit provider · deepseek")
   const byId = Object.fromEntries(seen!.fields.map((f) => [f.id, f as Record<string, unknown>]))
   expect(byId.id).toBeUndefined()
   expect(byId.baseUrl!.default).toBe("https://api.deepseek.com")

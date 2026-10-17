@@ -96,6 +96,8 @@ export interface ViewHost {
   header?(width: number, ctx: RenderContext): string[]
   /** The full-screen view open over the conversation: a form or the sub-agent viewer. */
   overlay: Component
+  /** Opts into terminal-sized overlay geometry, leaving the last margined transcript frame behind a card. */
+  overlayCard?(width: number, ctx: RenderContext): boolean
   /** Whether the input box is empty. */
   editorEmpty(): boolean
   /** Shows a short note in place of the key hints for a few seconds. */

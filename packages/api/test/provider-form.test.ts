@@ -55,6 +55,38 @@ function fakeAdmin() {
   return { admin, seen }
 }
 
+test("provider add and edit use a card with the existing connection action in the footer", () => {
+  const { admin } = fakeAdmin()
+  const existing: ProviderDraft = {
+    id: "my-provider",
+    dialect: "openai-chat",
+    baseUrl: "https://api.example/v1",
+    keySource: "none",
+    models: ["m"],
+  }
+  const adding = providerFormSpec(admin)
+  const editing = providerFormSpec(admin, existing)
+  expect(adding.title).toBe("Add provider")
+  expect(editing.title).toBe("Edit provider · my-provider")
+  for (const form of [adding, editing]) {
+    expect(form.layout).toBe("card")
+    expect(form.submitLabel).toBe("Save")
+    const schema = toFormSchema(form)
+    expect(schema.layout).toBe("card")
+    expect(schema.fields.filter((field) => field.type === "action" && field.placement === "footer")).toEqual([
+      {
+        type: "action",
+        id: "testConnection",
+        label: "Test connection",
+        buttonLabel: "Test",
+        placement: "footer",
+        section: "Check",
+      },
+    ])
+    expect(form.fields.find((field) => field.id === "fetchModels")).not.toHaveProperty("placement")
+  }
+})
+
 test("vendor presets choose a unique id and the first set environment variable", () => {
   const { admin } = fakeAdmin()
   expect(providerVendorInitial(admin, VENDOR)).toEqual({

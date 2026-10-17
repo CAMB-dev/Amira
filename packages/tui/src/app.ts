@@ -33,7 +33,7 @@ import { createMainRewind } from "./app/main-rewind.ts"
 import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
-import { activePointerHint, routePointer } from "./app/pointer.ts"
+import { activePointerHint, pointerGeometry, routePointer } from "./app/pointer.ts"
 import { showAgentSession } from "./app/session-display.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
@@ -57,7 +57,6 @@ import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { headerLine } from "./header.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
-import { contentGeometry } from "./margins.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { mouseLabels } from "./mouse-labels.ts"
 import { PromptHistory } from "./prompt-history.ts"
@@ -293,6 +292,7 @@ async function runFullscreen(
     },
     header,
     overlay: new View((width, ctx) => overlays.render(width, ctx)),
+    overlayCard: (width, ctx) => overlays.overlayCard(width, ctx),
     editorEmpty: () => editor.isEmpty,
     showNote,
     openSubagent: (sessionId: string) => {
@@ -747,7 +747,7 @@ async function runFullscreen(
       return redraw()
     }
     if (e.type === "mouse") {
-      const geometry = contentGeometry(terminal.columns, terminal.rows, settings)
+      const geometry = pointerGeometry(terminal, settings, overlays)
       if (routePointer(e, geometry, overlays, bottomArea, composer, showNote)) return redraw()
     }
     if (overlays.handleInput(e)) return shimmerClock.sync()

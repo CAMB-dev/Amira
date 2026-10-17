@@ -151,6 +151,7 @@ export class FormView implements Component {
     const byId = new Map(schema.fields.map((f) => [f.id, f]))
     this.form = new Form({
       title: schema.title,
+      ...(schema.layout !== undefined ? { layout: schema.layout } : {}),
       ...(schema.description !== undefined ? { description: schema.description } : {}),
       fields: schema.fields.map(toView),
       ...(schema.sections ? { sections: schema.sections } : {}),
@@ -395,6 +396,8 @@ function toView(f: FormFieldSchema): FormFieldView {
     ...("options" in f ? { options: f.options } : {}),
     ...(f.type === "multiselect" && f.allowCustom ? { allowCustom: true } : {}),
     ...(f.type === "textarea" && f.rows !== undefined ? { rows: f.rows } : {}),
+    ...(f.type === "action" && f.placement !== undefined ? { placement: f.placement } : {}),
+    ...(f.type === "action" && f.buttonLabel !== undefined ? { buttonLabel: f.buttonLabel } : {}),
   }
 }
 

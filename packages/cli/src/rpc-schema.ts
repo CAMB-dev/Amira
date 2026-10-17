@@ -558,7 +558,13 @@ function formFields(): Schema[] {
     obj({ type: strings("checkbox"), ...base, "default?": bool }),
     obj({ type: strings("textarea"), ...base, ...text, "default?": str, "rows?": num, "maxLength?": num }),
     obj(
-      { type: strings("action"), ...base, "recommended?": bool },
+      {
+        type: strings("action"),
+        ...base,
+        "placement?": strings("footer"),
+        "buttonLabel?": str,
+        "recommended?": bool,
+      },
       "A button; run it with ui.action. It has no value.",
     ),
   ]
@@ -775,6 +781,7 @@ export function rpcSchema(): Schema {
             kind: strings("form"),
             ...uiRequestSession,
             title: str,
+            "layout?": strings("card"),
             "description?": str,
             fields: arrayOf(ref("FormField")),
             "sections?": arrayOf(obj({ title: str, "help?": str, "optional?": bool, "collapsed?": bool })),
