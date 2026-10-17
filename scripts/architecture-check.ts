@@ -101,9 +101,11 @@ function sourceLineCapViolations(): string[] {
   }
 
   const withoutComments = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g, "")
-  const entries = withoutComments.match(
-    /\bconst\s+sourceLineAllowlist\s*=\s*new\s+Map(?:\s*<[^>]*>)?\s*\(\s*\[([\s\S]*?)\]\s*\)/,
-  )?.[1]
+  const match = withoutComments.match(
+    /\bconst\s+sourceLineAllowlist\s*=\s*new\s+Map(?:\s*<[^>]*>)?\s*\(\s*(?:\[([\s\S]*?)\]\s*)?\)/,
+  )
+  // An empty `new Map()` holds no caps, so every entry added on this branch is new.
+  const entries = match ? (match[1] ?? "") : undefined
   if (entries === undefined) {
     console.log("Source line cap ratchet skipped: no sourceLineAllowlist in the merge-base script.")
     return []
