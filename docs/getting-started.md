@@ -21,7 +21,7 @@ Change to the project you want Amira to work on, then run:
 amira
 ```
 
-The working directory is the current directory; `--cwd` can select another one. Amira opens a full-screen conversation with its banner, working directory, status area and `Message Amira` input. Use `--inline` if you prefer terminal scrollback. If the project has installed extensions, a trust prompt may appear before the main interface: extensions run code, so choose whether to load this project's packages. See [extensions](extensions.md).
+The working directory is the current directory; `--cwd` can select another one. Amira opens a full-screen conversation with its banner, working directory, status area and `Message Amira` input. For plain output without the full-screen interface, use `amira -p "your prompt"`. Interactive mode requires a capable terminal; `TERM=dumb` is not supported. If the project has installed extensions, a trust prompt may appear before the main interface: extensions run code, so choose whether to load this project's packages. See [extensions](extensions.md).
 
 With no configured provider, the welcome card reads:
 

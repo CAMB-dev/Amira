@@ -3,7 +3,7 @@ import { emptyUsage, type SubagentInfo } from "@amira/api"
 import { agentsCommand } from "../../../extensions/agent/src/agents-command.ts"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: /agents sleeps on static states and restarts only for visible working options`, async () => {
     const active = new Set<ReturnType<typeof setInterval>>()
     const schedule = globalThis.setInterval

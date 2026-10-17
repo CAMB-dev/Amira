@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream"
 import { modes } from "../src/ansi.ts"
 import { createConsoleCodePage } from "../src/console-code-page.ts"
 import { FakeTerminal, PASSIVE_SIGNAL_LISTENER, ProcessTerminal } from "../src/terminal.ts"
+import { processTerminalFixture } from "./process-terminal-fixture.ts"
 
 test("restore leaves enabled modes in reverse order, shows the cursor and leaves raw mode", () => {
   const term = new FakeTerminal()
@@ -21,6 +22,19 @@ test("restore leaves enabled modes in reverse order, shows the cursor and leaves
   expect(term.isRaw).toBe(false)
 })
 
+test("restoration honors existing no-argument restore-sequence overrides", () => {
+  class CustomTerminal extends FakeTerminal {
+    protected override takeRestoreSequence(): string {
+      return super.takeRestoreSequence()
+    }
+  }
+  const terminal = new CustomTerminal()
+  terminal.enterAltScreen()
+  terminal.clearWrites()
+  terminal.restore()
+  expect(terminal.output).toBe(`${modes.altScreen.off}\x1b[0m\x1b[?25h`)
+})
+
 test("exitAltScreen only writes when the alt screen is active", () => {
   const term = new FakeTerminal()
   term.exitAltScreen()
@@ -28,6 +42,22 @@ test("exitAltScreen only writes when the alt screen is active", () => {
   term.enterAltScreen()
   term.exitAltScreen()
   expect(term.writes).toEqual([modes.altScreen.on, modes.altScreen.off])
+})
+
+test("a failed alternate-screen exit retains its mode for restore", () => {
+  const f = processTerminalFixture()
+  try {
+    f.terminal.enterAltScreen()
+    f.failRestores(1)
+    expect(() => f.terminal.exitAltScreen()).toThrow("restore write failed")
+    f.terminal.restore()
+    expect(f.screen.inAltScreen).toBe(false)
+    expect(f.restoreAttempts()).toBe(2)
+  } finally {
+    f.failRestores(0)
+    f.terminal.stop()
+    f.stdin.destroy()
+  }
 })
 
 test("input and resize reach listeners until unsubscribed", () => {
@@ -43,6 +73,42 @@ test("input and resize reach listeners until unsubscribed", () => {
   expect(got).toEqual(["a"])
   expect(resized).toBe(1)
   expect(term.columns).toBe(40)
+})
+
+test("a failed stop releases input and listeners, and a second stop can restore tracked modes", () => {
+  const f = processTerminalFixture()
+  const events = ["exit", "uncaughtExceptionMonitor", "SIGINT", "SIGTERM", "SIGHUP"] as const
+  const before = events.map((event) => process.listenerCount(event))
+  try {
+    f.terminal.start()
+    f.terminal.setRawMode(true)
+    f.terminal.enableMode(modes.bracketedPaste)
+    f.terminal.enterAltScreen()
+    f.failRestores(1)
+    expect(() => f.terminal.stop()).toThrow("restore write failed")
+    expect({
+      raw: f.raw(),
+      paused: f.stdin.isPaused(),
+      inputListeners: f.stdin.listenerCount("data"),
+      resizeListeners: f.stdout.listenerCount("resize"),
+      processListeners: events.map((event) => process.listenerCount(event)),
+    }).toEqual({
+      raw: false,
+      paused: true,
+      inputListeners: 0,
+      resizeListeners: 0,
+      processListeners: before,
+    })
+    f.terminal.stop()
+    expect(f.screen.inAltScreen).toBe(false)
+    expect(f.screen.altSwitches).toEqual([true, false])
+    expect(f.restoreAttempts()).toBe(2)
+    expect(f.terminal.isRaw).toBe(false)
+  } finally {
+    f.failRestores(0)
+    f.terminal.stop()
+    f.stdin.destroy()
+  }
 })
 
 describe("ProcessTerminal restores itself when the process goes away", () => {

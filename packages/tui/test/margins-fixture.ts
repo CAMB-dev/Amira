@@ -6,7 +6,6 @@ import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { rememberMessageTime } from "../src/format.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
 import { headerLine } from "../src/header.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { InputBox } from "../src/input-box.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
@@ -19,7 +18,7 @@ const at = new Date(2026, 9, 10, 20, 9).getTime()
 /** Real view/renderer writes, including the exit printout, with no asynchronous agent timing. */
 export const marginFrame = withSnapshotClock(
   (
-    fullscreen: boolean,
+    _fullscreen: boolean,
     columns: number,
     rows: number,
     settings: TuiSettings,
@@ -41,7 +40,7 @@ export const marginFrame = withSnapshotClock(
     const editor = new Editor({ prompt: "› ", placeholder: "Message Amira" })
     editor.setText("Check the changes")
     const box = new InputBox(editor, () => [])
-    const view = (fullscreen ? createFullscreenView : createInlineView)({
+    const view = createFullscreenView({
       terminal,
       theme: createTheme({ theme: "dark", colorDepth: "truecolor", color: true, platform: "linux" }),
       capabilities: {

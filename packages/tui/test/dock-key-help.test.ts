@@ -7,7 +7,7 @@ for (const follow of [["ctrl+alt+b"], []]) {
     const s = await setup([], {
       cols: 120,
       rows: 32,
-      settings: { mode: "inline" },
+      settings: { mode: "fullscreen" },
       keybindings: new Keybindings({ ...defaultKeys({ vscode: false }), "scroll.bottom": follow }),
       extensions: [
         (api) => {

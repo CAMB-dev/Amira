@@ -3,7 +3,7 @@ import { PromptHistory } from "../src/prompt-history.ts"
 import { closeImageApp, inputImage, paste, waitFor } from "./app-harness.ts"
 import { focusFixture } from "./conversation-focus-fixture.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const origin of ["main", "owned"] as const) {
     for (const kind of ["text", "paste", "image"] as const) {
       test(`${mode}: ${origin} search preview never replaces its unsent ${kind} draft across focus`, async () => {

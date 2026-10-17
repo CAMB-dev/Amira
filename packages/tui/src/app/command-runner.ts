@@ -44,7 +44,6 @@ export interface CommandRunner {
 export interface CommandRunnerOptions {
   commands?: CommandHost
   keys: Keybindings
-  mode: "fullscreen" | "inline"
   reaches: (spec: KeySpec) => boolean
   commandEcho: (line: string) => void
   commandOutput: (level: "info" | "warning" | "error", text: string) => void
@@ -98,13 +97,12 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
   /** The newest running command that was not cancelled yet; the interrupt key cancels it first. */
   const cancellable = () => [...commandAborts].findLast(([controller]) => !controller.signal.aborted)
   /**
-   * The common keys, for /help: the actions with a help line, with their keys as bound now;
-   * the transcript's only in full-screen mode, where they work.
+   * The common keys, for /help: the actions with a help line, with their keys as bound now.
    */
   const keyHelp = (): KeyHelp[] => [
     ...(Object.keys(ACTIONS) as Action[]).flatMap((action) => {
       const info: { scope: string; help?: string } = ACTIONS[action]
-      if (!info.help || (info.scope === "transcript" && options.mode !== "fullscreen")) return []
+      if (!info.help) return []
       const label = options.keys.label(action, (spec) => action !== "newline" || options.reaches(spec))
       return label ? [{ keys: label, description: info.help }] : []
     }),

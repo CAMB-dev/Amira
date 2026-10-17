@@ -10,7 +10,7 @@ const encodings = {
 }
 
 async function fixture(
-  mode: "inline" | "fullscreen",
+  mode: "fullscreen",
   options: { needsTab?: boolean; dock?: boolean; binding?: string } = {},
 ) {
   let context!: UiContext
@@ -81,7 +81,7 @@ async function close(s: Awaited<ReturnType<typeof fixture>>) {
   await closeImageApp(s)
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const needsTab of [false, true]) {
     for (const [encoding, bytes] of Object.entries(encodings)) {
       test(`finding 1: ${mode}, needsTab=${needsTab}, ${encoding} F6 round-trip preserves text`, async () => {

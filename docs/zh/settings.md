@@ -309,9 +309,9 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 
 | 键 | 类型 | 默认值 | 说明 | 仅用户文件 |
 | --- | --- | --- | --- | --- |
-| `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | `"fullscreen"` 在终端备用屏幕上显示对话，由 Amira 负责滚动和搜索；`"inline"` 把已完成的输出留在终端滚动缓冲区。`--inline` 和 `--fullscreen` 优先。全屏模式下，本次输入的提示滚出视口后固定在标题栏下方；恢复的历史记录不显示固定提示。 |  |
-| `tui.margin` | `number` | `3` | 两种模式的左右留白宽度，单位为字符格（整数 0–12）。窄终端会自动缩小留白，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边布局。 |  |
-| `tui.marginRows` | `number` | `1` | 全屏模式标题栏上方和按键提示行下方的空行数（整数 0–2）。终端不足 24 行时自动取消；行内模式没有上下留白。 |  |
+| `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | 已弃用并忽略：交互式 TUI 始终使用全屏模式，退出时将对话打印到普通屏幕。在一个过渡版本内，仍接受 `"inline"` 和 `--inline`，并提示："inline mode was removed; running fullscreen. Use -p for plain output." `--fullscreen` 仍被接受，但不执行任何操作。 |  |
+| `tui.margin` | `number` | `3` | 左右留白宽度，单位为字符格（整数 0–12）。窄终端会自动缩小留白，尽可能保留至少 60 列内容。与 `tui.marginRows` 一起设为 `0` 可恢复贴边布局。 |  |
+| `tui.marginRows` | `number` | `1` | 标题栏上方和按键提示行下方的空行数（整数 0–2）。终端不足 24 行时自动取消。 |  |
 | `tui.theme` | `string` | `"auto"` | 主题名称，或 `"auto"`：Amira 根据终端背景选择配色（无法判断时使用深色）。`"dark"` 和 `"light"` 指定 Amira 配色；`"terminal"` 使用终端自身的 ANSI 颜色。`/theme` 可预览并保存主题。 |  |
 | `tui.themeVariant` | `"auto" \| "dark" \| "light"` | `"auto"` | 命名主题的配色版本：`"auto"` 根据终端背景选择；`"dark"` 或 `"light"` 强制指定版本。缺少的版本使用默认 Amira 配色。 |  |
 | `tui.shimmer` | `ShimmerEffect` | 主题的动画，否则为 `"soft"` | 活动标签动画：`off`、`soft`、`sharp`、`wide`、`bounce`、`pulse`、`wave` 或 `reveal`。对象只覆盖明确指定的参数；范围与颜色见[微光动画](themes.md#微光动画)。 |  |
@@ -321,7 +321,7 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `tui.title` | `boolean` | `true` | 标题设为 `Amira · 会话标题`，无标题时使用当前目录名，并去除 Markdown 标记。`●` 表示运行中；`✓` 表示终端失去焦点期间轮次已结束，终端重新获得焦点后清除；`◆` 表示对话框等待回答或确认，即使终端有焦点也保留，且优先于 `✓`。无标记表示空闲或已查看。等待状态切换和最终状态立即更新，其他运行中的标题每秒最多更新一次。 |  |
 | `tui.progress` | `boolean` | `true` | 在标签页和任务栏进度指示器上显示工作状态（OSC 9;4）。 |  |
 | `tui.tokenSpeed` | `boolean` | `true` | 在状态栏右侧显示实时 token 速度：`~N tok/s` 根据可见回复文字和工具参数估算，`thinking Ns` 显示思考时长；请求结束后，若有用量报告则改为精确的输出速度。空闲时保留上次速度，空间不足时优先隐藏此项。设为 `false` 可关闭。 |  |
-| `tui.reflow` | `"auto" \| "on" \| "off"` | `"auto"` | 终端在变窄时不会重新折行（旧版 conhost、部分 tmux 配置）时设为 `"off"`。 |  |
+| `tui.reflow` | `"auto" \| "on" \| "off"` | `"auto"` | 已弃用并忽略：全屏模式会按当前终端宽度重新绘制对话。 |  |
 | `tui.submitWhileWorking` | `"steer" \| "queue"` | `"steer"` | 轮次进行中按 Enter 的行为：`"steer"` 把消息发进正在进行的轮次（引导），`"queue"` 让消息排队到轮次结束后发送。排队键执行另一种行为。 |  |
 | `tui.images` | `"auto" \| "on" \| "off"` | `"auto"` | 在回复中显示图片（需安装 `images` 扩展）：`"auto"` 在终端支持时显示，`"on"` 总是显示，`"off"` 从不显示。 |  |
 | `tui.shellOutputLines` | `number` | `3` | 成功的 shell 命令在结果下方显示的最后几行输出；`0` 表示不显示。 |  |

@@ -94,7 +94,7 @@ for (const cols of [60, 90, 100]) {
       })
     }
 
-    for (const mode of ["fullscreen", "inline"] as const) {
+    for (const mode of ["fullscreen"] as const) {
       test(`sectioned picker preserves essential rows at four and three: ${mode} ${cols}/${margin}`, async () => {
         let cap = 4
         const render = Dialog.prototype.render

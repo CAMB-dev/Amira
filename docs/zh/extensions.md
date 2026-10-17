@@ -305,17 +305,17 @@ D111 为 `ExtensionAPI` 增加必需的 `readonly dataDir: string` 属性。`api
 
 渲染上下文包含 width、images、maxImageRows 和 `theme: { dark: boolean, foreground?: string, background?: string }`。执行图片工作前请检查 images。纯文本 `amira -p` 将已完整的节点交给同一注册表，设置 `images: false`，无人接管的源码保持原样；此时应返回文本。带 fallback 或 alt 的图片结果会转换成文本。渲染器在 `waitMs` 内没有回应时会被跳过，改为输出源码。`--json` 保留原始事件，不运行渲染器。
 
-TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次 COLORFGBG，默认深色），整个会话期间保持不变。渲染上下文使用同一选择，单色模式也如此。目前无法确定准确的前景色和背景色，因此省略这两个字段。非交互打印模式默认使用 `{ dark: true }`。渲染缓存的键包含主题。全屏回复在异步结果到达时重绘；内联对话记录等待块级结果的时间由 waitMs 指定（默认 3000 毫秒，最多 15000 毫秒），超时后提交源码。行内公式应同步返回 segments，以便段落进入滚动记录前完成替换。
+TUI 启动时通过终端背景探测选择明暗主题（优先 OSC 11，其次 COLORFGBG，默认深色），整个会话期间保持不变。渲染上下文使用同一选择，单色模式也如此。目前无法确定准确的前景色和背景色，因此省略这两个字段。非交互打印模式默认使用 `{ dark: true }`。渲染缓存的键包含主题。全屏回复在异步结果到达时重绘，此前显示 Amira 的渲染结果。`MarkdownRendererDefinition.waitMs` 已弃用，TUI 忽略此字段，但为兼容性保留；打印模式仍按上文所述使用它。行内公式应同步返回 segments。
 
 ### 命令回显
 
-命令默认会将输入的 slash 命令行回显到对话记录中。在传给 `api.registerCommand()` 的 `CommandDefinition` 上设置 `echo: false`，即可在内联和全屏 TUI 模式下省略这一行，例如用于 `/btw <question>`。这只隐藏前端的输入回显：命令自身的输出（`ctx.print`、通知和视图）仍照常显示，输入历史（↑）也仍会记录该行。打印模式和 RPC 的行为不变。
+命令默认会将输入的 slash 命令行回显到对话记录中。在传给 `api.registerCommand()` 的 `CommandDefinition` 上设置 `echo: false`，即可在全屏 TUI 中省略这一行，例如用于 `/btw <question>`。这只隐藏前端的输入回显：命令自身的输出（`ctx.print`、通知和视图）仍照常显示，输入历史（↑）也仍会记录该行。打印模式和 RPC 的行为不变。
 
 ### 全屏与停靠视图
 
 通过 `api.registerView()` 注册 `ViewDefinition`，命令用 `ctx.openView?.({ kind, data, state })` 打开它，可选的 `state` 为初始 `Partial<UiState>`。视图返回结构化的 `ViewLine` 对象；前端负责终端、换行、滚动、输入提示和确认。`subagent` 类型和 `/agents` 命令由内置 agent 扩展注册。没有加载该扩展时，从对话中的子 agent 块打开视图会提示实时视图不可用。
 
-终端能传递 F6 时，F6 在所有视图与主输入框之间切换焦点，包括默认视图和内联模式中的全屏覆盖层。可配置的 `view.focus` action 默认绑定为 `["f6", "ctrl+tab"]`；终端能传递 Ctrl+Tab 时，它也是别名，但 Windows Terminal 可能截获它，旧式终端可能将其报告为普通 Tab。F6 可避开这些 Ctrl+Tab 问题，但 VS Code 集成终端默认会截获 F6，因为 `terminal.integrated.commandsToSkipShell` 中包含 `workbench.action.focusNextPart`。可在 VS Code 设置的 `terminal.integrated.commandsToSkipShell` 中添加 `"-workbench.action.focusNextPart"`，或将 Amira 的 `view.focus` 重新绑定到终端能传递的按键。单独的 Shift+Tab 不能绑定到 `view.focus`；它保留用于权限模式切换和视图反向导航。默认视图仍可用 Tab，提示继续显示 `tab→input/view`，不显示 F6。设置 `ViewDefinition.needsTab: true` 可保留 Tab/Shift+Tab 用于组件导航或视图快捷键；默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。宿主焦点切换从不占用 Shift+Tab。内置子 agent 视图声明此选项。`/`、`i`、可打印键路由、Esc 和焦点样式见[扩展视图](keybindings.md#扩展视图)。已激活的视图内输入框和输入提示仍接收自身输入。
+终端能传递 F6 时，F6 在所有视图与主输入框之间切换焦点，包括默认视图。可配置的 `view.focus` action 默认绑定为 `["f6", "ctrl+tab"]`；终端能传递 Ctrl+Tab 时，它也是别名，但 Windows Terminal 可能截获它，旧式终端可能将其报告为普通 Tab。F6 可避开这些 Ctrl+Tab 问题，但 VS Code 集成终端默认会截获 F6，因为 `terminal.integrated.commandsToSkipShell` 中包含 `workbench.action.focusNextPart`。可在 VS Code 设置的 `terminal.integrated.commandsToSkipShell` 中添加 `"-workbench.action.focusNextPart"`，或将 Amira 的 `view.focus` 重新绑定到终端能传递的按键。单独的 Shift+Tab 不能绑定到 `view.focus`；它保留用于权限模式切换和视图反向导航。默认视图仍可用 Tab，提示继续显示 `tab→input/view`，不显示 F6。设置 `ViewDefinition.needsTab: true` 可保留 Tab/Shift+Tab 用于组件导航或视图快捷键；默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。宿主焦点切换从不占用 Shift+Tab。内置子 agent 视图声明此选项。`/`、`i`、可打印键路由、Esc 和焦点样式见[扩展视图](keybindings.md#扩展视图)。已激活的视图内输入框和输入提示仍接收自身输入。
 
 `title(data, opts)` 返回 `string | ViewLine`，作为第一行。字符串保留默认的 `◆`
 标记；语义化的 `ViewLine` 提供完整标题，前端不会自动添加标记。两种形式都会由前端
@@ -403,9 +403,9 @@ D105 增加宿主管理的页面，无需注册另一种视图：调用 `view.pu
 
 临时子 agent **不绕过 `maxConcurrent`**、深度、分组限制或 token/费用预算。当树的并发上限至少为 2 时，普通子 agent 最多占用 `maxConcurrent - 1` 个忙碌位置，为临时子 agent 的首轮或追问保留一个位置。临时工作也可使用其他空闲位置，但不能超过总并发上限或分组上限。`maxConcurrent: 1` 时仍正常排队。spawn 返回后立即读取 `child.state === "queued"`，以显示首轮等待状态。初始 `subagent.start` 事件在 `spawn()` 返回前发出，不会向新订阅者重放。订阅 `child.events` 可接收后续的 `subagent.state` 变化，包括追问排队。空闲子 agent 会释放并发位置。咨询用量（包括失败尝试和重试）以咨询模型的身份保存为发起请求的临时子 agent 的 `side_usage`。
 
-使用 `ctx.openView?.({ kind, data, placement: "dock", maxHeight?: number })` 打开停靠视图；省略 placement 时仍为全屏。高度包含标题、header 和底部按键栏，默认约为终端可用行数的 40%，至少 5 行（输入区域留下不足 5 行时除外）。内联和全屏模式均在保持焦点的输入框正上方显示同一实时区域，使用当前主题和边距。配置的 `scroll.page-up`/`scroll.page-down` 按键滚动停靠视图（默认 PgUp/PgDn）；鼠标滚轮只在指针位于该区域时滚动它；`scroll.bottom` 恢复跟随末尾（默认 End）。内联停靠视图只占用自身有界的行数，保留上方对话的可见内容。停靠视图默认聚焦主输入框；有可选择内容时，F6 进入停靠视图（终端能传递 Ctrl+Tab 时，它也是别名）；未声明 `needsTab: true` 时也可用 Tab。停靠视图获得焦点时，组件和扩展快捷键接收相应按键。只读停靠视图不取得焦点，保持原有滚动行为。停靠视图的 prompt/confirm 会取消，不替换主输入框。停靠视图获得焦点时，Esc 返回或关闭视图；主输入框为空时，Esc 将焦点返回有可选择内容的停靠视图，与全屏视图相同。主输入框有文本时，Esc 仍关闭停靠视图并保留草稿。历史搜索优先处理：Esc 先取消搜索并恢复草稿；主输入框为空时，再按 Esc 返回视图或有可选择内容的停靠视图。只读停靠视图仍先关闭，再取消命令或中断当前轮。对话框可见时，只允许在停靠区域上使用滚轮滚动；点击不会聚焦停靠视图或选择内容。覆盖其上的全屏视图和表单保留原有按键优先级。`follow`、用于 Markdown 的 `renderReply` 和 `onClose` 与全屏视图共用。
+使用 `ctx.openView?.({ kind, data, placement: "dock", maxHeight?: number })` 打开停靠视图；省略 placement 时仍为全屏。高度包含标题、header 和底部按键栏，默认约为终端可用行数的 40%，至少 5 行（输入区域留下不足 5 行时除外）。TUI 在保持焦点的输入框正上方显示实时区域，使用当前主题和边距。配置的 `scroll.page-up`/`scroll.page-down` 按键滚动停靠视图（默认 PgUp/PgDn）；鼠标滚轮只在指针位于该区域时滚动它；`scroll.bottom` 恢复跟随末尾（默认 End）。停靠视图默认聚焦主输入框；有可选择内容时，F6 进入停靠视图（终端能传递 Ctrl+Tab 时，它也是别名）；未声明 `needsTab: true` 时也可用 Tab。停靠视图获得焦点时，组件和扩展快捷键接收相应按键。只读停靠视图不取得焦点，保持原有滚动行为。停靠视图的 prompt/confirm 会取消，不替换主输入框。停靠视图获得焦点时，Esc 返回或关闭视图；主输入框为空时，Esc 将焦点返回有可选择内容的停靠视图，与全屏视图相同。主输入框有文本时，Esc 仍关闭停靠视图并保留草稿。历史搜索优先处理：Esc 先取消搜索并恢复草稿；主输入框为空时，再按 Esc 返回视图或有可选择内容的停靠视图。只读停靠视图仍先关闭，再取消命令或中断当前轮。对话框可见时，只允许在停靠区域上使用滚轮滚动；点击不会聚焦停靠视图或选择内容。覆盖其上的全屏视图和表单保留原有按键优先级。`follow`、用于 Markdown 的 `renderReply` 和 `onClose` 与全屏视图共用。
 
-`ctx.print(text, level?, { details?: string; markdown?: boolean; persist?: boolean })` 和 `api.notify(text, level?, options?)` 输出只供显示的块。text 是标题；details 在 summary 时折叠，在 full 时展开（Ctrl+O）。`markdown: true` 将详情渲染为 Markdown。`persist: true` 保存 `display` 会话条目，恢复时按对话顺序重新显示，但上下文构建会跳过它。标题和详情均不会发给模型，包括会话 fork、子 agent fork 和压缩请求。只有显示条目的会话也会在启动恢复时显示。保留的 `ctx.print` 始终绑定到命令运行时的会话，即使停靠视图因会话切换而关闭，也不会写入另一个会话。全屏模式保留可折叠的块；内联模式在有界的近期记录中保留语义化重绘，Ctrl+O 可原位重绘近期块；较旧的原生终端滚动记录不可修改。打印模式输出标题，RPC 还携带可选的详情字段。
+`ctx.print(text, level?, { details?: string; markdown?: boolean; persist?: boolean })` 和 `api.notify(text, level?, options?)` 输出只供显示的块。text 是标题；details 在 summary 时折叠，在 full 时展开（Ctrl+O）。`markdown: true` 将详情渲染为 Markdown。`persist: true` 保存 `display` 会话条目，恢复时按对话顺序重新显示，但上下文构建会跳过它。标题和详情均不会发给模型，包括会话 fork、子 agent fork 和压缩请求。只有显示条目的会话也会在启动恢复时显示。保留的 `ctx.print` 始终绑定到命令运行时的会话，即使停靠视图因会话切换而关闭，也不会写入另一个会话。TUI 保留可折叠的块。打印模式输出标题，RPC 还携带可选的详情字段。
 
 以下 `/btw` 风格示例仅使用公共 API，是文档草图，不是内置扩展。实际扩展还需处理子 agent 已结束、追问未送达以及卸载清理。
 
@@ -459,7 +459,7 @@ export default defineExtension((api) => {
 - 绑定的 `SessionData.append(key, data): void` 不提供持久写入确认。磁盘故障通过 `extension.error` 异步报告；`append()` 返回不代表已持久提交。如果决策证据要求持久提交，必须先提交到扩展自行控制的存储，再回答 `askUser` 问题。
 - `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。此 API 不提供删除；卸载或移除包后历史仍保留。
 
-`CommandContext.focusConversation?(owned: OwnedConversation): boolean` 聚焦独立会话；`unfocusConversation?(): boolean` 返回主会话。使用前检测这两个方法：仅 TUI 的内联和全屏模式提供；无法切换时返回 `false`（聚焦已释放句柄也会失败）。聚焦或返回都不停止工作，也不释放任何会话；释放已聚焦的句柄或卸载所属扩展会返回主会话。渲染器的保留控制属于宿主内部实现，不是公共扩展 API。
+`CommandContext.focusConversation?(owned: OwnedConversation): boolean` 聚焦独立会话；`unfocusConversation?(): boolean` 返回主会话。使用前检测这两个方法：仅全屏 TUI 提供；无法切换时返回 `false`（聚焦已释放句柄也会失败）。聚焦或返回都不停止工作，也不释放任何会话；释放已聚焦的句柄或卸载所属扩展会返回主会话。渲染器的保留控制属于宿主内部实现，不是公共扩展 API。
 
 焦点提示显示会话名称、主会话的 `working`/`idle` 状态和待回答的主会话问题。主会话的待处理提示在全屏覆盖层内容上方或下方的预留界面区域保持可见。输入框占位文本以 `Message <owned name>` 标明目标会话。F6（配置的 `view.focus` 绑定）返回主会话；已聚焦会话空闲且输入框为空时，Esc 也返回。工作期间，Esc/Ctrl+C 只停止已聚焦会话，不停止主会话。对话框、补全列表和历史搜索保留按键优先级。草稿、提示词历史、图片附件和粘贴内容按会话隔离；`@` 文件补全使用此会话的 `cwd`。每次切换焦点都会保存原会话草稿并恢复目标草稿，但会重置完整的编辑缓冲区：撤销/重做历史、kill ring 和 yank 状态，包括其中保留的图片和粘贴快照。普通 `setParts` 行为不变。斜杠命令和 skill 会被拦截并提示先返回主会话：输入保留，必须在那里显式执行。
 
@@ -467,7 +467,7 @@ export default defineExtension((api) => {
 
 命令、skill 和输入处理器的 `openView()` 能力绑定到创建上下文时的会话。若延迟打开时焦点已在其他会话，或原主会话已被替换，则返回 `false`，不会接管当前对话记录或输入框。切换焦点只暂停待回答问题的编辑器，不会取消请求；返回时会恢复未完成答案、选择和光标位置。回答或取消请求会释放保存的编辑状态。
 
-全屏和内联切换均显示 `— <name> —` 或 `— main —`，使用独立会话名称，绝不显示原始 ID。内联切换不会将历史重新打印到终端滚动记录中。隐藏期间暂存的新输出可在返回时显示。全屏模式显示已聚焦会话保存的对话记录。
+切换会话时显示 `— <name> —` 或 `— main —`，使用独立会话名称，绝不显示原始 ID。隐藏期间暂存的新输出可在返回时显示。TUI 显示已聚焦会话保存的对话记录。
 
 `UiRequestOptions.sessionId?: string` 将 UI 请求关联到某个会话（默认关联宿主会话），用于展示和按会话取消审批，不改变执行归属或权限。取消审批只停止所关联的会话，绝不停止无关的主会话或已聚焦会话。所有 UI 请求类型在 RPC 实时/重放的 `ui.request` 事件和 `state.uiRequests` 中均保留此关联，包括请求更新；`ui.resolved` 和 `ui.progress` 在事件封装的 `sessionId` 中保留此关联。RPC 顶层的 `state.sessionId` 仍是主会话 ID。后代请求在元数据中保留子会话 ID；原生宿主会将其映射到所属会话以展示和取消审批，包括聚焦前已经等待回答的请求。将 runtime 提供的 `sessionId` 和 `signal` 转发给 `ctx.ui.ask`，让问题显示在对应会话中：
 

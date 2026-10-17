@@ -15,7 +15,7 @@ const OWNED = "Owned draft stays here"
 // Inline preserves previous transcript rows; keep the assistant's reply non-private.
 const mainHistory = () => [exchange(SECRET)[0]!, exchange("Public main reply")[1]!]
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const action of ["conversation", "files", "fork"] as const) {
     test(`${mode}: real CLI ${action} control preserves prompt recovery through host selection`, async () => {
       const dir = mkdtempSync(join(tmpdir(), "amira-tui-rewind-"))

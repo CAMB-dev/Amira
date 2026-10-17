@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { setup, testCommands, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: Ctrl+O leaves collapsed at summary; /verbose still cycles all three levels`, async () => {
     const app = await setup([], {
       commands: testCommands([]),

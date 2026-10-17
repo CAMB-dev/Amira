@@ -8,10 +8,10 @@ import { marginFrame } from "./margins-fixture.ts"
 const ctx = { theme: defaultTheme, color: true, rows: 24 }
 const options = Array.from({ length: 14 }, (_, i) => `model-${i + 1}`)
 
-for (const fullscreen of [false, true]) {
+for (const fullscreen of [true]) {
   for (const columns of [60, 90, 100]) {
     for (const margin of [0, 3]) {
-      test(`dialog border, gutter and footer: ${fullscreen ? "fullscreen" : "inline"} ${columns} margin ${margin}`, () => {
+      test(`dialog border, gutter and footer: fullscreen ${columns} margin ${margin}`, () => {
         const dialog = new Dialog({ requestId: "frame", kind: "select", title: "Model", options }, () => {})
         dialog.maxRows = 8
         const frame = marginFrame(fullscreen, columns, 32, { margin, marginRows: 0 }, { bottom: dialog })

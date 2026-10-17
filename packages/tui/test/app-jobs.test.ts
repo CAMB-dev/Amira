@@ -29,7 +29,7 @@ function fakeJobs() {
   return { registry, procs, start }
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const cols of [120, 60]) {
     test(`background jobs show in a live panel above the activity line (${mode}, ${cols} columns)`, async () => {
       const jobs = fakeJobs()
@@ -78,7 +78,7 @@ function screenLines(text: string): string[] {
   return text.split("\n").map((l) => l.trimEnd())
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`/jobs lists the jobs; x stops one, Enter opens its live output (${mode})`, async () => {
     const jobs = fakeJobs()
     jobs.start("npm run dev", "VITE ready in 300 ms\n")
@@ -124,7 +124,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
   })
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`Shift+Tab cycles the permission mode, shown below the input's plain border (${mode})`, async () => {
     const { agent, terminal, live, exited } = await setup([], { cols: 100, settings: { mode } })
     // Model and permission mode share a right-aligned label, including the default auto.
@@ -173,7 +173,7 @@ test("a job that ends on its own shows a notice; a stopped one does not", async 
   await exited
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`quitting while background jobs run asks once, then quits (${mode})`, async () => {
     let running = 2
     const { terminal, live, exited } = await setup([], {

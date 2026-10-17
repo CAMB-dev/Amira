@@ -175,15 +175,15 @@ test("a command opens an extension's view over its data; it follows changes, run
   expect(s.data.cancelled).toBe(true)
 
   s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "the inline UI")
+  await waitFor(() => s.view().includes("│ › Message Amira"), "the fullscreen composer")
   expect(s.view()).toMatch(/^│ › Message Amira +│$/m)
-  expect(s.screen.altSwitches).toEqual([true, false])
+  expect(s.screen.altSwitches).toEqual([true])
 
   // A key can close the view too; opening it again shows it anew.
   s.terminal.send("/progress\r")
   await waitFor(() => s.screen.inAltScreen, "the view again")
   s.terminal.send("c")
-  await waitFor(() => !s.screen.inAltScreen, "closed by its key")
+  await waitFor(() => s.view().includes("│ › Message Amira"), "closed by its key")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -208,7 +208,7 @@ test("a long body starts at its top unless the view follows its end; the body sc
   await waitFor(() => top.screen.lines.at(-1)!.startsWith("  2–6 of 42"), "scrolled a row")
   // Ctrl+C leaves the view, not Amira.
   top.terminal.send("\x03")
-  await waitFor(() => !top.screen.inAltScreen, "closed")
+  await waitFor(() => top.view().includes("│ › Message Amira"), "closed")
   top.terminal.send("\x03")
   await top.exited
 
@@ -217,7 +217,7 @@ test("a long body starts at its top unless the view follows its end; the body sc
   await waitFor(() => end.view().includes("row 39"), "the end")
   expect(end.screen.lines.at(-1)).toMatch(/^ {2}following · /)
   end.terminal.send(ESC)
-  await waitFor(() => !end.screen.inAltScreen, "closed")
+  await waitFor(() => end.view().includes("│ › Message Amira"), "closed")
   end.terminal.send("\x03")
   await end.exited
 })
@@ -231,7 +231,7 @@ test("an unknown kind is the command's error; subagent can be registered by an e
   expect(s.errors).toEqual([])
   s.terminal.send("/progress nope\r")
   await waitFor(() => s.screen.text.includes('there is no "nope" view'), "the error")
-  expect(s.screen.inAltScreen).toBe(false)
+  expect(s.screen.inAltScreen).toBe(true)
   s.terminal.send("\x03")
   await s.exited
 })
@@ -256,7 +256,7 @@ test("legacy subagent requests normalize to data through ordinary extension look
   s.terminal.send("/legacy\r")
   await waitFor(() => s.view().includes("◆ Child child-id"), "the normalized request")
   s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "closed")
+  await waitFor(() => s.view().includes("│ › Message Amira"), "closed")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -275,10 +275,11 @@ test("a view that throws shows the error in place and reports it once", async ()
   })
   s.terminal.send("/progress\r")
   await waitFor(() => s.view().includes("The progress view failed: no data yet"), "the error line")
+  const before = calls
   s.api.requestRender()
-  await waitFor(() => calls > 2, "more redraws")
+  await waitFor(() => calls > before, "more redraws")
   s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "closed")
+  await waitFor(() => s.view().includes("│ › Message Amira"), "closed")
   await waitFor(() => s.screen.text.includes("View progress: render failed: no data yet"), "the report")
   expect(s.screen.text.split("render failed").length).toBe(2)
   s.terminal.send("\x03")
@@ -319,7 +320,7 @@ test("a key can ask to confirm first: y goes ahead, any other key does not", asy
   expect(answers).toEqual([false, true])
   expect(s.data.cancelled).toBe(true)
   s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "closed")
+  await waitFor(() => s.view().includes("│ › Message Amira"), "closed")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -567,11 +568,14 @@ test("a view prints snapshots at command output levels, including after closing"
   s.terminal.send("/progress\r")
   await waitFor(() => s.view().includes("check the tests"), "the view")
   s.terminal.send("p")
-  await waitFor(() => !s.screen.inAltScreen && s.screen.mainText.includes("view error"), "the printed output")
-  expect(s.screen.mainText).toContain("queued snapshot")
-  expect(s.screen.mainText).toContain("└ view warning")
-  expect(s.screen.mainText).toContain("✗ view error")
-  expect(s.screen.mainText).not.toContain("› /agents")
+  await waitFor(
+    () => s.view().includes("│ › Message Amira") && s.view().includes("view error"),
+    "the printed output",
+  )
+  expect(s.view()).toContain("queued snapshot")
+  expect(s.view()).toContain("└ view warning")
+  expect(s.view()).toContain("✗ view error")
+  expect(s.view()).not.toContain("› /agents")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -748,7 +752,7 @@ test("renderTool in an open view uses the registry passed by the app", async () 
   await waitFor(() => s.view().includes("├ test from registry  ✓ presented result"), "the presenter")
   expect(s.view()).toContain("├ test from registry  ✓ presented result")
   s.terminal.send(ESC)
-  await waitFor(() => !s.screen.inAltScreen, "closed")
+  await waitFor(() => s.view().includes("│ › Message Amira"), "closed")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -842,7 +846,7 @@ test("a key can ask for a line of text at the bottom of the view; Esc cancels it
   )
   s.terminal.send("\x03")
   await waitFor(() => answers.length === 3, "cancelled by Ctrl+C")
-  await waitFor(() => !s.screen.inAltScreen, "Ctrl+C closes even with a prompt")
+  await waitFor(() => s.view().includes("│ › Message Amira"), "Ctrl+C closes even with a prompt")
   expect(answers).toEqual(["hi q m", undefined, undefined])
   s.terminal.send("\x03")
   await s.exited

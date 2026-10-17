@@ -6,7 +6,7 @@ import type { CommandContext } from "@amira/api"
 import { Agent, SessionStore } from "@amira/core"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: a dock's retained command printer saves into its originating session on switch`, async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "amira-display-switch-"))
     const previous = SessionStore.create({ cwd: dir, dir })

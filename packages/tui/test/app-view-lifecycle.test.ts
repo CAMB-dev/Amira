@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { CommandContext, UiContext, UiControl, ViewDefinition } from "@amira/api"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: openView seeds initial state before onOpen and preserves same-kind state`, async () => {
     let open!: NonNullable<CommandContext["openView"]>
     let control!: UiControl
@@ -425,7 +425,7 @@ test("legacy subagent requests retain initial widget state when normalized", asy
     expect(context.state.inputValues.message).toBe("initial message")
   } finally {
     s.terminal.send("\x1b[27u")
-    await waitFor(() => !s.screen.inAltScreen, "legacy overlay closed")
+    await waitFor(() => !s.live().includes("Legacy request"), "legacy overlay closed")
     s.terminal.send("\x03")
     await s.exited
   }

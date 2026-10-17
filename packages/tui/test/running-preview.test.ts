@@ -260,7 +260,7 @@ test("/agents and fullscreen give one streaming call three rows beside two silen
   expect(liveRows(pane.render(env, 16))).toEqual(expected)
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: long running commands keep a two-cell timer gap and finished results wrap below`, async () => {
     const command = `printf '%s' ${"very-long-argument/".repeat(12)} | head -5)`
     const s = await setup(

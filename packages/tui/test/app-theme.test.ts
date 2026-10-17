@@ -245,8 +245,8 @@ test("named themes respect forced appearance and fall back to that variant's def
   }
 })
 
-test("registry changes replace the active overlay's theme in inline and full-screen modes", async () => {
-  for (const mode of ["inline", "fullscreen"] as const) {
+test("registry changes replace the active overlay's theme in fullscreen", async () => {
+  for (const mode of ["fullscreen"] as const) {
     const themes = new ThemeRegistry()
     themes.register({ name: "custom", dark: { accent: "#010203" } }, "user")
     const s = await setup([], {
@@ -290,7 +290,7 @@ test("picker shows provenance and Esc does not resurrect disposed extension them
     s.terminal.clearWrites()
     s.terminal.send("\x1b")
     await waitFor(() => s.terminal.output.includes("\x1b[38;2;120;219;226m›"), "current-registry fallback")
-    // Already committed inline scrollback keeps its colors; the live prompt must not resurrect them.
+    // Redrawing the live prompt must not resurrect disposed theme colors.
     expect(s.terminal.output).not.toContain("\x1b[38;2;1;2;3m›")
   } finally {
     s.terminal.send("\x03\x03")
@@ -395,7 +395,7 @@ test("validated invalid glyph overrides fall back to the TUI and Markdown defaul
   expect(glyphs.toolFailed).toBe("✗")
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: short theme picker keeps the actual appearance key in its footer`, async () => {
     const saved: { name: string; variant: string }[] = []
     const s = await setup([], {

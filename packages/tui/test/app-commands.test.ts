@@ -33,7 +33,7 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   await exited
 })
 
-test("typing a command: the input box stays put and each key draws one frame with its list", async () => {
+test("typing a command: fullscreen reserves room for its list and each key draws one frame", async () => {
   const frames: string[][] = []
   const { terminal, live, exited } = await setup([], {
     commands: testCommands([]),
@@ -76,14 +76,16 @@ test("typing a command: the input box stays put and each key draws one frame wit
     [" ", ["  › deepseek/deepseek-flash", "    deepseek/deepseek-pro", "    openai/gpt-5"]],
     ["d", ["  › deepseek/deepseek-flash", "    deepseek/deepseek-pro"]],
   ]
+  let listRows = 0
   for (const [k, expected] of steps) {
+    listRows = Math.max(listRows, expected.length)
     const before = frames.length
     terminal.send(k)
     await Bun.sleep(60)
     const drawn = frames.slice(before)
     expect({ key: k, frames: drawn.length }).toEqual({ key: k, frames: 1 })
-    expect(boxTop(drawn[0]!)).toBe(top)
-    expect(list(drawn[0]!)).toEqual(expected)
+    expect(boxTop(drawn[0]!)).toBe(top - listRows)
+    expect(list(drawn[0]!)).toEqual([...expected, ...Array(listRows - expected.length).fill("")])
   }
   terminal.send("\x03")
   terminal.send("\x03")
@@ -122,7 +124,7 @@ test("async argument candidates get a frame to arrive, so the key still draws on
   await exited
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: a command's matching display text is echoed once and remains rewindable`, async () => {
     const longPrompt = "Investigate the project and coordinate workers to accomplish the goal."
     const s = await setup([{ text: "Workers finished." }, { text: "Next answer." }], {
@@ -173,7 +175,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
 }
 
 for (const delivery of ["injected", "promoted"] as const) {
-  for (const mode of ["fullscreen", "inline"] as const) {
+  for (const mode of ["fullscreen"] as const) {
     test(`${mode}: a command sent while busy is echoed once when ${delivery}`, async () => {
       let release!: () => void
       const until = new Promise<void>((resolve) => {

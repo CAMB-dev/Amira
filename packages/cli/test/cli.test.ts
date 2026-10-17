@@ -67,11 +67,13 @@ test("rejects inconsistent flags", () => {
   expect(() => parseCliArgs(["--nope"], here, {})).toThrow(UsageError)
 })
 
-test("--inline and --fullscreen pick the UI's mode; unset leaves it to settings", () => {
+test("legacy UI flags are accepted and preserve inline requests for the removal notice", () => {
   expect(parseCliArgs(["--inline"], here, {}).mode).toBe("inline")
   expect(parseCliArgs(["--fullscreen", "hi"], here, {}).mode).toBe("fullscreen")
   expect(parseCliArgs(["hi"], here, {}).mode).toBeUndefined()
-  expect(() => parseCliArgs(["--inline", "--fullscreen"], here, {})).toThrow(UsageError)
+  expect(parseCliArgs(["--inline", "--fullscreen"], here, {}).mode).toBe("inline")
+  expect(USAGE).toContain("Deprecated: runs fullscreen with a notice; use -p for")
+  expect(USAGE).not.toContain("Draw the UI inline")
 })
 
 test("supports -- before a dash-prefixed prompt", () => {

@@ -1,11 +1,11 @@
 import { DEFAULT_TUI_MARGIN, DEFAULT_TUI_MARGIN_ROWS, type TuiSettings } from "@amira/api"
-import { type Component, type MouseInput, type RenderContext, truncateToWidth } from "@amira/tui-kit"
+import { type Component, type MouseInput, truncateToWidth } from "@amira/tui-kit"
 
 /** One content column shared by transcript, chrome and full-screen overlays. */
-export function contentGeometry(columns: number, rows: number, settings: TuiSettings, fullscreen: boolean) {
+export function contentGeometry(columns: number, rows: number, settings: TuiSettings) {
   const configured = settings.margin ?? DEFAULT_TUI_MARGIN
   const left = columns - 2 * configured >= 60 ? configured : Math.max(0, Math.floor((columns - 60) / 2))
-  const edgeRows = fullscreen && rows >= 24 ? (settings.marginRows ?? DEFAULT_TUI_MARGIN_ROWS) : 0
+  const edgeRows = rows >= 24 ? (settings.marginRows ?? DEFAULT_TUI_MARGIN_ROWS) : 0
   return {
     left,
     width: Math.max(1, columns - 2 * left),
@@ -14,45 +14,20 @@ export function contentGeometry(columns: number, rows: number, settings: TuiSett
   }
 }
 
-/** Leave the margins on the terminal's default surface, including committed scrollback. */
-export function insetLines(
-  lines: string[],
-  left: number,
-  insets?: readonly (number | undefined)[],
-): string[] {
-  if (!left && !insets) return lines
-  // Pending inline images keep their marker at the very end of the line. Their existing
-  // prefix also positions the image and indents every fallback row; don't append spaces.
-  return lines.map((line, i) => (line ? " ".repeat(insets?.[i] ?? left) + line : line))
+/** Leave the margins on the terminal's default surface, including the exit printout. */
+export function insetLines(lines: string[], left: number): string[] {
+  if (!left) return lines
+  return lines.map((line) => (line ? " ".repeat(left) + line : line))
 }
 
 /** Move only the outer edge; all inner rendering and width calculations stay content-relative. */
-export function marginView(
-  content: Component,
-  settings: TuiSettings,
-  fullscreen: boolean,
-  rowInsets?: (lines: string[]) => readonly (number | undefined)[] | undefined,
-): Component {
+export function marginView(content: Component, settings: TuiSettings): Component {
   return {
     render(columns, ctx) {
-      const geometry = contentGeometry(columns, ctx.rows, settings, fullscreen)
+      const geometry = contentGeometry(columns, ctx.rows, settings)
       const inner = {
         ...ctx,
         rows: geometry.height,
-        ...(ctx.commit
-          ? {
-              commit: ((lines, redraw) =>
-                ctx.commit!(
-                  insetLines(lines, geometry.left, rowInsets?.(lines)),
-                  redraw
-                    ? (columns, ctx) => {
-                        const next = contentGeometry(columns, ctx.rows, settings, fullscreen)
-                        return insetLines(redraw(next.width, { ...ctx, rows: next.height }), next.left)
-                      }
-                    : undefined,
-                )) satisfies NonNullable<RenderContext["commit"]>,
-            }
-          : {}),
         ...(ctx.place
           ? {
               place: (p: Parameters<NonNullable<typeof ctx.place>>[0]) =>
@@ -61,13 +36,9 @@ export function marginView(
           : {}),
       }
       const rendered = content.render(geometry.width, inner)
-      const insets = rowInsets?.(rendered)
       const lines = insetLines(
-        rendered.map((line, i) =>
-          truncateToWidth(line, Math.max(1, geometry.width + geometry.left - (insets?.[i] ?? geometry.left))),
-        ),
+        rendered.map((line) => truncateToWidth(line, geometry.width)),
         geometry.left,
-        insets,
       )
       if (!geometry.rows) return lines
       return [

@@ -3,7 +3,7 @@ import type { SessionData } from "./tools.ts"
 
 /**
  * Experimental: live panels, a few lines an extension keeps on screen while the user works,
- * such as a todo list. Frontends that have them (the TUI does, in full-screen and inline mode)
+ * such as a todo list. Frontends that have them (the fullscreen TUI does)
  * show every visible panel above the activity line and draw them again at each redraw, so an
  * extension changes a panel by changing its state and calling ExtensionAPI.requestRender. Lines
  * describe what they are, as a view's do; the frontend styles them.

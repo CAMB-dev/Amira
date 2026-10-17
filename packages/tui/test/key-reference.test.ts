@@ -7,10 +7,9 @@ import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 
 const keys = new Keybindings({ ...defaultKeys({ vscode: false }, "linux"), help: ["f1"] })
 
-function open(opts: { fullscreen?: boolean; usable?: KeyReferenceOptions["usable"] } = {}) {
+function open(opts: { usable?: KeyReferenceOptions["usable"] } = {}) {
   let closed = 0
   const ref = new KeyReference(keys, {
-    fullscreen: opts.fullscreen ?? true,
     onClose: () => closed++,
     ...(opts.usable ? { usable: opts.usable } : {}),
   })
@@ -48,7 +47,7 @@ test("rebound reference labels and its footer are lower-case, while prose keeps 
     submit: ["ctrl+alt+shift+f12"],
     "dialog.choose": ["f6"],
   })
-  const ref = new KeyReference(rebound, { fullscreen: true, onClose: () => {} })
+  const ref = new KeyReference(rebound, { onClose: () => {} })
   const rows = ref.render(180, { ...plain, rows: 300 })
   const text = rows.join("\n")
   expect(text).toMatch(/^ {2}ctrl\+alt\+shift\+f12 +Send the message/m)

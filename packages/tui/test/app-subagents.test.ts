@@ -248,7 +248,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   await exited
 })
 
-test("after an interrupt, a sub-agent it stopped gets its end line; one that runs on and finishes does not", async () => {
+test("after an interrupt, stopped and surviving sub-agents retain their final states", async () => {
   // Replies go by who asks: the commander, or a child by its task.
   const reply = (req: { messages: { role: string; content: unknown }[] }) => {
     const task = JSON.stringify(req.messages[0]?.content)
@@ -288,16 +288,19 @@ test("after an interrupt, a sub-agent it stopped gets its end line; one that run
   await survivor!.result()
   await idle()
   await bus.flush()
-  await waitFor(() => !live().includes("running in background"), "the rows gone")
+  await waitFor(
+    () => /‖ stopped Stop me ·/.test(all()) && /✓ done {4}Keep going ·/.test(all()),
+    "the stopped and completed rows rendered",
+  )
   expect(all()).toMatch(/└ ‖ stopped Stop me · explorer · \d+\.\ds · 0 tok/)
   expect(all().match(/‖ stopped Stop me ·/g)).toHaveLength(1)
-  // The survivor's notice (the agent extension's) reports it; no line of its own here.
-  expect(all()).not.toContain("✓ done    Keep going ·")
+  // The completed survivor stays attached to its tool call, without a duplicate row.
+  expect(all().match(/✓ done {4}Keep going ·/g)).toHaveLength(1)
   terminal.send("\x03")
   await exited
 })
 
-test("sub-agents that outlive their call run on under a head shaped like the call, with no end line", async () => {
+test("sub-agents that outlive their call stay attached and retain their completed state", async () => {
   let finish!: () => void
   let firstReplyClock = ""
   // The child and the commander ask in no fixed order: each reply goes by who asks.
@@ -349,27 +352,26 @@ test("sub-agents that outlive their call run on under a head shaped like the cal
   terminal.send("go\r")
   await shows("started it")
   await idle()
-  // The call is committed; its sub-agent runs on in the live region.
+  // The completed call keeps its still-working sub-agent in the retained transcript.
   expect(firstReplyClock).toMatch(/^\d{2}:\d{2}$/)
   expect(all()).toMatch(new RegExp(`^└ launch {2}✓ Started in the background +${firstReplyClock}$`, "m"))
   await waitFor(
     () =>
-      /^└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] launch · 1 sub-agent · running in background · \d+s\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Scan the logs · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(
+      /^└ launch {2}✓ Started in the background +\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Scan the logs · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(
         live(),
       ),
     "background rows",
   )
-  const committed = all().split("running in background")[0]!
-  expect(committed).not.toContain("Scan the logs")
+  expect(all().match(/Started in the background/g)).toHaveLength(1)
   // No turn runs: sub-agents working in the background bring no activity line.
   expect(live()).not.toContain("esc interrupt")
   expect(live()).not.toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] (working|running)/m)
   finish()
   await child!.result()
   await bus.flush()
-  await waitFor(() => !live().includes("running in background"), "the rows gone")
-  // Its end is reported by its notice (the agent extension's), not by an end line of its own.
-  expect(all()).not.toContain("✓ done    Scan the logs ·")
+  await waitFor(() => /✓ done {4}Scan the logs ·/.test(all()), "the completed row rendered")
+  // The completed state replaces the working row without adding a second child.
+  expect(all().match(/✓ done {4}Scan the logs ·/g)).toHaveLength(1)
   terminal.send("\x03")
   await exited
 })
@@ -425,7 +427,7 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   await idle()
   await waitFor(
     () =>
-      /^└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] flow · 3 sub-agents · running in background · \d+s\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Explore · 0\/3 agents\n/m.test(
+      /^└ flow {2}✓ Started in the background +\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Explore · 0\/3 agents\n/m.test(
         live(),
       ),
     "one line for the group",
@@ -446,7 +448,7 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   await exited
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: a command-started background group uses the host spinner on its tree rows`, async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => {
@@ -496,30 +498,19 @@ for (const mode of ["inline", "fullscreen"] as const) {
       expect(s.live().match(/^└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] in the background$/gm)).toHaveLength(1)
       expect(s.live().match(/workflow demo/g)).toHaveLength(1)
       expect(s.live()).not.toContain("Scan api")
-      if (mode === "inline") {
-        expect(s.live()).toMatch(
-          /^ {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 1 working · \S+ tok · Explore · 0\/1 agents\n\n {2}\/work\/proj /m,
-        )
-      }
+
       release()
       await child!.result()
       group!.end()
       await group!.ended()
       await s.bus.flush()
-      if (mode === "inline") {
-        await waitFor(
-          () => s.all().includes("workflow demo · 1/1 done"),
-          "the terminal group summary retained",
-        )
-      } else {
-        await waitFor(
-          () =>
-            /^└ ✓ in the background\n {2}└ ✓ workflow demo · 1\/1 done · 0 tok · Explore · 0\/1 agents$/m.test(
-              s.live(),
-            ),
-          "the ended background tree",
-        )
-      }
+      await waitFor(
+        () =>
+          /^└ ✓ in the background\n {2}└ ✓ workflow demo · 1\/1 done · 0 tok · Explore · 0\/1 agents$/m.test(
+            s.live(),
+          ),
+        "the ended background tree",
+      )
     } finally {
       release()
       group?.end()
@@ -528,32 +519,3 @@ for (const mode of ["inline", "fullscreen"] as const) {
     }
   })
 }
-
-test("inline: commands and streaming replies leave one blank row above the metadata header", async () => {
-  let release!: () => void
-  const gate = new Promise<void>((r) => {
-    release = r
-  })
-  const s = await setup(
-    [{ text: "Streaming reply still arriving at the terminal", hold: { chunks: 2, until: gate } }],
-    {
-      cols: 90,
-      commands: [{ name: "print", description: "", run: (_args, ctx) => ctx.print("Command output") }],
-    },
-  )
-  try {
-    s.terminal.send("/print\r")
-    await s.shows("Command output")
-    await s.idle()
-    expect(s.all()).toMatch(/^└ Command output\n\n {2}\/work\/proj /m)
-    s.terminal.send("go\r")
-    await waitFor(() => s.live().includes("Streaming reply"), "the streaming reply")
-    expect(s.agent.status).not.toBe("idle")
-    expect(s.live()).toMatch(/^ {2}Streaming reply[^\n]*\n\n {2}\/work\/proj /m)
-    release()
-    await s.idle()
-  } finally {
-    release()
-    await closeImageApp(s)
-  }
-})

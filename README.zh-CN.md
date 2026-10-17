@@ -35,6 +35,8 @@ Nightly 可执行程序预发布版本可从 [GitHub Releases](https://github.co
 
 ## 第一次使用
 
+交互式 UI 始终使用全屏模式，退出时将对话打印到普通屏幕。需要纯文本输出时，请使用 `amira -p "<prompt>"`。
+
 在项目目录运行 `amira`。输入 `/provider add`，按名称或 ID 搜索 models.dev 目录中的服务商，再确认预填的设置、模型和密钥来源。本地服务、未列出的服务，或离线时无法获取目录的情况，选择 `Custom` 并手动指定协议和服务地址。内置协议包括 `openai-chat`、`openai-responses`、`anthropic-messages` 和 `google-gemini`。使用环境变量存放密钥时，在表单中选择 `Environment variable`，填入变量名（`apiKeyEnv`），并在启动 Amira 的 shell 中设置该变量。然后用 `/model` 选择模型。配置详情见[provider 文档](docs/zh/providers.md)。
 
 输入需求后按 Enter 发送。默认情况下，轮次运行期间 Enter 用于引导，Alt+Enter 把消息排队到下一轮次（Windows 可能使用 Ctrl+Q，以界面提示为准）。Esc 中断当前轮次；若有等待中的消息，会立即发送。连续按两次 Esc 可以回退已保存会话中的消息；回退只改变对话，不恢复文件。输入 `@` 选择文件路径，`$` 选择 skill，`/` 浏览命令；输入框为空时按 `?` 查看快捷键。`/ext` 用于浏览、安装和管理扩展。`/provider` 打开 provider 管理页面；Enter 提供编辑、设置密钥、测试连接和删除操作，Esc 关闭。模型多选列表支持直接输入过滤，Ctrl+A 全选或清空所有匹配过滤条件的选项，Ctrl+X 反选这些选项。

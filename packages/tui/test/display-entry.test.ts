@@ -6,10 +6,9 @@ import { userMessage } from "@amira/ai"
 import { SessionStore } from "@amira/core"
 import { stripAnsi } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
-import { DisplayBlock } from "../src/blocks/display.ts"
+import { DisplayBlock, displayEnv } from "../src/blocks/display.ts"
 import { displayHistory } from "../src/display-history.ts"
 import { historyBlocks } from "../src/fullscreen/history-blocks.ts"
-import { displayEnv } from "../src/inline-display.ts"
 import { setup, waitFor } from "./app-harness.ts"
 
 test("display blocks fold, render Markdown details, and retain plain text for copying", () => {
@@ -28,7 +27,7 @@ test("display blocks fold, render Markdown details, and retain plain text for co
   expect(block.copyText()).toBe("btw: question\n**side answer**")
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: command display details toggle with Ctrl+O and never become messages`, async () => {
     const s = await setup([], {
       settings: { mode },

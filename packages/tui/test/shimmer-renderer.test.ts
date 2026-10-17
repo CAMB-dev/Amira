@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { isColorEnabled, setColorEnabled, stripAnsi } from "@amira/tui-kit"
 import { setup } from "./app-harness.ts"
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: 33 ms shimmer rewrites activity only and preserves composer cursor`, async () => {
     const color = isColorEnabled()
     setColorEnabled(true)

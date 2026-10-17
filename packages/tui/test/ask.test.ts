@@ -24,8 +24,8 @@ import { fileList } from "../src/file-index.ts"
  * approval, the free-text choice, narrow screens, CJK and NO_COLOR.
  */
 
-type Mode = "inline" | "fullscreen"
-const MODES: Mode[] = ["inline", "fullscreen"]
+type Mode = "fullscreen"
+const MODES: Mode[] = ["fullscreen"]
 
 const ESC = "\x1b[27u"
 const UP = "\x1b[A"
@@ -443,7 +443,7 @@ test(
   "Esc on an approval denies the call and stops the turn; meanwhile the activity line waits for you",
   async () => {
     const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "tried another way" }], {
-      mode: "inline",
+      mode: "fullscreen",
       approve: ["wipe"],
     })
     s.terminal.send("clean up\r")
@@ -465,7 +465,7 @@ test(
   "an approval refused with free text tells the model what to do instead",
   async () => {
     const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "ok, moving to trash" }], {
-      mode: "inline",
+      mode: "fullscreen",
       approve: ["wipe"],
     })
     s.terminal.send("clean up\r")

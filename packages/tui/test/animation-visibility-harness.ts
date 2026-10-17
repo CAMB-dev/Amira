@@ -1,11 +1,10 @@
 import { jest } from "bun:test"
 import type { ViewDefinition } from "@amira/api"
-import { FakeTerminal, FullScreenRenderer, LiveRenderer, Spinner } from "@amira/tui-kit"
+import { FakeTerminal, FullScreenRenderer, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { OverlayManager } from "../src/app/overlays.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
 
@@ -31,24 +30,22 @@ export function animationProbe() {
     Reflect.apply(cancel, globalThis, [timer])
   })
   const fullscreen = jest.spyOn(FullScreenRenderer.prototype, "requestRender")
-  const inline = jest.spyOn(LiveRenderer.prototype, "requestRender")
   return {
     sample: () => ({
       intervals: active.size,
       wakes,
-      requests: fullscreen.mock.calls.length + inline.mock.calls.length,
+      requests: fullscreen.mock.calls.length,
     }),
     restore: () => {
       start.mockRestore()
       stop.mockRestore()
       fullscreen.mockRestore()
-      inline.mockRestore()
     },
   }
 }
 
 /** Real transcript renderers and overlay scheduler, with no process terminal or user files. */
-export function visibilityHarness(mode: "inline" | "fullscreen", definition: ViewDefinition) {
+export function visibilityHarness(_mode: "fullscreen", definition: ViewDefinition) {
   const terminal = new FakeTerminal(80, 24)
   const screen = new VirtualScreen(80, 24)
   const write = terminal.write.bind(terminal)
@@ -59,7 +56,7 @@ export function visibilityHarness(mode: "inline" | "fullscreen", definition: Vie
     screen.write(data)
   }
   const keys = defaultKeybindings()
-  const view = (mode === "inline" ? createInlineView : createFullscreenView)({
+  const view = createFullscreenView({
     terminal,
     theme: plain.theme,
     capabilities: {
@@ -76,11 +73,7 @@ export function visibilityHarness(mode: "inline" | "fullscreen", definition: Vie
     spinner: new Spinner(),
     sessionId: () => "main",
     detail: () => "summary",
-    bottom: (width, ctx, budget, top) => [
-      ...(top?.render(width, ctx) ?? []),
-      ...manager.renderDock(width, ctx, Math.max(0, budget - 1)),
-      "input",
-    ],
+    bottom: (width, ctx, budget) => [...manager.renderDock(width, ctx, Math.max(0, budget - 1)), "input"],
     overlay: { render: (width, ctx) => manager.render(width, ctx) },
     editorEmpty: () => true,
     showNote: () => {},
@@ -88,7 +81,6 @@ export function visibilityHarness(mode: "inline" | "fullscreen", definition: Vie
   const manager = new OverlayManager({
     keys,
     theme: plain.theme,
-    mode,
     env: {},
     views: { get: () => definition },
     reaches: () => true,

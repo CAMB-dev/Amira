@@ -24,7 +24,6 @@ export function focusHistory(main: PromptHistory, focus: () => ConversationFocus
 
 /** Wires native focus without making the app controller own transcript-switch lifecycle. */
 export function createNativeFocus(deps: {
-  mode: "inline" | "fullscreen"
   editor: Editor
   mainView: TranscriptView
   mainHistory: PromptHistory
@@ -44,7 +43,6 @@ export function createNativeFocus(deps: {
 }) {
   const { overlays, composer } = deps
   const focus = new ConversationFocus({
-    mode: deps.mode,
     editor: deps.editor,
     mainView: deps.mainView,
     mainHistory: deps.mainHistory,

@@ -32,7 +32,7 @@ export interface CliArgs {
   permissionMode?: PermissionMode
   help: boolean
   version: boolean
-  /** How the interactive UI draws: --fullscreen or --inline. Unset: from settings, else full screen. */
+  /** Legacy UI mode request: --inline shows a removal notice; --fullscreen is a no-op. */
   mode?: "fullscreen" | "inline"
   /** Headless JSONL protocol on stdin and stdout. */
   rpc: boolean
@@ -83,11 +83,9 @@ Options:
                         (read-only: no file changes, no shell commands). Wins
                         over "permissions.mode" in settings.json; shift+tab
                         cycles it in the UI
-      --fullscreen      Draw the UI full screen: Amira scrolls, searches and
-                        folds the conversation, and prints it on exit (default,
-                        or "tui.mode" in settings.json)
-      --inline          Draw the UI inline: finished output goes to the
-                        terminal's scrollback (for SSH, tmux, native selection)
+      --fullscreen      Accepted for compatibility; the UI always runs fullscreen
+      --inline          Deprecated: runs fullscreen with a notice; use -p for
+                        plain output
   -C, --cwd <dir>       Working directory (default: current directory)
   -h, --help            Show this help
   -v, --version         Show the version
@@ -153,9 +151,8 @@ export function parseCliArgs(
   if (positionals.length) args.prompt = positionals.join(" ")
   if (values.resume !== undefined) args.resume = values.resume
   if (args.continue && args.resume !== undefined) throw new UsageError("use either --continue or --resume")
-  if (values.inline && values.fullscreen) throw new UsageError("use either --inline or --fullscreen")
   if (values.inline) args.mode = "inline"
-  if (values.fullscreen) args.mode = "fullscreen"
+  else if (values.fullscreen) args.mode = "fullscreen"
   if (values.shell !== undefined) args.shell = parseShell(values.shell)
   if (values["max-steps"] !== undefined) {
     const value = values["max-steps"]

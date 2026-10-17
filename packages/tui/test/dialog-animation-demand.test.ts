@@ -26,7 +26,6 @@ function setup() {
   const manager = new OverlayManager({
     keys: defaultKeybindings(),
     theme: ctx.theme,
-    mode: "fullscreen",
     env: {},
     reaches: () => true,
     view: () =>

@@ -16,7 +16,7 @@ async function answerMainAndReturn(s: Awaited<ReturnType<typeof focusFixture>>) 
   s.terminal.send("/design\r")
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: suspended secret input retains its pasted buffer and caret without displaying it`, async () => {
     const s = await focusFixture(mode)
     const secret = "owned-secret-9"

@@ -38,7 +38,7 @@ test("short fullscreen terminals keep a multiline draft and its caret visible du
   }
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: command activity describes Esc closing the dock before cancelling work`, async () => {
     const started = Promise.withResolvers<void>()
     let cancelled = false

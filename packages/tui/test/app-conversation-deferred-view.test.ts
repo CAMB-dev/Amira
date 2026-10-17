@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { closeImageApp, userTexts, waitFor } from "./app-harness.ts"
 import { focusFixture } from "./conversation-focus-fixture.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const placement of ["fullscreen", "dock"] as const) {
     test(`${mode}: arbitrary delayed main ${placement} view cannot attach to owned input`, async () => {
       const gate = Promise.withResolvers<void>()

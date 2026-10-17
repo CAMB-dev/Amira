@@ -86,8 +86,8 @@ async function run(argv: string[]): Promise<number> {
   let choice: { store: SessionStore; resumed: boolean } | undefined
   /** amira -r without an id: the UI starts with its session picker. */
   let pickInUi = false
-  if (args.resume === "") {
-    const sessions = listSessions(args.cwd)
+  const sessions = args.resume === "" ? listSessions(args.cwd) : undefined
+  if (sessions) {
     if (!sessions.length) {
       process.stderr.write(`amira: no sessions in ${args.cwd}\n`)
       return 1
@@ -96,6 +96,14 @@ async function run(argv: string[]): Promise<number> {
       process.stdout.write(`${formatSessionList(sessions)}\n`)
       return 0
     }
+  }
+  if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
+    throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
+  }
+  if (interactive && process.env.TERM === "dumb") {
+    throw new UsageError('TERM=dumb cannot run the fullscreen UI; use amira -p "<prompt>" for plain output.')
+  }
+  if (sessions) {
     // The UI's own picker (/resume) chooses, filterable like in a running session; with a
     // prompt to send the terminal's numbered list does, before the UI starts.
     if (args.prompt) {
@@ -103,9 +111,6 @@ async function run(argv: string[]): Promise<number> {
       if (!picked) return 0
       choice = { store: SessionStore.open(picked.file), resumed: true }
     } else pickInUi = true
-  }
-  if (interactive && !(process.stdin.isTTY && process.stdout.isTTY)) {
-    throw new UsageError("the interactive UI needs a terminal; use --print for pipes and scripts")
   }
   // Problems with keybindings.json show with the settings warnings.
   const keybindings = interactive ? loadKeybindings(amiraPath("keybindings.json")) : undefined
@@ -270,7 +275,7 @@ async function run(argv: string[]): Promise<number> {
       ...(pickInUi ? { resumePicker: true } : {}),
       ...(keybindings ? { keybindings: keybindings.keys } : {}),
       ...(config.settings.tui ? { settings: config.settings.tui } : {}),
-      // Full screen unless a flag or tui.mode says inline (D84).
+      // Preserve legacy inline requests so the fullscreen UI can show its removal notice.
       mode: args.mode ?? config.settings.tui?.mode ?? DEFAULT_TUI_MODE,
       runningJobs: () => host.backgroundJobs.running().length,
     })

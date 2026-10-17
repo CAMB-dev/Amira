@@ -3,9 +3,9 @@ import { expect, test } from "bun:test"
 import { marginFrame, zeroMargins } from "./margins-fixture.ts"
 
 // Intentional ANSI snapshots: shared grid, reading fills, typing borders, reference roles and ›/·.
-for (const fullscreen of [true, false]) {
+for (const fullscreen of [true]) {
   for (const columns of [100, 70]) {
-    test(`polished zero-margin ${fullscreen ? "fullscreen" : "inline"} ANSI and scrollback at ${columns}x30`, () => {
+    test(`polished zero-margin fullscreen ANSI and scrollback at ${columns}x30`, () => {
       expect(marginFrame(fullscreen, columns, 30, zeroMargins)).toMatchSnapshot()
     })
   }

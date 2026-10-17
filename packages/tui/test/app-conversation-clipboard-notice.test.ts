@@ -3,7 +3,7 @@ import type { ClipboardContent } from "../src/image-input.ts"
 import { closeImageApp, userTexts, waitFor } from "./app-harness.ts"
 import { focusFixture } from "./conversation-focus-fixture.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: pending clipboard submission warns in the visible owned transcript and keeps its draft`, async () => {
     const pending = Promise.withResolvers<ClipboardContent>()
     let reading = false

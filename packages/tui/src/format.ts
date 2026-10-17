@@ -112,8 +112,7 @@ export function timestampRow(
   at: number | undefined,
   record?: (stamp: TimestampDecoration) => void,
 ): string {
-  // Inline pending nodes must end at their APC marker so the renderer can resolve them.
-  if (timestampRoom(width, at) === width || at === undefined || row.includes("\x1b_")) return row
+  if (timestampRoom(width, at) === width || at === undefined) return row
   const text = localClock(at)
   const cells = visibleWidth(text)
   const gap = width - visibleWidth(row) - cells

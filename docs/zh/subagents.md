@@ -66,7 +66,7 @@ Esc 只打断主轮次，其后台子 agent 会继续运行。用 `/agents stop 
 
 可以用从 1 开始的列表序号、完整 ID 或唯一的 ID 前缀定位。列表显示标题、角色、状态、耗时、token，以及已知费用。交互选择器中 Enter 打开查看器，`p` 将对话记录输出到主对话。打印模式以文本列出项目；实时查看器需要交互界面。
 
-查看器随子 agent 工作实时更新。←/→ 或 Tab/Shift+Tab 切换子 agent。视图声明 `needsTab: true`，因此 F6（`view.focus`，默认按键 `["f6", "ctrl+tab"]`）在查看器与主输入框之间切换焦点，内联模式中的全屏覆盖层也一样；Tab/Shift+Tab 仍切换子 agent。终端能传递 Ctrl+Tab 时，它也是别名；Windows Terminal 可能截获它，旧式终端可能将其报告为普通 Tab，因此通常优先使用 F6；VS Code 需要下方按键绑定文档中说明的配置。默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。其他焦点操作见[扩展视图](keybindings.md#扩展视图)。`p` 输出当前对话记录；`x` 请求停止当前子 agent，接着 `y` 确认，其他键取消停止。Esc、`q` 或 Ctrl+C 关闭查看器。主会话有待回答的对话框时，查看器会显示提醒。两种终端模式都能打开查看器，内联模式会暂时切到备用屏幕。
+查看器随子 agent 工作实时更新。←/→ 或 Tab/Shift+Tab 切换子 agent。视图声明 `needsTab: true`，因此 F6（`view.focus`，默认按键 `["f6", "ctrl+tab"]`）在查看器与主输入框之间切换焦点；Tab/Shift+Tab 仍切换子 agent。终端能传递 Ctrl+Tab 时，它也是别名；Windows Terminal 可能截获它，旧式终端可能将其报告为普通 Tab，因此通常优先使用 F6；VS Code 需要下方按键绑定文档中说明的配置。默认焦点提示显示 `f6→input/view`，而不是 Ctrl+Tab。其他焦点操作见[扩展视图](keybindings.md#扩展视图)。`p` 输出当前对话记录；`x` 请求停止当前子 agent，接着 `y` 确认，其他键取消停止。Esc、`q` 或 Ctrl+C 关闭查看器。主会话有待回答的对话框时，查看器会显示提醒。
 
 ### 状态徽标图例
 
@@ -82,7 +82,7 @@ agent 状态徽标使用当前主题的符号，必要时使用 ASCII 替代。�
 | `failed` | 因错误结束 | 错误色 |
 | `stopped` | 完成前被停止 | 警告色 |
 
-这些是显示状态，不改变生命周期契约。请把完整的 info/result 传给 `@amira/api` 的 `agentStatusState(info)`：`done` 加已定义的提前结束备注（包括空备注、正常停止或轮次上限）显示为 `stopped`。暂停的成员仍占用工作名额，但在显示计数中与 working 分开。折叠树和紧凑组显示实际状态及结果计数；最后一个成员离开后，内联模式仍保留组的最终摘要。扩展可以通过宿主提供的可选 `statusBadge` 辅助函数显示相同的徽标（见[扩展](extensions.md#全屏与停靠视图)）。
+这些是显示状态，不改变生命周期契约。请把完整的 info/result 传给 `@amira/api` 的 `agentStatusState(info)`：`done` 加已定义的提前结束备注（包括空备注、正常停止或轮次上限）显示为 `stopped`。暂停的成员仍占用工作名额，但在显示计数中与 working 分开。折叠树和紧凑组显示实际状态及结果计数；最后一个成员离开后，会话记录仍保留组的最终摘要。扩展可以通过宿主提供的可选 `statusBadge` 辅助函数显示相同的徽标（见[扩展](extensions.md#全屏与停靠视图)）。
 
 ## Worktree 与合并
 

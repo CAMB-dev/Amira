@@ -285,7 +285,7 @@ test("view hints and the key reference show the current host bindings", () => {
   expect(stripAnsi(viewer.render(120, ctx).at(-1)!)).toBe("  1–7 of 40 · kj f8 scroll · f6 close")
   const minimal = new ExtensionViewer({ ...view, hostKeys: "minimal" }, {}, { keys })
   expect(stripAnsi(minimal.render(120, ctx).at(-1)!)).toBe("  f6 close")
-  const reference = new KeyReference(keys, { fullscreen: false, onClose: () => {} })
+  const reference = new KeyReference(keys, { onClose: () => {} })
   const text = reference
     .render(180, { ...ctx, rows: 300 })
     .map(stripAnsi)

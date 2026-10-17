@@ -308,8 +308,8 @@ export class TranscriptPane {
   }
 
   /**
-   * Every block at `width`, spaced like the inline transcript: what exiting prints. Blocks
-   * folded by hand print as the inline transcript shows them, except thinking keeps its chosen
+   * Every block at `width`, with transcript spacing: what exiting prints. Blocks
+   * folded by hand print at default detail, except thinking keeps its chosen
    * fold. Images print as their alt text: the normal screen is text.
    */
   printout(env: BlockEnv): string[] {

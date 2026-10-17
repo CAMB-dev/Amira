@@ -279,73 +279,74 @@ test("/tasks stops each kind, stops all, handles missing refs and hides at zero"
   expect(f.output.at(-1)).toContain("No live background tasks.")
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
-  test(`unified tasks panel, folding, job/agent views and stop-all (${mode})`, async () => {
-    const f = fixture()
-    const app = await setup([], {
-      cols: 110,
-      rows: 35,
-      settings: { mode },
-      control: f.session,
-      extensions: [
-        (api) => {
-          registerJobs(api, f.registry)
-          api.registerView(subagentView(api))
-        },
-      ],
-    })
-    try {
-      app.host.setSessionControl(f.session, () => app.agent)
-      app.bus.emit("ui.render", {}, { sessionId: app.agent.sessionId })
-      await waitFor(() => app.live().includes("5 background tasks | 3 running"), "combined panel")
-      expect(app.live()).toContain("monitor job2")
-      expect(app.live()).toContain("agent child running")
-      expect(app.live()).toContain("agent idle idle")
-      expect(app.live()).toContain("agent paused paused")
-      app.bus.emit(
-        "message.delta",
-        { kind: "text", text: "Streaming progress" },
-        { sessionId: "child", parentSessionId: app.agent.sessionId },
-      )
-      await waitFor(() => app.live().includes("Streaming progress"), "streaming agent preview")
-      app.terminal.send("\x14")
-      await waitFor(() => !app.live().includes("monitor job2"), "folded panel")
-      expect(app.live()).toContain("5 background tasks | 3 running")
-      app.terminal.send("/tasks\r")
-      await waitFor(
-        () => app.live().includes("Background tasks") && app.live().includes("monitor job2"),
-        "combined picker",
-      )
-      app.terminal.send("\x1b[B\r")
-      await waitFor(() => app.live().includes("job2 · tail -f build.log"), "job view")
-      expect(app.live()).toContain("ready")
-      app.terminal.send("q")
-      await waitFor(() => !app.live().includes("job2 · tail -f build.log"), "closed job view")
-      app.terminal.send("/tasks view child\r")
-      await waitFor(
-        () => app.live().includes("Implement it") && app.live().includes("Tests pass"),
-        "agent transcript view",
-      )
-      app.terminal.send("q")
-      await waitFor(() => !app.live().includes("Implement it"), "closed agent view")
-      app.terminal.send("/tasks view paused\r")
-      await waitFor(
-        () => app.live().includes("Implement it") && app.live().includes("paused"),
-        "paused agent transcript view",
-      )
-      app.terminal.send("q")
-      await waitFor(() => !app.live().includes("Implement it"), "closed paused agent view")
-      app.terminal.send("/tasks stop all\r")
-      await app.shows("Stopped 5 background tasks.")
-      await waitFor(() => !app.live().includes("5 background tasks | 3 running"), "hidden tasks panel")
-      expect(f.registry.running()).toHaveLength(0)
-      expect(f.stopped).toEqual(["child", "idle", "paused"])
-    } finally {
-      app.terminal.send("\x03")
-      await app.exited
-    }
+test("unified tasks panel, folding, job/agent views and stop-all", async () => {
+  const f = fixture()
+  const app = await setup([], {
+    cols: 110,
+    rows: 35,
+    control: f.session,
+    extensions: [
+      (api) => {
+        registerJobs(api, f.registry)
+        api.registerView(subagentView(api))
+      },
+    ],
   })
-}
+  try {
+    app.host.setSessionControl(f.session, () => app.agent)
+    app.bus.emit("ui.render", {}, { sessionId: app.agent.sessionId })
+    await waitFor(() => app.live().includes("5 background tasks | 3 running"), "combined panel")
+    expect(app.live()).toContain("monitor job2")
+    expect(app.live()).toContain("agent child running")
+    expect(app.live()).toContain("agent idle idle")
+    expect(app.live()).toContain("agent paused paused")
+    app.bus.emit(
+      "message.delta",
+      { kind: "text", text: "Streaming progress" },
+      { sessionId: "child", parentSessionId: app.agent.sessionId },
+    )
+    await waitFor(() => app.live().includes("Streaming progress"), "streaming agent preview")
+    app.terminal.send("\x14")
+    await waitFor(() => !app.live().includes("monitor job2"), "folded panel")
+    expect(app.live()).toContain("5 background tasks | 3 running")
+    app.terminal.send("/tasks\r")
+    await waitFor(
+      () => app.live().includes("Background tasks") && app.live().includes("monitor job2"),
+      "combined picker",
+    )
+    app.terminal.send("\x1b[B\r")
+    await waitFor(() => app.live().includes("job2 · tail -f build.log"), "job view")
+    expect(app.live()).toContain("ready")
+    app.terminal.send("q")
+    await waitFor(() => !app.live().includes("job2 · tail -f build.log"), "closed job view")
+    app.terminal.send("/tasks view child\r")
+    await waitFor(
+      () => app.live().includes("Implement it") && app.live().includes("Tests pass"),
+      "agent transcript view",
+    )
+    app.terminal.send("q")
+    await waitFor(() => !app.live().includes("Implement it"), "closed agent view")
+    app.terminal.send("/tasks view paused\r")
+    await waitFor(
+      () => app.live().includes("Implement it") && app.live().includes("paused"),
+      "paused agent transcript view",
+    )
+    app.terminal.send("q")
+    await waitFor(() => !app.live().includes("Implement it"), "closed paused agent view")
+    app.terminal.send("/tasks stop all\r")
+    await app.shows("Stopped 5 background tasks.")
+    await waitFor(() => !app.live().includes("5 background tasks | 3 running"), "hidden tasks panel")
+    expect(f.registry.running()).toHaveLength(0)
+    expect(f.stopped).toEqual(["child", "idle", "paused"])
+    expect(app.screen.altSwitches).toEqual([true])
+    expect(app.screen.mainText).toBe("")
+  } finally {
+    app.terminal.send("\x03")
+    await app.exited
+  }
+  expect(app.screen.altSwitches).toEqual([true, false])
+  expect(app.screen.mainText).toContain("Stopped 5 background tasks.")
+})
 
 test.each([false, true])(
   "automatic monitor notices and follow-ups do not replace the child's task boundary (%s)",

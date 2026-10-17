@@ -4,7 +4,7 @@ import { agentsCommand } from "../../../extensions/agent/src/agents-command.ts"
 import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: an open agents picker updates statuses without reopening or losing selection`, async () => {
     const agents: SubagentInfo[] = ["First child", "Selected child", "Failed child", "Stopped child"].map(
       (title, index) => ({

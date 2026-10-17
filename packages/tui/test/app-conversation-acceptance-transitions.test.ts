@@ -5,7 +5,7 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 
 const F6 = "\x1b[17~"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: F6 is safe when a mounted view reenters unfocus in onClose`, async () => {
     let closeCount = 0
     const reentries: (boolean | undefined)[] = []

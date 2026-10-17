@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { ViewDefinition } from "@amira/api"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const widgets of [false, true]) {
     test(`${mode}: ${widgets ? "widget" : "line"} fullscreen demand survives composer focus and then settles`, async () => {
       let focused = true

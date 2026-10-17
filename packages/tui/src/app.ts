@@ -17,11 +17,11 @@ import {
   ImageStore,
   type InputEvent,
   InputReader,
-  modes,
   ProcessTerminal,
   Spinner,
   setupTerminalInput,
   supportsHyperlinks,
+  type Terminal,
 } from "@amira/tui-kit"
 import { createTurnActivity, statusRetryLabel } from "./app/activity.ts"
 import { createBottomArea } from "./app/bottom-area.ts"
@@ -42,11 +42,12 @@ import {
   HINT_NOTE_MS,
   HOST_EVENTS,
   resumeAtStartup,
+  startupNotices,
   tildePath,
   welcomeCard,
 } from "./app/startup.ts"
 import { createSubmission } from "./app/submission.ts"
-import { interactiveBanner, interactiveTerminal } from "./app/terminal.ts"
+import { interactiveBanner, withFullscreenTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
 import { displayHistory, displayOutput } from "./display-history.ts"
@@ -54,7 +55,6 @@ import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { headerLine } from "./header.ts"
-import { createInlineView } from "./inline-view.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
 import { contentGeometry, contentMouse } from "./margins.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
@@ -73,15 +73,22 @@ export { type InteractiveOptions, tildePath } from "./app/startup.ts"
 
 /**
  * The interactive terminal UI. This is its controller: it follows the bus and the keys, keeps
- * the input, dialogs, forms and the message queue, and hands the conversation to a view that
- * draws it inline (finished output goes to the scrollback) or full screen (the conversation
- * is kept and scrolled by Amira). Resolves with the process exit code when the user quits.
+ * the input, dialogs, forms and the message queue, and hands the conversation to the full-screen
+ * view, kept and scrolled by Amira. Resolves with the process exit code when the user quits.
  */
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
+  const env = opts.env ?? process.env
+  const terminal = opts.terminal ?? new ProcessTerminal()
+  return withFullscreenTerminal(terminal, env, () => runFullscreen(opts, terminal, env))
+}
+
+async function runFullscreen(
+  opts: InteractiveOptions,
+  terminal: Terminal,
+  env: Record<string, string | undefined>,
+): Promise<number> {
   // Wiring and collaborators: terminal setup and the UI's shared services.
   let { agent } = opts
-  const env = opts.env ?? process.env
-  const terminal = interactiveTerminal(opts.terminal, env)
   const presenters = opts.toolRenderers
   const settings = opts.settings ?? {}
   const imageSetting = settings.images ?? DEFAULT_TUI_IMAGES
@@ -94,7 +101,7 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
 
   // Links are clickable (OSC 8) where the terminal is known to support them.
   const hyperlinks = supportsHyperlinks(env)
-  // Images on a line of their own are drawn where the terminal can, in both views: at most 20
+  // Images on a line of their own are drawn where the terminal can: at most 20
   // rows, and 40% of the screen. Full-screen overlays (the sub-agent viewer, forms) show their
   // alt text (D83, D84). What images are made of comes from image providers (the images
   // extension, D88): without one, they are their alt text.
@@ -211,12 +218,10 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     focusHint: (theme, width) => overlays.focusHint(theme, width),
     steering: () => (focus.conversation ? [] : outbox.steering),
     queued: () => (focus.conversation ? [] : outbox.queued),
-    mode: () => mode,
     hintNote: hint.current,
     commandActivity: () => commandRunner,
     canRewind: () => rewind.canRewind(),
     status: opts.status,
-    header,
     panels: opts.panels,
     editor,
     keys,
@@ -228,7 +233,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     filePicker: composer.filePicker,
   })
 
-  const mode = env.TERM === "dumb" ? "inline" : (opts.mode ?? settings.mode ?? "inline")
   const overlays = new OverlayManager({
     ui: opts.ui,
     views: opts.views,
@@ -237,7 +241,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     presenters,
     images,
     previewTheme: () => renders.theme,
-    mode,
     env,
     reaches,
     view: () => view,
@@ -263,12 +266,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       editor.focused = focused
     },
     renderInput: bottomArea.overlayInput,
-    dockChanged: (open) => {
-      if (mode !== "inline") return
-      if (open) terminal.enableMode(modes.mouse)
-      else if (!overlays.hasFullscreen) terminal.disableMode(modes.mouse)
-      view.redraw()
-    },
   })
   // Turn display state: the detail level read by the transcript view.
   let detail: ToolDetailLevel = "summary"
@@ -286,7 +283,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     spinner,
     sessionId: () => agent.sessionId,
     detail: () => detail,
-    essentialBottomRows: () => (overlays.dialogs.length ? 3 : 0),
     bottom: (...args) => {
       const rows = bottomArea.layout(...args)
       overlays.syncAnimation(args[2] > 0)
@@ -294,7 +290,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     },
     header,
     overlay: new View((width, ctx) => overlays.render(width, ctx)),
-    dockOpen: () => !!overlays.dock,
     editorEmpty: () => editor.isEmpty,
     showNote,
     openSubagent: (sessionId: string) => {
@@ -306,16 +301,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       overlays.openView({ kind: "subagent", data: { sessionId } })
     },
   }
-  const makeView = (h: ViewHost) => (mode === "fullscreen" ? createFullscreenView(h) : createInlineView(h))
-  const mainView = makeView(host)
+  const mainView = createFullscreenView(host)
   let view: TranscriptView = mainView
   const focus = createNativeFocus({
-    mode,
     editor,
     mainView,
     mainHistory,
     host,
-    makeView,
+    makeView: createFullscreenView,
     composer,
     overlays,
     keys,
@@ -373,7 +366,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const commandRunner = createCommandRunner({
     commands,
     keys,
-    mode,
     reaches,
     commandEcho: (line) => mainView.commandEcho(line),
     commandOutput: (level, text) => mainView.commandOutput(level, text),
@@ -723,13 +715,14 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     shimmerClock.dispose()
     noticeStrip.dispose()
     reader.stop()
-    view.stop()
-    themes.dispose()
-    unbindTerminal?.()
-    termStatus.stop()
-    if (terminal instanceof ProcessTerminal) terminal.stop()
-    else terminal.restore()
-    resolveExit(code)
+    try {
+      view.stop()
+    } finally {
+      themes.dispose()
+      unbindTerminal?.()
+      termStatus.stop()
+      resolveExit(code)
+    }
   }
 
   // Lifecycle: terminal focus is unknown until the first report.
@@ -751,17 +744,15 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       return redraw()
     }
     if (overlays.hasFullscreen && e.type === "mouse") {
-      const translated = contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings, true))
+      const translated = contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings))
       if (!translated) return
       e = translated
     }
     if (overlays.handleInput(e)) return shimmerClock.sync()
     // Docks use content-relative pointer coordinates, but leave transcript events unchanged.
     const dockEvent =
-      e.type === "mouse"
-        ? contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings, mode === "fullscreen"))
-        : e
-    if (dockEvent && overlays.handleDockInput(view.dockInput?.(dockEvent) ?? dockEvent)) return redraw()
+      e.type === "mouse" ? contentMouse(e, contentGeometry(terminal.columns, terminal.rows, settings)) : e
+    if (dockEvent && overlays.handleDockInput(dockEvent)) return redraw()
     // Fullscreen extension views keep pending dialogs behind their visible composer.
     const dialog = overlays.hasFullscreen ? undefined : overlays.dialogs[0]
     if (!dialog) composer.prepareInput(e)
@@ -811,9 +802,8 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
       if (focus.unfocus()) return redraw()
       return quitOrWarn("exit")
     } else if (keys.is(e, "copy.reply")) {
-      // In both modes: from the session's messages, so a new session (/clear) has none yet.
-      const fallback =
-        mode === "fullscreen" ? `${mouseLabels.drag} selects text.` : "Select it with the mouse."
+      // From the session's messages, so a new session (/clear) has none yet.
+      const fallback = `${mouseLabels.drag} selects text.`
       copyToClipboard(
         terminal,
         lastReplyText([...(focus.historySnapshot() ?? agent.messages)]),
@@ -868,33 +858,40 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
   const offThemeCommand = opts.registerCommand?.(
     themes.command({ overlays, keys, requestRender: () => view.requestRender() }),
   )
-  termStatus.start()
-  const unbindTerminal = opts.bindTerminal?.(termStatus)
-  opts.onReady?.()
+  let unbindTerminal: (() => void) | undefined
   const reader = new InputReader(terminal, onInput)
-  reader.start()
-  view.banner((theme) => interactiveBanner(theme, agent.model, tildePath(agent.cwd, env)))
-  // Where to start: how to find the commands, the files, the skills and the keys.
-  const helpKey = keys.label("help")
-  const starts = [
-    commands && "/help commands",
-    "@ files",
-    commands && "$ skills",
-    helpKey && `${helpKey} keys`,
-  ].filter(Boolean)
-  view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
-  if (agent.messages.length || displayHistory(agent).length) showAgentSession(mainView, agent, false)
-  for (const e of opts.startupEvents ?? []) onEvent(e)
-  // With no provider yet, a welcome card with the steps to a first message replaces the notice.
-  const welcome = isNoModel(agent.model) && submission.noProviders()
-  if (welcome) view.notice("info", welcomeCard())
-  // A notice about something else (a broken settings file, say) still shows under the card.
-  if (opts.notice && !(welcome && opts.notice.startsWith("No providers"))) view.notice("warning", opts.notice)
-  // The first frame carries the banner, history and startup messages.
-  view.start()
-  if (opts.resumePicker) resumeAtStartup({ run: commandRunner.run, agent: () => agent, quit })
-  else if (opts.initialPrompt?.trim()) submission.submit(opts.initialPrompt)
-  if (leftoverInput) reader.feed(leftoverInput)
+  try {
+    termStatus.start()
+    unbindTerminal = opts.bindTerminal?.(termStatus)
+    opts.onReady?.()
+    reader.start()
+    view.banner((theme) => interactiveBanner(theme, agent.model, tildePath(agent.cwd, env)))
+    // Where to start: how to find the commands, the files, the skills and the keys.
+    const helpKey = keys.label("help")
+    const starts = [
+      commands && "/help commands",
+      "@ files",
+      commands && "$ skills",
+      helpKey && `${helpKey} keys`,
+    ].filter(Boolean)
+    view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
+    if (agent.messages.length || displayHistory(agent).length) showAgentSession(mainView, agent, false)
+    for (const e of opts.startupEvents ?? []) onEvent(e)
+    // With no provider yet, a welcome card with the steps to a first message replaces the notice.
+    const welcome = isNoModel(agent.model) && submission.noProviders()
+    if (welcome) view.notice("info", welcomeCard())
+    for (const notice of startupNotices(opts, welcome)) view.notice("warning", notice)
+    // The first frame carries the banner, history and startup messages.
+    view.start()
+    if (opts.resumePicker) resumeAtStartup({ run: commandRunner.run, agent: () => agent, quit })
+    else if (opts.initialPrompt?.trim()) submission.submit(opts.initialPrompt)
+    if (leftoverInput) reader.feed(leftoverInput)
+  } catch (error) {
+    try {
+      quit(1)
+    } catch {}
+    throw error
+  }
 
   return exited
 }

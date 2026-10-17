@@ -23,7 +23,7 @@ You can also set a name in `settings.json`:
 
 `tui.themeVariant` accepts `auto`, `dark` and `light`. `auto` follows the detected terminal background, defaulting to dark when it is unknown. `dark` or `light` forces that appearance. Colors omitted from the chosen variant inherit Amira's defaults for that appearance. If a theme supplies only `dark`, choosing `light` uses the default light palette, not the theme's dark colors; glyph overrides still apply. The same rule holds in reverse for a light-only theme.
 
-Runtime changes redraw the full-screen transcript and active inline regions immediately. Output already committed to inline scrollback keeps its original styling.
+Runtime changes redraw the full-screen transcript immediately.
 
 The existing `tui.theme` choices remain valid: `auto` follows the terminal with Amira's palette, `dark` and `light` explicitly choose Amira's palette, and `terminal` uses the terminal's ANSI colors. Named themes do not force truecolor: the color-depth setting and monochrome behavior still apply.
 

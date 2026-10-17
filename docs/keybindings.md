@@ -67,7 +67,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `tool-output` | `ctrl+o` | Toggle tool output between summary and full; collapsed returns to summary |
 | `panels.toggle` | `ctrl+t` | Fold the live panels above the activity line (such as the running background jobs, or an extension's todo list) to one line each, or unfold them |
 | `permissions.mode` | `shift+tab` | Cycle the [permission mode](usage.md#permissions): `auto`, `edits` (changes files, asks before shell commands), `plan` (read-only). The hint line says what the new mode does; a mode other than `auto` shows next to the model in the input box's border. It applies to the whole session, sub-agents included |
-| `copy.reply` | `alt+c` | Copy the last reply of the session, as Markdown, to the clipboard (both modes) |
+| `copy.reply` | `alt+c` | Copy the last reply of the session, as Markdown, to the clipboard |
 | `help` | `?` | Open the key reference, while the input is empty and no dialog or list is open (with text, `?` is typed). It scrolls with ↑↓, PgUp/PgDn, Home/End; Esc, `q` or `?` close it |
 | `edit.kill-to-start` | `ctrl+u` | Cut from the start of the line to the caret (at the start, the line break before it) |
 | `edit.kill-to-end` | `ctrl+k` | Cut from the caret to the end of the line (at the end, the line break after it) |
@@ -77,7 +77,7 @@ from `terminal.integrated.commandsToSkipShell`.
 | `edit.redo` | `ctrl+shift+z` | Redo the change undone last. Terminals without the kitty keyboard protocol send Ctrl+Shift+Z as Ctrl+Z; bind another key there |
 | `edit.external` | `ctrl+g` | Edit the message in your editor: `$VISUAL`, else `$EDITOR`, else Git's `core.editor` (a command, e.g. `code --wait`), else Notepad on Windows and vi elsewhere. The terminal is the editor's until it exits; the saved text becomes the input |
 
-When an [extension-owned conversation](extensions.md#extension-owned-conversations) has native focus (inline or fullscreen), F6 (`view.focus`, or your binding) returns to main without stopping either conversation. Esc (`interrupt`) also returns when the focused conversation is idle and the composer is empty; while it is working, Esc/Ctrl+C (`interrupt`/`cancel`) stop only that conversation, not background main work. Dialogs, completion lists and history search keep their key priority. Drafts, prompt history, images and pasted content stay scoped to the conversation; `@` file completion uses its working directory. Slash commands and skills show a hint instead of executing: return to main and execute them explicitly.
+When an [extension-owned conversation](extensions.md#extension-owned-conversations) has native focus, F6 (`view.focus`, or your binding) returns to main without stopping either conversation. Esc (`interrupt`) also returns when the focused conversation is idle and the composer is empty; while it is working, Esc/Ctrl+C (`interrupt`/`cancel`) stop only that conversation, not background main work. Dialogs, completion lists and history search keep their key priority. Drafts, prompt history, images and pasted content stay scoped to the conversation; `@` file completion uses its working directory. Slash commands and skills show a hint instead of executing: return to main and execute them explicitly.
 
 ### Completion lists
 
@@ -195,8 +195,7 @@ changing how arrows recall prompt history. To disable all line scrolling in view
 both the view and shared line-scroll actions.
 
 When the terminal delivers it, F6 (`view.focus`) toggles focus between the extension view
-and the composer in all views, including default views and a full-screen overlay opened
-in inline mode. Ctrl+Tab is an alias where the terminal delivers it. Windows Terminal may
+and the composer in all views, including default views. Ctrl+Tab is an alias where the terminal delivers it. Windows Terminal may
 intercept Ctrl+Tab, and legacy terminals may report it as plain Tab. F6 avoids those
 Ctrl+Tab issues, but VS Code's integrated terminal intercepts F6 by default because
 `workbench.action.focusNextPart` is in `terminal.integrated.commandsToSkipShell`. Add
@@ -239,14 +238,12 @@ instead of closing the view.
 
 ### Transcript (full-screen mode)
 
-In full-screen mode (the default, see `tui.mode` below) Amira keeps the conversation and
+Amira keeps the conversation and
 scrolls it itself. These keys act on the transcript before the input gets them. Home, End and
 plain characters act on the transcript only while the input is empty; otherwise the input
 uses them. The mouse wheel scrolls three rows a notch, and dragging selects text (see
 [Text selection](#text-selection)); a click does nothing else, so the keyboard stays with the
-input. Blocks are selected with the keyboard (`select.start`). In inline mode the terminal
-keeps the scrollback: the first press of `find`, a page key or `select.start` says they are
-for full-screen mode, and the terminal's own scrollback and find work there.
+input. Blocks are selected with the keyboard (`select.start`).
 
 The view follows the newest output. Scrolled up, it stays where it is while the conversation
 grows, and the row under it says how many rows are below (`↓ 124 rows below`, or
@@ -292,8 +289,7 @@ the latest; `←`/`→` there switch between them.
 `tool-output` (Ctrl+O) toggles summary ↔ full; from collapsed it returns to summary.
 `/verbose collapsed` still selects collapsed, and `/verbose` without an argument cycles
 summary → full → collapsed. Full also reveals thinking text:
-live thoughts in either mode, and retained thoughts in fullscreen. Inline thoughts already
-committed to scrollback cannot be expanded. The thinking hint appears only when the next
+live and retained thoughts. The thinking hint appears only when the next
 press reveals text and names the current binding. Blocks folded or unfolded by hand keep
 their own level.
 
@@ -351,7 +347,7 @@ Shift while dragging (Windows Terminal, VS Code on Windows and Linux, xterm); in
 macOS hold Option, or set `terminal.integrated.macOptionClickForcesSelection`.
 The same goes for pasting with the mouse: in Windows Terminal hold Shift while right-clicking
 (on Linux terminals, Shift+middle-click), or press Ctrl+V; Amira says so when a click with
-those buttons reaches it. In inline mode the terminal's own selection and paste work as usual.
+those buttons reaches it.
 
 VS Code keeps Ctrl+F, Ctrl+Home, Ctrl+End and Ctrl+↑↓ for its terminal (they are in its
 `terminal.integrated.commandsToSkipShell`), so there Alt+F, Alt+Home, Alt+End and Alt+↑ come
@@ -369,16 +365,16 @@ These live under `tui` in `settings.json`, the user's or a project's (`.amira/se
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `tui.mode` | `"fullscreen"` | `"fullscreen"` draws on the alternate screen: Amira scrolls, finds, folds and copies the conversation, redraws all of it when the window changes size, and prints it to the normal screen when it exits (also after a crash). `"inline"` leaves finished output in the terminal's own scrollback, for SSH, tmux, or native scrolling and selection. The `--inline` and `--fullscreen` flags win |
-| `tui.margin` | `3` | Side margin in cells in both modes (integer 0–12); shrinks on narrow terminals to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for edge-to-edge output |
-| `tui.marginRows` | `1` | Empty rows above the header and below the key-hint line in fullscreen (integer 0–2); omitted below 24 terminal rows. No vertical margin in inline mode |
+| `tui.mode` | `"fullscreen"` | Deprecated and ignored; the UI always runs fullscreen on the alternate screen. For one release, `"inline"` and `--inline` emit `inline mode was removed; running fullscreen. Use -p for plain output.` `--fullscreen` is accepted as a no-op. Live prompts pin below the header when scrolled away; resumed history has no sticky prompt. |
+| `tui.margin` | `3` | Side margin in cells (integer 0–12); shrinks on narrow terminals to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for edge-to-edge output |
+| `tui.marginRows` | `1` | Empty rows above the header and below the key-hint line in fullscreen (integer 0–2); omitted below 24 terminal rows |
 | `tui.theme` | `"auto"` | A [theme name](themes.md), or `"auto"` to follow the terminal background (dark if unknown); `"dark"` and `"light"` choose Amira's palette explicitly; `"terminal"` uses the terminal's own ANSI colors |
 | `tui.themeVariant` | `"auto"` | Named-theme appearance: `"auto"` follows the terminal background; `"dark"` or `"light"` forces that appearance. Missing variants use Amira's default palette for that appearance |
 | `tui.colorDepth` | `"auto"` | Color depth: `"auto"` detects terminal support; `"truecolor"`, `"256"` and `"16"` override it. Use strings, not numbers, for `"256"` and `"16"` |
 | `tui.title` | `true` | Set the terminal title to `Amira · <folder> · <session title> ⎇ <branch>` when a session title exists, marked with `●` while a turn runs; the previous title comes back on exit. The title bar draws it in the system's font, so `⎇` is safe there; the status in the input box's border leaves it out (Cascadia Code and Mono lack it) |
 | `tui.progress` | `true` | Show a busy indicator on the tab and taskbar while a turn runs, and a paused one while a dialog waits (OSC 9;4: Windows Terminal, ConEmu, VS Code, Ghostty) |
 | `tui.bell` | `true` | Ring the bell when a turn ends or a dialog opens while the terminal is in the background; where the terminal does not report focus, only after a turn of 15 seconds or more |
-| `tui.reflow` | `"auto"` | Inline mode: `"off"` for terminals that do not re-wrap lines when they get narrower, so a resize does not erase the transcript above the input; `"auto"` and `"on"` assume they do |
+| `tui.reflow` | `"auto"` | Deprecated and ignored; fullscreen redraws the conversation at the current terminal width |
 | `tui.submitWhileWorking` | `"steer"` | What `submit` (Enter) does while a turn runs: `"steer"` sends the message into the running turn, `"queue"` sends it after the turn. The `queue` key does the other one, and the hint line says which (`Enter queue · Ctrl+Q steer`). Slash commands run at once either way |
 | `tui.images` | `"auto"` | Draw images that stand on a line of their own in replies, with the optional [`images`](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/images/README.md) extension installed (`amira ext install images`; it reads local files, and http(s) URLs with web_fetch's private-network protection, up to 10 MB): `"auto"` where the terminal says it can — Windows Terminal 1.22+ (Sixel), VS Code with `terminal.integrated.enableImages`, iTerm2, WezTerm, kitty, Ghostty; `"on"` everywhere; `"off"` never. Otherwise, and when an image fails or takes over 3 seconds, it shows as `🖼` and its alt text, linked to the image |
 | `tui.shellOutputLines` | `3` | How many of its last output lines a shell command that succeeded shows under its result, as many as show while it runs; `0` shows none. A failed command shows its output's start and end, and the `full` tool output level (Ctrl+O) all of it |

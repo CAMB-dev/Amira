@@ -264,7 +264,7 @@ export class ToolBlock extends Block {
     return this.folding !== undefined
   }
 
-  /** As the inline transcript shows it, or as unfolded by hand when that shows more. */
+  /** Default-detail output, or as unfolded by hand when that shows more. */
   override printLines(env: BlockEnv): string[] {
     if (!this.end) return this.lines({ ...env, liveOutputLines: 0 })
     const folding = this.folding
@@ -370,7 +370,7 @@ export class ExploredBlock extends Block {
     return this.folding !== undefined
   }
 
-  /** As the inline transcript shows it, or as unfolded by hand when that shows more. */
+  /** Default-detail output, or as unfolded by hand when that shows more. */
   override printLines(env: BlockEnv): string[] {
     const folding = this.folding
     if (folding && DETAIL_RANK[folding] > DETAIL_RANK[env.detail]) return this.lines(env)

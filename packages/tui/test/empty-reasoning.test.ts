@@ -5,11 +5,10 @@ import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { localClock } from "../src/format.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
 
-function setup(mode: "inline" | "fullscreen", detail: ToolDetailLevel) {
+function setup(_mode: "fullscreen", detail: ToolDetailLevel) {
   const terminal = new FakeTerminal(100, 30)
   const screen = new VirtualScreen(100, 30)
   const write = terminal.write.bind(terminal)
@@ -17,7 +16,7 @@ function setup(mode: "inline" | "fullscreen", detail: ToolDetailLevel) {
     write(data)
     screen.write(data)
   }
-  const create = mode === "inline" ? createInlineView : createFullscreenView
+  const create = createFullscreenView
   const view = create({
     terminal,
     theme: plain.theme,
@@ -44,7 +43,7 @@ function setup(mode: "inline" | "fullscreen", detail: ToolDetailLevel) {
   return { view, screen, text: () => screen.lines.join("\n") }
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: a rejected first call owns the clock without a start event`, () => {
     const at = new Date(2026, 9, 10, 20, 9).getTime()
     const clock = spyOn(Date, "now").mockReturnValue(at)

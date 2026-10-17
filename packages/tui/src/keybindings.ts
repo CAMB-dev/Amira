@@ -9,8 +9,8 @@ export function keyLabel(spec: Parameters<typeof kitKeyLabel>[0]): string {
 
 /**
  * Where an action applies: the input box, a completion list below it while open (commands
- * or files), the history search while it runs, a dialog, or an extension view; in full-screen mode also the
- * transcript (keys taken before the input's), a block selection, the find bar, and text
+ * or files), the history search while it runs, a dialog, an extension view, the transcript
+ * (keys taken before the input's), a block selection, the find bar, and text
  * selected with the mouse.
  */
 export type KeyScope =

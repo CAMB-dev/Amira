@@ -6,7 +6,7 @@ import type { AnyEvent, CommandContext } from "@amira/api"
 import { Agent, SessionStore } from "@amira/core"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const printAfterFirstTurn of [false, true]) {
     test(`${mode}: retained printing ${printAfterFirstTurn ? "between" : "before"} resumed turns keeps both turns saved`, async () => {
       const dir = mkdtempSync(path.join(tmpdir(), "amira-display-resume-"))

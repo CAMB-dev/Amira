@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test"
 import type { MarkdownNode, MarkdownRenderContext, MarkdownRenderResult } from "@amira/api"
 import { MarkdownRendererRegistry } from "@amira/core"
-import { defaultTheme, ImageStore, renderMarkdown, stripAnsi, visibleWidth } from "@amira/tui-kit"
-import { findImageMarker, imageState, releaseImage } from "../../tui-kit/src/images/placement.ts"
+import { defaultTheme, ImageStore, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { fakeProvider } from "../../tui-kit/test/fake-images.ts"
 import { setImageFallback } from "../src/blocks/base.ts"
 import { type BlockEnv, imagesIn, ReplyBlock } from "../src/blocks.ts"
-import { inlineNodes, ReplyRenderers } from "../src/markdown-nodes.ts"
+import { ReplyRenderers } from "../src/markdown-nodes.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
 
 const math: MarkdownNode = { type: "math", display: true, source: "x^2" }
@@ -61,22 +60,37 @@ const plain = (rows: string[]) => rows.map(stripAnsi).join("\n")
 
 test("math renderers receive the session theme and distinct inline/display contexts", () => {
   const contexts: MarkdownRenderContext[] = []
+  const displays: boolean[] = []
   const source = new MarkdownRendererRegistry()
   source.register({
     id: "math",
     match: { math: "both" },
     render(node, ctx) {
       contexts.push(ctx)
+      if (node.type === "math") displays.push(node.display)
       return node.type === "math" && !node.display ? { segments: text } : { lines: text }
     },
   })
   const renders = new ReplyRenderers(source, "light")
-  const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
-  expect(plain(renderMarkdown("A $x^2$ B\n\n$$\nx^2\n$$", 40, defaultTheme, { nodes }))).toBe("A x² B\n\nx²")
-  expect(contexts).toHaveLength(2)
-  expect(contexts.every((ctx) => !ctx.images && !ctx.theme.dark)).toBe(true)
-  const block = new ReplyBlock("A \\(x^2\\) B\n\n\\[x^2\\]", false, false)
-  expect(plain(block.lines(env(renders)))).toBe("  A x² B\n\n  x²")
+  for (const source of ["A $x^2$ B\n\n$$\nx^2\n$$", "A \\(x^2\\) B\n\n\\[x^2\\]"]) {
+    const block = new ReplyBlock(source, false, false)
+    expect(plain(block.lines(env(renders)))).toBe("  A x² B\n\n  x²")
+  }
+  expect(displays).toEqual([false, true])
+  expect(contexts).toEqual([
+    { ...context, width: 38, theme: { dark: false } },
+    { ...context, width: 38, theme: { dark: false } },
+  ])
+  const block = new ReplyBlock("A $x^2$ B\n\n$$x^2$$", false, false)
+  expect(plain(block.lines(env(renders, store())))).toBe("  A x² B\n\n  x²")
+  expect(contexts.at(-1)).toEqual({
+    ...context,
+    width: 38,
+    images: true,
+    maxImageRows: 10,
+    theme: { dark: false },
+  })
+  expect(displays).toEqual([false, true, true])
 })
 
 test("block Markdown choice lines render their retained metadata with wrapping and ANSI styles", () => {
@@ -95,18 +109,20 @@ test("block Markdown choice lines render their retained metadata with wrapping a
       ],
     }),
   )
-  const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
-  const rows = renderMarkdown("$$x^2$$", 20, defaultTheme, { nodes })
-  expect(rows).toEqual([
-    `${defaultTheme.success("✓ ")}${defaultTheme.text("A very long option")}`,
-    `  ${defaultTheme.text("label with several")}`,
-    `  ${defaultTheme.text("words")}`,
-    `  ${defaultTheme.muted("One explanation")}`,
-    `${defaultTheme.muted("[ ] ")}${defaultTheme.muted("Other")}${defaultTheme.muted("  No change")}`,
-    `${defaultTheme.muted("")}${defaultTheme.text("Plain text also")}`,
-    defaultTheme.text("wraps when requested"),
-  ])
-  expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true)
+  const block = new ReplyBlock("$$x^2$$", false, false)
+  const rows = block.lines({ ...env(renders), width: 22 })
+  expect(rows).toEqual(
+    [
+      `${defaultTheme.success("✓ ")}${defaultTheme.text("A very long option")}`,
+      `  ${defaultTheme.text("label with several")}`,
+      `  ${defaultTheme.text("words")}`,
+      `  ${defaultTheme.muted("One explanation")}`,
+      `${defaultTheme.muted("[ ] ")}${defaultTheme.muted("Other")}${defaultTheme.muted("  No change")}`,
+      `${defaultTheme.muted("")}${defaultTheme.text("Plain text also")}`,
+      defaultTheme.text("wraps when requested"),
+    ].map((row) => `  ${row}`),
+  )
+  expect(rows.every((row) => visibleWidth(row) <= 22)).toBe(true)
 })
 
 test("Markdown multiline choices hang continuations and descriptions under the complete label", () => {
@@ -118,15 +134,16 @@ test("Markdown multiline choices hang continuations and descriptions under the c
       ],
     }),
   )
-  const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
+  const block = new ReplyBlock("$$x^2$$", false, false)
   for (const width of [20, 90]) {
-    const rows = renderMarkdown("$$x^2$$", width, defaultTheme, { nodes })
+    const rows = block.lines({ ...env(renders), width: width + 2 })
     expect(rows.map(stripAnsi)).toEqual(
-      width === 90
+      (width === 90
         ? ["✓ First", "  second  One explanation", "[ ] Else", "    continued  Not chosen"]
-        : ["✓ First", "  second", "  One explanation", "[ ] Else", "    continued", "    Not chosen"],
+        : ["✓ First", "  second", "  One explanation", "[ ] Else", "    continued", "    Not chosen"]
+      ).map((row) => `  ${row}`),
     )
-    expect(rows[0]).toBe(`${defaultTheme.success("✓ ")}${defaultTheme.text("First")}`)
+    expect(rows[0]).toBe(`  ${defaultTheme.success("✓ ")}${defaultTheme.text("First")}`)
     expect(rows.find((row) => stripAnsi(row).includes("second"))).toContain(defaultTheme.text("second"))
     expect(rows.find((row) => stripAnsi(row).includes("continued"))).toContain(
       defaultTheme.muted("continued"),
@@ -136,7 +153,7 @@ test("Markdown multiline choices hang continuations and descriptions under the c
     )
     expect(rows.filter((row) => stripAnsi(row).includes("✓"))).toHaveLength(1)
     expect(rows.filter((row) => stripAnsi(row).includes("[ ]"))).toHaveLength(1)
-    expect(rows.every((row) => visibleWidth(row) <= width)).toBe(true)
+    expect(rows.every((row) => visibleWidth(row) <= width + 2)).toBe(true)
   }
 })
 
@@ -150,8 +167,8 @@ test("description-implied wrapping survives every multiline Markdown-label fragm
         ],
       }),
     )
-    const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
-    return renderMarkdown("$$x^2$$", 20, defaultTheme, { nodes })
+    const block = new ReplyBlock("$$x^2$$", false, false)
+    return block.lines({ ...env(renders), width: 22 })
   }
   const explicit = render(true)
   for (const wrap of [undefined, false]) {
@@ -163,7 +180,7 @@ test("description-implied wrapping survives every multiline Markdown-label fragm
     expect(rows[0]).toContain(defaultTheme.text("A A A A A A A A A A"))
     expect(rows.at(-1)).toContain(defaultTheme.text("tail"))
     expect(rows.at(-1)).toContain(defaultTheme.muted("  Explanation"))
-    expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true)
+    expect(rows.every((row) => visibleWidth(row) <= 22)).toBe(true)
   }
 })
 
@@ -186,74 +203,101 @@ test("rendering cache distinguishes theme and preserves inline segment spaces", 
     { dark: true },
     { dark: false, foreground: "#111", background: "#fff" },
   ])
-  const nodes = inlineNodes({
-    renders: new ReplyRenderers(
-      registry({
-        segments: [
-          { kind: "accent", text: "x " },
-          { kind: "text", text: "+ y" },
-        ],
-      }),
-    ),
-    images: () => undefined,
-    theme: defaultTheme,
-  })
-  expect(plain(renderMarkdown("$x+y$", 40, defaultTheme, { nodes }))).toBe("x + y")
+  const segments = new ReplyRenderers(
+    registry({
+      segments: [
+        { kind: "accent", text: "x " },
+        { kind: "text", text: "+ y" },
+      ],
+    }),
+  )
+  const block = new ReplyBlock("$x+y$", false, false)
+  expect(plain(block.lines(env(segments)))).toBe("  x + y")
 })
 
 test("unclaimed or invalid inline math leaves the existing Markdown output unchanged", () => {
   for (const source of [new MarkdownRendererRegistry(), registry(picture)]) {
     const renders = new ReplyRenderers(source)
-    const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
     const input = "Raw $x_y$ and \\(x^2\\); `$z$` and \\$5."
-    expect(renderMarkdown(input, 40, defaultTheme, { nodes })).toEqual(renderMarkdown(input, 40))
+    const block = new ReplyBlock(input, false, false)
+    const view = env(renders)
+    expect(block.lines(view)).toEqual(
+      new ReplyBlock(input, false, false).lines({ ...view, renders: undefined }),
+    )
   }
 })
 
-test("inline image results retain fallback text, including asynchronous results", async () => {
+test("full-screen image results replace fallback text, including asynchronous results", async () => {
   for (const async of [false, true]) {
-    const images = store()
+    let finishOpen!: () => void
+    const provider = fakeProvider()
+    const images = store(async (...args) => {
+      await new Promise<void>((resolve) => {
+        finishOpen = resolve
+      })
+      return provider.open(...args)
+    })
     const renders = new ReplyRenderers(registry(async ? Promise.resolve(picture) : picture))
-    const nodes = inlineNodes({ renders, images: () => images, theme: defaultTheme })
-    const rows = renderMarkdown("$$x^2$$", 40, defaultTheme, { nodes })
-    const marker = findImageMarker(rows[0]!)!
-    expect(marker).toBeDefined()
-    await renders.get(math, { ...context, images: true, maxImageRows: 10 }).promise
-    await images.inline({ url: "math-40x60.png" }, 40)
+    const block = new ReplyBlock("$$x^2$$", false, false)
+    const view = env(renders, images)
+    let redraws = 0
+    view.renders!.changed = () => {
+      redraws++
+    }
+    let imageRedraws = 0
+    view.images!.changed = () => {
+      imageRedraws++
+    }
+    const initial = block.lines(view)
+    expect(imagesIn(initial)).toBeUndefined()
     await Bun.sleep(0)
-    expect(imageState(marker.id)).toMatchObject({ kind: "image", fallback: ["x squared", "equals y"] })
-    releaseImage(marker.id)
+    const fallback = block.lines(view)
+    expect(plain(fallback)).toBe("  x squared\n  equals y")
+    expect(imagesIn(fallback)).toBeUndefined()
+    if (async) expect(redraws).toBeGreaterThan(0)
+    else expect(plain(initial)).toBe(plain(fallback))
+    finishOpen()
+    await Bun.sleep(0)
+    expect(imageRedraws).toBeGreaterThan(0)
+    const rows = block.lines(view)
+    expect(rows).toHaveLength(3)
+    expect(imagesIn(rows)).toHaveLength(1)
+    expect(imagesIn(rows)?.[0]).toMatchObject({
+      alt: "Equation: x squared equals y",
+      fallback: ["x squared", "equals y"],
+    })
   }
 })
 
 test("image failure and no-graphics paths use fallback lines, or alt alone", async () => {
   for (const result of [picture, { image: { url: "missing.png" }, alt: "formula" }]) {
-    const expected = "fallback" in result ? "x squared\nequals y" : "formula"
+    const expected = "fallback" in result ? "  x squared\n  equals y" : "  formula"
     const renders = new ReplyRenderers(registry(result))
-    const nodes = inlineNodes({ renders, images: () => undefined, theme: defaultTheme })
-    expect(plain(renderMarkdown("$$x^2$$", 40, defaultTheme, { nodes }))).toBe(expected)
+    const block = new ReplyBlock("$$x^2$$", false, false)
+    expect(plain(block.lines(env(renders)))).toBe(expected)
     const images = store(async () => undefined)
-    const graphicNodes = inlineNodes({ renders, images: () => images, theme: defaultTheme })
-    const rows = renderMarkdown("$$x^2$$", 40, defaultTheme, { nodes: graphicNodes })
-    const marker = findImageMarker(rows[0]!)!
-    await Bun.sleep(5)
-    expect(imageState(marker.id)).toMatchObject({ kind: "fallback", fallback: expected.split("\n") })
-    releaseImage(marker.id)
+    const view = env(renders, images)
+    expect(plain(block.lines(view))).toBe(expected)
+    const source = images.screen(result.image)
+    await new Promise<void>((resolve) => source.onSettled(resolve))
+    expect(source.state).toBe("failed")
+    const rows = block.lines(view)
+    expect(plain(rows)).toBe(expected)
+    expect(imagesIn(rows)).toBeUndefined()
   }
 })
 
-test("an async renderer supplies fallback before image loading times out", async () => {
+test("an async renderer supplies fallback while a full-screen image is still loading", async () => {
   const images = store(() => new Promise(() => {}))
   const renders = new ReplyRenderers(registry(Promise.resolve(picture)))
-  const nodes = inlineNodes({ renders, images: () => images, theme: defaultTheme })
-  const rows = renderMarkdown("$$x^2$$", 40, defaultTheme, { nodes })
-  const marker = findImageMarker(rows[0]!)!
+  const block = new ReplyBlock("$$x^2$$", false, false)
+  const view = env(renders, images)
+  block.lines(view)
   await Bun.sleep(0)
-  expect(imageState(marker.id, Number.POSITIVE_INFINITY)).toEqual({
-    kind: "fallback",
-    fallback: ["x squared", "equals y"],
-  })
-  releaseImage(marker.id)
+  const rows = block.lines(view)
+  expect(plain(rows)).toBe("  x squared\n  equals y")
+  expect(imagesIn(rows)).toBeUndefined()
+  expect(images.screen(picture.image).state).toBe("loading")
 })
 
 test("full-screen images retain accessible alt and text for selection, copying and printout", async () => {

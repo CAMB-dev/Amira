@@ -5,7 +5,7 @@ import { ConversationEvents } from "../../core/src/owned-conversations-events.ts
 import { exchange, inputImage, type SetupOptions, setup } from "./app-harness.ts"
 
 export async function focusFixture(
-  mode: "inline" | "fullscreen",
+  mode: "fullscreen",
   steps: MockStep[] = [{ text: "Main reply" }],
   ownedCwd = "/work/design",
   options: SetupOptions = {},

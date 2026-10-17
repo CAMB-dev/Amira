@@ -1,5 +1,5 @@
-import type { PrintOptions } from "@amira/api"
-import { renderMarkdown, wrapText } from "@amira/tui-kit"
+import type { PrintOptions, ToolDetailLevel } from "@amira/api"
+import { renderMarkdown, type Theme, wrapText } from "@amira/tui-kit"
 import { type NoticeLevel, noticeLines } from "../transcript.ts"
 import { Block, type BlockEnv } from "./base.ts"
 
@@ -45,5 +45,24 @@ export class DisplayBlock extends Block {
 
   override get refolded(): boolean {
     return this.#open !== undefined
+  }
+}
+
+/** A text-only environment for rendering display output outside the live transcript. */
+export function displayEnv(
+  theme: Theme,
+  width: number,
+  detail: ToolDetailLevel,
+  hyperlinks = false,
+): BlockEnv {
+  return {
+    theme,
+    width,
+    detail,
+    hyperlinks,
+    now: Date.now(),
+    spinner: "",
+    presenters: undefined,
+    nodes: new Map(),
   }
 }

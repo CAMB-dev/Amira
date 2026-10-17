@@ -9,13 +9,12 @@ import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { type BlockEnv, SubagentGroupBlock } from "../src/blocks.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
 import { setGlyphs } from "../src/glyphs.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
 
 const at = 1000
 
-function setup(mode: "inline" | "fullscreen") {
+function setup(_mode: "fullscreen") {
   const terminal = new FakeTerminal(100, 40)
   const screen = new VirtualScreen(100, 40)
   const write = terminal.write.bind(terminal)
@@ -24,7 +23,7 @@ function setup(mode: "inline" | "fullscreen") {
     screen.write(data)
   }
   const spinner = new Spinner()
-  const view = (mode === "inline" ? createInlineView : createFullscreenView)({
+  const view = createFullscreenView({
     terminal,
     theme: plain.theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -36,7 +35,7 @@ function setup(mode: "inline" | "fullscreen") {
     spinner,
     sessionId: () => "main",
     detail: () => "summary",
-    bottom: (width, ctx, _budget, top) => [...(top?.render(width, ctx) ?? []), "input"],
+    bottom: () => ["input"],
     overlay: { render: () => ["agents overlay"] },
     editorEmpty: () => true,
     showNote: () => {},
@@ -72,7 +71,7 @@ function guides(ascii: boolean) {
 }
 
 for (const ascii of [false, true]) {
-  for (const mode of ["inline", "fullscreen"] as const) {
+  for (const mode of ["fullscreen"] as const) {
     test(`${mode}: sibling background groups nest their children after resumed history (${ascii ? "ASCII" : "Unicode"})`, () => {
       const clock = spyOn(Date, "now").mockReturnValue(at)
       if (ascii) setGlyphs({ treeBranch: "|-", treeLast: "`-", treePipe: "|" })
@@ -140,7 +139,7 @@ for (const ascii of [false, true]) {
   })
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: a compact command group is one child below its header, not its sibling`, () => {
     const clock = spyOn(Date, "now").mockReturnValue(at)
     const { view, event, text } = setup(mode)
@@ -271,7 +270,7 @@ test("fullscreen: adding a sibling invalidates a finished group's cached arm and
   }
 })
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: background working badges animate without a parent turn timer`, async () => {
     const { view, start, event, spinner, text } = setup(mode)
     try {

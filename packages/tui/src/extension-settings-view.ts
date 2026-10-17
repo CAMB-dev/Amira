@@ -462,7 +462,7 @@ export class ExtensionSettingsView implements Component {
       }
       return fallback()
     }
-    // Title occupies row zero. Both inline-mode alternate screen and fullscreen use ctx.place.
+    // Title occupies row zero; image placements follow it.
     ctx.place?.({
       key: `extension-settings:${this.#backend.request.requestId}`,
       image,

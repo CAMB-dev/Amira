@@ -38,7 +38,7 @@ test("dock key help follows rebound or unbound scroll actions", () => {
   expect(dockKeyHelp(unbound).some((key) => key.description === "Follow new dock output")).toBe(false)
 })
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: dock routes rebound page and follow keys, not literal End`, async () => {
     const data = { rows: Array.from({ length: 40 }, (_, i) => `KEYROW-${i}`) }
     const s = await setup([], {
@@ -127,7 +127,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
       const title = s.screen.lines.findIndex((line) => line.includes("Bounded dock"))
       const input = s.screen.lines.findIndex((line) => line.includes("╭"))
       expect(input - title).toBe(10)
-      if (mode === "inline") expect(input).toBeLessThan(30)
+
       const wheel = (x: number, row: number) => s.terminal.send(`\x1b[<64;${x + 1};${row + 1}M`)
       const last = s.screen.lines.findIndex((line) => line.includes("HITROW-39"))
       const transcript = s.screen.lines.findIndex((line) => line.includes("Short main transcript"))
@@ -212,7 +212,7 @@ for (const mode of ["fullscreen", "inline"] as const) {
       const row = s.screen.lines.findIndex((line) => line.includes("ROW-39"))
       const input = s.screen.lines.findIndex((line) => line.includes("Message Amira"))
       expect(row).toBeLessThan(input)
-      if (mode === "inline") expect(s.terminal.writes.join("")).not.toContain("\x1b[?1049h")
+
       s.terminal.send("draft\x1b[D")
       await waitFor(() => s.live().includes("draft"), "input remains usable")
       expect(s.live()).toContain("ROW-39")

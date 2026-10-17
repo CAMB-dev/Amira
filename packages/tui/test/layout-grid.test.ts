@@ -109,8 +109,8 @@ test("reply list and quote markers use the gutter; code labels are neither copy 
   }
 })
 
-test("welcome banner hangs on the content column in real inline and fullscreen printouts", () => {
-  for (const fullscreen of [false, true]) {
+test("welcome banner hangs on the content column in the real fullscreen printout", () => {
+  for (const fullscreen of [true]) {
     for (const columns of [20, 70]) {
       for (const margin of [0, 3]) {
         const frame = marginFrame(fullscreen, columns, 30, { margin, marginRows: 0 })

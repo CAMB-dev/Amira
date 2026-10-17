@@ -5,7 +5,7 @@ import { animationProbe, visibilityHarness } from "./animation-visibility-harnes
 beforeEach(() => void jest.useFakeTimers())
 afterEach(() => void jest.useRealTimers())
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const placement of ["fullscreen", "dock"] as const) {
     test(`${mode} ${placement}: clipping a working badge retains only explicit refresh demand`, () => {
       const probe = animationProbe()

@@ -160,7 +160,7 @@ test("first focus during streaming replaces a suffix with the authoritative repl
   expect(view.notice).not.toHaveBeenCalled()
 })
 
-test("inline recovery separates a complete reply from partial live fragments", () => {
+test("fallback recovery separates a complete reply from partial live fragments", () => {
   const { onEvent, view } = setup()
   onEvent(event("message.delta", { kind: "thinking", text: "thought suffix" }))
   onEvent(event("message.delta", { kind: "text", text: "world" }))

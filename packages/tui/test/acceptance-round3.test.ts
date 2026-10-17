@@ -8,7 +8,7 @@ const commands: CommandDefinition[] = Array.from({ length: 12 }, (_, i) => ({
   run: () => {},
 }))
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const cols of [50, 80, 120]) {
     for (const margin of [0, 3]) {
       for (const working of [false, true]) {

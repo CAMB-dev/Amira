@@ -83,9 +83,8 @@ export interface MarkdownRendererDefinition {
    */
   priority?: number
   /**
-   * How long the inline transcript holds what follows the node while an async result is on its
-   * way; then Amira's own rendering is committed instead. Default 3000 ms, at most 15000.
-   * The full-screen transcript shows Amira's rendering until the result arrives, whenever.
+   * How long print mode waits for an async result before falling back to Amira's rendering.
+   * Ignored by the fullscreen TUI, which shows Amira's rendering until the result arrives.
    */
   waitMs?: number
   /**
@@ -133,8 +132,8 @@ export interface ImageEncodeRequest {
   /** A cell's height in pixels: where each row of cells starts in the image. */
   cellHeight: number
   /**
-   * Drawn whole only (the inline transcript): Sixel needs only the bands from pixel row 0. When
-   * false (the full-screen transcript draws any run of its rows), every phase a row starts in.
+   * Drawn whole only: Sixel needs only the bands from pixel row 0. When false (the fullscreen
+   * transcript draws any run of its rows), every phase a row starts in.
    */
   whole: boolean
   /**

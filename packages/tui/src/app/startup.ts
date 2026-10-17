@@ -21,7 +21,7 @@ import type { PresenterSource } from "../tool-view.ts"
 export interface InteractiveOptions {
   agent: Agent
   status: StatusRegistry
-  /** Live panels registered by extensions, shown above the activity line in both modes. */
+  /** Live panels registered by extensions, shown above the activity line. */
   panels?: PanelRegistry
   /** Extension dialogs, answered inline. Without it they are left to other frontends. */
   ui?: UiRequests
@@ -77,16 +77,9 @@ export interface InteractiveOptions {
   files?: FileSource
   /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
   keybindings?: Keybindings
-  /**
-   * The `tui` settings: the mode, bell, title, progress indicator, reflow, what Enter does
-   * while working.
-   */
+  /** The `tui` settings: bell, title, progress indicator, reflow, what Enter does while working. */
   settings?: TuiSettings
-  /**
-   * Full screen (the conversation kept on the alternate screen, scrolled by Amira) or inline
-   * (finished output goes to the terminal's scrollback). Default: `settings.mode`, else inline;
-   * the CLI defaults to full screen (D84).
-   */
+  /** @deprecated Ignored: the UI always runs fullscreen. Inline requests show a removal notice. */
   mode?: "fullscreen" | "inline"
   /** Tells the terminal apart (Windows Terminal, VS Code); injectable for tests. */
   env?: Record<string, string | undefined>
@@ -101,6 +94,22 @@ export interface InteractiveOptions {
    * now. Quitting while some run asks first, as it does for sub-agents; they stop on exit.
    */
   runningJobs?: () => number
+}
+
+/** One notice for either legacy inline request, even when both the flag and setting are present. */
+export function inlineModeNotice(opts: Pick<InteractiveOptions, "mode" | "settings">): string | undefined {
+  if (opts.mode === "inline" || opts.settings?.mode === "inline") {
+    return "inline mode was removed; running fullscreen. Use -p for plain output."
+  }
+  return undefined
+}
+
+/** Startup warnings not already explained by the no-provider welcome card. */
+export function startupNotices(opts: InteractiveOptions, welcome: boolean): string[] {
+  return [
+    opts.notice && !(welcome && opts.notice.startsWith("No providers")) ? opts.notice : undefined,
+    inlineModeNotice(opts),
+  ].filter((notice): notice is string => !!notice)
 }
 
 /** The renderer's shortest time between frames, and how long a key waits for async candidates. */

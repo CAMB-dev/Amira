@@ -19,7 +19,6 @@ import {
   QUEUE_HINT,
   setup,
   testCommands,
-  transcriptChecker,
   userTexts,
   waitFor,
 } from "./app-harness.ts"
@@ -67,7 +66,6 @@ test("a conversation: user message, tool call and reply end up in the transcript
         "",
         "  The file has three lines\\.",
         "",
-        `  /work/proj${" ".repeat(40)}0 / 128K`,
         "╭",
       ].join("\n"),
     ),
@@ -246,41 +244,6 @@ test("a running tool shows the last lines of its output live, and only its resul
   await exited
 })
 
-test("many calls at once take at most half the screen: output first, then the first calls give way", async () => {
-  const calls = Array.from({ length: 8 }, (_, i) => ({ name: "stream", args: { command: `job${i + 1}` } }))
-  const { terminal, live, shows, idle, exited, agent } = await setup(
-    [{ toolCalls: calls }, { text: "all built" }],
-    {
-      rows: 14,
-    },
-  )
-  const releases: (() => void)[] = []
-  agent.tools.register(
-    defineTool({
-      name: "stream",
-      ...parallel,
-      execute: async (_p, ctx) => {
-        ctx.update(textResult("l1\nl2\n"))
-        await new Promise<void>((r) => releases.push(r))
-        return textResult("ok")
-      },
-    }),
-    "test",
-  )
-  terminal.send("go\r")
-  await waitFor(() => releases.length === 8 && live().includes("job8"), "all running")
-  // 14 rows: at most 7 for the calls, their output dropped, the first three counted.
-  expect(live()).not.toContain("│ l2")
-  expect(live()).toContain("… 3 earlier calls")
-  expect(live()).not.toContain("job3 ")
-  expect(live()).toContain("job4")
-  for (const r of releases) r()
-  await shows("all built")
-  await idle()
-  terminal.send("\x03")
-  await exited
-})
-
 test("Esc interrupting a running tool marks it interrupted, muted, not failed", async () => {
   const { terminal, live, all, shows, idle, exited, agent } = await setup([
     { toolCalls: [{ name: "hang", args: { command: "sleep 100" } }] },
@@ -320,43 +283,13 @@ test("Esc interrupting a running tool marks it interrupted, muted, not failed", 
   await exited
 })
 
-test("failures show their output cut to 8 lines; Ctrl+O shows all of later ones and says so", async () => {
-  const out = Array.from({ length: 20 }, (_, i) => `out ${i + 1}`).join("\n")
-  const { terminal, live, all, shows, idle, exited, agent } = await setup([
-    { toolCalls: [{ name: "fail", args: {} }] },
-    { text: "one" },
-    { toolCalls: [{ name: "fail", args: {} }] },
-    { text: "two" },
-  ])
-  agent.tools.register(
-    defineTool({ name: "fail", ...parallel, execute: async () => textResult(`bad\n${out}`, true) }),
-    "test",
-  )
-  terminal.send("go\r")
-  await shows("one")
-  await idle()
-  expect(all()).toMatch(new RegExp(`^└ fail {2}✗ bad \\(\\+20 lines\\) +${TIMESTAMP}\\n {2}out 1\\n`, "m"))
-  expect(all()).toContain("  … 13 more lines\n")
-  expect(all()).not.toContain("out 10")
-  terminal.send("\x0f")
-  await waitFor(() => live().includes("Tool output: full (applies to tool results from now on"), "hint")
-  terminal.send("again\r")
-  await shows("two")
-  await idle()
-  // The first result stays as it was committed; the second one is complete.
-  expect(all().split("  out 10\n").length - 1).toBe(1)
-  expect(all().split("… 13 more lines").length - 1).toBe(1)
-  terminal.send("\x03")
-  await exited
-})
-
 test("/verbose sets the tool output level, printed under the command", async () => {
   const { terminal, all, shows, exited } = await setup([], { commands: testCommands([]), tuiCommands: true })
   terminal.send("/verbose collapsed\r")
   await shows("Tool output: collapsed")
   // Wrapped to the width, hanging under the result mark, directly below the echo.
   expect(all()).toContain(
-    "› /verbose collapsed\n└ Tool output: collapsed (applies to tool results from now\n  on; ctrl+o toggles summary/full)",
+    "› /verbose collapsed\n└ Tool output: collapsed (every tool call; folded ones keep\n  theirs; ctrl+o toggles summary/full)",
   )
   terminal.send("/verbose loud\r")
   await shows('Unknown level "loud"')
@@ -425,39 +358,6 @@ test("successful reads in a row, over steps too, go to the scrollback as one Exp
   await exited
 })
 
-test("Ctrl+O unfolds held exploration calls immediately in inline mode", async () => {
-  let release!: () => void
-  const until = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  const s = await setup(
-    [
-      {
-        toolCalls: [
-          { name: "read", args: { path: "a.ts" } },
-          { name: "read", args: { path: "b.ts" } },
-        ],
-      },
-      { text: "done", hold: { chunks: 0, until } },
-    ],
-    { presenters: true },
-  )
-  try {
-    s.terminal.send("go\r")
-    await waitFor(() => s.live().includes("Read 2 files"), "folded exploration")
-    s.terminal.send("\x0f")
-    await waitFor(() => s.live().includes("Read a.ts") && s.live().includes("Read b.ts"), "expanded calls")
-    expect(s.live()).not.toContain("Read 2 files")
-    release()
-    await s.shows("done")
-    await s.idle()
-  } finally {
-    release()
-    s.terminal.send("\x03\x03")
-    await s.exited
-  }
-})
-
 test("a resumed session shows its thinking folded and marks a reply that was interrupted", async () => {
   const { terminal, all, exited } = await setup([], {
     history: [
@@ -474,7 +374,7 @@ test("a resumed session shows its thinking folded and marks a reply that was int
     ],
   })
   await waitFor(() => all().includes("⊘ Interrupted"), "history")
-  expect(all()).toContain("› go\n\n\n∴ Thought\n\n  Half an ans\n\n⊘ Interrupted")
+  expect(all()).toContain("› go\n\n\n∴ Thought  ctrl+o to expand\n\n  Half an ans\n\n⊘ Interrupted")
   terminal.send("\x03")
   await exited
 })
@@ -714,7 +614,9 @@ test("a resumed compaction's summary line says why it happened", async () => {
     history: [...exchange("a"), ...exchange("b"), ...exchange("c")],
     prepare: (agent) => agent.compact(),
   })
-  await shows("▸ Compacted (you asked) · summary of earlier messages · 1 line")
+  terminal.send("\x1b[H")
+  await shows("Compacted (you asked)")
+  expect(all()).toMatch(/Compacted \(you asked\) · summary of earlier messages · 1\s+line/)
   expect(all()).not.toContain("Compacted summary of earlier messages")
   terminal.send("\x03")
   await exited
@@ -815,22 +717,6 @@ test("Ctrl+Q queues a message while working, like Alt+Enter", async () => {
   await exited
 })
 
-test("a long streaming reply is committed progressively so its start stays visible", async () => {
-  const reply = Array.from({ length: 15 }, (_, i) => `line ${i + 1}`).join("\n")
-  const { terminal, screen, shows, idle, all, exited } = await setup([{ text: reply, delayMs: 5 }], {
-    rows: 8,
-  })
-  terminal.send("go\r")
-  await waitFor(() => screen.scrollback.join("\n").includes("line 1"), "early commit")
-  await shows("line 15")
-  await idle()
-  const text = all()
-  for (let i = 1; i <= 15; i++) expect(text.split(`line ${i}\n`).length - 1).toBeLessThanOrEqual(1)
-  expect(text.indexOf("line 1\n")).toBeLessThan(text.indexOf("line 15"))
-  terminal.send("\x03")
-  await exited
-})
-
 test("a streamed reply with text-default emoji is drawn with VS16, its table aligned", async () => {
   const reply = "Got ✉ from ⚠ ops.\n\n| a | b |\n| --- | --- |\n| ✉ ☑ | x |\n| yyyy | z |"
   const { terminal, screen, shows, idle, all, exited } = await setup([{ text: reply, delayMs: 2 }])
@@ -844,125 +730,6 @@ test("a streamed reply with text-default emoji is drawn with VS16, its table ali
   const table = rows.filter((l) => l.includes("│"))
   expect(table.length).toBe(2)
   expect(bar(table[0]!)).toBe(bar(table[1]!))
-  terminal.send("\x03")
-  await exited
-})
-
-test("a reply longer than the screen reaches the scrollback once, in order, never cut and reprinted", async () => {
-  const lines = Array.from({ length: 30 }, (_, i) => `L${i + 1} some text`)
-  const para = Array.from({ length: 90 }, (_, i) => `P${i + 1}`)
-  const tail = Array.from({ length: 10 }, (_, i) => `L${i + 31}`)
-  const reply = [...lines, para.join(" "), ...tail].join("\n")
-  const check = transcriptChecker([...lines.map((l) => l.split(" ")[0]!), ...para, ...tail])
-  const { terminal, screen, shows, idle, exited } = await setup([{ text: reply, delayMs: 1 }], {
-    cols: 40,
-    rows: 12,
-    onWrite: (s) => check.onWrite(s),
-  })
-  terminal.send("go\r")
-  await shows("L40")
-  await idle()
-  expect(check.problems).toEqual([])
-  check.final(screen)
-  terminal.send("\x03")
-  await exited
-})
-
-test("a Markdown reply streams block by block: every row once, in order, never cut and reprinted", async () => {
-  const markers: string[] = []
-  const m = (kind: "L" | "P") => {
-    const id = `${kind}${markers.length + 1}`
-    markers.push(id)
-    return id
-  }
-  const parts = [
-    `# ${m("L")} heading`,
-    "",
-    `Some **bold ${m("L")}** and \`code ${m("L")}\` here.`,
-    Array.from({ length: 40 }, () => m("P")).join(" "),
-    "",
-    ...Array.from({ length: 6 }, () => `- item ${m("L")} with *emphasis*`),
-    `  - nested ${m("L")}`,
-    "",
-    "```ts",
-    ...Array.from({ length: 8 }, () => `const ${m("L")} = "x" // note`),
-    "```",
-    "",
-    `> quoted ${m("L")}`,
-    "",
-    "| col | other |",
-    "|-----|-------|",
-    ...Array.from({ length: 5 }, () => `| ${m("L")} | **v** |`),
-    "",
-    `Done ${m("L")}.`,
-  ]
-  const check = transcriptChecker(markers)
-  const { terminal, screen, shows, idle, all, exited } = await setup(
-    [{ text: parts.join("\n"), delayMs: 1 }],
-    {
-      cols: 40,
-      rows: 12,
-      onWrite: (s) => check.onWrite(s),
-    },
-  )
-  terminal.send("go\r")
-  await shows(`Done ${markers.at(-1)}.`)
-  await idle()
-  expect(check.problems).toEqual([])
-  check.final(screen)
-  const text = all()
-  expect(text).toContain(`${markers[0]} heading`)
-  expect(text).toContain("  L1 heading")
-  expect(text).toContain("  Some bold L2 and code L3 here.")
-  expect(text).toContain("• item")
-  expect(text).toContain(`${" ".repeat(38)}ts`)
-  expect(text).toContain("▎ quoted")
-  expect(text).toMatch(/col +│ other/)
-  // One painted padding row after the prompt, then one unpainted inter-block gap.
-  expect(text.replace(/ +\d{2}:\d{2}(?=\n|$)/g, "")).toContain(
-    `› go\n\n\n  ${markers[0]} heading\n\n  Some bold`,
-  )
-  expect(text).toContain(`\n${" ".repeat(38)}ts\n  const`)
-  expect(text).not.toMatch(/\n +\n/)
-  terminal.send("\x03")
-  await exited
-})
-
-test("a URL longer than the screen is cut to fit it, never cut and reprinted", async () => {
-  // Four cells per marker: continuation rows use 50 columns less the two-cell gutter.
-  // Only the first row ("See") reserves the nine-cell timestamp rail.
-  const markers = Array.from({ length: 80 }, (_, i) => `L${i + 10}`)
-  const check = transcriptChecker(markers)
-  const { terminal, screen, shows, idle, exited } = await setup(
-    [{ text: `See https://example.com/${markers.join("/")} for details`, delayMs: 1 }],
-    { cols: 50, rows: 12, onWrite: (s) => check.onWrite(s) },
-  )
-  terminal.send("go\r")
-  await shows("for details")
-  await idle()
-  expect(check.problems).toEqual([])
-  check.final(screen)
-  terminal.send("\x03")
-  await exited
-})
-
-test("a draft typed while a long reply streams does not cut the reply either", async () => {
-  const lines = Array.from({ length: 40 }, (_, i) => `L${i + 1}`)
-  const check = transcriptChecker(lines)
-  const { terminal, screen, shows, idle, exited } = await setup([{ text: lines.join("\n"), delayMs: 2 }], {
-    cols: 40,
-    rows: 12,
-    onWrite: (s) => check.onWrite(s),
-  })
-  terminal.send("go\r")
-  await shows("L8")
-  terminal.send(`\x1b[200~${Array.from({ length: 30 }, (_, i) => `draft ${i}`).join("\n")}\x1b[201~`)
-  await shows("L40")
-  await idle()
-  expect(check.problems).toEqual([])
-  check.final(screen)
-  // The first Ctrl+C clears the draft.
-  terminal.send("\x03")
   terminal.send("\x03")
   await exited
 })
@@ -996,22 +763,17 @@ test("a long draft scrolls inside the input box instead of growing past the scre
   await waitFor(() => live().includes("row 20"), "draft")
   const rows = screen.lines
   const top = rows.findIndex((l) => l.startsWith("╭"))
-  // A third of 12 rows shows; the top border counts the rest.
-  expect(rows[top]).toContain("↑ 16 rows")
-  expect(rows.slice(top + 1, top + 5).map((l) => l.slice(1, -1).trim())).toEqual([
-    "row 17",
-    "row 18",
-    "row 19",
-    "row 20",
-  ])
-  expect(rows[top + 5]).toBe("╰────────────────────────────╯")
-  expect(rows[top + 6]).toBe("                     m1 · auto")
+  // Fullscreen keeps its workspace header; the two-row editor counts the rest.
+  expect(rows[top]).toContain("↑ 18 rows")
+  expect(rows.slice(top + 1, top + 3).map((l) => l.slice(1, -1).trim())).toEqual(["row 19", "row 20"])
+  expect(rows[top + 3]).toBe("╰────────────────────────────╯")
+  expect(rows[top + 4]).toBe("                     m1 · auto")
   // The extra status row shifts the transcript up one row, without pushing its start off screen.
-  expect(rows[0]).toContain("Amira")
+  expect(rows[0]).toContain("/work/proj")
   // Moving up past the shown rows scrolls, and the border says what is below.
   for (let i = 0; i < 6; i++) terminal.send("\x1b[A")
   // The count of rows below goes into the separate status row after the model.
-  await waitFor(() => /^╰─{28}╯\n {10}m1 · auto · ↓ 3 rows$/m.test(live()), "scrolled up")
+  await waitFor(() => /^╰─{28}╯\n {10}m1 · auto · ↓ 5 rows$/m.test(live()), "scrolled up")
   expect(live()).toContain("↑ 13 rows")
   expect(screen.y).toBe(top + 1)
   terminal.send("\x03")
@@ -1023,7 +785,7 @@ test("a reply with only thinking shows that it thought, not that there was no re
   const { terminal, idle, all, exited } = await setup([{ thinking: "hmm" }])
   terminal.send("go\r")
   await waitFor(
-    () => /^∴ Thought for \d+(?:\.\d+)?s +(?:[01]\d|2[0-3]):[0-5]\d$/m.test(all()),
+    () => /^∴ Thought for \d+(?:\.\d+)?s {2}ctrl\+o to expand +(?:[01]\d|2[0-3]):[0-5]\d$/m.test(all()),
     "thinking summary with a timestamp",
   )
   await idle()
@@ -1039,7 +801,9 @@ test("a reply's thinking goes before its text", async () => {
   terminal.send("go\r")
   await shows("Answer.")
   await idle()
-  expect(all()).toMatch(/^∴ Thought for \d+(?:\.\d+)?s +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}Answer\.$/m)
+  expect(all()).toMatch(
+    /^∴ Thought for \d+(?:\.\d+)?s {2}ctrl\+o to expand +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}Answer\.$/m,
+  )
   terminal.send("\x03")
   await exited
 })

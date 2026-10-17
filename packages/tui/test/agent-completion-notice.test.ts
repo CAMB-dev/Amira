@@ -1,13 +1,8 @@
 import { expect, test } from "bun:test"
-import { AGENT_STATUS_BADGES, emptyUsage, textResult } from "@amira/api"
-import { EventBus } from "@amira/core"
-import { defaultTheme, FakeTerminal, Spinner, stripAnsi, visibleWidth } from "@amira/tui-kit"
-import { VirtualScreen } from "../../tui-kit/test/screen.ts"
+import { AGENT_STATUS_BADGES } from "@amira/api"
+import { defaultTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
 import { userLines } from "../src/format.ts"
 import { glyphs, setGlyphs } from "../src/glyphs.ts"
-import { createInlineView } from "../src/inline-view.ts"
-import { defaultKeys, Keybindings } from "../src/keybindings.ts"
-import { ReplyRenderers } from "../src/markdown-nodes.ts"
 import { messageNoticeLines } from "../src/message-notice.ts"
 
 test("legacy title glyphs cannot turn a failed completion into a successful badge", () => {
@@ -96,96 +91,6 @@ for (const ascii of [false, true]) {
         expect(messageNoticeLines(defaultTheme, semantic)).toEqual(expected)
         expect(messageNoticeLines(defaultTheme, stored)).toEqual(expected)
       } finally {
-        setGlyphs(before)
-      }
-    })
-
-    test(`inline background ${status} completion remains explicit after its live node is removed (ASCII=${ascii})`, () => {
-      const before = { ...glyphs }
-      const terminal = new FakeTerminal(120, 30)
-      const screen = new VirtualScreen(120, 30)
-      const write = terminal.write.bind(terminal)
-      const written: string[] = []
-      terminal.write = (data) => {
-        write(data)
-        written.push(data)
-        screen.write(data)
-      }
-      const view = createInlineView({
-        terminal,
-        theme: defaultTheme,
-        capabilities: {
-          win32InputMode: false,
-          kittyKeyboard: true,
-          synchronizedOutput: false,
-          shiftEnter: true,
-        },
-        settings: { margin: 0, marginRows: 0 },
-        presenters: undefined,
-        hyperlinks: false,
-        renders: new ReplyRenderers(undefined),
-        keys: new Keybindings(defaultKeys({ vscode: false })),
-        spinner: new Spinner(),
-        sessionId: () => "main",
-        detail: () => "summary",
-        bottom: () => ["input"],
-        overlay: { render: () => [] },
-        editorEmpty: () => true,
-        showNote: () => {},
-      })
-      const bus = new EventBus()
-      try {
-        if (ascii) setGlyphs({ pointer: ">", separator: "|" })
-        view.start()
-        view.toolStart("call", "agent", {}, 0)
-        view.subagentEvent(
-          bus.emit(
-            "subagent.start",
-            {
-              childSessionId: "child",
-              toolCallId: "call",
-              title: "Do look",
-              prompt: "look",
-              role: "explorer",
-              model: { provider: "mock", model: "m1" },
-              depth: 1,
-              cwd: "/work",
-              context: "fresh",
-              queued: false,
-            },
-            { sessionId: "main" },
-          ),
-        )
-        view.toolEnd("call", { result: textResult("Started in the background"), durationMs: 0 })
-        view.turnEnd()
-        view.subagentEvent(
-          bus.emit(
-            "subagent.end",
-            {
-              childSessionId: "child",
-              status: status === "failed" ? "error" : status === "stopped" ? "aborted" : "done",
-              usage: emptyUsage(),
-              durationMs: 2000,
-              error: status === "done" ? undefined : "its commander finished",
-            },
-            { sessionId: "main" },
-          ),
-        )
-        const text = "Do look · explorer · 2s · 3 tok · its commander finished"
-        view.user({
-          role: "user",
-          content: [{ type: "text", text: "Full report" }],
-          display: { origin: "subagent", text, notices: [{ status, text }] },
-        })
-        view.render()
-        const badge = AGENT_STATUS_BADGES[status]
-        const label = `${ascii ? badge.ascii : badge.symbol} ${badge.label}`
-        const rendered = `${label} ${text.replaceAll(" · ", ` ${glyphs.separator} `)}`
-        const lines = [...screen.scrollback, ...screen.lines].filter((line) => line.includes("3 tok"))
-        expect(lines.map((line) => line.trimEnd())).toEqual([rendered])
-        expect(written.join("")).toContain(defaultTheme[badge.role](label))
-      } finally {
-        view.stop()
         setGlyphs(before)
       }
     })

@@ -6,7 +6,7 @@ import { ExtensionViewer } from "../src/extension-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const rebound of [false, true]) {
     for (const shape of ["anonymous", "tabs-first", "identified"] as const) {
       test(`${mode}: ${shape} declarative dock scrolls and follows with ${rebound ? "rebound" : "default"} keys`, async () => {

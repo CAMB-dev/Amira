@@ -2,12 +2,12 @@ import { expect, test } from "bun:test"
 import { closeImageApp, paste, setup, waitFor } from "./app-harness.ts"
 
 for (const cols of [40, 24]) {
-  test(`inline: a long answered input leaves the next question visible at ${cols} columns`, async () => {
+  test(`fullscreen: a long answered input leaves the next question visible at ${cols} columns`, async () => {
     let second = false
     const s = await setup([], {
       cols,
       rows: 12,
-      settings: { mode: "inline" },
+      settings: { mode: "fullscreen" },
       commands: [
         {
           name: "questions",
@@ -30,12 +30,12 @@ for (const cols of [40, 24]) {
       s.terminal.send("answer\r")
       await s.shows("Finished")
       await s.idle()
-      expect(s.all()).toContain("First question?")
-      expect(s.all()).toContain("Second question?")
     } finally {
       s.host.ui.cancelAll()
       await s.idle()
       await closeImageApp(s)
     }
+    expect(s.screen.mainText).toContain("First question?")
+    expect(s.screen.mainText).toContain("Second question?")
   })
 }

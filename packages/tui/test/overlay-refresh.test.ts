@@ -33,7 +33,6 @@ function setup(placement: "fullscreen" | "dock", definition: ViewDefinition) {
   const manager = new OverlayManager({
     keys: defaultKeybindings(),
     theme: ctx.theme,
-    mode: "fullscreen",
     env: {},
     views: { get: () => definition },
     reaches: () => true,

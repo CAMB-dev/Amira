@@ -4,7 +4,7 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 
 const F6 = "\x1b[17~"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: F6 detaches an owned form and restores its pending dialog when refocused`, async () => {
     const s = await focusFixture(mode)
     try {

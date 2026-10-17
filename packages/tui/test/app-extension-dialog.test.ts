@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: workflow confirmation labels the extension without its full source path`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "amira-workflow-dialog-"))
     const file = join(dir, "index.ts")

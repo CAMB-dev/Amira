@@ -6,14 +6,13 @@ import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { localClock } from "../src/format.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
-import { createInlineView } from "../src/inline-view.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
 import { closeImageApp, setup as setupApp, waitFor } from "./app-harness.ts"
 
 const at = new Date(2026, 9, 10, 20, 9).getTime()
 
-function setup(mode: "inline" | "fullscreen", binding: string[] = ["ctrl+o"], columns = 100) {
+function setup(_mode: "fullscreen", binding: string[] = ["ctrl+o"], columns = 100) {
   const terminal = new FakeTerminal(columns, 40)
   const screen = new VirtualScreen(columns, 40)
   const write = terminal.write.bind(terminal)
@@ -23,7 +22,7 @@ function setup(mode: "inline" | "fullscreen", binding: string[] = ["ctrl+o"], co
   }
   let detail: ToolDetailLevel = "summary"
   const keys = new Keybindings({ ...defaultKeys({ vscode: false }), "tool-output": binding })
-  const view = (mode === "inline" ? createInlineView : createFullscreenView)({
+  const view = createFullscreenView({
     terminal,
     theme: plain.theme,
     capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -53,7 +52,7 @@ function setup(mode: "inline" | "fullscreen", binding: string[] = ["ctrl+o"], co
   }
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: clocks belong to users and the first assistant row, including thinking, not later steps`, () => {
     const clock = spyOn(Date, "now").mockReturnValue(at)
     const { view, screen, text } = setup(mode)
@@ -346,7 +345,7 @@ for (const mode of ["inline", "fullscreen"] as const) {
   })
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test.each([
     ["ctrl+o", "\x0f"],
     ["ctrl+b", "\x02"],
@@ -379,20 +378,3 @@ for (const mode of ["inline", "fullscreen"] as const) {
     }
   })
 }
-
-test("inline keeps one blank row above its live header after both committed and live replies", () => {
-  const { view, screen } = setup("inline")
-  try {
-    for (const finish of [false, true]) {
-      view.replyDelta("Answer.")
-      if (finish) view.replyEnd([])
-      view.render()
-      const rows = screen.lines
-      const header = rows.findIndex((line) => line.trim() === "live header")
-      expect(rows[header - 1]?.trim()).toBe("")
-      expect(rows[header - 2]?.trim()).toStartWith("Answer.")
-    }
-  } finally {
-    view.stop()
-  }
-})

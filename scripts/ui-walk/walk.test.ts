@@ -13,6 +13,7 @@ import {
   waitForSpawnWork,
 } from "../spawn-test.ts"
 import { address, positiveInteger, request, type SessionAddress, sessionRoot, start } from "./session.ts"
+import { main } from "./walk.ts"
 
 function ptyUnavailable(): boolean {
   try {
@@ -37,6 +38,12 @@ test("validates names and dimensions before using the registry", () => {
   for (const name of ["../escape", "", "a/b", "a".repeat(65)]) expect(() => sessionRoot(name)).toThrow()
   for (const value of [0, -1, "NaN", 1.5, 501]) expect(() => positiveInteger(value, "cols", 500)).toThrow()
   expect(positiveInteger("100", "cols", 500)).toBe(100)
+})
+
+test("rejects the removed inline argument before starting a session", async () => {
+  await expect(main(["start", "removed-inline", "--", "--inline"])).rejects.toThrow(
+    "Amira argument is not allowed in the offline harness: --inline",
+  )
 })
 
 test.skipIf(ptyUnavailable())(

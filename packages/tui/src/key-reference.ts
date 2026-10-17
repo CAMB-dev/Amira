@@ -23,24 +23,22 @@ import {
 } from "./keybindings.ts"
 
 /** The groups of the reference, in the order they are listed, with their headings. */
-const SCOPES: { scope: KeyScope; title: string; fullscreenOnly?: boolean }[] = [
+const SCOPES: { scope: KeyScope; title: string }[] = [
   { scope: "input", title: "Input" },
   { scope: "popup", title: "Command and file lists" },
   { scope: "search", title: "History search" },
   { scope: "dialog", title: "Dialogs" },
   { scope: "view", title: "Extension views" },
-  { scope: "transcript", title: "Transcript", fullscreenOnly: true },
-  { scope: "select", title: "Block selection", fullscreenOnly: true },
-  { scope: "find", title: "Find", fullscreenOnly: true },
-  { scope: "text", title: "Text selected with the mouse", fullscreenOnly: true },
+  { scope: "transcript", title: "Transcript" },
+  { scope: "select", title: "Block selection" },
+  { scope: "find", title: "Find" },
+  { scope: "text", title: "Text selected with the mouse" },
 ]
 
 /** The widest the keys column gets; longer key lists wrap within it. */
 const MAX_KEYS_WIDTH = 28
 
 export interface KeyReferenceOptions {
-  /** Whether the full-screen view is on: its transcript keys are listed only then. */
-  fullscreen: boolean
   /** Called when the user asks to leave it. */
   onClose: () => void
   /**
@@ -113,14 +111,10 @@ export class KeyReference implements Component {
   }
 
   #body(width: number, theme: Theme): string[] {
-    const groups = SCOPES.filter((s) => this.opts.fullscreen || !s.fullscreenOnly).map((s) => ({
+    const groups = SCOPES.map((s) => ({
       ...s,
       rows: (Object.keys(ACTIONS) as Action[])
-        .filter(
-          (a) =>
-            ACTIONS[a].scope === s.scope ||
-            (!this.opts.fullscreen && s.scope === "view" && a.startsWith("scroll.")),
-        )
+        .filter((a) => ACTIONS[a].scope === s.scope)
         .map((a) => ({
           keys: this.#labels(a),
           description: `${ACTIONS[a].description} ${glyphs.separator} ${a}`,

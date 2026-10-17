@@ -15,7 +15,7 @@ import { closeImageApp, setup, waitFor } from "../../tui/test/app-harness.ts"
 import { userApprover } from "../src/session/approvals.ts"
 
 async function approvalSetup(
-  mode: "inline" | "fullscreen",
+  mode: "fullscreen",
   mainWorking: boolean,
   gate: "permission" | "interceptor" = "permission",
 ) {
@@ -129,7 +129,7 @@ async function approvalSetup(
   }
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   for (const mainWorking of [false, true]) {
     for (const gate of ["permission", "interceptor"] as const) {
       for (const key of ["\x1b", "\x03"]) {

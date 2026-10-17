@@ -18,7 +18,6 @@ for (const pressed of ["enter", "escape"] as const) {
       ui,
       keys: defaultKeybindings(),
       theme: ctx.theme,
-      mode: "fullscreen",
       env: {},
       reaches: () => true,
       view: () => ({ requestRender: () => {}, dialogEcho: () => {} }) as unknown as TranscriptView,

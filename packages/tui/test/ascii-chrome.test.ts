@@ -61,7 +61,7 @@ test("ASCII key reference, scroll range, and model picker use ASCII hints", () =
   try {
     setGlyphs(ascii.glyphs)
     const keys = defaultKeybindings()
-    const ref = new KeyReference(keys, { fullscreen: true, onClose: () => {} })
+    const ref = new KeyReference(keys, { onClose: () => {} })
     chrome(ref.render(120, { ...ctx, rows: 300 }))
     ref.render(80, { ...ctx, rows: 16 })
     ref.handleInput(key("pagedown"))

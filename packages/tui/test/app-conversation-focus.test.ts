@@ -4,14 +4,13 @@ import { focusFixture } from "./conversation-focus-fixture.ts"
 
 const F6 = "\x1b[17~"
 
-for (const mode of ["fullscreen", "inline"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: focus chrome uses a non-design conversation name`, async () => {
     const s = await focusFixture(mode, undefined, undefined, {}, "Acceptance · fixture")
     try {
       s.terminal.send("/design\r")
       await waitFor(() => s.live().includes("Acceptance · fixture"), "named focus")
       expect(s.all()).not.toContain("— design:")
-      if (mode === "inline") expect(s.all()).toContain("— Acceptance · fixture —")
     } finally {
       s.context()?.unfocusConversation?.()
       await s.conversation.release()

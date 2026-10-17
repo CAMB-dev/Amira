@@ -51,6 +51,13 @@ test("the model comes from --model, then $AMIRA_MODEL, then settings", () => {
   expect(config(["-m", "flag/m"], { AMIRA_MODEL: "env/m" }).settings.model).toBe("flag/m")
 })
 
+test("the deprecated tui.mode setting remains valid for existing configurations", () => {
+  put(userSettingsFile(), { tui: { mode: "inline" } })
+  const c = config([])
+  expect(c.settings.tui?.mode).toBe("inline")
+  expect(c.warnings).toEqual([])
+})
+
 test("--max-steps overrides every agent.maxSteps settings layer, including with 0", () => {
   expect(config([]).settings.agent?.maxSteps).toBeUndefined()
   expect(config(["--max-steps", "0"]).settings.agent?.maxSteps).toBe(0)

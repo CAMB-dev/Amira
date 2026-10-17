@@ -7,7 +7,7 @@ import { OverlayManager } from "../src/app/overlays.ts"
 import { defaultKeybindings } from "../src/keybindings.ts"
 import type { TranscriptView } from "../src/view.ts"
 
-function setup(mode: "inline" | "fullscreen", definition?: ViewDefinition) {
+function setup(_mode: "fullscreen", definition?: ViewDefinition) {
   const errors: unknown[] = []
   const bus = new EventBus((error) => errors.push(error))
   const ui = new UiRequests(bus)
@@ -44,7 +44,6 @@ function setup(mode: "inline" | "fullscreen", definition?: ViewDefinition) {
     ui,
     keys: defaultKeybindings(),
     theme: ctx.theme,
-    mode,
     env: {},
     views: {
       get: () => definition,
@@ -99,7 +98,7 @@ function setup(mode: "inline" | "fullscreen", definition?: ViewDefinition) {
   }
 }
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: pending form, queued form and dialog detach without settling and reopen on return`, async () => {
     const app = setup(mode)
     try {

@@ -2,7 +2,6 @@
 import type { Agent, PanelRegistry, StatusRegistry } from "@amira/core"
 import {
   bold,
-  type Component,
   type Editor,
   type RenderContext,
   type Spinner,
@@ -30,7 +29,7 @@ type HintItems = Parameters<typeof fitHint>[0]
 
 /** The input box, its hint and list, the status, live panels and pending messages under the transcript. */
 export interface BottomArea {
-  layout(width: number, ctx: RenderContext, budget: number, top?: Component): string[]
+  layout(width: number, ctx: RenderContext, budget: number): string[]
   /** Composer beneath an extension overlay, without transcript panels or a dock. */
   overlayInput(width: number, ctx: RenderContext, budget: number): string[]
   searchHint(theme: Theme, width: number): string | undefined
@@ -52,12 +51,10 @@ export interface BottomAreaDeps {
   dialogs: () => readonly Dialog[]
   steering: () => readonly string[]
   queued: () => readonly Outgoing[]
-  mode: () => "fullscreen" | "inline"
   hintNote: () => { text: string; until: number } | undefined
   commandActivity: () => Pick<CommandRunner, "spinner" | "render" | "hasCancellable">
   canRewind: () => boolean
   status: StatusRegistry
-  header?: (width: number, ctx: RenderContext) => string[]
   panels?: PanelRegistry
   dock?: () => DockedView | undefined
   renderDock?: (width: number, ctx: RenderContext, available: number) => string[]
@@ -193,7 +190,6 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     ]
   })
   const bottom = [
-    new View((width, ctx) => (deps.mode() === "inline" ? (deps.header?.(width, ctx) ?? []) : [])),
     // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
     // They give way to everything else under the transcript: folded, then cut, when rows are short.
     new View((width, ctx) => {
@@ -261,10 +257,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         return []
       }
       const rows = listLines(list, width, ctx, listRoom)
-      if (deps.mode() === "fullscreen") {
-        listRows = Math.min(listRoom, Math.max(listRows, rows.length))
-        while (rows.length < listRows) rows.push("")
-      }
+      listRows = Math.min(listRoom, Math.max(listRows, rows.length))
+      while (rows.length < listRows) rows.push("")
       return [
         ...rows,
         ...(showHint
@@ -292,16 +286,15 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   ]
 
   /**
-   * The bottom area under `top`, fitted into `budget` rows: live panels give way first (to the
+   * The bottom area fitted into `budget` rows: live panels give way first (to the
    * dialog at its full size too), then the dialog is fitted into what the rest leaves.
    */
-  function layoutBottom(width: number, ctx: RenderContext, budget: number, top?: Component): string[] {
-    const parts = top ? [top, ...bottom] : bottom
+  function layoutBottom(width: number, ctx: RenderContext, budget: number): string[] {
     const draw = () => {
       let afterDock = 0
       let passedDock = false
       let total = 0
-      const rows = parts.flatMap((c) => {
+      const rows = bottom.flatMap((c) => {
         const lines = c.render(width, ctx)
         if (c === inputRegion) interactiveStart = total
         total += lines.length

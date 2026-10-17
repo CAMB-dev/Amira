@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test"
 import { Spinner } from "@amira/tui-kit"
 import { setup, waitFor } from "./app-harness.ts"
 
-for (const mode of ["inline", "fullscreen"] as const) {
+for (const mode of ["fullscreen"] as const) {
   test(`${mode}: command animation sleeps when its row is clipped and restarts when visible`, async () => {
     let release = () => {}
     let started = false

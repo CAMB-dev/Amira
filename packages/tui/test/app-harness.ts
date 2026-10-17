@@ -345,31 +345,3 @@ export async function skillSetup(steps: MockStep[], o: SetupOptions = {}) {
   agent = s.agent
   return s
 }
-
-/**
- * Follows markers (L1, P2, ...) through a transcript. After every write, the markers on screen or
- * in the scrollback must have no hole: a hole means a line was drawn and then lost off the top of
- * the live region, to be printed again later — the view jumps back up when that happens.
- */
-export function transcriptChecker(markers: string[]) {
-  const index = new Map(markers.map((m, i) => [m, i]))
-  const problems: string[] = []
-  const found = (screen: VirtualScreen) =>
-    [...screen.scrollback, ...screen.lines].join("\n").match(/\b[LP]\d+\b/g) ?? []
-  return {
-    problems,
-    onWrite(screen: VirtualScreen) {
-      const seen = new Set(found(screen).map((m) => index.get(m) ?? -1))
-      const max = Math.max(-1, ...seen)
-      for (let i = 0; i <= max; i++) {
-        if (seen.has(i)) continue
-        if (problems.length < 5) problems.push(`${markers[i]} is gone while ${markers[max]} is shown`)
-        break
-      }
-    },
-    /** Every marker reached the transcript exactly once, in order. */
-    final(screen: VirtualScreen) {
-      expect([...found(screen)]).toEqual(markers)
-    },
-  }
-}
