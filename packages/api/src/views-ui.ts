@@ -24,7 +24,7 @@ export interface UiTreeItem {
   /**
    * Shown only while expanded, before children, at the width remaining after the tree indent.
    * Widget details are content-height, display-only: box, row/column, text, progress, bar, rule,
-   * table (and blank spacer). IDs/follow are ignored; tree, tabs and input are not rendered.
+   * table (and blank spacer). IDs/follow are ignored; tree, tabs, input and button are not rendered.
    */
   detail?: ViewLine[] | UiNode
   children?: UiTreeItem[]
@@ -88,6 +88,8 @@ export type UiNode =
       /** Skip automatic focus; this key, Tab or explicit focus enables typing. Esc leaves the input. */
       activate?: string
     }
+  /** Bracketed action label. Enter, Space or click emits activate with key (default: id). */
+  | { type: "button"; id: string; label: string; key?: string; tone?: "normal" | "accent" }
   /** Blank content; size supplies the default main-axis size inside a row or column. */
   | { type: "spacer"; size?: number }
 

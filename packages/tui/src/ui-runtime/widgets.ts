@@ -175,6 +175,50 @@ export function prepare(
   return plan
 }
 
+/** Shared tab-window geometry for painting and pointer targets. */
+export function tabLabels(
+  plan: Plan,
+  host: WidgetHost,
+): { labels: string[]; separator: string; start: number } {
+  const node = plan.node
+  if (node.type !== "tabs") return { labels: [], separator: "", start: 0 }
+  const { theme, state } = host
+  const dim = themeToken(theme, "dim") ?? theme.border
+  const divided = node.style === "divided"
+  const accent = divided ? theme.accent(" ") : ""
+  const color = accent !== stripColors(accent)
+  const labels = node.tabs.map((t) => {
+    const label = terminalText(t.label)
+    const selected = t.key === state.activeTabs[node.id]
+    const text = selected
+      ? !host.focused
+        ? dim(divided && color ? label : `[${label}]`)
+        : divided && color
+          ? bold(inverse(theme.accent(label)))
+          : theme.accent(`[${label}]`)
+      : theme.muted(label)
+    return text + (divided ? "  " : "")
+  })
+  const separator = divided ? `${dim(glyphs.output)}  ` : "  "
+  const gap = divided ? 3 : 2
+  const active = Math.max(
+    0,
+    node.tabs.findIndex((t) => t.key === state.activeTabs[node.id]),
+  )
+  let start = active
+  let used = visibleWidth(labels[active] ?? "")
+  while (start > 0 && used + visibleWidth(labels[start - 1]!) + gap <= plan.rect.width - 2) {
+    used += visibleWidth(labels[--start]!) + gap
+  }
+  return { labels, separator, start }
+}
+
+export const inputRoom = (node: Extract<UiNode, { type: "input" }>, width: number): number =>
+  Math.max(1, width - 2 - Math.min(visibleWidth(terminalText(node.hint ?? "")) + 1, Math.floor(width / 3)))
+
+export const buttonLabel = (node: Extract<UiNode, { type: "button" }>): string =>
+  `[${terminalText(node.label)}]`
+
 function reconcile(
   map: Record<string, string>,
   id: string,
@@ -204,7 +248,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
   const selection = (line: string) =>
     host.focused ? (theme.selection?.(line) ?? line) : dim(stripColors(line))
   let out: string[] = []
-  if (from > 0 && ["bar", "progress", "rule", "input", "spacer"].includes(node.type))
+  if (from > 0 && ["bar", "progress", "rule", "input", "button", "spacer"].includes(node.type))
     return Array<string>(h).fill(" ".repeat(w))
   switch (node.type) {
     case "column":
@@ -323,32 +367,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       break
     }
     case "tabs": {
-      const divided = node.style === "divided"
-      const accent = divided ? theme.accent(" ") : ""
-      const color = accent !== stripColors(accent)
-      const labels = node.tabs.map((t) => {
-        const label = terminalText(t.label)
-        const selected = t.key === state.activeTabs[node.id]
-        const text = selected
-          ? !host.focused
-            ? dim(divided && color ? label : `[${label}]`)
-            : divided && color
-              ? bold(inverse(theme.accent(label)))
-              : theme.accent(`[${label}]`)
-          : theme.muted(label)
-        return text + (divided ? "  " : "")
-      })
-      const separator = divided ? `${dim(glyphs.output)}  ` : "  "
-      const gap = divided ? 3 : 2
-      const active = Math.max(
-        0,
-        node.tabs.findIndex((t) => t.key === state.activeTabs[node.id]),
-      )
-      let start = active
-      let used = visibleWidth(labels[active] ?? "")
-      while (start > 0 && used + visibleWidth(labels[start - 1]!) + gap <= w - 2) {
-        used += visibleWidth(labels[--start]!) + gap
-      }
+      const { labels, separator, start } = tabLabels(plan, host)
       out.push(marker + labels.slice(start).join(separator))
       if (plan.children[0]) out.push(...paint(plan.children[0], host))
       break
@@ -405,7 +424,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
     }
     case "input": {
       const hint = terminalText(node.hint ?? "")
-      const room = Math.max(1, w - 2 - Math.min(visibleWidth(hint) + 1, Math.floor(w / 3)))
+      const room = inputRoom(node, w)
       const input = host.input(node.id).render(room, theme, {
         focused: focused && host.cursor && w > 2,
         placeholder: terminalText(
@@ -415,6 +434,12 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
         ),
       })
       out.push(marker + fit(input, room) + (hint ? ` ${theme.muted(hint)}` : ""))
+      break
+    }
+    case "button": {
+      const label = buttonLabel(node)
+      const text = !host.focused ? dim(label) : node.tone === "accent" ? theme.accent(label) : label
+      out.push(marker + (focused && host.focused ? bold(text) : text))
       break
     }
     case "spacer":

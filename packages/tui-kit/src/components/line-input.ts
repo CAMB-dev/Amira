@@ -46,6 +46,19 @@ export class LineInput {
     return this.at
   }
 
+  /** Places the caret at a cell column of the last render, counting masks and wide graphemes. */
+  placeCursor(column: number): void {
+    let used = 0
+    let at = this.offset
+    const target = Math.max(0, column)
+    for (; at < this.g.length; at++) {
+      const width = visibleWidth(this.opts.mask || this.g[at]!)
+      if (target < used + width) break
+      used += width
+    }
+    this.at = at
+  }
+
   insert(text: string): void {
     const add = this.clean(text)
     if (!add.length) return
@@ -101,6 +114,7 @@ export class LineInput {
   ): string {
     const caret = opts.focused ? CURSOR_MARKER : ""
     if (!this.g.length) {
+      this.offset = 0
       return (
         caret +
         (opts.placeholder ? theme.muted(truncateToWidth(opts.placeholder, width - 1, opts.more ?? "…")) : "")

@@ -12,7 +12,7 @@ import {
 import { FullScreenRenderer } from "../src/fullscreen.ts"
 import { defaultGlyphs } from "../src/glyphs.ts"
 import { InputParser } from "../src/input.ts"
-import { type InputEvent, key, textKey } from "../src/keys.ts"
+import { type InputEvent, key, type MouseInput, textKey } from "../src/keys.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { visibleWidth } from "../src/width.ts"
 import { plain } from "./context.ts"
@@ -48,6 +48,39 @@ describe("LineInput", () => {
     const digits = new LineInput({ accept: (g) => /\d/.test(g) })
     type(digits, "12a3")
     expect(digits.value).toBe("123")
+  })
+
+  test("places the caret by rendered cells, including graphemes, masks and horizontal scrolling", () => {
+    const input = new LineInput()
+    input.value = "a你👨‍👩‍👧éz"
+    input.render(20, plain.theme)
+    input.placeCursor(2) // Inside the wide CJK character, not halfway through it.
+    expect(input.cursor).toBe(1)
+    input.placeCursor(3)
+    expect(input.cursor).toBe(2)
+    input.placeCursor(5)
+    expect(input.cursor).toBe(3)
+    input.insert("!")
+    expect(input.value).toBe("a你👨‍👩‍👧!éz")
+    input.placeCursor(-1)
+    expect(input.cursor).toBe(0)
+    input.placeCursor(100)
+    expect(input.cursor).toBe(6)
+
+    input.value = "漢字漢字漢字漢字"
+    input.render(9, plain.theme, { focused: true })
+    input.placeCursor(0)
+    expect(input.cursor).toBe(4)
+    input.placeCursor(3)
+    expect(input.cursor).toBe(5)
+
+    const secret = new LineInput({ mask: "*" })
+    secret.value = "你👨‍👩‍👧éabc"
+    secret.render(5, plain.theme, { focused: true })
+    secret.placeCursor(1)
+    expect(secret.cursor).toBe(3)
+    secret.insert("!")
+    expect(secret.value).toBe("你👨‍👩‍👧é!abc")
   })
 
   test("word keys and Ctrl+U/K/W", () => {
@@ -138,6 +171,298 @@ function makeChecklist(
     validate: () => ({}),
   })
 }
+
+const mouse = (
+  action: MouseInput["action"],
+  button: MouseInput["button"],
+  x: number,
+  y: number,
+): MouseInput => ({
+  type: "mouse",
+  action,
+  button,
+  x,
+  y,
+  shift: false,
+  alt: false,
+  ctrl: false,
+})
+
+function cell(lines: string[], text: string, offset = 0) {
+  const clean = lines.map((line) => stripAnsi(line).replaceAll(CURSOR_MARKER, ""))
+  const y = clean.findIndex((line) => line.includes(text))
+  expect(y).toBeGreaterThanOrEqual(0)
+  return { x: visibleWidth(clean[y]!.slice(0, clean[y]!.indexOf(text))) + offset, y }
+}
+
+function click(form: Form, lines: string[], text: string, offset = 0) {
+  const { x, y } = cell(lines, text, offset)
+  form.handleInput(mouse("press", "left", x, y))
+  form.handleInput(mouse("release", "left", x, y))
+}
+
+describe("Form mouse input", () => {
+  test.each([30, 80, 120])("focuses fields and places a wide-text cursor at %s columns", (width) => {
+    const { form } = makeForm({
+      fields: [
+        { id: "first", type: "text", label: "First" },
+        { id: "other", type: "text", label: "名前 Other" },
+      ],
+      values: { first: "", other: "a你👨‍👩‍👧éz" },
+      validate: (values): Record<string, string> => (values.first ? {} : { first: "First is required" }),
+    })
+    const screen = () => form.render(width, { ...plain, rows: 30 })
+    click(form, screen(), "a你", 3)
+    expect(form.focused).toBe("other")
+    type(form, "!")
+    expect(form.values.other).toBe("a你!👨‍👩‍👧éz")
+    expect(screen().join("\n")).toContain("First is required")
+    click(form, screen(), "First")
+    expect(form.focused).toBe("first")
+  })
+
+  test("only a left press and release on the same rendered target activates it", () => {
+    const { form } = makeForm({ validate: () => ({}) })
+    const screen = () => form.render(80, { ...plain, rows: 40 })
+    const box = cell(screen(), "[ ]")
+    form.handleInput(mouse("release", "left", box.x, box.y))
+    form.handleInput(mouse("press", "right", box.x, box.y))
+    form.handleInput(mouse("release", "right", box.x, box.y))
+    expect(form.values.extra).toBe(false)
+    form.handleInput(mouse("press", "left", box.x, box.y))
+    form.handleInput(mouse("release", "left", 0, 0))
+    expect(form.values.extra).toBe(false)
+    form.handleInput(mouse("press", "left", box.x, box.y))
+    screen() // Rebuilding render regions must retain the pending press.
+    form.handleInput(mouse("release", "left", box.x, box.y))
+    expect(form.focused).toBe("extra")
+    expect(form.values.extra).toBe(true)
+  })
+
+  test("opens a dropdown, ignores group headings, filters and chooses the clicked option", () => {
+    const { form } = makeForm({
+      fields: [
+        {
+          id: "mode",
+          type: "select",
+          label: "Mode",
+          options: [
+            { value: "a", label: "Alpha", group: "Local" },
+            { value: "b", label: "Beta", group: "Cloud" },
+            { value: "c", label: "Gamma", group: "Cloud" },
+          ],
+        },
+      ],
+      validate: () => ({}),
+    })
+    const screen = () => form.render(60, { ...plain, rows: 25 })
+    click(form, screen(), "Alpha")
+    expect(screen().join("\n")).toContain("Gamma")
+    click(form, screen(), "Cloud")
+    expect(form.values.mode).toBe("a")
+    expect(screen().join("\n")).toContain("Gamma")
+    type(form, "Cloud")
+    click(form, screen(), "Gamma")
+    expect(form.values.mode).toBe("c")
+    expect(screen().join("\n")).not.toContain("Beta")
+    click(form, screen(), "Gamma")
+    click(form, screen(), "Mode")
+    expect(screen().join("\n")).not.toContain("Beta")
+  })
+
+  test("a rerender cannot complete a press on a different choice at the same list index", () => {
+    const { form } = makeForm({
+      fields: [
+        {
+          id: "mode",
+          type: "select",
+          label: "Mode",
+          options: [
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta" },
+          ],
+        },
+      ],
+      validate: () => ({}),
+    })
+    const screen = () => form.render(60, { ...plain, rows: 25 })
+    click(form, screen(), "Mode")
+    const point = cell(screen(), "Beta")
+    form.handleInput(mouse("press", "left", point.x, point.y))
+    form.setOptions("mode", [
+      { value: "a", label: "Alpha" },
+      { value: "c", label: "Gamma" },
+    ])
+    screen()
+    form.handleInput(mouse("release", "left", point.x, point.y))
+    expect(form.values.mode).toBe("a")
+    expect(screen().join("\n")).toContain("Gamma")
+  })
+
+  test("focuses a checklist, toggles the clicked grouped choice and wheels only the hovered list", () => {
+    const { form } = makeForm({
+      fields: [
+        { id: "name", type: "text", label: "Name" },
+        {
+          id: "tags",
+          type: "multiselect",
+          label: "Tags",
+          options: [
+            { value: "a", label: "Alpha", group: "Local" },
+            { value: "b", label: "Beta", group: "Cloud" },
+            { value: "c", label: "Gamma", group: "Cloud" },
+          ],
+        },
+      ],
+      validate: () => ({}),
+    })
+    const screen = () => form.render(80, { ...plain, rows: 30 })
+    click(form, screen(), "Tags")
+    expect(form.focused).toBe("tags")
+    click(form, screen(), "Cloud")
+    expect(form.values.tags).toEqual([])
+    click(form, screen(), "Beta")
+    expect(form.values.tags).toEqual(["b"])
+    const point = cell(screen(), "Gamma")
+    form.handleInput(mouse("wheel", "down", point.x, point.y))
+    expect(form.focused).toBe("tags")
+    form.handleInput(key("space"))
+    expect(form.values.tags).toEqual(["b", "c"])
+    click(form, screen(), "Beta")
+    expect(form.values.tags).toEqual(["c"])
+  })
+
+  test("section disclosures and action, submit and cancel buttons use their keyboard paths", () => {
+    const { form, log } = makeForm({
+      sections: [{ title: "Advanced", collapsed: true }],
+      fields: [{ id: "go", type: "action", label: "Fetch", section: "Advanced" }],
+      validate: () => ({}),
+    })
+    const screen = () => form.render(80, { ...plain, rows: 20 })
+    click(form, screen(), "Advanced")
+    click(form, screen(), "[ Fetch ]")
+    expect(log).toEqual(["action go"])
+    form.setActionState("go", { running: true })
+    click(form, screen(), "[ Fetch ]")
+    expect(log).toEqual(["action go"])
+    click(form, screen(), "Advanced")
+    expect(screen().join("\n")).not.toContain("Fetch")
+    const button = cell(screen(), "[ Save ]")
+    const gap = button.x + visibleWidth("[ Save ]") + 1
+    form.handleInput(mouse("press", "left", gap, button.y))
+    form.handleInput(mouse("release", "left", gap, button.y))
+    expect(log).toEqual(["action go"])
+    click(form, screen(), "[ Save ]")
+    click(form, screen(), "[ Cancel ]")
+    expect(log).toEqual(["action go", "submit", "cancel"])
+  })
+
+  test("clicking Save validates and clicking Cancel preserves the dirty confirmation", () => {
+    const { form, log } = makeForm()
+    const screen = () => form.render(80, { ...plain, rows: 40 })
+    click(form, screen(), "[ Save ]")
+    expect(form.focused).toBe("name")
+    expect(log).toEqual([])
+    expect(screen().join("\n")).toContain("is required")
+    type(form, "Ada")
+    click(form, screen(), "[ Cancel ]")
+    expect(form.confirmingCancel).toBe(true)
+    const lines = screen()
+    click(form, lines, "Discard your changes?")
+    expect(log).toEqual([])
+    form.handleInput(key("y"))
+    expect(log).toEqual(["cancel"])
+  })
+
+  test.each(["n", "y"])("dirty-form discard confirmation accepts the %s choice by click", (choice) => {
+    const { form, log } = makeForm()
+    const screen = () => form.render(80, { ...plain, rows: 24 })
+    type(form, "draft")
+    click(form, screen(), "[ Cancel ]")
+    expect(form.confirmingCancel).toBe(true)
+    const draft = form.values
+    click(form, screen(), "名前 Name")
+    type(form, "blocked")
+    expect(form.values).toEqual(draft)
+    form.handleInput(mouse("press", "left", 0, 0))
+    form.handleInput(mouse("release", "left", 0, 0))
+    expect(form.confirmingCancel).toBe(true)
+    const keep = cell(screen(), "n keep editing")
+    const discard = cell(screen(), "y discard")
+    form.handleInput(mouse("press", "left", keep.x, keep.y))
+    form.handleInput(mouse("release", "left", discard.x, discard.y))
+    expect(form.confirmingCancel).toBe(true)
+    const target = choice === "n" ? keep : discard
+    form.handleInput(mouse("press", "left", target.x, target.y))
+    screen() // Rebuilding regions between press and release must retain the confirmation gesture.
+    form.handleInput(mouse("release", "left", target.x, target.y))
+    expect(form.confirmingCancel).toBe(false)
+    expect(form.values).toEqual(draft)
+    expect(log).toEqual(choice === "y" ? ["cancel"] : [])
+    if (choice === "n") {
+      click(form, screen(), "名前 Name")
+      type(form, "!")
+      expect(form.values.name).toBe("draft!")
+    }
+  })
+
+  test("wheel scrolls the body without moving focus and click targets follow cropped rows", () => {
+    const { form } = makeForm({
+      description: undefined,
+      fields: Array.from({ length: 20 }, (_, i) => ({ id: `box-${i}`, type: "checkbox", label: `Box ${i}` })),
+      values: {},
+      validate: () => ({}),
+    })
+    const screen = () => form.render(50, { ...plain, rows: 10 })
+    const before = screen()
+    const point = cell(before, "Box 0")
+    form.handleInput(mouse("wheel", "down", point.x, point.y))
+    const after = screen()
+    expect(form.focused).toBe("box-0")
+    expect(after.join("\n")).not.toContain("Box 0")
+    click(form, after, "Box 3")
+    expect(form.focused).toBe("box-3")
+    expect(form.values["box-3"]).toBe(true)
+    expect(form.values["box-0"]).toBe(false)
+    screen()
+    form.handleInput(key("up"))
+    expect(form.focused).toBe("box-2")
+    expect(screen().join("\n")).toContain("Box 2")
+    const outside = screen()
+    form.handleInput(mouse("wheel", "down", 100, point.y))
+    expect(screen()).toEqual(outside)
+  })
+
+  test("dropdown row targets follow list scrolling and body cropping", () => {
+    const { form } = makeForm({
+      description: undefined,
+      fields: [
+        {
+          id: "mode",
+          type: "select",
+          label: "Mode",
+          options: Array.from({ length: 16 }, (_, i) => ({
+            value: `option-${i}`,
+            group: i < 4 ? "Local" : "Cloud",
+          })),
+        },
+      ],
+      validate: () => ({}),
+    })
+    const screen = () => form.render(50, { ...plain, rows: 12 })
+    click(form, screen(), "Mode")
+    for (let i = 0; i < 10; i++) {
+      const lines = screen()
+      const y = lines.findIndex((line) => line.includes("option-"))
+      expect(y).toBeGreaterThanOrEqual(0)
+      form.handleInput(mouse("wheel", "down", 15, y))
+    }
+    const lines = screen()
+    click(form, lines, "option-10")
+    expect(form.values.mode).toBe("option-10")
+    expect(form.focused).toBe("mode")
+  })
+})
 
 describe("Form", () => {
   test("configured ASCII pointers and separators follow field, list, action and footer focus", () => {

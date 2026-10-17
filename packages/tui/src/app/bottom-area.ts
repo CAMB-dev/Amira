@@ -3,9 +3,12 @@ import type { Agent, PanelRegistry, StatusRegistry } from "@amira/core"
 import {
   bold,
   type Editor,
+  type InputEvent,
+  type MouseInput,
   type RenderContext,
   type Spinner,
   type Theme,
+  translateMouse,
   truncateToWidth,
 } from "@amira/tui-kit"
 import type { CommandPopup } from "../command-popup.ts"
@@ -33,6 +36,10 @@ export interface BottomArea {
   /** Composer beneath an extension overlay, without transcript panels or a dock. */
   overlayInput(width: number, ctx: RenderContext, budget: number): string[]
   searchHint(theme: Theme, width: number): string | undefined
+  /** Content-relative pointer input, translated to the visible dialog or completion list. */
+  handlePointer(event: MouseInput, completion: (event: InputEvent) => boolean): boolean
+  /** Pointer input relative to the composer beneath a fullscreen extension view. */
+  handleOverlayPointer(event: MouseInput, completion: (event: InputEvent) => boolean): boolean
   readonly panelsShown: boolean
   togglePanels(): void
 }
@@ -149,6 +156,15 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let showHint = true
   let bottomBudget = Number.POSITIVE_INFINITY
   let interactiveStart = 0
+  let pointerTop = 0
+  let pointerWidth = 0
+  let pointerVisible = false
+  let dialogInset = 0
+  let listInset = 0
+  let overlayListTop = 0
+  let overlayListHeight = 0
+  let overlayListWidth = 0
+  let overlayListInset = 0
 
   /** The panels' rows; unfolded, a blank row sets each panel apart from the one before. */
   const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
@@ -180,13 +196,20 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       return rows
     }
     const lines = dialog.render(width, ctx)
+    dialogInset = deps.conversationIndicator?.(width) ? 1 : 0
     dialogRows = lines.length
     // Status is optional: leave three rows for title, selection and footer first.
     const indicator = deps.conversationIndicator?.(width)
+    const note = deps.hintNote()
+    const pointerHint = note && Date.now() < note.until && note.text.startsWith("Clicks go to Amira here:")
     return [
       ...(indicator ? [ctx.theme.accent(indicator)] : []),
       ...lines,
-      ...(bottomBudget > 3 ? statusLine(statusItems(), width, ctx) : []),
+      ...(bottomBudget > 3
+        ? pointerHint
+          ? [ctx.theme.muted(truncateToWidth(note.text, width))]
+          : statusLine(statusItems(), width, ctx)
+        : []),
     ]
   })
   const bottom = [
@@ -259,11 +282,16 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       const rows = listLines(list, width, ctx, listRoom)
       listRows = Math.min(listRoom, Math.max(listRows, rows.length))
       while (rows.length < listRows) rows.push("")
+      const note = deps.hintNote()
+      const pointerHint =
+        note && Date.now() < note.until && note.text.startsWith("Clicks go to Amira here:")
+          ? ctx.theme.muted(truncateToWidth(note.text, Math.max(1, width - 2)))
+          : undefined
       return [
         ...rows,
         ...(showHint
           ? [
-              `  ${deps.focusHint?.(ctx.theme, Math.max(1, width - 2)) ?? ctx.theme.muted(fitHint(list.hint(), Math.max(1, width - 2)))}`,
+              `  ${pointerHint ?? deps.focusHint?.(ctx.theme, Math.max(1, width - 2)) ?? ctx.theme.muted(fitHint(list.hint(), Math.max(1, width - 2)))}`,
             ]
           : []),
       ]
@@ -272,12 +300,12 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     // its own keys above the transcript: the row stays, blank, so the layout does not jump.
     new View((width, ctx) => {
       if (!showHint || deps.dialogs()[0] || inputList()) return []
-      const focusHint = deps.focusHint?.(ctx.theme, Math.max(1, width - 2))
-      if (focusHint) return [`  ${focusHint}`]
       const hintNote = deps.hintNote()
       if (hintNote && Date.now() < hintNote.until) {
         return [`  ${ctx.theme.muted(truncateToWidth(hintNote.text, Math.max(1, width - 2), glyphs.more))}`]
       }
+      const focusHint = deps.focusHint?.(ctx.theme, Math.max(1, width - 2))
+      if (focusHint) return [`  ${focusHint}`]
       if (deps.view().capturing) return [""]
       return [
         `  ${fitHint(inputHint(ctx.theme), Math.max(0, width - 2), ctx.theme.muted(`  ${glyphs.separator}  `))}`,
@@ -362,6 +390,10 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       budget > 0
         ? [...rest.slice(Math.max(0, interactiveStart - prefixRoom), interactiveStart), ...essential]
         : []
+    pointerTop = ctx.rows - (rest.length - interactiveStart)
+    pointerWidth = width
+    pointerVisible = budget > 0
+    listInset = inputBox.framed(width) ? 2 : 0
     deps.activityVisible?.(budget > 0 && activityRows.some((row) => visible.includes(row)), ctx)
     deps.commandVisible?.(budget > 0 && commandRows.some((row) => visible.includes(row)))
     return visible
@@ -441,13 +473,50 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
 
   return {
     layout: layoutBottom,
+    handlePointer(event, completion) {
+      if (!pointerVisible) return false
+      const dialog = deps.dialogs()[0]
+      if (dialog) {
+        const top = pointerTop + dialogInset
+        if (
+          event.action === "wheel" &&
+          (event.x < 0 || event.x >= pointerWidth || event.y < top || event.y >= top + dialogRows)
+        )
+          return false
+        dialog.handleInput(translateMouse(event, 0, top))
+        return true
+      }
+      if (!inputList() || search.active) return false
+      const top = pointerTop + composerRows
+      const inside =
+        event.x >= listInset && event.x < pointerWidth && event.y >= top && event.y < top + listRows
+      if (event.action !== "wheel" || inside) completion(translateMouse(event, listInset, top))
+      // An open picker owns clicks, including outside clicks; wheel elsewhere still scrolls the transcript.
+      return event.action !== "wheel" || (event.y >= top && event.y < top + listRows)
+    },
+    handleOverlayPointer(event, completion) {
+      if (!overlayListHeight || !inputList() || search.active) return false
+      const inside =
+        event.x >= overlayListInset &&
+        event.x < overlayListWidth &&
+        event.y >= overlayListTop &&
+        event.y < overlayListTop + overlayListHeight
+      if (event.action !== "wheel" || inside)
+        completion(translateMouse(event, overlayListInset, overlayListTop))
+      return inside
+    },
     searchHint: (theme, width) => (search.active ? theme.muted(fitHint(searchHint(), width)) : undefined),
     overlayInput(width, ctx, budget) {
       const list = inputList()
       inputBox.accentFocus = true
       inputBox.maxRows = Math.max(1, budget - (list ? 1 : 0))
       const rows = inputBox.render(width, ctx)
-      if (list) rows.push(...listLines(list, width, ctx, Math.max(0, budget - rows.length)))
+      overlayListTop = rows.length
+      overlayListWidth = width
+      overlayListInset = inputBox.framed(width) ? 2 : 0
+      const choices = list ? listLines(list, width, ctx, Math.max(0, budget - rows.length)) : []
+      overlayListHeight = choices.length
+      rows.push(...choices)
       return rows
     },
     get panelsShown() {

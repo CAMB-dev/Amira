@@ -1,9 +1,8 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
-import { type InputEvent, isSubmitKey, keyLabel, matchesKey } from "../keys.ts"
+import { type InputEvent, isSubmitKey, key, keyLabel, type MouseInput, matchesKey } from "../keys.ts"
 import { bold } from "../style.ts"
-import { graphemes, truncateToWidth, visibleWidth, wrapText } from "../width.ts"
-import { Editor } from "./editor.ts"
+import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import {
   formButton as button,
   type FormFieldState as FieldState,
@@ -11,13 +10,17 @@ import {
   formToneStyle as toneStyle,
 } from "./form-field.ts"
 import { wrapFormHint } from "./form-hint.ts"
-import { LineInput } from "./line-input.ts"
+import { type FormHit, FormMouse } from "./form-mouse.ts"
+import {
+  filteredFormChoices,
+  filterFormInput,
+  formChecklistRows,
+  formFieldValue,
+  makeFormField,
+  setFormFilter,
+} from "./form-state.ts"
 
 export { LineInput, type LineInputOptions } from "./line-input.ts"
-
-/** Control characters, including tabs and line breaks, that a one-line input never keeps. */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are the point
-const CONTROL = /[\x00-\x1f\x7f\x9b]/g
 
 /** A value of one form field. */
 export type FormInputValue = string | number | boolean | string[]
@@ -131,11 +134,13 @@ export class Form implements Component {
   private previewRows = 1
   private collapsed = new Set<string>()
   private initial: string
+  private mouse = new FormMouse()
+  private mouseScrolling = false
 
   constructor(private opts: FormOptions) {
     for (const section of opts.sections ?? []) if (section.collapsed) this.collapsed.add(section.title)
     const values = opts.values ?? {}
-    this.fields = opts.fields.map((def) => this.makeField(def, values[def.id]))
+    this.fields = opts.fields.map((def) => makeFormField(def, values[def.id]))
     this.initial = JSON.stringify(this.values)
     this.focus = this.order()[0] ?? SUBMIT
   }
@@ -144,7 +149,7 @@ export class Form implements Component {
   get values(): Record<string, FormInputValue> {
     const out: Record<string, FormInputValue> = {}
     for (const f of this.fields) {
-      const v = this.valueOf(f)
+      const v = formFieldValue(f)
       if (v !== undefined) out[f.def.id] = v
     }
     return out
@@ -216,6 +221,9 @@ export class Form implements Component {
   }
 
   handleInput(e: InputEvent): boolean {
+    if (e.type === "mouse") return this.mouseInput(e)
+    if (e.type === "focus" && !e.focused) this.mouse.reset()
+    this.mouseScrolling = false
     if (this.confirming) {
       if (matchesKey(e, "y")) {
         this.confirming = false
@@ -281,6 +289,69 @@ export class Form implements Component {
     return true
   }
 
+  private mouseInput(e: MouseInput): boolean {
+    if (this.confirming) {
+      const hit = this.mouse.handle(e)?.target
+      if (hit?.kind === "confirm" && (hit.value === "n" || hit.value === "y"))
+        this.handleInput(key(hit.value))
+      return true
+    }
+    if (e.action === "wheel") {
+      if (e.button !== "up" && e.button !== "down") return true
+      const step = e.button === "up" ? -1 : 1
+      const target = this.mouse.at(e)
+      if (target?.focus === PREVIEW) {
+        this.previewTop = Math.max(0, Math.min(this.previewLength - 1, this.previewTop + step * 3))
+        if (e.x < this.mouse.viewport.width) {
+          this.top = Math.max(
+            0,
+            Math.min(this.mouse.viewport.length - this.mouse.viewport.rows, this.top + step * 3),
+          )
+          this.mouseScrolling = true
+        }
+      } else if (target?.kind === "option" || target?.kind === "list") {
+        const f = this.field(target.focus)
+        if (f) {
+          const rows = f.def.type === "select" ? filteredFormChoices(f) : formChecklistRows(f)
+          f.highlight = Math.max(0, Math.min(rows.length - 1, f.highlight + step))
+          this.mouseScrolling = false
+        }
+      } else if (
+        e.x >= 0 &&
+        e.x < this.mouse.viewport.width &&
+        e.y >= this.mouse.viewport.y &&
+        e.y < this.mouse.viewport.y + this.mouse.viewport.rows
+      ) {
+        this.top = Math.max(
+          0,
+          Math.min(this.mouse.viewport.length - this.mouse.viewport.rows, this.top + step * 3),
+        )
+        this.mouseScrolling = true
+      }
+      return true
+    }
+    const click = this.mouse.handle(e)
+    if (!click) return true
+    const { target } = click
+    this.mouseScrolling = false
+    if (this.focus !== target.focus) {
+      this.leave()
+      this.focus = target.focus
+    }
+    const f = this.field(target.focus)
+    if (target.kind === "input") f?.input?.placeCursor(click.x)
+    else if (target.kind === "editor") f?.editor?.placeCursor(click.x, click.y)
+    else if (target.kind === "option" && f) {
+      f.highlight = target.index ?? 0
+      // Use the same selection/toggle path as the keyboard (including validation).
+      this.handleInput(key(f.def.type === "select" ? "enter" : "space"))
+    } else if (target.kind === "activate") {
+      if (f?.def.type === "select" && f.open) this.handleInput(key("escape"))
+      else this.handleInput(key("enter"))
+    }
+    return true
+  }
+
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const chrome = chromeGlyphs(ctx.glyphs)
@@ -304,7 +375,8 @@ export class Form implements Component {
       ? wrapText(this.opts.description, inner).map((l) => truncateToWidth(INDENT + theme.muted(l), width))
       : []
     const rule = theme.border((ctx.glyphs?.rule ?? "─").repeat(width))
-    const footer = this.footer(width, ctx)
+    const footerHits: FormHit[] = []
+    const footer = this.footer(width, ctx, footerHits)
     // Too few rows for everything: drop the description, then the rules; keep a body row.
     if (1 + description.length + 1 + footer.length + 2 <= ctx.rows) header = [...header, ...description, rule]
     else if (1 + footer.length + 3 <= ctx.rows) header = [...header, rule]
@@ -312,8 +384,8 @@ export class Form implements Component {
     this.previewRows = Math.max(1, bodyRows - 2)
     const sideBySide = width >= 110 && preview.length > 0
     const formWidth = sideBySide ? Math.floor(width * 0.58) : width
-    const { lines, spans } = this.body(formWidth, ctx, values, sideBySide ? [] : preview)
-    const span = spans.get(this.focus)
+    const { lines, spans, hits } = this.body(formWidth, ctx, values, sideBySide ? [] : preview)
+    const span = this.mouseScrolling ? undefined : spans.get(this.focus)
     if (span && this.focus === PREVIEW && !sideBySide) this.top = span.start + this.previewTop
     else if (span && span.end - span.start <= bodyRows) {
       if (span.start < this.top) this.top = span.start
@@ -326,6 +398,7 @@ export class Form implements Component {
     this.top = Math.max(0, Math.min(this.top, lines.length - bodyRows))
     const body = lines.slice(this.top, this.top + bodyRows)
     while (body.length < bodyRows) body.push("")
+    const bodyWidths = body.map(() => formWidth)
     const more = [
       this.top > 0 ? chrome.arrowUp : "",
       this.top + bodyRows < lines.length ? chrome.arrowDown : "",
@@ -337,6 +410,7 @@ export class Form implements Component {
         const hint = theme.muted(truncateToWidth(` ${more.join("")} more`, width))
         const room = width - visibleWidth(hint)
         body[row] = truncateToWidth(body[row]!, Math.max(0, room)) + hint
+        bodyWidths[row] = Math.max(0, Math.min(formWidth, room))
       }
     }
     if (sideBySide) {
@@ -367,72 +441,17 @@ export class Form implements Component {
           `${left}${" ".repeat(Math.max(0, formWidth - visibleWidth(left)))} ${theme.border("|")} ${theme.muted(visible[row] ?? "")}`
       }
     }
-    return [...header, ...body, ...footer].slice(0, Math.max(1, ctx.rows))
-  }
-
-  private makeField(def: FormFieldView, initial: FormInputValue | undefined): FieldState {
-    const f: FieldState = {
-      def,
-      value: "",
-      options: [...(def.options ?? [])],
-      open: false,
-      highlight: 0,
-      top: 0,
-      filter: "",
-    }
-    switch (def.type) {
-      case "text":
-        f.input = new LineInput()
-        break
-      case "secret":
-        // "*" is one cell everywhere; "•" is ambiguous-width and takes two in some CJK setups.
-        f.input = new LineInput({ mask: "*", accept: (g) => !/\s/.test(g) })
-        break
-      case "number":
-        f.input = new LineInput({ accept: (g) => /[0-9.,_-]/.test(g) })
-        break
-      case "textarea":
-        f.editor = new Editor({ placeholder: def.placeholder ?? "" })
-        f.editor.maxRows = def.rows ?? 4
-        break
-      case "select":
-        f.value = typeof initial === "string" ? initial : (f.options[0]?.value ?? "")
-        break
-      case "multiselect":
-        f.value = Array.isArray(initial) ? [...initial] : []
-        break
-      case "checkbox":
-        f.value = initial === true
-        break
-      case "action":
-        f.action = { running: false }
-        break
-    }
-    if (f.input && initial !== undefined) f.input.value = String(initial)
-    if (f.editor && initial !== undefined) f.editor.setText(String(initial))
-    return f
-  }
-
-  private valueOf(f: FieldState): FormInputValue | undefined {
-    switch (f.def.type) {
-      case "text":
-      case "secret":
-        return f.input!.value
-      case "number": {
-        const raw = f.input!.value.trim()
-        if (!raw) return undefined
-        const n = Number(raw.replace(/[_,]/g, ""))
-        return Number.isFinite(n) ? n : raw
-      }
-      case "textarea":
-        return f.editor!.getText()
-      case "multiselect":
-        return [...(f.value as string[])]
-      case "action":
-        return undefined
-      default:
-        return f.value
-    }
+    const output = [...header, ...body, ...footer].slice(0, Math.max(1, ctx.rows))
+    this.mouse.render(width, output.length, hits, footerHits, {
+      y: header.length,
+      rows: bodyRows,
+      width: formWidth,
+      length: lines.length,
+      top: this.top,
+      bodyWidths,
+      preview: sideBySide ? PREVIEW : undefined,
+    })
+    return output
   }
 
   private field(id: string): FieldState | undefined {
@@ -474,7 +493,7 @@ export class Form implements Component {
     const f = this.field(this.focus)
     if (!f) return
     f.open = false
-    if (f.def.type === "multiselect") this.setFilter(f, "")
+    if (f.def.type === "multiselect") setFormFilter(f, "")
     else f.filter = ""
     this.touched.add(f.def.id)
     this.refreshErrors()
@@ -547,7 +566,7 @@ export class Form implements Component {
   }
 
   private selectInput(f: FieldState, e: InputEvent): boolean {
-    const list = this.filtered(f)
+    const list = filteredFormChoices(f)
     if (!f.open) {
       if (matchesKey(e, "enter") || matchesKey(e, "space")) {
         f.open = true
@@ -580,12 +599,12 @@ export class Form implements Component {
       f.open = false
       f.filter = ""
       return false
-    } else if (!this.filterInput(f, e)) return true
+    } else if (!filterFormInput(f, e)) return true
     return true
   }
 
   private checklistInput(f: FieldState, e: InputEvent): boolean {
-    const rows = this.checklistRows(f)
+    const rows = formChecklistRows(f)
     const checked = f.value as string[]
     const toggle = (v: string) => {
       f.value = checked.includes(v) ? checked.filter((x) => x !== v) : [...checked, v]
@@ -612,7 +631,7 @@ export class Form implements Component {
         f.filter = ""
         f.highlight = Math.max(
           0,
-          this.checklistRows(f).findIndex((r) => r.value === typed),
+          formChecklistRows(f).findIndex((r) => r.value === typed),
         )
         return true
       }
@@ -635,7 +654,7 @@ export class Form implements Component {
       return true
     }
     if (matchesKey(e, "escape") && f.filter) {
-      this.setFilter(f, "")
+      setFormFilter(f, "")
       return true
     }
     if (e.type === "paste" && f.def.allowCustom && /[\s,]/.test(e.text.trim())) {
@@ -644,48 +663,7 @@ export class Form implements Component {
       f.value = [...new Set([...checked, ...add])]
       return true
     }
-    return this.filterInput(f, e)
-  }
-
-  /** Typing into a list's filter; false for keys that are not typing. */
-  private filterInput(f: FieldState, e: InputEvent): boolean {
-    if (e.type === "focus" || e.type === "mouse") return false
-    let filter = f.filter
-    if (e.type === "paste") filter += e.text.replace(/\s+/g, "").replace(CONTROL, "")
-    else if (e.name === "backspace" && !e.ctrl && !e.alt) {
-      if (!filter) return false
-      filter = graphemes(filter).slice(0, -1).join("")
-    } else if (e.text && !e.ctrl && !e.alt && e.name !== "space") filter += e.text
-    else return false
-    this.setFilter(f, filter)
-    return true
-  }
-
-  private setFilter(f: FieldState, filter: string): void {
-    const highlighted = f.def.type === "multiselect" ? this.checklistRows(f)[f.highlight]?.value : undefined
-    f.filter = filter
-    const next =
-      highlighted === undefined ? -1 : this.checklistRows(f).findIndex((r) => r.value === highlighted)
-    f.highlight = Math.max(0, next)
-    if (next < 0) f.top = 0
-  }
-
-  private filtered(f: FieldState): FormChoice[] {
-    const q = f.filter.toLowerCase()
-    if (!q) return f.options
-    return f.options.filter((o) => `${o.value} ${o.label ?? ""} ${o.group ?? ""}`.toLowerCase().includes(q))
-  }
-
-  /** A checklist's rows: its options, then checked values that are no options, filtered. */
-  private checklistRows(f: FieldState, filter = f.filter): FormChoice[] {
-    const extra = (f.value as string[])
-      .filter((v) => !f.options.some((o) => o.value === v))
-      .map((value) => ({ value }))
-    const all: FormChoice[] = [...f.options, ...extra]
-    const q = filter.toLowerCase()
-    return q
-      ? all.filter((o) => `${o.value} ${o.label ?? ""} ${o.group ?? ""}`.toLowerCase().includes(q))
-      : all
+    return filterFormInput(f, e)
   }
 
   private body(
@@ -693,11 +671,12 @@ export class Form implements Component {
     ctx: RenderContext,
     values: Record<string, FormInputValue>,
     preview: string[],
-  ): { lines: string[]; spans: Map<string, Span> } {
+  ): { lines: string[]; spans: Map<string, Span>; hits: FormHit[] } {
     const { theme } = ctx
     const chrome = chromeGlyphs(ctx.glyphs)
     const lines: string[] = []
     const spans = new Map<string, Span>()
+    const hits: FormHit[] = []
     const shown = this.shown(values)
     const labelWidth = Math.min(
       24,
@@ -721,6 +700,15 @@ export class Form implements Component {
           const focused = this.focus === id
           const title = truncateToWidth(`${disclosure}${section}`, Math.max(1, width - 4), chrome.more)
           const rule = (ctx.glyphs?.rule ?? "─").repeat(Math.max(0, width - visibleWidth(title) - 3))
+          if (def?.collapsed !== undefined)
+            hits.push({
+              focus: id,
+              kind: "activate",
+              x: 0,
+              y: lines.length,
+              width: Math.min(width, visibleWidth(title) + 2),
+              height: 1,
+            })
           lines.push(
             `${focused ? theme.accent(ctx.color ? bold(pointer(ctx)) : pointer(ctx)) : " "} ${focused ? theme.accent(bold(title)) : bold(title)} ${theme.border(rule)}`,
           )
@@ -742,9 +730,24 @@ export class Form implements Component {
         this.focus === f.def.id,
         this.shownError(f.def.id),
         {
-          filtered: this.filtered(f),
-          checklist: f.def.type === "multiselect" ? this.checklistRows(f) : [],
-          total: f.def.type === "multiselect" ? this.checklistRows(f, "").length : 0,
+          filtered: filteredFormChoices(f),
+          checklist: f.def.type === "multiselect" ? formChecklistRows(f) : [],
+          total: f.def.type === "multiselect" ? formChecklistRows(f, "").length : 0,
+        },
+        (hit) => {
+          hits.push({ ...hit, focus: f.def.id, y: at + hit.y })
+          if (f.editor && hit.kind === "focus" && hit.y >= (stacked ? 1 : 0)) {
+            const edge = width - column >= 3 ? 1 : 0
+            hits.push({
+              focus: f.def.id,
+              kind: "editor",
+              x: column + edge,
+              y: at + hit.y,
+              width: Math.max(1, width - column - edge * 2),
+              height: 1,
+              editorY: hit.y - (stacked ? 1 : 0),
+            })
+          }
         },
       )
       lines.push(...own.lines)
@@ -762,7 +765,17 @@ export class Form implements Component {
         for (const wrapped of wrapText(line, Math.max(1, width - 2)))
           lines.push(INDENT + theme.muted(wrapped))
     }
-    if (preview.length) this.previewLength = lines.length - previewStart - 1
+    if (preview.length) {
+      this.previewLength = lines.length - previewStart - 1
+      hits.push({
+        focus: PREVIEW,
+        kind: "focus",
+        x: 0,
+        y: previewStart + 1,
+        width,
+        height: this.previewLength,
+      })
+    }
     spans.set(PREVIEW, {
       start: previewStart,
       end: lines.length,
@@ -771,25 +784,33 @@ export class Form implements Component {
         : Math.max(0, lines.length - 1),
     })
     spans.set(SUBMIT, { start: previewStart, end: lines.length, active: Math.max(0, lines.length - 1) })
-    return { lines, spans }
+    return { lines, spans, hits }
   }
 
-  private footer(width: number, ctx: RenderContext): string[] {
+  private footer(width: number, ctx: RenderContext, hits: FormHit[]): string[] {
     const { theme } = ctx
     const chrome = chromeGlyphs(ctx.glyphs)
     const out = [theme.border((ctx.glyphs?.rule ?? "─").repeat(width))]
     for (const n of this.opts.notice?.() ?? [])
       out.push(theme.warning(truncateToWidth(n, width, chrome.more)))
     if (this.confirming) {
-      out.push(
-        theme.warning(
-          truncateToWidth(
-            `Discard your changes? y discard ${separator(ctx)} n keep editing`,
-            width,
-            chrome.more,
-          ),
-        ),
-      )
+      const text = `Discard your changes? y discard ${separator(ctx)} n keep editing`
+      const shown = truncateToWidth(text, width, chrome.more)
+      for (const [value, label] of [
+        ["y", "y discard"],
+        ["n", "n keep editing"],
+      ] as const)
+        if (shown.includes(label))
+          hits.push({
+            focus: CANCEL,
+            kind: "confirm",
+            value,
+            x: visibleWidth(text.slice(0, text.indexOf(label))),
+            y: out.length,
+            width: visibleWidth(label),
+            height: 1,
+          })
+      out.push(theme.warning(shown))
       return out
     }
     const bad = this.submitted ? this.order().filter((id) => this.errors[id]).length : 0
@@ -808,6 +829,15 @@ export class Form implements Component {
     const save = button(this.opts.submitLabel ?? "Save", this.focus === SUBMIT, ctx)
     const cancel = button("Cancel", this.focus === CANCEL, ctx)
     const mark = (on: boolean) => (on ? theme.accent(pointer(ctx)) : " ")
+    const saveX = visibleWidth(mark(this.focus === SUBMIT)) + 1
+    const cancelX = saveX + visibleWidth(save) + 2 + visibleWidth(mark(this.focus === CANCEL)) + 1
+    // A clipped button is not actionable, and the gap between the buttons is inert.
+    for (const [focus, x, text] of [
+      [SUBMIT, saveX, save],
+      [CANCEL, cancelX, cancel],
+    ] as const)
+      if (x + visibleWidth(text) <= width)
+        hits.push({ focus, kind: "activate", x, y: out.length, width: visibleWidth(text), height: 1 })
     out.push(
       truncateToWidth(
         `${mark(this.focus === SUBMIT)} ${save}  ${mark(this.focus === CANCEL)} ${cancel}`,

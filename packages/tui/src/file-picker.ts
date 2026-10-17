@@ -1,7 +1,10 @@
 import {
   type Component,
   chromeGlyphs,
+  HitRegions,
   type InputEvent,
+  key,
+  type MouseInput,
   type RenderContext,
   Spinner,
   truncateToWidth,
@@ -258,6 +261,10 @@ const count = (n: number) => n.toLocaleString("en-US")
  * shown as they come.
  */
 export class FilePicker implements Component {
+  #hits = new HitRegions()
+  #mouseRows = new Map<string, number>()
+  #mouseWidth = 0
+  #mouseHeight = 0
   #query: string | undefined
   #listing: FileListing | undefined
   #search: Search | undefined
@@ -289,6 +296,8 @@ export class FilePicker implements Component {
   update(beforeCaret: string): void {
     const query = atReference(beforeCaret)?.query
     if (query === this.#query) return
+    this.#hits.reset()
+    this.#mouseRows.clear()
     this.#query = query
     this.#dismissed = false
     this.#navigated = false
@@ -397,6 +406,7 @@ export class FilePicker implements Component {
   dispose(): void {
     this.#stop()
     this.#off()
+    this.#hits.reset()
   }
 
   /** Whether it takes the list keys: there are matches of the query to choose from. */
@@ -415,6 +425,7 @@ export class FilePicker implements Component {
   /** Handles a key while shown; undefined leaves it to the editor. */
   handleKey(e: InputEvent): FilePickerAction | undefined {
     if (!this.visible) return undefined
+    if (e.type === "mouse") return this.handleMouse(e)
     // The completion lists share their keys: the popup.* actions.
     const keys = this.keys
     if (keys.is(e, "popup.close")) {
@@ -440,7 +451,42 @@ export class FilePicker implements Component {
     return { type: "insert", replace: 1 + (this.#query ?? "").length, text }
   }
 
+  /** Mouse cells are relative to the picker's last render; a second click inserts the path. */
+  handleMouse(e: MouseInput): FilePickerAction | undefined {
+    if (!this.open) return undefined
+    if (e.action === "wheel") {
+      if (
+        (e.button !== "up" && e.button !== "down") ||
+        e.x < 0 ||
+        e.x >= this.#mouseWidth ||
+        e.y < 0 ||
+        e.y >= this.#mouseHeight
+      )
+        return undefined
+      this.#selected = Math.max(
+        0,
+        Math.min(this.#results.length - 1, this.#selected + (e.button === "up" ? -3 : 3)),
+      )
+      this.#navigated = true
+      return { type: "handled" }
+    }
+    const hit = this.#hits.handle(e)
+    const at = hit && this.#mouseRows.get(hit.id)
+    if (hit && at !== undefined && this.#results[at] === hit.id) {
+      this.#selected = at
+      this.#navigated = true
+      return hit.double ? this.handleKey(key("enter")) : { type: "handled" }
+    }
+    return e.x >= 0 && e.x < this.#mouseWidth && e.y >= 0 && e.y < this.#mouseHeight
+      ? { type: "handled" }
+      : undefined
+  }
+
   render(width: number, ctx: RenderContext, maxRows = Number.POSITIVE_INFINITY): string[] {
+    this.#hits.clear()
+    this.#mouseRows.clear()
+    this.#mouseWidth = width
+    this.#mouseHeight = 0
     if (!this.visible || maxRows <= 0) return []
     const t = ctx.theme
     const chrome = chromeGlyphs(ctx.glyphs)
@@ -454,6 +500,12 @@ export class FilePicker implements Component {
           width,
           t,
           maxRows - statusRows,
+          (index, y) => {
+            if (this.#stale) return
+            const id = this.#results[index]!
+            this.#mouseRows.set(id, index)
+            this.#hits.add(id, { x: 0, y, width, height: 1 })
+          },
         )
       : []
     if (statusRows && this.#indexing && listing) {
@@ -465,6 +517,7 @@ export class FilePicker implements Component {
         truncateToWidth(t.muted(`  searched the first ${count(listing.files)} files`), width, chrome.more),
       )
     }
+    this.#mouseHeight = rows.length
     return rows
   }
 }

@@ -1,5 +1,13 @@
 import type { CommandCandidate, CommandInfo } from "@amira/api"
-import { type Component, type InputEvent, type RenderContext, truncateToWidth } from "@amira/tui-kit"
+import {
+  type Component,
+  HitRegions,
+  type InputEvent,
+  key,
+  type MouseInput,
+  type RenderContext,
+  truncateToWidth,
+} from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { pickerRows } from "./picker.ts"
@@ -50,6 +58,10 @@ interface Result {
  * answer is dropped. With the sigil "$" it is the same list for skills.
  */
 export class CommandPopup implements Component {
+  #hits = new HitRegions()
+  #mouseRows = new Map<string, number>()
+  #mouseWidth = 0
+  #mouseHeight = 0
   #text = ""
   #result: Result = { text: "", candidates: [] }
   #selected = 0
@@ -74,6 +86,8 @@ export class CommandPopup implements Component {
    */
   update(text: string): Promise<void> | undefined {
     if (text === this.#text) return this.#pending
+    this.#hits.reset()
+    this.#mouseRows.clear()
     this.#text = text
     this.#dismissed = false
     this.#pending = undefined
@@ -130,6 +144,7 @@ export class CommandPopup implements Component {
   handleKey(e: InputEvent): PopupAction | undefined {
     const r = this.#current
     if (!this.open || !r) return undefined
+    if (e.type === "mouse") return this.handleMouse(e)
     if (this.keys.is(e, "popup.close")) {
       this.#dismissed = true
       return { type: "handled" }
@@ -176,6 +191,37 @@ export class CommandPopup implements Component {
     return { type: "run", line: r.text.trim() }
   }
 
+  /** Mouse cells are relative to the popup's last render, not the terminal screen. */
+  handleMouse(e: MouseInput): PopupAction | undefined {
+    if (!this.open) return undefined
+    if (e.action === "wheel") {
+      if (
+        (e.button !== "up" && e.button !== "down") ||
+        e.x < 0 ||
+        e.x >= this.#mouseWidth ||
+        e.y < 0 ||
+        e.y >= this.#mouseHeight
+      )
+        return undefined
+      this.#selected = Math.max(
+        0,
+        Math.min(this.#shown!.candidates.length - 1, this.#selected + (e.button === "up" ? -3 : 3)),
+      )
+      this.#navigated = true
+      return { type: "handled" }
+    }
+    const hit = this.#hits.handle(e)
+    const at = hit && this.#mouseRows.get(hit.id)
+    if (hit && at !== undefined) {
+      this.#selected = at
+      this.#navigated = true
+      return hit.double ? this.handleKey(key("enter")) : { type: "handled" }
+    }
+    return e.x >= 0 && e.x < this.#mouseWidth && e.y >= 0 && e.y < this.#mouseHeight
+      ? { type: "handled" }
+      : undefined
+  }
+
   /** Whether the list shows candidates to pick from, not how a command is used or that none match. */
   get hasCandidates(): boolean {
     return (this.#shown?.candidates.length ?? 0) > 0
@@ -187,8 +233,13 @@ export class CommandPopup implements Component {
   }
 
   render(width: number, ctx: RenderContext, maxRows = Number.POSITIVE_INFINITY): string[] {
+    this.#hits.clear()
+    this.#mouseRows.clear()
     const r = this.#shown
-    return r && this.visible && maxRows > 0 ? this.#lines(r, ctx, width, maxRows) : []
+    const rows = r && this.visible && maxRows > 0 ? this.#lines(r, ctx, width, maxRows) : []
+    this.#mouseWidth = width
+    this.#mouseHeight = rows.length
+    return rows
   }
 
   /** The result for the text in the editor, if it has arrived. */
@@ -234,6 +285,11 @@ export class CommandPopup implements Component {
     // A bare sigil names nothing yet: no row is marked until one is picked, as Enter does nothing.
     const selected = this.#pickedNothing(r) ? -1 : this.#selected
     if (!theme) return rows.map((row) => row.label)
-    return pickerRows(rows, selected, width, theme, maxRows)
+    return pickerRows(rows, selected, width, theme, maxRows, (index, y) => {
+      if (r !== this.#current) return
+      const id = `${r.command ?? ""}:${r.candidates[index]!.value}`
+      this.#mouseRows.set(id, index)
+      this.#hits.add(id, { x: 0, y, width, height: 1 })
+    })
   }
 }

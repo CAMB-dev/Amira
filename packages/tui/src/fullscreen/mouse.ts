@@ -1,7 +1,6 @@
-import { type MouseInput, modes, osc, type Terminal } from "@amira/tui-kit"
+import { type MouseInput, MULTI_CLICK_MS, modes, osc, type Terminal } from "@amira/tui-kit"
 import type { Block } from "../blocks/base.ts"
-import { keyLabel } from "../keybindings.ts"
-import { mouseLabels } from "../mouse-labels.ts"
+import { mouseLabels, mousePasteHint } from "../mouse-labels.ts"
 import type { TranscriptPane } from "../transcript-pane.ts"
 
 /** Rows one notch of the mouse wheel scrolls. */
@@ -11,8 +10,6 @@ const EDGE_SCROLL_MS = 40
 /** Held at an edge, the drag scrolls a row more per step every this many steps, up to EDGE_SCROLL_MAX rows. */
 const EDGE_SCROLL_RAMP = 10
 const EDGE_SCROLL_MAX = 6
-/** Presses on one cell this close together make a double or triple click. */
-const MULTI_CLICK_MS = 400
 /** Copies longer than this (in UTF-16 units) may be more than a terminal takes through OSC 52. */
 const OSC52_SAFE = 100_000
 
@@ -91,11 +88,10 @@ export function createMouse(deps: MouseDeps) {
       else if (e.button === "down") pane.scrollBy(WHEEL_ROWS)
       return true
     }
-    if (e.action === "press" && (e.button === "right" || e.button === "middle")) {
+    const hint = mousePasteHint(e)
+    if (hint) {
       // The terminal hands every click to the app while it reports the mouse; say how to paste.
-      showNote(
-        `Clicks go to Amira here: ${mouseLabels[e.button]} (or ${keyLabel({ name: "v", ctrl: true })}) pastes, ${mouseLabels.drag} selects natively.`,
-      )
+      showNote(hint)
       return true
     }
     if (e.button !== "left") return true

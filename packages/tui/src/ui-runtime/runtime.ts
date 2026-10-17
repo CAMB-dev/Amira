@@ -3,8 +3,9 @@ import { type InputEvent, isSubmitKey, LineInput, matchesKey, type Theme } from 
 import { terminalText } from "../diff-view.ts"
 import { defaultKeybindings, isTypingKey, type Keybindings, viewScrollAction } from "../keybindings.ts"
 import { cells, inside } from "./layout.ts"
-import { expandable, type TreeIndex } from "./tree.ts"
-import { type Plan, paint, prepare, scrollable, type WidgetHost, widgetId } from "./widgets.ts"
+import { WidgetHits } from "./mouse.ts"
+import { expandable, type TreeIndex, type TreeRow } from "./tree.ts"
+import { inputRoom, type Plan, paint, prepare, scrollable, type WidgetHost, widgetId } from "./widgets.ts"
 
 const map = <T>(): Record<string, T> => Object.create(null)
 const initialState = (): UiState => ({
@@ -25,6 +26,7 @@ export class UiRuntime {
   #defaultExpanded = new Map<string, Set<string>>()
   #explicitExpanded = new Set<string>()
   #widgets: Plan[] = []
+  #hits = new WidgetHits()
   #scrollables: Plan[] = []
   #anonymousScroll = new Map<string, { top: number; following: boolean }>()
   #frame: { node: UiNode; width: number; height: number; host: WidgetHost } | undefined
@@ -72,6 +74,7 @@ export class UiRuntime {
     this.#widgets.length = 0
     this.#scrollables.length = 0
     this.#frame = undefined
+    this.#hits.reset()
   }
 
   dispose(): void {
@@ -85,6 +88,7 @@ export class UiRuntime {
     this.#scrollables.length = 0
     this.#widgets.length = 0
     this.#frame = undefined
+    this.#hits.reset()
   }
 
   render(
@@ -153,6 +157,7 @@ export class UiRuntime {
       if (focused !== this.state.focused) this.reconciled = true
       this.state.focused = focused
     }
+    this.#hits.prepare(plan, host)
     this.#dirty = false
     return plan
   }
@@ -171,7 +176,7 @@ export class UiRuntime {
     return input
   }
 
-  /** Whether the visible frame contains selectable rows or tabs, rather than only reading/input widgets. */
+  /** Whether the visible frame contains selectable rows, tabs or buttons, not just reading/input widgets. */
   get selectable(): boolean {
     if (this.#dirty) this.#prepare()
     return this.#widgets.some((p) =>
@@ -179,7 +184,7 @@ export class UiRuntime {
         ? !!p.tree?.rows.length
         : p.node.type === "table"
           ? p.node.rows.length > 0
-          : p.node.type === "tabs" && p.node.tabs.length > 0,
+          : p.node.type === "button" || (p.node.type === "tabs" && p.node.tabs.length > 0),
     )
   }
 
@@ -210,10 +215,31 @@ export class UiRuntime {
   handleInput(e: InputEvent, scroll = true): boolean {
     if (this.#dirty) this.#prepare()
     if (e.type === "mouse") {
-      if (e.action !== "wheel" || (e.button !== "up" && e.button !== "down")) return false
-      const target = this.#scrollables.findLast((p) => inside(p.rect, e.x, e.y))
-      if (!target) return false
-      this.#scroll(target, e.button === "up" ? -3 : 3)
+      if (e.action === "wheel" && (e.button === "up" || e.button === "down")) {
+        const target = this.#scrollables.findLast((p) => inside(p.rect, e.x, e.y))
+        if (!target) return false
+        this.#scroll(target, e.button === "up" ? -3 : 3)
+        return true
+      }
+      const hit = this.#hits.handle(e)
+      if (!hit) return e.button === "left" && e.action === "press" && this.#hits.contains(e)
+      const { plan, kind, key, index } = hit.target
+      const id = widgetId(plan.node)!
+      this.focus(id)
+      if (kind === "row" || kind === "disclosure") {
+        this.#select(plan, index!)
+        if (kind === "disclosure") this.#toggle(id, plan.tree!.rows[index!]!, !plan.tree!.rows[index!]!.open)
+        else if (hit.double) this.#event({ type: "activate", id, key: key! })
+      } else if (kind === "tab") {
+        this.state.activeTabs[id] = key!
+        this.#event({ type: "tab", id, key: key! })
+      } else if (kind === "input" && plan.node.type === "input") {
+        this.#input(id).placeCursor(
+          Math.max(0, Math.min(hit.x - 2, inputRoom(plan.node, plan.rect.width) - 1)),
+        )
+      } else if (kind === "button" && plan.node.type === "button") {
+        this.#event({ type: "activate", id, key: plan.node.key ?? id })
+      }
       return true
     }
     if (e.type === "key" && e.name === "tab" && !e.ctrl && !e.alt) {
@@ -255,6 +281,10 @@ export class UiRuntime {
       return handled
     }
     if (e.type !== "key" || e.ctrl || e.alt || e.shift) return scroll && this.handleScroll(e)
+    if (node.type === "button" && (e.name === "enter" || e.name === "space" || e.text === " ")) {
+      this.#event({ type: "activate", id, key: node.key ?? id })
+      return true
+    }
     if (node.type === "tabs" && (e.name === "left" || e.name === "right")) {
       const n = node.tabs.length
       if (n) {
@@ -291,16 +321,7 @@ export class UiRuntime {
           if (row.parent >= 0) this.#select(plan, row.parent)
         } else if (expandable(row.item)) {
           const open = e.name === "right"
-          if (open !== row.open) {
-            const seen = this.#defaultExpanded.get(id) ?? new Set<string>()
-            seen.add(row.item.key)
-            this.#defaultExpanded.set(id, seen)
-            const expanded = new Set(this.state.expanded[id])
-            if (open) expanded.add(row.item.key)
-            else expanded.delete(row.item.key)
-            this.state.expanded[id] = [...expanded]
-            this.#event({ type: "toggle", id, key: row.item.key, expanded: open })
-          }
+          if (open !== row.open) this.#toggle(id, row, open)
         }
         return true
       }
@@ -329,7 +350,19 @@ export class UiRuntime {
     } else if (action === "up" || action === "down") {
       this.#scroll(plan, action === "up" ? -1 : 1)
     } else return false
+    this.#dirty = true
     return true
+  }
+
+  #toggle(id: string, row: TreeRow, open: boolean): void {
+    const seen = this.#defaultExpanded.get(id) ?? new Set<string>()
+    seen.add(row.item.key)
+    this.#defaultExpanded.set(id, seen)
+    const expanded = new Set(this.state.expanded[id])
+    if (open) expanded.add(row.item.key)
+    else expanded.delete(row.item.key)
+    this.state.expanded[id] = [...expanded]
+    this.#event({ type: "toggle", id, key: row.item.key, expanded: open })
   }
 
   #select(plan: Plan, index: number): void {
@@ -352,6 +385,7 @@ export class UiRuntime {
     const max = Math.max(0, plan.total - plan.viewport)
     scroll.top = Math.max(0, Math.min(max, scroll.top + by))
     scroll.following = by > 0 && scroll.top === max
+    this.#dirty = true
   }
 
   #event(e: UiEvent): void {

@@ -1,6 +1,6 @@
 // A bounded extension viewport in the bottom area; selectable content can take focus.
 import type { KeyHelp } from "@amira/api"
-import { type InputEvent, type RenderContext, themeToken, visibleWidth } from "@amira/tui-kit"
+import { type InputEvent, type RenderContext, themeToken, translateMouse, visibleWidth } from "@amira/tui-kit"
 import type { ExtensionViewer } from "../extension-view.ts"
 import type { Keybindings } from "../keybindings.ts"
 
@@ -34,6 +34,7 @@ export class DockedView {
   private height = 0
   private width = 0
   private top = 0
+  private pointerFocused = false
 
   constructor(
     readonly viewer: ExtensionViewer,
@@ -69,7 +70,7 @@ export class DockedView {
   }
 
   get focusable(): boolean {
-    return this.height > 0 && this.viewer.selectable
+    return this.height > 0 && (this.viewer.selectable || (this.pointerFocused && this.viewer.focused))
   }
 
   /** The fitting pass temporarily gives docks zero rows; check only the final allocation. */
@@ -94,11 +95,20 @@ export class DockedView {
   handleInput(e: InputEvent): boolean {
     if (!this.height) return false
     if (e.type === "mouse") {
-      if (!this.contains(e)) return false
-      if (this.viewer.focused) this.viewer.handleInput({ ...e, y: e.y - this.top })
+      const local = translateMouse(e, 0, this.top)
+      if (!this.contains(e)) {
+        if (e.button === "left" && e.action !== "wheel") this.viewer.handleDockInput(local)
+        return false
+      }
+      if (this.viewer.focused) this.viewer.handleInput(local)
       else {
-        if (e.action !== "wheel") return false
-        this.viewer.handleDockInput({ ...e, y: e.y - this.top })
+        const handled = this.viewer.handleDockInput(local)
+        if (handled && e.button === "left" && e.action === "release") {
+          // Inputs and reading widgets can take pointer focus without changing initial Tab routing.
+          this.pointerFocused = true
+          this.viewer.focused = true
+        }
+        if (e.action !== "wheel") return handled
       }
       return true
     }
