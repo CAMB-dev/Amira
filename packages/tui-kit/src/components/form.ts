@@ -1,15 +1,11 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
-import { type InputEvent, isSubmitKey, key, keyLabel, type MouseInput, matchesKey } from "../keys.ts"
+import { type InputEvent, isSubmitKey, key, type MouseInput, matchesKey } from "../keys.ts"
 import { bold } from "../style.ts"
 import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
-import {
-  formButton as button,
-  type FormFieldState as FieldState,
-  renderFormField,
-  formToneStyle as toneStyle,
-} from "./form-field.ts"
-import { wrapFormHint } from "./form-hint.ts"
+import { drawFormCard } from "./form-card.ts"
+import { type FormFieldState as FieldState, renderFormField } from "./form-field.ts"
+import { CANCEL, PREVIEW, renderFormFooter, SUBMIT } from "./form-footer.ts"
 import { type FormHit, FormMouse } from "./form-mouse.ts"
 import {
   filteredFormChoices,
@@ -59,12 +55,18 @@ export interface FormFieldView {
   allowCustom?: boolean
   /** Rows a textarea shows. Default 4. */
   rows?: number
+  /** Actions placed with Save and Cancel instead of in the body. */
+  placement?: "footer"
+  /** Short action label, e.g. in the footer. */
+  buttonLabel?: string
 }
 
 export type FormStatusTone = "info" | "success" | "warning" | "error"
 
 export interface FormOptions {
   title: string
+  /** Centred bordered grid on roomy terminals; plain layout on small terminals. */
+  layout?: "card"
   description?: string
   fields: FormFieldView[]
   sections?: { title: string; help?: string; collapsed?: boolean }[]
@@ -101,16 +103,13 @@ interface Span {
   active: number
 }
 
-const SUBMIT = "\0submit"
-const CANCEL = "\0cancel"
-const PREVIEW = "\0preview"
 const INDENT = "  "
 const pointer = (ctx: RenderContext) => ctx.glyphs?.pointer ?? defaultGlyphs.pointer ?? "›"
 const separator = (ctx: RenderContext) => ctx.glyphs?.separator ?? defaultGlyphs.separator ?? "·"
 
 /**
- * A full-screen form: a title, a scrolling body of fields and buttons, and a footer with
- * Save and Cancel. Tab/Shift+Tab or ↓/↑ move between fields; typing edits the focused text
+ * A full-screen form, optionally presented as a centred card: a title, a scrolling body of
+ * fields and a footer with actions, Save and Cancel. Tab/Shift+Tab or ↓/↑ move between fields; typing edits the focused text
  * field and Enter moves on; Enter or Space opens a select, toggles a checkbox or a checklist
  * row, and presses a button; Ctrl+S saves from anywhere. Esc first closes what the field has
  * open (a select's list, a checklist filter, a running action), and otherwise cancels the
@@ -143,6 +142,11 @@ export class Form implements Component {
     this.fields = opts.fields.map((def) => makeFormField(def, values[def.id]))
     this.initial = JSON.stringify(this.values)
     this.focus = this.order()[0] ?? SUBMIT
+  }
+
+  /** Whether this form opts into the card presentation (small terminals still render plain). */
+  get cardLayout(): boolean {
+    return this.opts.layout === "card"
   }
 
   /** Every field's value; an empty number is left out and one that does not parse stays text. */
@@ -317,7 +321,7 @@ export class Form implements Component {
           this.mouseScrolling = false
         }
       } else if (
-        e.x >= 0 &&
+        e.x >= (this.mouse.viewport.x ?? 0) &&
         e.x < this.mouse.viewport.width &&
         e.y >= this.mouse.viewport.y &&
         e.y < this.mouse.viewport.y + this.mouse.viewport.rows
@@ -364,6 +368,7 @@ export class Form implements Component {
       const from = this.fields.findIndex((f) => f.def.id === this.focus)
       this.focus = this.fields.slice(from + 1).find((f) => order.includes(f.def.id))?.def.id ?? SUBMIT
     }
+    if (this.cardLayout && width >= 60 && ctx.rows >= 20) return this.renderCard(width, ctx, values, preview)
     const inner = Math.max(1, width - INDENT.length)
     let header = [
       truncateToWidth(
@@ -454,6 +459,53 @@ export class Form implements Component {
     return output
   }
 
+  private renderCard(
+    width: number,
+    ctx: RenderContext,
+    values: Record<string, FormInputValue>,
+    preview: string[],
+  ): string[] {
+    const cardWidth = Math.min(width - 8, 88)
+    const inner = cardWidth - 2
+    const footerHits: FormHit[] = []
+    const footer = this.footer(inner, ctx, footerHits, 2)
+    const { lines, spans, hits } = this.body(inner, ctx, values, preview, true)
+    const height = Math.min(Math.max(1, lines.length) + footer.length + 2, ctx.rows - 4)
+    const bodyRows = Math.max(1, height - footer.length - 2)
+    this.previewRows = Math.max(1, bodyRows - 2)
+    const span = this.mouseScrolling ? undefined : spans.get(this.focus)
+    if (span && this.focus === PREVIEW) this.top = span.start + this.previewTop
+    else if (span && span.end - span.start <= bodyRows) {
+      if (span.start < this.top) this.top = span.start
+      else if (span.end > this.top + bodyRows) this.top = span.end - bodyRows
+    } else if (span) {
+      this.top = Math.max(span.active - bodyRows + 1, Math.min(span.start, span.active))
+    }
+    this.top = Math.max(0, Math.min(this.top, lines.length - bodyRows))
+    const body = lines.slice(this.top, this.top + bodyRows)
+    while (body.length < bodyRows) body.push("")
+    const { output, left, y } = drawFormCard(
+      width,
+      ctx,
+      this.opts.title,
+      body,
+      footer,
+      this.top,
+      lines.length,
+    )
+    const offset = (hit: FormHit): FormHit => ({ ...hit, x: hit.x + left + 1 })
+    this.mouse.render(width, output.length, hits.map(offset), footerHits.map(offset), {
+      x: left + 1,
+      y: y + 1,
+      rows: bodyRows,
+      width: left + cardWidth - 1,
+      length: lines.length,
+      top: this.top,
+      bodyWidths: body.map(() => left + cardWidth - 1),
+    })
+    return output
+  }
+
   private field(id: string): FieldState | undefined {
     return this.fields.find((f) => f.def.id === id)
   }
@@ -468,6 +520,7 @@ export class Form implements Component {
     const order: string[] = []
     let previous: string | undefined
     for (const f of this.shown(values)) {
+      if (f.def.type === "action" && f.def.placement === "footer") continue
       const section = f.def.section
       if (
         section !== previous &&
@@ -477,7 +530,17 @@ export class Form implements Component {
       previous = section
       if (!section || !this.collapsed.has(section)) order.push(f.def.id)
     }
-    return [...order, ...(this.hasPreview ? [PREVIEW] : []), SUBMIT, CANCEL]
+    return [
+      ...order,
+      ...(this.hasPreview ? [PREVIEW] : []),
+      ...this.footerActions(values).map((f) => f.def.id),
+      SUBMIT,
+      CANCEL,
+    ]
+  }
+
+  private footerActions(values = this.values): FieldState[] {
+    return this.shown(values).filter((f) => f.def.type === "action" && f.def.placement === "footer")
   }
 
   private move(step: number): void {
@@ -671,26 +734,40 @@ export class Form implements Component {
     ctx: RenderContext,
     values: Record<string, FormInputValue>,
     preview: string[],
+    card = false,
   ): { lines: string[]; spans: Map<string, Span>; hits: FormHit[] } {
     const { theme } = ctx
     const chrome = chromeGlyphs(ctx.glyphs)
     const lines: string[] = []
     const spans = new Map<string, Span>()
     const hits: FormHit[] = []
-    const shown = this.shown(values)
+    const shown = this.shown(values).filter((f) => f.def.type !== "action" || f.def.placement !== "footer")
+    if (card && this.opts.description)
+      for (const line of wrapText(this.opts.description, width - 4)) lines.push(INDENT + theme.muted(line))
     const labelWidth = Math.min(
       24,
       Math.max(0, ...shown.map((f) => visibleWidth(f.def.label) + (f.def.required ? 2 : 0))),
     )
-    const stacked = width - labelWidth - 6 < 20
-    const column = stacked ? Math.min(2, Math.max(0, width - 3)) : labelWidth + 4
+    const stacked = !card && width - labelWidth - 6 < 20
+    const column = stacked ? Math.min(2, Math.max(0, width - 3)) : labelWidth + (card ? 5 : 4)
+    const rowRule = () =>
+      theme.border(
+        (ctx.glyphs?.rule ?? defaultGlyphs.rule).repeat(card ? column - 2 : width) +
+          (card
+            ? (ctx.glyphs?.tableCross ?? defaultGlyphs.tableCross) +
+              (ctx.glyphs?.rule ?? defaultGlyphs.rule).repeat(width - column + 1)
+            : ""),
+      )
     let section: string | undefined
     for (const f of shown) {
+      if (card && f.def.section === section && (!section || !this.collapsed.has(section)) && lines.length)
+        lines.push(rowRule())
       const start = lines.length
       if (f.def.section !== section) {
         section = f.def.section
         if (section) {
-          if (lines.length) lines.push("")
+          if (lines.length)
+            lines.push(card ? theme.border((ctx.glyphs?.rule ?? defaultGlyphs.rule).repeat(width)) : "")
           const def = this.opts.sections?.find((s) => s.title === section)
           const id = sectionId(section)
           const disclosure =
@@ -715,7 +792,7 @@ export class Form implements Component {
           if (!this.collapsed.has(section) && def?.help)
             for (const line of wrapText(def.help, Math.max(1, width - 2)))
               lines.push(INDENT + theme.muted(line))
-          lines.push("")
+          if (!card) lines.push("")
           spans.set(id, { start, end: lines.length, active: start + (start ? 1 : 0) })
         }
       }
@@ -749,6 +826,7 @@ export class Form implements Component {
             })
           }
         },
+        card,
       )
       lines.push(...own.lines)
       spans.set(f.def.id, { start, end: lines.length, active: at + own.active })
@@ -756,7 +834,7 @@ export class Form implements Component {
     const previewStart = lines.length
     if (preview.length) {
       lines.push(
-        "",
+        card ? theme.border((ctx.glyphs?.rule ?? defaultGlyphs.rule).repeat(width)) : "",
         this.focus === PREVIEW
           ? `${theme.accent(pointer(ctx))} ${theme.accent(bold("Preview"))}`
           : INDENT + bold("Preview"),
@@ -783,111 +861,23 @@ export class Form implements Component {
         ? previewStart + 1 + Math.min(this.previewTop, Math.max(0, this.previewLength - 1))
         : Math.max(0, lines.length - 1),
     })
-    spans.set(SUBMIT, { start: previewStart, end: lines.length, active: Math.max(0, lines.length - 1) })
+    if (!card)
+      spans.set(SUBMIT, { start: previewStart, end: lines.length, active: Math.max(0, lines.length - 1) })
     return { lines, spans, hits }
   }
 
-  private footer(width: number, ctx: RenderContext, hits: FormHit[]): string[] {
-    const { theme } = ctx
-    const chrome = chromeGlyphs(ctx.glyphs)
-    const out = [theme.border((ctx.glyphs?.rule ?? "─").repeat(width))]
-    for (const n of this.opts.notice?.() ?? [])
-      out.push(theme.warning(truncateToWidth(n, width, chrome.more)))
-    if (this.confirming) {
-      const text = `Discard your changes? y discard ${separator(ctx)} n keep editing`
-      const shown = truncateToWidth(text, width, chrome.more)
-      for (const [value, label] of [
-        ["y", "y discard"],
-        ["n", "n keep editing"],
-      ] as const)
-        if (shown.includes(label))
-          hits.push({
-            focus: CANCEL,
-            kind: "confirm",
-            value,
-            x: visibleWidth(text.slice(0, text.indexOf(label))),
-            y: out.length,
-            width: visibleWidth(label),
-            height: 1,
-          })
-      out.push(theme.warning(shown))
-      return out
-    }
-    const bad = this.submitted ? this.order().filter((id) => this.errors[id]).length : 0
-    if (bad)
-      out.push(
-        theme.error(
-          truncateToWidth(
-            `Fix ${bad === 1 ? "1 field" : `${bad} fields`} before saving.`,
-            width,
-            chrome.more,
-          ),
-        ),
-      )
-    if (this.status)
-      out.push(toneStyle(theme, this.status.tone)(truncateToWidth(this.status.text, width, chrome.more)))
-    const save = button(this.opts.submitLabel ?? "Save", this.focus === SUBMIT, ctx)
-    const cancel = button("Cancel", this.focus === CANCEL, ctx)
-    const mark = (on: boolean) => (on ? theme.accent(pointer(ctx)) : " ")
-    const saveX = visibleWidth(mark(this.focus === SUBMIT)) + 1
-    const cancelX = saveX + visibleWidth(save) + 2 + visibleWidth(mark(this.focus === CANCEL)) + 1
-    // A clipped button is not actionable, and the gap between the buttons is inert.
-    for (const [focus, x, text] of [
-      [SUBMIT, saveX, save],
-      [CANCEL, cancelX, cancel],
-    ] as const)
-      if (x + visibleWidth(text) <= width)
-        hits.push({ focus, kind: "activate", x, y: out.length, width: visibleWidth(text), height: 1 })
-    out.push(
-      truncateToWidth(
-        `${mark(this.focus === SUBMIT)} ${save}  ${mark(this.focus === CANCEL)} ${cancel}`,
-        width,
-      ),
-    )
-    const hint = this.hint(ctx)
-    if (this.field(this.focus)?.def.type === "multiselect" && width >= 40 && ctx.rows >= 10) {
-      for (const line of wrapFormHint(hint, width, ` ${separator(ctx)} `)) out.push(theme.muted(line))
-    } else out.push(theme.muted(truncateToWidth(hint, width, chrome.more)))
-    return out
-  }
-
-  private hint(ctx: RenderContext): string {
-    const sep = separator(ctx)
-    const f = this.field(this.focus)
-    const enter = keyLabel({ name: "enter" })
-    const esc = keyLabel({ name: "escape" })
-    const tab = keyLabel({ name: "tab" })
-    const space = keyLabel({ name: "space" })
-    const save = keyLabel({ name: "s", ctrl: true })
-    const arrows = chromeGlyphs(ctx.glyphs)
-    const pair = (a: string, b: string) => a + (a.length > 1 || b.length > 1 ? "/" : "") + b
-    const vertical = pair(arrows.arrowUp, arrows.arrowDown)
-    const horizontal = pair(arrows.arrowLeft, arrows.arrowRight)
-    const common = `${tab}/${vertical} move ${sep} ${save} save ${sep} ${esc} cancel`
-    if (this.focus === PREVIEW)
-      return `${vertical}/PgUp/PgDn scroll preview ${sep} ${tab} move ${sep} ${save} save ${sep} ${esc} cancel`
-    if (!f)
-      return this.focus.startsWith("\0section:")
-        ? `${enter}/${space} expand or collapse ${sep} ${horizontal} open/close ${sep} ${common}`
-        : `${enter} press ${sep} ${common}`
-    switch (f.def.type) {
-      case "select":
-        return f.open
-          ? `${vertical} pick ${sep} type to filter ${sep} ${enter} choose ${sep} ${esc} close`
-          : `${enter} list ${sep} ${horizontal} change ${sep} ${common}`
-      case "multiselect":
-        return `${space} toggle ${sep} type to filter${f.def.allowCustom ? " or add" : ""} ${sep} ${keyLabel({ name: "a", ctrl: true })} all/none filtered options ${sep} ${keyLabel({ name: "x", ctrl: true })} invert filtered options ${sep} ${common}`
-      case "checkbox":
-        return `${space} toggle ${sep} ${common}`
-      case "textarea":
-        return `${keyLabel({ name: "enter", shift: true })} newline ${sep} ${enter} next ${sep} ${common}`
-      case "action":
-        return f.action?.running
-          ? `${esc} stop ${sep} ${tab}/${vertical} move ${sep} ${save} save`
-          : `${enter} run ${sep} ${common}`
-      default:
-        return `${enter} next ${sep} ${common}`
-    }
+  private footer(width: number, ctx: RenderContext, hits: FormHit[], hintInset = 0): string[] {
+    return renderFormFooter(width, ctx, hits, {
+      focus: this.focus,
+      field: this.field(this.focus),
+      confirming: this.confirming,
+      bad: this.submitted ? this.order().filter((id) => this.errors[id]).length : 0,
+      status: this.status,
+      actions: this.footerActions(),
+      submitLabel: this.opts.submitLabel,
+      notice: this.opts.notice?.() ?? [],
+      hintInset,
+    })
   }
 }
 

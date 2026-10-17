@@ -1,5 +1,6 @@
-import { type MouseInput, translateMouse } from "@amira/tui-kit"
-import { contentMouse } from "../margins.ts"
+import type { TuiSettings } from "@amira/api"
+import { type MouseInput, type Terminal, translateMouse } from "@amira/tui-kit"
+import { contentGeometry, contentMouse } from "../margins.ts"
 import { mousePasteHint } from "../mouse-labels.ts"
 import type { BottomArea } from "./bottom-area.ts"
 import type { Composer } from "./composer.ts"
@@ -10,6 +11,16 @@ export function activePointerHint(note: { text: string; until: number } | undefi
   return note && Date.now() < note.until && note.text.startsWith("Clicks go to Amira here:")
     ? note.text
     : undefined
+}
+
+/** Match the card's terminal-sized render surface; other overlays stay content-relative. */
+export function pointerGeometry(
+  terminal: Pick<Terminal, "columns" | "rows">,
+  settings: TuiSettings,
+  overlays: Pick<OverlayManager, "overlayCard">,
+) {
+  const card = overlays.overlayCard(terminal.columns, { rows: terminal.rows })
+  return contentGeometry(terminal.columns, terminal.rows, card ? { margin: 0, marginRows: 0 } : settings)
 }
 
 /** Route pointer ownership before the transcript can start a selection. */

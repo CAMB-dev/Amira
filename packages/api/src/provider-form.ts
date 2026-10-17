@@ -6,6 +6,7 @@ import {
   type FormValues,
   formDefaults,
 } from "./form.ts"
+import { maskedEntry } from "./internal/provider-form-preview.ts"
 import type {
   ProviderAdmin,
   ProviderDraft,
@@ -127,33 +128,6 @@ function compatValues(values: FormValues, base?: ProviderSettings["compat"]): Pr
       Object.assign(compat, { [option.key]: value === "true" ? true : value === "false" ? false : value })
   }
   return compat
-}
-
-function maskedEntry(entry: ProviderSettings): ProviderSettings {
-  const copy: ProviderSettings = JSON.parse(
-    JSON.stringify(entry, (key, value) => (key === "apiKey" ? "••••" : value)),
-  )
-  if (copy.headers)
-    copy.headers = Object.fromEntries(
-      Object.entries(copy.headers).map(([name, value]) => [
-        name,
-        /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value) ? value : "••••",
-      ]),
-    )
-  if (copy.baseUrl) {
-    try {
-      const url = new URL(copy.baseUrl)
-      const sensitive = !!(url.username || url.password || url.search || url.hash)
-      if (url.username) url.username = "REDACTED"
-      if (url.password) url.password = "REDACTED"
-      for (const key of new Set(url.searchParams.keys())) url.searchParams.set(key, "REDACTED")
-      if (url.hash) url.hash = "REDACTED"
-      if (sensitive) copy.baseUrl = url.toString()
-    } catch {
-      copy.baseUrl = "(invalid URL)"
-    }
-  }
-  return copy
 }
 
 /** "128k", "1M". */
@@ -459,7 +433,8 @@ export function providerFormSpec(
     }
   }
   const spec: FormSpec = {
-    title: editing ? `Edit provider ${existing.id}` : "Add a provider",
+    title: editing ? `Edit provider · ${existing.id}` : "Add provider",
+    layout: "card",
     description: editing
       ? "Changes go to your settings.json; a new key goes to ~/.amira/auth.json."
       : "Saved to your settings.json; a key goes to ~/.amira/auth.json, which only you can read.",
@@ -750,7 +725,15 @@ export function providerFormSpec(
         section: "Check",
         help: "Save tests the first selected model with a tiny request (at most 16 output tokens). Permission is needed only for paid or unknown prices; known-free models need none.",
       },
-      { type: "action", id: "testConnection", label: "Test connection", section: "Check", run: runTest },
+      {
+        type: "action",
+        id: "testConnection",
+        label: "Test connection",
+        buttonLabel: "Test",
+        placement: "footer",
+        section: "Check",
+        run: runTest,
+      },
       {
         type: "checkbox",
         id: "saveAnyway",

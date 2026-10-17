@@ -1,5 +1,6 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
 import {
+  CURSOR_MARKER,
   closeStyles,
   FullScreenRenderer,
   isColorEnabled,
@@ -39,6 +40,7 @@ import { CONTENT_INSET, contentRoom } from "./grid.ts"
 import { sessionBoundary } from "./history.ts"
 import { contentGeometry, insetLines, marginView } from "./margins.ts"
 import { stickyPromptOverlay } from "./pane/sticky-prompt.ts"
+import { cellsOf } from "./text-selection.ts"
 import { OUTPUT_LINES } from "./tool-view.ts"
 import { commandOutputLines, type NoticeLevel, noticeLines } from "./transcript.ts"
 import { TranscriptPane } from "./transcript-pane.ts"
@@ -48,6 +50,19 @@ import { activationBoundary, type TranscriptView, View, type ViewHost } from "./
 const FRAME_MS = 16
 /** Rows the transcript keeps when a dialog wants the screen. */
 const MIN_TRANSCRIPT_ROWS = 3
+
+/** A backdrop slice in terminal cells; a wide grapheme cut by the card becomes blank cells. */
+function backdropSlice(line: string, from: number, to: number): string {
+  let out = ""
+  let used = 0
+  for (const cell of cellsOf(stripAnsi(line))) {
+    const overlap = Math.min(to, cell.col + cell.width) - Math.max(from, cell.col)
+    if (cell.escape || overlap <= 0) continue
+    out += overlap === cell.width && cell.text !== "\t" ? cell.text : " ".repeat(overlap)
+    used += overlap
+  }
+  return out + " ".repeat(Math.max(0, to - from - used))
+}
 
 /**
  * The full-screen view (D84): the conversation is kept as blocks on the alternate screen and
@@ -169,8 +184,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     markToolTrees()
   }
 
-  const root = new View((width, ctx) => {
-    // Covered by a full-screen overlay, the transcript's images are not placed: they are cleared.
+  const content = new View((width, ctx) => {
+    // Covered by an overlay, the transcript is not rendered and its images are not placed.
     if (overlay) return host.overlay.render(width, ctx)
     const header = host.header?.(width, ctx) ?? []
     // The header gap stays fixed; sticky bands overlay the constant-height transcript.
@@ -216,7 +231,34 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
         )
     return [...header, ...rows, below, ...bar, ...bottom]
   })
-  const renderer = new FullScreenRenderer(terminal, marginView(root, host.settings), {
+  const margined = marginView(content, host.settings)
+  // Cache the terminal frame after transcript margins; only cards bypass those margins.
+  // Streaming and overlay redraws cannot move the frozen backdrop.
+  let backdrop: string[] = []
+  const root = new View((width, ctx) => {
+    if (!overlay) {
+      const frame = margined.render(width, ctx)
+      backdrop = frame.map((line) => line.replaceAll(CURSOR_MARKER, ""))
+      return frame
+    }
+    if (!host.overlayCard?.(width, ctx) || width < 60 || ctx.rows < 20) return margined.render(width, ctx)
+    const rows = host.overlay.render(width, ctx)
+    const cardWidth = Math.min(width - 8, 88)
+    const left = Math.floor((width - cardWidth) / 2)
+    const right = left + cardWidth
+    return Array.from({ length: ctx.rows }, (_, i) => {
+      const behind = backdrop[i] ?? ""
+      const row = rows[i]
+      if (!row) return theme.dim(backdropSlice(behind, 0, width))
+      // Form indents nonempty card rows with spaces; its interior is already padded to cardWidth.
+      return (
+        theme.dim(backdropSlice(behind, 0, left)) +
+        row.slice(left) +
+        theme.dim(backdropSlice(behind, right, width))
+      )
+    })
+  })
+  const renderer = new FullScreenRenderer(terminal, root, {
     synchronizedOutput: host.capabilities.synchronizedOutput,
     theme,
     glyphs: host.glyphs,

@@ -84,6 +84,39 @@ describe("schema and values", () => {
     expect(action.auto.watch).toEqual(["auth", "key", "env"])
   })
 
+  test("card layout and footer action labels survive schema serialization without changing action ids", () => {
+    const form: FormSpec = {
+      title: "Server",
+      layout: "card",
+      fields: [
+        {
+          type: "action",
+          id: "testConnection",
+          label: "Test connection",
+          placement: "footer",
+          buttonLabel: "Test",
+          run: async () => undefined,
+        },
+      ],
+    }
+    const schema = toFormSchema(form)
+    expect(JSON.parse(JSON.stringify(schema))).toEqual({
+      title: "Server",
+      layout: "card",
+      fields: [
+        {
+          type: "action",
+          id: "testConnection",
+          label: "Test connection",
+          placement: "footer",
+          buttonLabel: "Test",
+        },
+      ],
+    })
+    expect(toFormSchema(spec())).not.toHaveProperty("layout")
+    expect(toFormSchema(spec()).fields.find((field) => field.id === "fetch")).not.toHaveProperty("placement")
+  })
+
   test("automatic readiness sees sanitized partial values without running actions or validators", () => {
     let effects = 0
     const received: FormValues[] = []
@@ -282,6 +315,32 @@ describe("runFormDialogs", () => {
     expect(await runFormDialogs(form, ui)).toEqual({})
     expect(asked).toEqual(["Fetch? [Yes|No]", "t: Save? [Save|Cancel]"])
     expect(runs).toBe(0)
+  })
+
+  test("card footer actions keep their full labels and field order in dialogs", async () => {
+    const runs: string[] = []
+    const form: FormSpec = {
+      title: "Server",
+      layout: "card",
+      fields: [
+        {
+          type: "action",
+          id: "testConnection",
+          label: "Test connection",
+          placement: "footer",
+          buttonLabel: "Test",
+          run: async () => {
+            runs.push("testConnection")
+            return undefined
+          },
+        },
+        { type: "text", id: "name", label: "Name" },
+      ],
+    }
+    const { ui, asked } = scripted(["Yes", "demo", "Save"])
+    expect(await runFormDialogs(form, ui)).toEqual({ name: "demo" })
+    expect(asked).toEqual(["Test connection? [No|Yes]", "Server · Name", "Server: Save? [Save|Cancel]"])
+    expect(runs).toEqual(["testConnection"])
   })
 
   test("asks each shown field, runs a chosen action and ends with Save", async () => {

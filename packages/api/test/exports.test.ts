@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import type {
+  ActionField,
   AgentStatusSource,
   BackgroundJobChange,
   BackgroundJobInfo,
@@ -10,6 +11,9 @@ import type {
   EventMap,
   ExtensionAPI,
   ExtensionView,
+  FormFieldSchema,
+  FormSchema,
+  FormSpec,
   ModelSettings,
   OwnedConversation,
   OwnedConversations,
@@ -89,6 +93,34 @@ test("declarative buttons reuse the existing activation event without a version 
   expect(event).toEqual({ type: "activate", id: "run", key: "execute" })
   expect(fallback.key ?? fallback.id).toBe("close")
   expect((await import("../src/index.ts")).API_VERSION).toBe("0.1.58")
+})
+
+test("card forms and footer action labels are additive public contracts without a version bump", async () => {
+  const api = await import("../src/index.ts")
+  const action: ActionField = {
+    type: "action",
+    id: "testConnection",
+    label: "Test connection",
+    placement: "footer",
+    buttonLabel: "Test",
+    run: async () => undefined,
+  }
+  const spec: FormSpec = { title: "Provider", layout: "card", fields: [action] }
+  const schema: FormSchema = api.toFormSchema(spec)
+  const field: FormFieldSchema = schema.fields[0]!
+  expect({ version: api.API_VERSION, layout: schema.layout, field }).toMatchInlineSnapshot(`
+    {
+      "field": {
+        "buttonLabel": "Test",
+        "id": "testConnection",
+        "label": "Test connection",
+        "placement": "footer",
+        "type": "action",
+      },
+      "layout": "card",
+      "version": "0.1.58",
+    }
+  `)
 })
 
 test("the public API exports stay stable", async () => {

@@ -47,14 +47,20 @@ export function renderFormField(
   error: string | undefined,
   lists: { filtered: FormChoice[]; checklist: FormChoice[]; total: number },
   onHit?: (hit: FormFieldHit) => void,
+  card = false,
 ): { lines: string[]; active: number } {
   const { theme } = ctx
   const chrome = chromeGlyphs(ctx.glyphs)
   const mark = focused ? theme.accent(ctx.color ? bold(pointer(ctx)) : pointer(ctx)) : " "
-  const labelWidth = stacked ? Math.max(1, width - 2) : column - 4
+  const labelWidth = stacked ? Math.max(1, width - 2) : column - (card ? 5 : 4)
   const name = truncateToWidth(f.def.label + (f.def.required ? " *" : ""), labelWidth, chrome.more)
-  const label = `${mark} ${" ".repeat(stacked ? 0 : Math.max(0, labelWidth - visibleWidth(name)))}${focused ? theme.accent(name) : name}`
-  const indent = " ".repeat(column)
+  const padding = " ".repeat(stacked ? 0 : Math.max(0, labelWidth - visibleWidth(name)))
+  const label = card
+    ? `${mark} ${focused ? theme.accent(name) : name}${padding} ${theme.border(ctx.glyphs?.tableColumn ?? defaultGlyphs.tableColumn)}`
+    : `${mark} ${padding}${focused ? theme.accent(name) : name}`
+  const indent = card
+    ? `${" ".repeat(column - 2)}${theme.border(ctx.glyphs?.tableColumn ?? defaultGlyphs.tableColumn)} `
+    : " ".repeat(column)
   const room = Math.max(1, width - column)
   const edge = room >= 3 ? 2 : 0
   const contentRoom = Math.max(1, room - edge)
@@ -72,29 +78,39 @@ export function renderFormField(
       out.push(label)
       active = out.length
       out.push(indent + text)
-    } else out.push(`${label}  ${text}`)
+    } else out.push(`${label}${card ? " " : "  "}${text}`)
     const kind = ["select", "checkbox", "action"].includes(f.def.type) ? "activate" : "focus"
     for (const [y, line] of out.entries())
       onHit?.({ kind, x: 0, y, width: Math.min(width, visibleWidth(line)), height: 1 })
   }
   const list = (rows: FormChoice[], on: (o: FormChoice) => boolean, boxes: boolean) => {
-    const x = Math.max(0, column - 2)
+    const x = Math.max(0, card ? column : column - 2)
     const y = out.length
     const options: FormFieldHit[] = []
-    const lines = renderFormList(f, rows, room + 2, ctx, on, boxes, "", (index, row, left, size) => {
-      options.push({
-        kind: "option",
-        index,
-        value: rows[index]?.value,
-        x: x + left,
-        y: y + row,
-        width: size,
-        height: 1,
-      })
-    })
+    const lines = renderFormList(
+      f,
+      rows,
+      room + (card ? 0 : 2),
+      ctx,
+      on,
+      boxes,
+      "",
+      (index, row, left, size) => {
+        options.push({
+          kind: "option",
+          index,
+          value: rows[index]?.value,
+          x: x + left,
+          y: y + row,
+          width: size,
+          height: 1,
+        })
+      },
+    )
     onHit?.({ kind: "list", x, y, width: width - x, height: lines.length })
     for (const hit of options) onHit?.(hit)
-    return lines.map((line) => " ".repeat(x) + line)
+    const prefix = card ? indent : " ".repeat(x)
+    return lines.map((line) => prefix + line)
   }
   const hint = (text: string, style = theme.muted) => {
     for (const line of wrapText(text, contentRoom)) out.push(`${indent} ${style(line)}`)
@@ -115,7 +131,7 @@ export function renderFormField(
       )
       onHit?.({
         kind: "input",
-        x: (stacked ? column : visibleWidth(label) + 2) + (edge ? 1 : 0),
+        x: (stacked ? column : visibleWidth(label) + (card ? 1 : 2)) + (edge ? 1 : 0),
         y: stacked ? 1 : 0,
         width: contentRoom,
         height: 1,
@@ -198,7 +214,7 @@ export function renderFormField(
       break
     case "action": {
       const action = f.action ?? { running: false }
-      first(formButton(f.def.label, focused, ctx))
+      first(formButton(f.def.buttonLabel ?? f.def.label, focused, ctx))
       if (action.running)
         hint(
           `${chrome.more} ${action.text ?? "working"} ${separator(ctx)} ${keyLabel({ name: "escape" })} stops it`,
@@ -211,9 +227,12 @@ export function renderFormField(
   if (error) hint(`${chrome.error} ${error}`, theme.error)
   return {
     lines: out.map((line) => {
-      const clipped = truncateToWidth(line, width)
-      if (!line.includes(CURSOR_MARKER) || clipped.includes(CURSOR_MARKER)) return clipped
-      return truncateToWidth(line.replace(CURSOR_MARKER, ""), Math.max(0, width - 1)) + CURSOR_MARKER
+      let clipped = truncateToWidth(line, width)
+      if (line.includes(CURSOR_MARKER) && !clipped.includes(CURSOR_MARKER))
+        clipped = truncateToWidth(line.replace(CURSOR_MARKER, ""), Math.max(0, width - 1)) + CURSOR_MARKER
+      if (card && focused && ctx.color && theme.inputBg)
+        return theme.inputBg(clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped))))
+      return clipped
     }),
     active,
   }

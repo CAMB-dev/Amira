@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import type { Form, FormFieldView, FormOptions } from "../src/index.ts"
 
 test("the public theme exports are part of the stable package surface", async () => {
   expect(Object.keys(await import("../src/index.ts")).sort()).toEqual([
@@ -97,6 +98,27 @@ test("the public theme exports are part of the stable package surface", async ()
     "wrapText",
     "yellow",
   ])
+})
+
+test("the public form presentation contract is opt-in", () => {
+  const options: Pick<FormOptions, "layout"> = { layout: "card" }
+  const action: Pick<FormFieldView, "placement" | "buttonLabel"> = {
+    placement: "footer",
+    buttonLabel: "Test",
+  }
+  const card: Form["cardLayout"] = true
+  expect({ options, action, card }).toMatchInlineSnapshot(`
+    {
+      "action": {
+        "buttonLabel": "Test",
+        "placement": "footer",
+      },
+      "card": true,
+      "options": {
+        "layout": "card",
+      },
+    }
+  `)
 })
 
 test("the public console-code-page exports stay stable", async () => {

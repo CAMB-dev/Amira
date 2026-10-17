@@ -158,7 +158,7 @@ test("provider edit shows the prefilled form; remove and key work without a sess
       },
     }),
   ).toBe(0)
-  expect(shown?.title).toBe("Edit provider ds-test")
+  expect(shown?.title).toBe("Edit provider · ds-test")
   expect(settings().providers["ds-test"]).toMatchObject({
     baseUrl: "https://b",
     models: [{ id: "m1" }, { id: "m2" }],
@@ -303,7 +303,7 @@ test("provider add with some flags opens the form with them filled in", async ()
   )
   expect(code).toBe(1)
   const byId = Object.fromEntries(shown!.fields.map((f) => [f.id, f as unknown as Record<string, unknown>]))
-  expect(shown!.title).toBe("Add a provider")
+  expect(shown!.title).toBe("Add provider")
   expect(byId.id!.default).toBe("mine")
   expect(byId.dialect!.default).toBe("anthropic-messages")
   expect("default" in byId.baseUrl!).toBe(false)
@@ -468,7 +468,7 @@ test("the terminal starts with a filterable vendor list including Custom", async
       },
     }),
   ).toBe(1)
-  expect(shown[0]?.title).toBe("Add a provider")
+  expect(shown[0]?.title).toBe("Add provider")
   const list = shown[0]?.fields[0]
   if (list?.type !== "select") throw new Error("expected a filterable select")
   expect(list.options).toContainEqual(

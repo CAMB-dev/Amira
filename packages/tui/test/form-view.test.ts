@@ -255,6 +255,49 @@ test("FormView with a spec backend reports refused values and aborts actions on 
   expect(closed).toBe(1)
 })
 
+test("form view forwards card layout and footer button metadata without changing the action id", async () => {
+  const calls: string[] = []
+  const view = new FormView(
+    specFormBackend(
+      {
+        title: "Server",
+        layout: "card",
+        fields: [
+          { type: "text", id: "name", label: "Name" },
+          {
+            type: "action",
+            id: "testConnection",
+            label: "Test connection",
+            placement: "footer",
+            buttonLabel: "Test",
+            run: async () => {
+              calls.push("testConnection")
+              return { message: "Connected", tone: "success" }
+            },
+          },
+          { type: "text", id: "note", label: "Note" },
+        ],
+      },
+      () => {},
+    ),
+    { requestRender: () => {}, onClose: () => {} },
+  )
+  expect(view.form.cardLayout).toBe(true)
+  const rendered = view.render(100, { ...plain, rows: 30 }).join("\n")
+  expect(rendered).toContain("Test")
+  expect(rendered).not.toContain("Test connection")
+  expect(view.form.focused).toBe("name")
+  view.handleInput(key("tab"))
+  expect(view.form.focused).toBe("note")
+  view.handleInput(key("tab"))
+  expect(view.form.focused).toBe("testConnection")
+  view.handleInput(key("enter"))
+  await Bun.sleep(0)
+  expect(calls).toEqual(["testConnection"])
+  expect(view.render(100, { ...plain, rows: 30 }).join("\n")).toContain("Connected")
+  view.close()
+})
+
 test("form view applies live updates and previews, blocks failed checks, and lets the user recover", async () => {
   const changes: string[] = []
   let saved: FormValues | undefined

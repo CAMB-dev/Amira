@@ -122,6 +122,10 @@ export interface TextareaField extends FieldBase {
  */
 export interface ActionField extends FieldBase {
   type: "action"
+  /** Show the button beside Save and Cancel instead of among the fields. */
+  placement?: "footer"
+  /** Shown on the button instead of `label`; dialogs keep the full label. */
+  buttonLabel?: string
   run: (ctx: FormActionContext) => Promise<FormActionResult | undefined>
   /**
    * Where a form is asked one field at a time, the question whether to run it defaults to yes.
@@ -185,6 +189,8 @@ export interface FormSection {
 /** What `ui.form` takes. */
 export interface FormSpec {
   title: string
+  /** A centred card with a label/control grid; falls back to stacked fields in small terminals. */
+  layout?: "card"
   /** Text under the title. */
   description?: string
   fields: FormField[]
@@ -215,6 +221,7 @@ export type FormFieldSchema = { [T in FormField as T["type"]]: Serializable<T> }
 /** A form as it travels to frontends in ui.request (kind "form"). */
 export interface FormSchema {
   title: string
+  layout?: "card"
   description?: string
   fields: FormFieldSchema[]
   sections?: FormSection[]
@@ -233,6 +240,7 @@ export function toFormSchema(spec: FormSpec): FormSchema {
   }) as FormFieldSchema[]
   return {
     title: spec.title,
+    ...(spec.layout !== undefined ? { layout: spec.layout } : {}),
     ...(spec.description !== undefined ? { description: spec.description } : {}),
     fields,
     ...(spec.sections ? { sections: spec.sections } : {}),

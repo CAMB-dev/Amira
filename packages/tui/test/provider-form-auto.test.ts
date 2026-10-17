@@ -654,6 +654,29 @@ for (const hosted of [false, true]) {
   })
 }
 
+test("provider card keeps its live settings preview full-width and masks the key", async () => {
+  const form = setup({ initial: { keySource: "auth", models: ["served-model"] } })
+  try {
+    form.focus("apiKey")
+    form.type("card-preview-secret")
+    form.screen()
+    form.focus("preview")
+    const start = stripAnsi(form.view.render(80, { ...plain, rows: 24 }).join("\n"))
+    expect(start).toContain("Preview")
+    expect(start).not.toContain("card-preview-secret")
+    form.view.handleInput(key("end"))
+    const screen = stripAnsi(form.view.render(80, { ...plain, rows: 24 }).join("\n"))
+    expect(screen).toContain("new key")
+    expect(screen).not.toContain("card-preview-secret")
+    expect(screen).toContain("[ Test ]")
+    expect(screen).toContain("[ Save ]")
+    expect(screen).toContain("[ Cancel ]")
+    expect(screen).not.toContain("│ Preview") // The preview spans the grid, not an input cell.
+  } finally {
+    await form.close()
+  }
+})
+
 test("provider form has one credential label and one concise model metadata line", async () => {
   const form = setup({ initial: { keySource: "auth" } })
   try {
@@ -663,7 +686,7 @@ test("provider form has one credential label and one concise model metadata line
     await waitFor(() => form.calls.length === 1 && form.screen().includes("models.dev"), "model metadata")
     await tick()
     const screen = stripAnsi(form.screen())
-    expect(screen.split("\n").filter((line) => /^\s*API key\s+─/.test(line))).toHaveLength(1)
+    expect(screen.split("\n").filter((line) => /^\s*│\s*API key\s+─/.test(line))).toHaveLength(1)
     expect(screen).toContain("***********")
     expect(screen).not.toContain("fake-secret")
     expect(screen).toContain("Shown masked, never logged.")
