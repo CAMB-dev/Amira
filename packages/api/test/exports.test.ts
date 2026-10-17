@@ -88,13 +88,13 @@ test("declarative buttons reuse the existing activation event without a version 
   const event: UiEvent = { type: "activate", id: button.id, key: button.key ?? button.id }
   expect(event).toEqual({ type: "activate", id: "run", key: "execute" })
   expect(fallback.key ?? fallback.id).toBe("close")
-  expect((await import("../src/index.ts")).API_VERSION).toBe("0.1.57")
+  expect((await import("../src/index.ts")).API_VERSION).toBe("0.1.58")
 })
 
 test("the public API exports stay stable", async () => {
   const api = await import("../src/index.ts")
   const actual = Object.keys(api).sort()
-  expect(api.API_VERSION).toBe("0.1.57")
+  expect(api.API_VERSION).toBe("0.1.58")
   expect(actual).toEqual([
     "AGENT_STATUS_BADGES",
     "API_VERSION",
@@ -304,7 +304,7 @@ test("the public display-state source contract handles clean stops and pauses wi
         "paused",
       ],
       "terminal": "stopped",
-      "version": "0.1.57",
+      "version": "0.1.58",
     }
   `)
 })
@@ -486,7 +486,7 @@ test("the public TUI settings include optional margins without changing API_VERS
   const defaults: TuiSettings = { margin: DEFAULT_TUI_MARGIN, marginRows: DEFAULT_TUI_MARGIN_ROWS }
   const edgeToEdge: TuiSettings = { margin: 0, marginRows: 0 }
   const omitted: TuiSettings = {}
-  expect(API_VERSION).toBe("0.1.57")
+  expect(API_VERSION).toBe("0.1.58")
   expect(defaults).toEqual({ margin: 3, marginRows: 1 })
   expect(edgeToEdge).toEqual({ margin: 0, marginRows: 0 })
   expect(omitted).toEqual({})
