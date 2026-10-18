@@ -1,5 +1,6 @@
 import path from "node:path"
-import type { AnyEvent, EventEnvelope, Extension } from "@amira/api"
+import type { AnyEvent, EventEnvelope, Extension, ExtensionStatusMetadata } from "@amira/api"
+import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import type { Agent, EventBus, ExtensionHost } from "@amira/core"
 import type { ActivePackages } from "@amira/packages"
 
@@ -116,7 +117,7 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
 function packageLabel(
   p: ActivePackages["packages"][number],
   file: string,
-): { source: string; name: string; hint: string; root: string } {
+): { source: string; name: string; hint: string; root: string; extensionStatus: ExtensionStatusMetadata } {
   const rel = path.relative(p.dir, file).split(path.sep).join("/")
   const source = p.manifest.extensions.length > 1 ? `${p.name}/${rel}` : p.name
   return {
@@ -124,6 +125,7 @@ function packageLabel(
     name: p.name,
     hint: `${p.scope} package; amira ext disable ${p.name} turns it off`,
     root: p.dir,
+    extensionStatus: extensionStatusMetadata(p.manifest.status ? p.manifest : p),
   }
 }
 

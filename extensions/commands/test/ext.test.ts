@@ -3,12 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import type {
-  ExtensionAdmin,
-  ExtensionProgress,
-  ManagedExtension,
-  SessionControl,
-  UiRequest,
+import {
+  type ExtensionAdmin,
+  type ExtensionProgress,
+  type ExtensionStatusMetadata,
+  extensionStatusNotice,
+  type ManagedExtension,
+  type SessionControl,
+  type UiRequest,
 } from "@amira/api"
 import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
 import {
@@ -163,7 +165,7 @@ async function setup(
   })
   const run = (line: string, signal?: AbortSignal) =>
     work.run((owned) => commands.run(line, { frontend: "tui", signal: owned }), signal)
-  return { run, commands, host, asked, reloads: () => reloads }
+  return { run, commands, host, bus, asked, reloads: () => reloads }
 }
 
 test("/ext parsing validates arity and flags, preserving explicit scope", () => {
@@ -584,4 +586,134 @@ test("progress uses themed lines and clips 120/60 columns including fetching per
     expect(rows[4]!.kind).toBe("success")
     expect(rows[5]!.kind).toBe("error")
   }
+})
+
+test("extension picker badges are ASCII and keep package identities and scope distinct", () => {
+  const installed = settingsAdmin(false).list()[0]!
+  const rows = extensionRows(
+    [
+      { ...installed, status: "wip" },
+      { ...installed, scope: "project", status: "deprecated" },
+    ],
+    [{ name: "preview", version: "1.0.0", description: "", status: "experimental" }],
+  )
+  expect(rows.options[0]).toStartWith("sample [wip] 1.0.0")
+  expect(rows.options[1]).toStartWith("sample [deprecated] 1.0.0")
+  expect(rows.options[2]).toBe("preview [experimental]")
+  expect(rows.rows.map((row) => row.installed.name)).toEqual(["sample", "sample"])
+  expect(rows.optionExtensionStatuses.map((value) => value?.status)).toEqual([
+    "wip",
+    "deprecated",
+    "experimental",
+  ])
+  for (const label of rows.options) expect(label.match(/\[[^\]]+\]/)?.[0]).toMatch(/^[\x20-\x7e]+$/)
+})
+
+test.each(["experimental", "wip", "deprecated"] as const)(
+  "/ext prints one %s status notice after each successful install/update only",
+  async (status) => {
+    const metadata: ExtensionStatusMetadata = {
+      status,
+      statusMessage: "Package maturity",
+      replacedBy: "replacement",
+    }
+    let failed = false
+    let changed = true
+    const admin: ExtensionAdmin = {
+      ...settingsAdmin(false),
+      install: async () => ({ name: "sample", version: "1.0.0", warnings: [], ...metadata }),
+      update: async (_names, _scope, _opts, each) => {
+        each({
+          name: "sample",
+          version: "1.0.0",
+          changed,
+          ...metadata,
+          ...(failed ? { error: "kept old version" } : { warnings: ["fixture warning"] }),
+        })
+      },
+    }
+    const { run, bus } = await setup(admin)
+    const output: { text: string; level: string }[] = []
+    bus.subscribe((event) => {
+      if (event.type === "command.output") output.push(event.data)
+    })
+    const notice = extensionStatusNotice("sample", metadata)!
+    for (const command of ["/ext install sample", "/ext update sample", "/ext update sample"]) {
+      output.length = 0
+      const result = await run(command)
+      await bus.flush()
+      expect(result.ok).toBe(true)
+      expect(result.output.filter((line) => line === notice.message)).toHaveLength(1)
+      expect(result.output.indexOf(notice.message)).toBeGreaterThan(0)
+      expect(output.find((line) => line.text === notice.message)?.level).toBe(
+        status === "experimental" ? "info" : "warning",
+      )
+      changed = false
+    }
+    failed = true
+    const result = await run("/ext update sample")
+    expect(result.output.join("\n")).toContain("update failed")
+    expect(result.output).not.toContain(notice.message)
+    expect((await run("/ext disable sample")).output).not.toContain(notice.message)
+  },
+)
+
+test("/extensions aliases the management picker without printing lifecycle notices", async () => {
+  const base = settingsAdmin(false)
+  const { run, asked } = await setup({
+    ...base,
+    list: () => base.list().map((item) => ({ ...item, status: "wip" })),
+  })
+  expect((await run("/extensions")).ok).toBe(true)
+  expect(asked[0]).toMatchObject({ kind: "select", optionExtensionStatuses: [{ status: "wip" }] })
+})
+
+test("early TUI status callbacks are deduplicated against install/update results", async () => {
+  const metadata: ExtensionStatusMetadata = { status: "deprecated", replacedBy: "next" }
+  const notice = extensionStatusNotice("sample", metadata)!
+  const admin: ExtensionAdmin = {
+    ...settingsAdmin(false),
+    install: async (_name, _scope, opts) => {
+      opts.onStatus?.("sample", metadata)
+      return { name: "sample", version: "1.0.0", warnings: [], ...metadata }
+    },
+    update: async (_names, _scope, opts, each) => {
+      opts.onStatus?.("sample", metadata)
+      each({ name: "sample", version: "1.0.0", changed: false, ...metadata })
+    },
+  }
+  const { run } = await setup(admin)
+  for (const command of ["/ext install sample", "/ext update sample"]) {
+    const result = await run(command)
+    expect(result.output.filter((line) => line === notice.message)).toHaveLength(1)
+    expect(result.output[0]).toBe(notice.message)
+  }
+})
+
+test("legacy, failed and cancelled installs do not print status notices; the picker carries metadata without notices", async () => {
+  const base = settingsAdmin(false)
+  const admin: ExtensionAdmin = {
+    ...base,
+    list: () => base.list().map((item) => ({ ...item, status: "wip" })),
+    install: async () => ({ name: "sample", version: "1.0.0", warnings: [] }),
+  }
+  const { run, asked } = await setup(admin)
+  expect((await run("/ext install sample")).output).toHaveLength(1)
+  expect((await run("/ext")).output).toEqual([])
+  expect(asked[0]).toMatchObject({ kind: "select", optionExtensionStatuses: [{ status: "wip" }] })
+  expect(asked[0]).not.toHaveProperty("optionExtensionStatuses.0.source")
+  admin.install = async () => {
+    throw new Error("fixture install failed")
+  }
+  const failed = await run("/ext install sample")
+  expect(failed.ok).toBe(false)
+  expect(failed.output).toEqual(["fixture install failed"])
+  const controller = new AbortController()
+  admin.install = async () => {
+    controller.abort()
+    return { name: "sample", version: "1.0.0", warnings: [], status: "deprecated" }
+  }
+  const cancelled = await run("/ext install sample", controller.signal)
+  expect(cancelled.output).toHaveLength(1)
+  expect(cancelled.output[0]).toContain("cancelled")
 })

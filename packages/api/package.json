@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./internal/extension-status": "./src/internal/extension-status.ts",
     "./internal/subagent-transcript": "./src/internal/subagent-transcript.ts"
   },
   "dependencies": {

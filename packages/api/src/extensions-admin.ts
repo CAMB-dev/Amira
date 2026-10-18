@@ -1,3 +1,5 @@
+import type { ExtensionStatusMetadata } from "./extension-status.ts"
+
 /**
  * Managing extension packages from a slash command (`/ext`), supplied by the host as
  * SessionControl.extensionAdmin. The same operations and rules as `amira ext`: a project
@@ -7,7 +9,7 @@
 export type ExtensionScope = "user" | "project"
 
 /** A package one of the two scopes' lock files records. */
-export interface ManagedExtension {
+export interface ManagedExtension extends ExtensionStatusMetadata {
   name: string
   version: string
   scope: ExtensionScope
@@ -20,6 +22,8 @@ export interface ManagedExtension {
   description: string
   /** Why the package cannot be used, when it cannot. */
   error?: string
+  /** Non-blocking manifest diagnostics. */
+  warnings?: string[]
   /** A user package hidden by a project package of the same name. */
   shadowed?: boolean
   /** A loaded extension in this package declares configurable settings. */
@@ -36,7 +40,7 @@ export interface ExtensionSettingsTarget {
 }
 
 /** An entry of the extensions index. */
-export interface AvailableExtension {
+export interface AvailableExtension extends ExtensionStatusMetadata {
   name: string
   version: string
   description: string
@@ -55,16 +59,19 @@ export interface ExtensionOperationOptions {
   /** Stops the operation; an install then leaves the old package, or none. */
   signal: AbortSignal
   onProgress(progress: ExtensionProgress): void
+  /** Advisory lifecycle metadata, before downloading when the index declares it. */
+  onStatus?(name: string, status: ExtensionStatusMetadata): void
   /** Warnings, e.g. that a cached index was used. */
   log(message: string): void
 }
 
 /** One package's update: what it is at now, or why it could not move (the installed one is kept). */
-export interface ExtensionUpdate {
+export interface ExtensionUpdate extends ExtensionStatusMetadata {
   name: string
   version: string
   changed: boolean
   error?: string
+  warnings?: string[]
 }
 
 export interface ExtensionAdmin {
@@ -82,7 +89,7 @@ export interface ExtensionAdmin {
     name: string,
     scope: ExtensionScope,
     opts: ExtensionOperationOptions,
-  ): Promise<{ name: string; version: string; warnings: string[] }>
+  ): Promise<{ name: string; version: string; warnings: string[] } & ExtensionStatusMetadata>
   /** Updates the named packages of a scope, or all of them with no names; `each` hears of each. */
   update(
     names: string[],

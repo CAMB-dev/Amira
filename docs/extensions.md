@@ -28,7 +28,9 @@ amira ext enable <name>
 amira ext remove <name>
 ```
 
-These commands accept multiple package names or sources. Update without names updates all packages in the selected scope. Install without sources restores missing packages from that scope's lock file. Disable keeps the package and its lock entry; remove deletes both. Use `--quiet` for just results or `--json` for result objects, one per line, with install, update and remove.
+These commands accept multiple package names or sources. Update without names updates all packages in the selected scope. Install without sources restores missing packages from that scope's lock file. Disable keeps the package and its lock entry; remove deletes both. Use `--quiet` for results and warnings only or `--json` for result objects, one per line, with install, update and remove.
+
+Install and update show a note for `experimental` packages and warnings for `wip` and `deprecated` packages. `--quiet` suppresses the experimental note but retains warnings; `--json` emits a separate `type: "status"` event with a structured `status` object (`kind`, optional `message` and `replacedBy`); result events keep their existing operation outcome in `status`. `amira ext list --json` returns an array with the same structured status object on affected packages.
 
 Install copies a local directory into the package scope; it is not a live link. After editing the source directory, install it again. Git commits and npm versions are pinned exactly in `packages.lock`; update resolves the source again and writes new pins.
 
@@ -102,8 +104,21 @@ A package describes its contributions in `amira-package.json`, or in the `amira`
 | `skills` | Skill directory paths |
 | `themes` | Theme JSON file paths; defaults to `[]` (see [Themes](themes.md)) |
 | `commands` | Top-level CLI command names mapped to modules |
+| `status` | Optional: `experimental`, `wip` or `deprecated` |
+| `statusMessage` | Optional status explanation |
+| `replacedBy` | Optional replacement package name; used only with `deprecated`, ignored otherwise |
 
 The engine range describes the extension API, not the CLI release version. The exported `API_VERSION` in [the public API](../packages/api/src/index.ts) gives the current value. Without an extension list, Amira looks for `index.ts`, then `src/index.ts`. A command-only or theme-only package can omit an extension entry.
+
+### Extension status
+
+Status metadata is optional. In `package.json`, put it inside the `amira` object as `amira.status`, `amira.statusMessage` and `amira.replacedBy`; in `amira-package.json`, use the same fields at the top level. `experimental` marks an experimental package, `wip` means work in progress, and `deprecated` marks a package that is no longer recommended. Use `statusMessage` for context and, for a deprecated package, `replacedBy` to name its replacement.
+
+An unknown status is ignored with a manifest warning. Status metadata and its warnings never prevent installation or loading; `replacedBy` does not automatically install a replacement.
+
+The same optional `status`, `statusMessage` and `replacedBy` fields can appear at the top level of each `index.json` entry (not nested under `amira`), so status is available during discovery before installation. The same status values and `replacedBy` restriction apply. Index status is reported before downloading; a valid manifest status takes precedence in installed metadata. When the manifest has no valid status, the index metadata is retained in the lock file for offline lists and settings.
+
+Status badges appear in `amira ext list`, `/extensions` and extension settings pages. Status notices are not shown at session start or when using an extension's own commands or views.
 
 ## A complete small extension
 

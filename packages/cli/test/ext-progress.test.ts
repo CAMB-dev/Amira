@@ -144,6 +144,21 @@ test("lines are cut to the terminal width, and more packages than fit collapse",
   ])
 })
 
+for (const mode of ["plain", "quiet", "json", "tty"] as const) {
+  test(`${mode} packageStatus reports whether it emitted a notice`, () => {
+    const io = capture()
+    const progress = new ExtProgress({ mode, stdout: io.stdout, stderr: io.stderr, intervalMs: 0 })
+    expect(progress.packageStatus("alpha", {})).toBe(false)
+    expect(io.out + io.err).toBe("")
+    expect(progress.packageStatus("alpha", { status: "experimental" })).toBe(mode !== "quiet")
+    expect((io.out + io.err).includes("note: alpha is experimental")).toBe(mode !== "quiet")
+    for (const status of ["wip", "deprecated"] as const) {
+      expect(progress.packageStatus("alpha", { status })).toBe(true)
+    }
+    progress.close()
+  })
+}
+
 test("a warning is printed above the package lines, which are drawn again below it", () => {
   const { screen, progress, err } = ttyProgress()
   progress.add("alpha")

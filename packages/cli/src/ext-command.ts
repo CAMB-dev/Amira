@@ -1,7 +1,7 @@
 import path from "node:path"
 import { parseArgs } from "node:util"
 import type { Settings } from "@amira/api"
-import { DEFAULT_PACKAGES_DISABLED } from "@amira/api"
+import { DEFAULT_PACKAGES_DISABLED, type ExtensionStatusMetadata, extensionStatusBadge } from "@amira/api"
 import { amiraHome, loadSettings } from "@amira/core"
 import {
   defaultGitCacheDir,
@@ -127,6 +127,11 @@ export async function runExtCommand(
   const abort = new AbortController()
   const signal = opts.signal ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
   const stopSigint = opts.handleSigint ? onSigint(abort, progress) : () => {}
+  const statusNotices = new Set<string>()
+  const reportStatus = (name: string, metadata: ExtensionStatusMetadata) => {
+    if (!metadata.status || statusNotices.has(name)) return
+    if (progress.packageStatus(name, metadata)) statusNotices.add(name)
+  }
   const install: InstallOptions = {
     scope,
     cwd,
@@ -137,6 +142,7 @@ export async function runExtCommand(
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
     log: (line) => progress.note(line.startsWith("warning: ") ? `amira: ${line}` : line),
     onProgress: (p) => progress.update(p),
+    onStatus: reportStatus,
   }
   /** Full errors of failed packages, printed after the package lines in a terminal. */
   const failures: string[] = []
@@ -164,14 +170,16 @@ export async function runExtCommand(
             return 0
           }
           for (const name of missing) progress.add(name)
-          await restorePackages(install, (r) =>
+          await restorePackages(install, (r) => {
+            for (const w of r.warnings) progress.note(`amira: warning: ${w}`)
+            reportStatus(r.name, r)
             progress.finish(r.name, {
               kind: "installed",
               text: `${r.entry.version} ${pinText(r.entry)}`,
               line: `Installed ${r.name} ${r.entry.version} ${pinText(r.entry)}`,
               data: { version: r.entry.version, pinned: r.entry.pinned },
-            }),
-          )
+            })
+          })
           autoPrune(cacheDir, home, cwd)
           return done(0)
         }
@@ -187,6 +195,7 @@ export async function runExtCommand(
             return done(1)
           }
           for (const w of r.warnings) progress.note(`amira: warning: ${w}`)
+          reportStatus(r.name, r)
           const was = r.previous ? ` (was ${r.previous.version} ${pinText(r.previous)})` : ""
           progress.finish(spec, {
             kind: "installed",
@@ -207,7 +216,25 @@ export async function runExtCommand(
       case "list":
       case "ls":
         noArgs(sub, rest)
-        io.stdout(formatList(listInstalled({ home, cwd }), { home, cwd, settings: settingsOf(cwd, home) }))
+        if (parsed.values.json) {
+          const packages = listInstalled({ home, cwd }).map((p) => {
+            const { manifest: _manifest, status, statusMessage, replacedBy, ...installed } = p
+            return {
+              ...installed,
+              ...(status
+                ? {
+                    status: {
+                      kind: status,
+                      ...(statusMessage ? { message: statusMessage } : {}),
+                      ...(replacedBy ? { replacedBy } : {}),
+                    },
+                  }
+                : {}),
+            }
+          })
+          io.stdout(`${JSON.stringify(packages)}\n`)
+        } else
+          io.stdout(formatList(listInstalled({ home, cwd }), { home, cwd, settings: settingsOf(cwd, home) }))
         return 0
       case "disable":
       case "enable": {
@@ -307,7 +334,8 @@ export async function runExtCommand(
         for (const e of hits) {
           const where = installed.filter((p) => p.name === e.name).map((p) => p.scope)
           const mark = where.length ? `  [installed: ${where.join(", ")}]` : ""
-          io.stdout(`${e.name} ${e.version}${mark}\n`)
+          const badge = extensionStatusBadge(e)
+          io.stdout(`${e.name}${badge ? ` ${badge}` : ""} ${e.version}${mark}\n`)
           if (e.description) io.stdout(`  ${e.description}\n`)
           if (e.tags.length) io.stdout(`  tags: ${e.tags.join(", ")}\n`)
         }
@@ -344,6 +372,7 @@ export async function runExtCommand(
   }
 
   function reportUpdate(r: UpdateResult) {
+    for (const w of r.warnings ?? []) progress.note(`amira: warning: ${w}`)
     if ("error" in r) {
       fail(
         r.name,
@@ -352,6 +381,7 @@ export async function runExtCommand(
       )
       return
     }
+    reportStatus(r.name, r)
     const outcome: Outcome = r.changed
       ? {
           kind: "updated",
@@ -507,7 +537,8 @@ function formatList(
           : p.shadowed
             ? "  [replaced by the project package]"
             : ""
-      out += `  ${p.name} ${p.entry.version} ${pinText(p.entry)}${state}\n`
+      const badge = extensionStatusBadge(p)
+      out += `  ${p.name}${badge ? ` ${badge}` : ""} ${p.entry.version} ${pinText(p.entry)}${state}\n`
       out += `    from ${describeSource(p.entry.source)}${p.entry.index ? " via the extensions index" : ""}\n`
     }
   }

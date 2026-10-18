@@ -7,6 +7,9 @@ import {
   type ExtensionProgress,
   type ExtensionScope,
   type ExtensionSettingsTarget,
+  type ExtensionStatusMetadata,
+  extensionStatusBadge,
+  extensionStatusNotice,
   type ManagedExtension,
   type SelectSection,
   type ToolLine,
@@ -52,6 +55,8 @@ export function parseExtArgs(args: string): { sub?: Subcommand; names: string[];
 }
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
+const packageName = (value: ExtensionStatusMetadata & { name: string }) =>
+  [value.name, extensionStatusBadge(value)].filter(Boolean).join(" ")
 
 /** Whether the index offers a higher version than the installed one (both valid semver). */
 function hasUpdate(p: ManagedExtension, available: AvailableExtension[]): boolean {
@@ -67,7 +72,7 @@ function hasUpdate(p: ManagedExtension, available: AvailableExtension[]): boolea
 /** What `d` (and "Show details") prints about an installed package. */
 function details(item: ManagedExtension): string {
   return [
-    `${item.name} ${item.version} · ${item.scope}${item.enabled ? "" : " · disabled"}`,
+    `${packageName(item)} ${item.version} · ${item.scope}${item.enabled ? "" : " · disabled"}`,
     item.description,
     `Source: ${item.source}`,
     item.trusted ? "Trusted" : "Not trusted: loads once you trust the project (amira ext trust)",
@@ -91,13 +96,13 @@ export function extensionRows(
       target,
     }))
   const rows = installed.map((p) => ({
-    label: `${p.name} ${p.version} · ${p.scope} · ${p.enabled ? "enabled" : "disabled"}${!p.trusted ? " · not trusted" : ""}${p.shadowed ? " · shadowed" : ""}${hasUpdate(p, available) ? " · update available" : ""}`,
+    label: `${packageName(p)} ${p.version} · ${p.scope} · ${p.enabled ? "enabled" : "disabled"}${!p.trusted ? " · not trusted" : ""}${p.shadowed ? " · shadowed" : ""}${hasUpdate(p, available) ? " · update available" : ""}`,
     description: oneLine(p.error ?? p.description),
     installed: p,
   }))
   const others = available
     .filter((e) => !names.has(e.name))
-    .map((e) => ({ label: e.name, description: oneLine(e.description), available: e }))
+    .map((e) => ({ label: packageName(e), description: oneLine(e.description), available: e }))
   const sections: SelectSection[] = []
   if (rows.length)
     sections.push({ at: 0, title: "Installed", choose: "manage", keys: [{ key: "d", label: "details" }] })
@@ -121,6 +126,11 @@ export function extensionRows(
       ...rows.map((r) => r.description),
       ...standalone.map((r) => r.description),
       ...others.map((r) => r.description),
+    ],
+    optionExtensionStatuses: [
+      ...installed,
+      ...standalone.map(() => undefined),
+      ...others.map((r) => r.available),
     ],
     sections,
     rows,
@@ -187,6 +197,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
   const changed = (ctx: CommandContext, message: string) => ctx.print(`${message} ${reloadHint(ctx)}`)
   const command: CommandDefinition = {
     name: "ext",
+    aliases: ["extensions"],
     description: "Manage extensions: settings, install, update, remove, enable, disable or search",
     args: {
       hint: "[subcommand] [name…] [--project]",
@@ -258,12 +269,21 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
       const warnings = (messages: string[]) => {
         for (const message of messages) ctx.print(message, "warning")
       }
+      const statusNotices = new Set<string>()
+      const statusNotice = (name: string, value: ExtensionStatusMetadata) => {
+        if (ctx.signal.aborted || statusNotices.has(name)) return
+        const notice = extensionStatusNotice(name, value)
+        if (!notice) return
+        statusNotices.add(name)
+        ctx.print(notice.message, notice.level === "warning" ? "warning" : "info")
+      }
       const opts = {
         signal: ctx.signal,
         onProgress: (p: ExtensionProgress) => {
           if (!ctx.signal.aborted) update(p)
         },
         log: (message: string) => ctx.print(message, "warning"),
+        onStatus: statusNotice,
       }
       let didChange = false
       const perform = async (sub: Subcommand, names: string[], scope: ExtensionScope) => {
@@ -278,6 +298,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
             update({ name, phase: "done", detail: result.version })
             didChange = true
             changed(ctx, `Installed ${result.name} ${result.version} into ${scope} scope.`)
+            statusNotice(result.name, result)
             if (
               scope === "project" &&
               admin.list().some((p) => p.name === result.name && p.scope === scope && !p.trusted)
@@ -302,11 +323,15 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
             for (const name of selected) update({ name, phase: "queued" })
             await admin.update(names, scope, opts, (r) => {
               update({ name: r.name, phase: r.error ? "failed" : "done", detail: r.error ?? r.version })
+              warnings(r.warnings ?? [])
               if (r.error) ctx.print(`${r.name}: update failed, kept ${r.version}: ${r.error}`, "error")
-              else if (r.changed) {
-                didChange = true
-                changed(ctx, `Updated ${r.name} to ${r.version}.`)
-              } else ctx.print(`${r.name} is up to date (${r.version}).`)
+              else {
+                if (r.changed) {
+                  didChange = true
+                  changed(ctx, `Updated ${r.name} to ${r.version}.`)
+                } else ctx.print(`${r.name} is up to date (${r.version}).`)
+                statusNotice(r.name, r)
+              }
             })
             ctx.signal.throwIfAborted()
             break
@@ -365,6 +390,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
         const pick = await ctx.ui.choose("Extensions", rows.options, {
           sections: rows.sections,
           descriptions: rows.descriptions,
+          optionExtensionStatuses: rows.optionExtensionStatuses,
           signal: ctx.signal,
         })
         if (!pick) return

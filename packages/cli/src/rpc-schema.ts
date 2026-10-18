@@ -734,6 +734,7 @@ export function rpcSchema(): Schema {
             ),
             description: "Host-rendered status badges aligned with options; null leaves an option unbadged.",
           },
+          "optionExtensionStatuses?": arrayOf(oneOf(ref("ExtensionStatusMetadata"), { type: "null" })),
           "searchTexts?": {
             ...arrayOf(str),
             description:
@@ -794,6 +795,7 @@ export function rpcSchema(): Schema {
           ...uiRequestSession,
           name: str,
           title: str,
+          "extensionStatus?": ref("ExtensionStatusMetadata"),
           fields: arrayOf(ref("ExtensionSettingField")),
           values: { type: "object", additionalProperties: oneOf(str, num, bool) },
           "sources?": {
@@ -803,6 +805,11 @@ export function rpcSchema(): Schema {
           scope: strings("user", "project"),
         }),
       ),
+      ExtensionStatusMetadata: obj({
+        "status?": strings("experimental", "wip", "deprecated"),
+        "statusMessage?": str,
+        "replacedBy?": str,
+      }),
       ExtensionSettingField: oneOf(
         obj({
           ...extensionSettingBase,

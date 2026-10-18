@@ -241,6 +241,8 @@ test("the public API exports stay stable", async () => {
     "draftFromValues",
     "emptyUsage",
     "extensionSettingsDefaults",
+    "extensionStatusBadge",
+    "extensionStatusNotice",
     "fallbackTitle",
     "fetchPublic",
     "fieldDefault",
@@ -292,6 +294,16 @@ test("the public API exports stay stable", async () => {
     "validateExtensionSetting",
     "withSection",
   ])
+})
+
+test("status parsing helpers stay out of the public API", async () => {
+  const api = await import("../src/index.ts")
+  const internal = await import("@amira/api/internal/extension-status")
+  expect(Object.keys(internal).sort()).toEqual(["extensionStatusMetadata", "parseExtensionStatus"])
+  expect(Object.keys(internal).filter((name) => name in api)).toEqual([])
+  expect("unknownExtensionStatusWarning" in api).toBe(false)
+  expect(typeof api.extensionStatusBadge).toBe("function")
+  expect(typeof api.extensionStatusNotice).toBe("function")
 })
 
 test("only the named transcript renderer is public, not its internal helpers", async () => {

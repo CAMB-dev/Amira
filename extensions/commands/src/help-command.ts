@@ -1,4 +1,4 @@
-import type { CommandDefinition } from "@amira/api"
+import { type CommandDefinition, clip } from "@amira/api"
 import { oneLine } from "./command-utils.ts"
 import { table } from "./format.ts"
 
@@ -20,7 +20,11 @@ export function helpCommand(): CommandDefinition {
         const rows = all
           .filter((c) => (builtIn(c.source) ? "" : c.source) === source)
           .map((c) => [
-            `/${c.name}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(", ")})` : ""}${c.hint ? ` ${c.hint}` : ""}`,
+            // Leave room for the two-space separator and the 70-cell description.
+            clip(
+              `/${c.name}${c.aliases.length ? ` (${c.aliases.map((a) => `/${a}`).join(", ")})` : ""}${c.hint ? ` ${c.hint}` : ""}`,
+              47,
+            ),
             oneLine(c.description, 70),
           ])
         return `${source === "" ? "Commands" : `From ${source}`}:\n${table(rows)}`

@@ -78,11 +78,18 @@ test.each([false, true])(
       mkdirSync(pkg, { recursive: true })
       writeFileSync(
         path.join(pkg, "amira-package.json"),
-        JSON.stringify({ name: "foo", version: "1.0.0", extensions: ["index.ts"] }),
+        JSON.stringify({
+          name: "foo",
+          version: "1.0.0",
+          extensions: ["index.ts"],
+          status: kind === "user" ? "wip" : "deprecated",
+          statusMessage: `${kind} manifest status`,
+          ...(kind === "project" ? { replacedBy: "replacement" } : {}),
+        }),
       )
       writeFileSync(
         path.join(pkg, "index.ts"),
-        `export default (api) => api.settings.declare({ fields: [{ key: "size", type: "number", label: "Size", default: 2 }] })`,
+        `export default (api) => api.settings.declare({ status: "experimental", fields: [{ key: "size", type: "number", label: "Size", default: 2 }] })`,
       )
       writeLock(scope.lockFile, {
         lockfileVersion: 1,
@@ -119,6 +126,23 @@ test.each([false, true])(
       expect(rows.find((row) => row.scope === "project")).toMatchObject({ name: "foo", trusted })
       expect(rows.find((row) => row.scope === "user")?.settings).toBe(trusted ? undefined : true)
       expect(rows.find((row) => row.scope === "project")?.settings).toBe(trusted ? true : undefined)
+      const answer = session.host.ui.extensionSettings("foo")
+      const request = session.host.ui.pending[0]!
+      expect(request).toMatchObject({
+        kind: "extension-settings",
+        extensionStatus: {
+          status: trusted ? "deprecated" : "wip",
+          statusMessage: `${trusted ? "project" : "user"} manifest status`,
+          ...(trusted ? { replacedBy: "replacement" } : {}),
+        },
+      })
+      expect(
+        session.startupEvents.filter(
+          (event) => event.type === "extension.notice" && event.data.text.includes("manifest status"),
+        ),
+      ).toEqual([])
+      session.host.ui.cancel(request.requestId)
+      await answer
     } finally {
       unload?.()
       if (previous === undefined) delete process.env.AMIRA_HOME

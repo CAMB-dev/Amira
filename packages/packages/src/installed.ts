@@ -1,5 +1,7 @@
 import { existsSync } from "node:fs"
 import path from "node:path"
+import type { ExtensionStatusMetadata } from "@amira/api"
+import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import {
   type LockEntry,
   type PackageScope,
@@ -10,7 +12,7 @@ import {
 } from "./lock.ts"
 import { engineMismatch, type PackageManifest, readManifest } from "./manifest.ts"
 
-export interface InstalledPackage {
+export interface InstalledPackage extends ExtensionStatusMetadata {
   name: string
   scope: ScopeKind
   dir: string
@@ -139,7 +141,11 @@ function scopePackages(scope: PackageScope): InstalledPackage[] {
     try {
       const manifest = readManifest(dir)
       const mismatch = engineMismatch(manifest)
-      return mismatch ? { ...base, error: mismatch } : { ...base, manifest }
+      return {
+        ...base,
+        ...extensionStatusMetadata(manifest.status ? manifest : (entry.index ?? {})),
+        ...(mismatch ? { error: mismatch } : { manifest }),
+      }
     } catch (err) {
       return { ...base, error: err instanceof Error ? err.message : String(err) }
     }

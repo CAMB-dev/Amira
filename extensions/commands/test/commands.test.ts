@@ -333,6 +333,7 @@ test("the built-in aliases run their commands", async () => {
     "new→clear",
     "reset→clear",
     "usage→cost",
+    "extensions→ext",
     "?→help",
     "h→help",
     "exit→quit",
@@ -369,6 +370,25 @@ test("/help lists other extensions' commands in their own group, descriptions cu
   // Built-in commands from anywhere are Commands, not an internal id.
   expect(text).not.toContain("From builtin:")
   expect(text).toMatch(/\/deploy\s+Ship: very long.*…\n/)
+  expect(text.split("\n").every((l) => l.length < 120)).toBe(true)
+})
+
+test("/help preserves descriptions beside long command signatures in the same group", async () => {
+  const { run, ext } = await setup()
+  await ext.load((api) => {
+    api.registerCommand({
+      name: "deploy",
+      args: {
+        hint: "<environment> [--region <region>] [--version <version>] [--config <path>] [--timeout <seconds>] [--dry-run] [--skip-health-check]",
+      },
+      description: "Ship a release",
+      run: () => {},
+    })
+    api.registerCommand({ name: "rollback", description: "Restore the previous release", run: () => {} })
+  }, "my-ext")
+  const { text } = await run("/help")
+  expect(text).toMatch(/\/deploy .*\s+Ship a release/)
+  expect(text).toMatch(/\/rollback\s+Restore the previous release/)
   expect(text.split("\n").every((l) => l.length < 120)).toBe(true)
 })
 

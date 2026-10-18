@@ -1,6 +1,7 @@
 import path from "node:path"
 import type { ExtensionAdmin, ExtensionOperationOptions, ExtensionScope } from "@amira/api"
 import { DEFAULT_PACKAGES_DISABLED } from "@amira/api"
+import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import { amiraHome, loadSettings } from "@amira/core"
 import { defaultGitCacheDir, GitCache } from "./git-cache.ts"
 import { type IndexOptions, loadIndex, searchIndex } from "./index-file.ts"
@@ -51,6 +52,8 @@ export function createExtensionAdmin(
         trusted: p.scope === "user" || trusted,
         source: describeSource(p.entry.source),
         description: p.manifest?.description ?? "",
+        ...extensionStatusMetadata(p),
+        ...(p.manifest?.warnings ? { warnings: p.manifest.warnings } : {}),
         ...(p.error ? { error: p.error } : {}),
         ...(p.shadowed ? { shadowed: true } : {}),
       }))
@@ -62,15 +65,32 @@ export function createExtensionAdmin(
     async install(name, scope, opts) {
       // Like the CLI, reinstalling refreshes the package atomically and keeps the old copy on failure.
       const result = await installPackage(name, operation(scope, opts))
-      return { name: result.name, version: result.entry.version, warnings: result.warnings }
+      return {
+        name: result.name,
+        version: result.entry.version,
+        ...extensionStatusMetadata(result),
+        warnings: result.warnings,
+      }
     },
     async update(names, scope, opts, each) {
       for (const name of names) requireInstalled(name, scope)
       await updatePackages(operation(scope, opts), names, (r) =>
         each(
           "error" in r
-            ? { name: r.name, version: r.from.version, changed: false, error: r.error }
-            : { name: r.name, version: r.to.version, changed: r.changed },
+            ? {
+                name: r.name,
+                version: r.from.version,
+                changed: false,
+                error: r.error,
+                ...(r.warnings ? { warnings: r.warnings } : {}),
+              }
+            : {
+                name: r.name,
+                version: r.to.version,
+                changed: r.changed,
+                ...extensionStatusMetadata(r),
+                ...(r.warnings ? { warnings: r.warnings } : {}),
+              },
         ),
       )
     },

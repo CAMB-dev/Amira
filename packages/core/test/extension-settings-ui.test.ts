@@ -119,3 +119,23 @@ test("RPC settings responses also persist asynchronously and never leak draft va
   await bus.flush()
   expect(events.find((event) => event.type === "ui.resolved")?.data).not.toHaveProperty("value")
 })
+
+test("settings requests copy only lifecycle fields from the host backend", async () => {
+  const metadata = {
+    status: "deprecated" as const,
+    statusMessage: "Retiring",
+    replacedBy: "new-package",
+    privateValue: "host-only",
+  }
+  const { ui } = setup({ extensionStatus: metadata })
+  const answer = ui.api("commands").extensionSettings("diagrams")
+  const request = ui.pending[0]!
+  expect(request).toMatchObject({
+    extensionStatus: { status: "deprecated", statusMessage: "Retiring", replacedBy: "new-package" },
+  })
+  expect(request).not.toHaveProperty("extensionStatus.privateValue")
+  metadata.statusMessage = "changed later"
+  expect(request).toHaveProperty("extensionStatus.statusMessage", "Retiring")
+  ui.cancel(request.requestId)
+  await answer
+})
