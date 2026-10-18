@@ -11,7 +11,7 @@ import {
   visibleWidth,
 } from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { segmentText, viewTitle } from "../view-lines.ts"
 import { detailContent } from "./detail.ts"
 import { allocate, cells, fit, type Rect, sides } from "./layout.ts"
@@ -299,9 +299,11 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
               : viewTitle(node.title, theme, w - 2)
         const strong = node.tone === "focus"
         const rule = strong && glyphs.rule === "─" ? "━" : glyphs.rule
-        const aside = node.aside ? truncateToWidth(` ${terminalText(node.aside)} `, w - 2, "…") : ""
+        const aside = node.aside
+          ? truncateToWidth(` ${terminalText(node.aside)} `, w - 2, viewEllipsis("…"))
+          : ""
         const label = title
-          ? truncateToWidth(` ${title} `, Math.max(0, w - 2 - visibleWidth(aside)), "…")
+          ? truncateToWidth(` ${title} `, Math.max(0, w - 2 - visibleWidth(aside)), viewEllipsis("…"))
           : ""
         const head =
           label + color(rule.repeat(Math.max(0, w - 2 - visibleWidth(label) - visibleWidth(aside)))) + aside
@@ -427,6 +429,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       const room = inputRoom(node, w)
       const input = host.input(node.id).render(room, theme, {
         focused: focused && host.cursor && w > 2,
+        more: viewEllipsis("…"),
         placeholder: terminalText(
           [node.placeholder, !focused && node.activate !== undefined ? `(${node.activate} to type)` : ""]
             .filter(Boolean)

@@ -1,5 +1,6 @@
 import type { Size } from "@amira/api"
 import { closeStyles, truncateToWidth, visibleWidth } from "@amira/tui-kit"
+import { viewEllipsis } from "../glyphs.ts"
 
 export interface Rect {
   x: number
@@ -58,7 +59,7 @@ export function allocate(
 /** A styled string clipped with ellipsis and padded, without leaking styles into a neighbor. */
 export function fit(text: string, width: number, right = false): string {
   if (width <= 0) return ""
-  const cut = closeStyles(truncateToWidth(text, width, "…"))
+  const cut = closeStyles(truncateToWidth(text, width, viewEllipsis("…")))
   const pad = " ".repeat(Math.max(0, width - visibleWidth(cut)))
   return right ? pad + cut : cut + pad
 }

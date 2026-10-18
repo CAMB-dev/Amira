@@ -27,7 +27,7 @@ import {
 import { terminalText } from "./diff-view.ts"
 import { oneLine, wrapViewLines } from "./extension-view-rendering.ts"
 import { replyRows } from "./format.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { fitHint } from "./hint.ts"
 import {
   keyLabel as bindingLabel,
@@ -56,7 +56,7 @@ import {
   usableViewKey as usable,
   viewInputHint,
 } from "./view-keys.ts"
-import { renderViewLines, viewTitle } from "./view-lines.ts"
+import { renderViewLines, viewTitle, viewToolChrome } from "./view-lines.ts"
 import { confirmationText, ViewPromptHits } from "./view-pointer.ts"
 
 export { wrapViewLines } from "./extension-view-rendering.ts"
@@ -525,7 +525,7 @@ export class ExtensionViewer implements Component {
     const asideText = this.#view.titleAside
       ? oneLine(this.#call("titleAside", () => this.#view.titleAside?.(this.#data)) ?? "")
       : ""
-    const aside = asideText ? theme.muted(truncateToWidth(` ${asideText}`, width, glyphs.more)) : ""
+    const aside = asideText ? theme.muted(truncateToWidth(` ${asideText}`, width, viewEllipsis())) : ""
     // The aside stays at the right end; the title is cut first on a narrow screen.
     const room = width - visibleWidth(aside)
     const fitted =
@@ -533,7 +533,7 @@ export class ExtensionViewer implements Component {
         ? truncateToWidth(
             `${theme.accent(glyphs.subagent)} ${theme.text(oneLine(title))}`,
             Math.max(1, room),
-            glyphs.more,
+            viewEllipsis(),
           )
         : viewTitle(title, theme, Math.max(1, room))
     head.push(aside ? fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted))) + aside : fitted)
@@ -662,14 +662,10 @@ export class ExtensionViewer implements Component {
       renderTool: (name, call, detail, options) => {
         finished = true
         return this.#hostRows(
-          finishedToolLines(
-            theme,
-            this.#opts.presenters?.get(name),
-            { ...call, name },
-            detail,
-            width,
-            options,
-          ),
+          finishedToolLines(theme, this.#opts.presenters?.get(name), { ...call, name }, detail, width, {
+            ...options,
+            ...viewToolChrome(),
+          }),
         )
       },
       toolDetail: this.#toolDetail ?? this.#opts.toolDetail?.() ?? "summary",
@@ -679,9 +675,16 @@ export class ExtensionViewer implements Component {
         let run: { call: FinishedCall; presenter: ReturnType<PresenterSource["get"]> }[] = []
         const flush = (last: boolean) => {
           if (run.length > 1)
-            rows.push(...exploredLines(theme, run, detail === "full", detail, width, { last }))
+            rows.push(
+              ...exploredLines(theme, run, detail === "full", detail, width, { last, ...viewToolChrome() }),
+            )
           else if (run[0])
-            rows.push(...finishedToolLines(theme, run[0].presenter, run[0].call, detail, width, { last }))
+            rows.push(
+              ...finishedToolLines(theme, run[0].presenter, run[0].call, detail, width, {
+                last,
+                ...viewToolChrome(),
+              }),
+            )
           run = []
         }
         for (const [index, entry] of calls.entries()) {
@@ -691,7 +694,9 @@ export class ExtensionViewer implements Component {
           if (explorationOf(presenter, call)) run.push({ call, presenter })
           else {
             flush(false)
-            rows.push(...finishedToolLines(theme, presenter, call, detail, width, { last }))
+            rows.push(
+              ...finishedToolLines(theme, presenter, call, detail, width, { last, ...viewToolChrome() }),
+            )
           }
         }
         flush(options?.last ?? false)
@@ -709,9 +714,9 @@ export class ExtensionViewer implements Component {
               this.#opts.presenters?.get(name),
               { ...call, name, startedAt: call.startedAt ?? now },
               now,
-              this.#spinner.glyph,
+              Spinner.forGlyphs(this.#spinner.glyph, glyphs),
               width,
-              options,
+              { ...options, ...viewToolChrome() },
             ),
             true,
           ),
@@ -825,17 +830,17 @@ export class ExtensionViewer implements Component {
         ),
       )
     }
-    if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, glyphs.more))
+    if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, viewEllipsis()))
     const asking = this.#prompt
     if (asking) {
-      const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), glyphs.more)
+      const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), viewEllipsis())
       const room = Math.max(1, width - visibleWidth(label))
       const back = this.#navigationLabel("view.back", true)
       const placeholder = `${bindingLabel({ name: "enter" })} send${back ? ` ${glyphs.separator} ${back} cancel` : ""}`
-      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: this.focused, placeholder })}`
+      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: this.focused, placeholder, more: viewEllipsis("…") })}`
     }
     if (this.#view.hostKeys === "minimal")
-      return theme.muted(truncateToWidth(this.#backHint(), width, glyphs.more))
+      return theme.muted(truncateToWidth(this.#backHint(), width, viewEllipsis()))
     if (this.#ui)
       return theme.muted(
         fitHint(

@@ -114,6 +114,36 @@ export type Glyphs = { -readonly [K in keyof typeof defaults]: string }
 /** Shared by the terminal UI's formatting helpers; one interactive UI owns these at a time. */
 export const glyphs: Glyphs = { ...defaults }
 
+/** Whether the active glyph set is the font-limited ASCII profile (a plain-ASCII cursor). */
+export function asciiGlyphs(): boolean {
+  return /^[\x20-\x7e]+$/.test(glyphs.pointer)
+}
+
+/**
+ * The marker for text cut to width in host-rendered views. A theme's `glyphs.more` is a
+ * one-cell marker it owns (the ASCII theme uses "."); a view ellipsis instead stands for
+ * omitted text, so ASCII mode uses three periods in three cells, like the shape of "…".
+ * Elsewhere it returns `fallback`, so callers that drew a literal ellipsis keep doing so
+ * whatever the theme's `more` is, while callers that used `more` pass it as the fallback.
+ */
+export function viewEllipsis(fallback = glyphs.more): string {
+  return asciiGlyphs() ? "..." : fallback
+}
+
+/** Stands for the lines between two hunks in a view; ASCII mode spells the gap out. */
+export function viewGap(): string {
+  return asciiGlyphs() ? "..." : "⋯"
+}
+
+/**
+ * The separator between host-composed labels inside a view (tool summaries, for example).
+ * Non-ASCII mode keeps the middle dot these labels have always used; ASCII mode uses the
+ * period the ASCII theme also chooses for its own separator.
+ */
+export function viewSeparator(): string {
+  return asciiGlyphs() ? "." : "·"
+}
+
 /** Definitions are validated by the core registry; absent keys always reset to the defaults. */
 export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
   const profile = chromeGlyphs(overrides)
