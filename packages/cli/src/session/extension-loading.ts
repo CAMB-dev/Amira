@@ -7,6 +7,8 @@ export interface ExtensionLoaderOptions {
   host: ExtensionHost
   bus: EventBus
   noBuiltins: boolean
+  /** Keep package skill metadata without executing unbundled code. */
+  executionOnly?: boolean
   builtins: () => Promise<{ source: string; extension: Extension }[]>
   getPackages: () => ActivePackages | undefined
   extensions: string[]
@@ -29,6 +31,33 @@ export function createExtensionLoader(opts: ExtensionLoaderOptions): () => Promi
       }
     }
     const packages = opts.getPackages()
+    if (opts.executionOnly) {
+      const skipped = [
+        ...(packages?.packages ?? []).flatMap((pkg) =>
+          pkg.manifest.extensions.map((file) => packageLabel(pkg, file).source),
+        ),
+        ...opts.extensions.map((file) => fileLabel(file, opts.cwd)),
+      ]
+      for (const source of skipped)
+        opts.bus.emit(
+          "extension.notice",
+          {
+            source,
+            level: "warning",
+            text: `Skipped executable extension ${source}: remote workspaces support built-in extensions only.`,
+          },
+          { sessionId: "host" },
+        )
+      for (const problem of packages?.problems ?? []) {
+        opts.bus.emit(
+          "extension.error",
+          { source: problem.name, error: problem.error },
+          { sessionId: "host" },
+        )
+        failed.push(problem.name)
+      }
+      return failed
+    }
     for (const p of packages?.packages ?? []) {
       for (const file of p.manifest.extensions) {
         const label = packageLabel(p, file)

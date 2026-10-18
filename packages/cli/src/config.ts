@@ -41,6 +41,7 @@ export function resolveConfig(
   args: CliArgs,
   home = amiraHome(),
   platform: string = process.platform,
+  options: { credentials?: "load" | "omit" } = {},
 ): Config {
   const flags: Settings = {
     ...(args.model ? { model: args.model } : {}),
@@ -65,7 +66,9 @@ export function resolveConfig(
   const trusted = projectScopeIsUser(where) || projectTrust(args.cwd, settings) === true
   const permissions = resolvePermissions(permissionLayers, { trusted })
   warnings.push(...permissions.warnings)
-  const auth = loadAuth(authFile(home), platform)
+  // Injected/proxy AI composition must not read a remote credential store.
+  const auth =
+    options.credentials === "omit" ? { keys: {}, warnings: [] } : loadAuth(authFile(home), platform)
   let shell: ShellMode = settings.shell ?? DEFAULT_SHELL
   if (shell === "powershell" && platform !== "win32") {
     warnings.push('settings: shell "powershell" is only available on Windows; using auto')

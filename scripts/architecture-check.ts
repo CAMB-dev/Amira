@@ -214,7 +214,10 @@ function lineCount(file: string): number {
  * The composition root that bundles the built-in extensions (D50). It is the one host file that
  * may reach into extensions/*; everything else talks to them through @amira/api.
  */
-const bundlingRoots = new Set(["packages/cli/src/session.ts"])
+const bundlingRoots = new Set([
+  "packages/cli/src/session/builtin-profiles.ts",
+  "packages/cli/src/server/profile.ts",
+])
 const packageRoot = path.join(root, "packages")
 const extensionRoot = path.join(root, "extensions")
 const packageDirectoriesInWorkspace = [

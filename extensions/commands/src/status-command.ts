@@ -7,6 +7,7 @@ import {
 } from "@amira/api"
 import { cacheHitRate, costByModel, formatCost, formatTokens, table, windowLabel } from "./format.ts"
 import { liveSpeed } from "./live-speed.ts"
+import { safeProviderUrl } from "./provider-url.ts"
 import { trackSpeed } from "./status-speed.ts"
 
 /**
@@ -117,7 +118,7 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
           [
             "Provider",
             provider
-              ? `${provider.id} (${provider.dialect}, ${provider.baseUrl})`
+              ? `${provider.id} (${provider.dialect}, ${safeProviderUrl(provider.baseUrl)})`
               : info.model.provider || "(none; add one with /provider add, pick a model with /model)",
           ],
           ["Session", `${info.id}${info.busy ? " (turn running)" : ""}`],
