@@ -1,15 +1,9 @@
-import {
-  type Ai,
-  type Message,
-  type MessageDisplay,
-  type UserContent,
-  type UserMessage,
-  userMessage,
-} from "@amira/ai"
-import { type AnyEvent, type EventMap, modelLabel, type TurnEndReason } from "@amira/api"
+import type { Ai } from "@amira/ai"
+import type { AnyEvent } from "@amira/api"
 import { type Agent, type CommandHost, newTurnId, UiRequests } from "@amira/core"
-import { safeJson } from "./print.ts"
-import type { COMMAND_PARAMS } from "./rpc-schema.ts"
+import { safeJson } from "./json-output.ts"
+import { createRpcDispatcher, createRpcOperations, type LastTurn, rpcUiRequest } from "./rpc/operations.ts"
+import type { ErrorCode, Id } from "./rpc/validation.ts"
 import { stdoutWriter } from "./stdout-writer.ts"
 
 export interface RpcIO {
@@ -54,40 +48,6 @@ export interface RpcSession {
    * the active agent: session.resume goes through it, and this frontend follows its switches.
    */
   commands?: CommandHost
-}
-
-type ErrorCode =
-  | "parse_error"
-  | "invalid_request"
-  | "unknown_command"
-  | "invalid_params"
-  | "busy"
-  | "not_found"
-  | "not_supported"
-  | "command_failed"
-  | "internal"
-
-class RpcError extends Error {
-  constructor(
-    readonly code: ErrorCode,
-    message: string,
-  ) {
-    super(message)
-  }
-}
-
-type Id = string | number | null
-type Params = Record<string, unknown>
-type Handler = (p: Params) => Record<string, unknown> | Promise<Record<string, unknown>>
-
-/** What the client needs to read back the most recent turn. */
-interface LastTurn {
-  turnId: string
-  prompt: UserMessage
-  /** Where the prompt sat in the history when the turn started. */
-  start: number
-  reason?: TurnEndReason
-  error?: string
 }
 
 /**
@@ -137,11 +97,6 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     prepareAgent(agent)
     lastTurn = undefined
   })
-  /** command.run calls still going; they may wait on dialogs answered by later lines. */
-  const runningCommands = new Set<Promise<void>>()
-  /** What the client last said about its focus (ui.focus); events go out on changes only. */
-  let focused: boolean | undefined
-
   const send = (value: unknown) => io.write(`${safeJson(value)}\n`)
   const sendEvent = (event: AnyEvent) =>
     send(event.type === "ui.request" ? { ...event, data: rpcUiRequest(event.data) } : event)
@@ -177,245 +132,20 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   const offEvents = agent.bus.subscribe(sendEvent, { maxQueue: opts.maxQueue ?? 2000 })
   opts.onReady?.()
 
-  const text = (p: Params, key = "text"): string => {
-    const v = p[key]
-    if (typeof v !== "string") throw new RpcError("invalid_params", `"${key}" must be a string`)
-    return v
-  }
-  /** What keeps the agent busy, for the busy errors: "a turn", "a compaction", "a reload". */
-  const running = () => (agent.turnId ? "a turn" : `a ${agent.holdingFor ?? "compaction"}`)
-
-  const handlers: Record<keyof typeof COMMAND_PARAMS, Handler> = {
-    prompt: (p) => {
-      const content: UserContent[] = [{ type: "text", text: text(p) }, ...attachments(p.attachments)]
-      const shown = display(p.display)
-      if (agent.turnId) throw new RpcError("busy", "a turn is running; steer it or wait for turn.end")
-      if (agent.busy) throw new RpcError("busy", `${running()} is running; steer to queue the message`)
-      const turnId = newTurnId()
-      agent
-        .prompt({ role: "user", content, ...(shown ? { display: shown } : {}) }, { turnId })
-        .catch(() => {})
-      return { turnId }
-    },
-    steer: (p) => {
-      const message = userMessage(text(p), display(p.display))
-      const queued = agent.busy
-      agent.steer(message)
-      return { ...(agent.turnId ? { turnId: agent.turnId } : {}), queued }
-    },
-    abort: () => {
-      const aborted = agent.busy
-      agent.abort()
-      return { aborted }
-    },
-    "subagent.message": (p) => ({
-      delivered: needCommands().control.messageSubagent(text(p, "sessionId"), text(p)),
+  const dispatcher = createRpcDispatcher({
+    handlers: createRpcOperations({
+      agent: () => agent,
+      ai,
+      ui,
+      commands,
+      lastTurn: () => lastTurn,
+      newTurnId,
+      resume: opts.resume,
+      replaceAgent,
     }),
-    "subagent.pause": (p) => ({ paused: needCommands().control.pauseSubagent(text(p, "sessionId")) }),
-    "subagent.resume": (p) => ({ resumed: needCommands().control.resumeSubagent(text(p, "sessionId")) }),
-    "ui.respond": (p) => {
-      const requestId = text(p, "requestId")
-      // A misspelt key must not cancel the dialog; only an explicit null does.
-      if (!Object.hasOwn(p, "value"))
-        throw new RpcError("invalid_params", '"value" is required (null cancels)')
-      const problem = ui.respond(requestId, p.value)
-      if (problem)
-        throw new RpcError(problem.startsWith("no pending") ? "not_found" : "invalid_params", problem)
-      return {}
-    },
-    "ui.action": async (p) => {
-      const requestId = text(p, "requestId")
-      const action = text(p, "action")
-      const values = p.values ?? {}
-      if (typeof values !== "object" || values === null || Array.isArray(values)) {
-        throw new RpcError("invalid_params", '"values" must be an object')
-      }
-      if (ui.validateForm(requestId, {}) === undefined) {
-        throw new RpcError("not_found", `no pending form "${requestId}"`)
-      }
-      return { result: await ui.runFormAction(requestId, action, values as Record<string, unknown>) }
-    },
-    "ui.configure": (p) => {
-      if (p.forms !== "native" && p.forms !== "dialogs") {
-        throw new RpcError("invalid_params", '"forms" must be "native" or "dialogs"')
-      }
-      ui.formMode = p.forms
-      return {}
-    },
-    "ui.focus": (p) => {
-      if (typeof p.focused !== "boolean") throw new RpcError("invalid_params", '"focused" must be a boolean')
-      if (p.focused !== focused) {
-        focused = p.focused
-        agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
-      }
-      return {}
-    },
-    "session.read": (p) => {
-      if (p.what === "messages") return { messages: agent.messages }
-      if (p.what !== "lastTurn")
-        throw new RpcError("invalid_params", '"what" must be "lastTurn" or "messages"')
-      if (!lastTurn) return { messages: [] }
-      const messages = agent.messages.slice(turnStart(agent.messages, lastTurn))
-      return {
-        turnId: lastTurn.turnId,
-        ...(lastTurn.reason ? { reason: lastTurn.reason } : {}),
-        ...(lastTurn.error !== undefined ? { error: lastTurn.error } : {}),
-        text: lastAssistantText(messages) ?? "",
-        messages,
-      }
-    },
-    "model.set": (p) => {
-      const ref = text(p, "model")
-      // The running turn's history may carry state only its model understands.
-      if (agent.busy) throw new RpcError("busy", `${running()} is running; set the model after it ends`)
-      try {
-        agent.setModel(ai.model(ref))
-      } catch (err) {
-        throw new RpcError("invalid_params", err instanceof Error ? err.message : String(err))
-      }
-      return { model: modelLabel({ provider: agent.model.provider, model: agent.model.id }) }
-    },
-    "thinking.set": (p) => {
-      const level = text(p, "level")
-      if (
-        level !== "default" &&
-        level !== "low" &&
-        level !== "medium" &&
-        level !== "high" &&
-        level !== "xhigh" &&
-        level !== "max"
-      ) {
-        throw new RpcError("invalid_params", '"level" must be low, medium, high, xhigh, max or default')
-      }
-      if (agent.busy) throw new RpcError("busy", `${running()} is running; set thinking after it ends`)
-      agent.thinking.set(level === "default" ? undefined : level, agent.model)
-      return agent.thinking.state(agent.model)
-    },
-    state: () => {
-      const last = lastAssistantText(agent.messages)
-      return {
-        status: agent.status,
-        model: modelLabel({ provider: agent.model.provider, model: agent.model.id }),
-        sessionId: agent.sessionId,
-        ...(agent.turnId ? { turnId: agent.turnId } : {}),
-        messages: agent.messages.length,
-        ...(last !== undefined ? { lastAssistantText: last } : {}),
-        busy: agent.busy,
-        ...agent.thinking.state(agent.model),
-        uiRequests: ui.pending.map(rpcUiRequest),
-      }
-    },
-    "session.rename": (p) => {
-      const rename = needCommands().control.rename
-      if (!rename) throw new RpcError("not_supported", "this host cannot rename sessions")
-      const title = text(p, "title")
-      if (!title.trim()) throw new RpcError("invalid_params", "title must not be empty")
-      rename(title)
-      return { sessionId: agent.sessionId, title: agent.session?.title }
-    },
-    "session.fork": async (p) => {
-      if (agent.busy) throw new RpcError("busy", `${running()} is running`)
-      const fork = needCommands().control.fork
-      if (!fork) throw new RpcError("not_supported", "this host cannot fork sessions")
-      const index = p.index
-      if (index !== undefined && (typeof index !== "number" || !Number.isInteger(index) || index < 0))
-        throw new RpcError("invalid_params", "index must be a non-negative integer")
-      await fork(index as number | undefined)
-      return { sessionId: agent.sessionId }
-    },
-    "session.resume": async (p) => {
-      const sessionId = text(p, "sessionId")
-      if (agent.busy) throw new RpcError("busy", `${running()} is running`)
-      if (commands) {
-        if (sessionId === agent.sessionId) return { sessionId }
-        try {
-          await commands.control.resume(sessionId)
-        } catch (err) {
-          throw new RpcError("not_found", err instanceof Error ? err.message : String(err))
-        }
-        return { sessionId: agent.sessionId }
-      }
-      if (!opts.resume) throw new RpcError("not_supported", "this host cannot resume sessions")
-      const next = await opts.resume(sessionId)
-      if (!next) throw new RpcError("not_found", `no session ${sessionId}`)
-      await replaceAgent(next)
-      return { sessionId: agent.sessionId }
-    },
-    "command.list": () => ({ commands: needCommands().list(), aliases: needCommands().aliases() }),
-    "command.complete": async (p) => await needCommands().complete(text(p)),
-    "command.run": async (p) => {
-      const r = await needCommands().run(text(p), { frontend: "rpc" })
-      if (!r.ok) {
-        const unknown =
-          !r.command ||
-          !needCommands()
-            .list()
-            .some((c) => c.name === r.command)
-        throw new RpcError(unknown ? "not_found" : "command_failed", r.error ?? "command failed")
-      }
-      return { command: r.command, output: r.output }
-    },
-    "skill.list": () => ({ skills: needCommands().skills() }),
-    "skill.run": async (p) => {
-      const name = typeof p.name === "string" ? p.name.trim() : ""
-      if (!name || /[\s$]/.test(name)) throw new RpcError("invalid_params", '"name" must be a skill name')
-      const args = p.args === undefined ? "" : p.args
-      if (typeof args !== "string") throw new RpcError("invalid_params", '"args" must be a string')
-      const line = `$${name}${args.trim() ? ` ${args.trim()}` : ""}`
-      const known = needCommands().skillLine(line) !== undefined
-      const r = await needCommands().runSkill(line, { frontend: "rpc" })
-      if (!r.ok) throw new RpcError(known ? "command_failed" : "not_found", r.error ?? "skill failed")
-      return { skill: name, output: r.output }
-    },
-  }
-
-  const needCommands = (): CommandHost => {
-    if (!commands) throw new RpcError("not_supported", "this host has no slash commands or skills")
-    return commands
-  }
-
-  const handle = async (line: string) => {
-    if (!line.trim()) return
-    let msg: unknown
-    try {
-      msg = JSON.parse(line)
-    } catch (err) {
-      return fail(null, "parse_error", err instanceof Error ? err.message : String(err))
-    }
-    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
-      return fail(null, "invalid_request", "a command must be a JSON object")
-    }
-    const p = msg as Params
-    const id: Id = typeof p.id === "string" || typeof p.id === "number" ? p.id : null
-    if (typeof p.cmd !== "string") return fail(id, "invalid_request", 'missing "cmd"')
-    const handler = Object.hasOwn(handlers, p.cmd) ? handlers[p.cmd as keyof typeof handlers] : undefined
-    if (!handler) return fail(id, "unknown_command", `unknown command "${p.cmd}"`)
-    const report = (err: unknown) => {
-      if (err instanceof RpcError) fail(id, err.code, err.message)
-      else fail(id, "internal", err instanceof Error ? err.message : String(err))
-    }
-    if (p.cmd === "command.run" || p.cmd === "skill.run" || p.cmd === "ui.action") {
-      // Not awaited: a command may ask a question that a later line (ui.respond) answers, and
-      // an action may take a while; later lines must still be handled meanwhile.
-      const run = (async () => {
-        try {
-          reply(id, await handler(p))
-        } catch (err) {
-          report(err)
-        }
-      })()
-      runningCommands.add(run)
-      void run.finally(() => runningCommands.delete(run))
-      return
-    }
-    try {
-      // Synchronous answers go out before any event the command caused (prompt's turn.start).
-      const result = handler(p)
-      reply(id, result instanceof Promise ? await result : result)
-    } catch (err) {
-      report(err)
-    }
-  }
+    reply,
+    fail,
+  })
 
   // First Ctrl+C aborts the turn; a second one exits.
   let interrupted = false
@@ -426,12 +156,12 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
   }
   process.on("SIGINT", onSigint)
   try {
-    for await (const line of io.lines) await handle(line)
+    for await (const line of io.lines) await dispatcher.handle(line)
     closed = true
     // Approvals asked from now on are refused with a reason instead of a dialog nobody sees.
     ui.unavailable ??= "the rpc client closed its input"
     ui.cancelAll()
-    await Promise.all(runningCommands)
+    await dispatcher.settle()
     // The running turn or /compact, background sub-agents still expected to report, and the
     // turns their results start; Ctrl+C stops waiting for the sub-agents.
     while (agent.busy || (!interrupted && (agent.expectedNotices > 0 || agent.noticeRetry)))
@@ -448,63 +178,6 @@ export async function runRpc(session: RpcSession, opts: RpcOptions = {}): Promis
     offSwitch?.()
     io.close?.()
   }
-}
-
-/** Automatic actions belong to the TUI; RPC clients can still invoke them with ui.action. */
-function rpcUiRequest(request: EventMap["ui.request"]): EventMap["ui.request"] {
-  if (request.kind !== "form") return request
-  return {
-    ...request,
-    fields: request.fields.map((field) => {
-      if (field.type !== "action") return { ...field }
-      const { auto: _auto, ...manual } = field
-      return manual
-    }),
-  }
-}
-
-function display(value: unknown): MessageDisplay | undefined {
-  if (value === undefined) return undefined
-  const d = value as { text?: unknown; note?: unknown } | null
-  if (typeof d?.text !== "string" || !d.text.trim() || (d.note !== undefined && typeof d.note !== "string")) {
-    throw new RpcError("invalid_params", '"display" must be {text, note?} with string values, text not blank')
-  }
-  return { text: d.text, ...(d.note !== undefined ? { note: d.note } : {}) }
-}
-
-function attachments(value: unknown): UserContent[] {
-  if (value === undefined) return []
-  if (!Array.isArray(value)) throw new RpcError("invalid_params", '"attachments" must be an array')
-  return value.map((a, i) => {
-    if (a?.type === "text" && typeof a.text === "string") return { type: "text", text: a.text }
-    if (a?.type === "image" && typeof a.mimeType === "string" && typeof a.data === "string") {
-      return { type: "image", mimeType: a.mimeType, data: a.data }
-    }
-    throw new RpcError(
-      "invalid_params",
-      `attachments[${i}] must be {type:"text",text} or {type:"image",mimeType,data}`,
-    )
-  })
-}
-
-/**
- * Index of the turn's prompt in the history. When entries were replaced (a reload or
- * compaction), falls back to where it started, and to the whole history if that is gone.
- */
-function turnStart(messages: Message[], turn: LastTurn): number {
-  const i = messages.lastIndexOf(turn.prompt)
-  if (i !== -1) return i
-  return turn.start < messages.length ? turn.start : 0
-}
-
-function lastAssistantText(messages: Message[]): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]!
-    if (m.role !== "assistant") continue
-    const t = m.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
-    if (t) return t
-  }
-  return undefined
 }
 
 /** stdin split into lines, and stdout with backpressure. */

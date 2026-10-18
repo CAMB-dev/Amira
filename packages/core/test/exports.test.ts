@@ -125,6 +125,7 @@ test("the public core exports stay stable", async () => {
     "commandName",
     "contextTokens",
     "copyFileHistory",
+    "createLocalAgentPort",
     "createToolSession",
     "deepMerge",
     "defaultSections",

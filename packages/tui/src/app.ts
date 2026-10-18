@@ -9,7 +9,7 @@ import {
   type EventMap,
   type ToolDetailLevel,
 } from "@amira/api"
-import { type Agent, MODE_SUMMARY } from "@amira/core"
+import { type Agent, type AgentPort, MODE_SUMMARY } from "@amira/core"
 import {
   chooseImageSupport,
   detectEnv,
@@ -34,7 +34,7 @@ import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
 import { activePointerHint, pointerGeometry, routePointer } from "./app/pointer.ts"
-import { showAgentSession } from "./app/session-display.ts"
+import { createSessionDisplay } from "./app/session-display.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
@@ -46,12 +46,13 @@ import {
   startupNotices,
   tildePath,
   welcomeCard,
+  withFrontend,
 } from "./app/startup.ts"
 import { createSubmission } from "./app/submission.ts"
 import { interactiveBanner, withFullscreenTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyToClipboard, lastReplyText } from "./clipboard.ts"
-import { displayHistory, displayOutput } from "./display-history.ts"
+import { displayOutput } from "./display-history.ts"
 import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
@@ -79,16 +80,19 @@ export { type InteractiveOptions, tildePath } from "./app/startup.ts"
 export async function runInteractive(opts: InteractiveOptions): Promise<number> {
   const env = opts.env ?? process.env
   const terminal = opts.terminal ?? new ProcessTerminal()
-  return withFullscreenTerminal(terminal, env, () => runFullscreen(opts, terminal, env))
+  return withFrontend(opts, (options) =>
+    withFullscreenTerminal(terminal, env, () => runFullscreen(options, terminal, env)),
+  )
 }
 
 async function runFullscreen(
-  opts: InteractiveOptions,
+  opts: InteractiveOptions & { frontend: AgentPort },
   terminal: Terminal,
   env: Record<string, string | undefined>,
 ): Promise<number> {
   // Wiring and collaborators: terminal setup and the UI's shared services.
   let { agent } = opts
+  const state = () => opts.frontend.snapshot.state
   const presenters = opts.toolRenderers
   const settings = opts.settings ?? {}
   const imageSetting = settings.images ?? DEFAULT_TUI_IMAGES
@@ -189,14 +193,14 @@ async function runFullscreen(
       focus.conversation
         ? { cwd: tildePath(focus.conversation.cwd, env), title: focus.conversation.name }
         : {
-            cwd: tildePath(agent.cwd, env),
-            ...(workspace?.cwd === agent.cwd
+            cwd: tildePath(state().cwd, env),
+            ...(workspace?.cwd === state().cwd
               ? { branch: workspace.branch ?? workspace.head, dirty: workspace.dirty }
               : {}),
-            title: agent.session?.title,
+            title: state().title,
             cost: opts.status.snapshot().find((i) => i.id === "cost")?.text,
-            used: agent.contextTokens,
-            limit: agent.model.contextWindow,
+            used: state().contextTokens,
+            limit: state().model.contextWindow,
           },
       width,
       ctx,
@@ -635,7 +639,7 @@ async function runFullscreen(
 
   /** "Interrupted", and that sub-agents run on in the background (an interrupt stops only the turn). */
   function interruptedText(): string {
-    const n = agent.tree?.children.length ?? 0
+    const n = state().children
     return n
       ? `${INTERRUPTED_NOTICE} · ${n} sub-agent${n === 1 ? "" : "s"} still running · /agents`
       : INTERRUPTED_NOTICE
@@ -658,7 +662,7 @@ async function runFullscreen(
    * run; then the first press says so and a second one (while the note shows) quits.
    */
   function quitOrWarn(action: "cancel" | "exit") {
-    const n = agent.tree?.children.length ?? 0
+    const n = state().children
     const jobs = runningJobs()
     if ((!n && !jobs) || Date.now() < quitArmedUntil) return quit()
     quitArmedUntil = Date.now() + HINT_NOTE_MS
@@ -684,10 +688,9 @@ async function runFullscreen(
     agent = next
     commandRunner.clearEchoes()
     noticeStrip.reset()
-    showAgentSession(mainView, next, true)
+    sessions.show(next.sessionId, true)
     view.requestRender()
   }
-
   /** Sets how much of tool results is shown; returns the note that says so. */
   function setDetail(level: ToolDetailLevel): string {
     detail = level
@@ -707,6 +710,7 @@ async function runFullscreen(
     overlays.dispose()
     off()
     offSwitch?.()
+    sessions.dispose()
     offCommand?.()
     offThemeCommand?.()
     hint.dispose()
@@ -849,8 +853,8 @@ async function runFullscreen(
     if (pending) setTimeout(() => view.requestRender(), FRAME_MS)
     else view.requestRender()
   }
-
   // Lifecycle: subscriptions and terminal startup, in registration order.
+  const sessions = createSessionDisplay(opts.frontend, mainView)
   const off = agent.bus.subscribe(onEvent)
   const offSwitch = commands?.onSwitch(followAgent)
   const offCommand = opts.registerCommand?.(detailCommand(() => detail, setDetail))
@@ -864,7 +868,7 @@ async function runFullscreen(
     unbindTerminal = opts.bindTerminal?.(termStatus)
     opts.onReady?.()
     reader.start()
-    view.banner((theme) => interactiveBanner(theme, agent.model, tildePath(agent.cwd, env)))
+    view.banner((theme) => interactiveBanner(theme, state().model, tildePath(state().cwd, env)))
     // Where to start: how to find the commands, the files, the skills and the keys.
     const helpKey = keys.label("help")
     const starts = [
@@ -874,10 +878,10 @@ async function runFullscreen(
       helpKey && `${helpKey} keys`,
     ].filter(Boolean)
     view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
-    if (agent.messages.length || displayHistory(agent).length) showAgentSession(mainView, agent, false)
+    if (state().resumed) sessions.show(agent.sessionId, false)
     for (const e of opts.startupEvents ?? []) onEvent(e)
     // With no provider yet, a welcome card with the steps to a first message replaces the notice.
-    const welcome = isNoModel(agent.model) && submission.noProviders()
+    const welcome = isNoModel(state().model) && submission.noProviders()
     if (welcome) view.notice("info", welcomeCard())
     for (const notice of startupNotices(opts, welcome)) view.notice("warning", notice)
     // The first frame carries the banner, history and startup messages.

@@ -1,24 +1,68 @@
-import { statSync } from "node:fs"
-import type { Agent } from "@amira/core"
+import type { Message } from "@amira/ai"
+import type { CompactionInfo } from "@amira/api"
+import type { AgentPort, FrontendSnapshot } from "@amira/core"
 import { displayHistory } from "../display-history.ts"
 import { rememberMessageTime } from "../format.ts"
 import type { TranscriptView } from "../view.ts"
 
-/** Shows this session's boundary and history; switched full-screen sessions start afresh. */
-export function showAgentSession(view: TranscriptView, agent: Agent, switched: boolean) {
-  const displays = displayHistory(agent)
-  const resumed = agent.messages.length > 0 || displays.length > 0
-  let updatedAt: number | undefined
-  try {
-    if (agent.session?.file && resumed) updatedAt = statSync(agent.session.file).mtimeMs
-  } catch {}
-  const boundary = {
-    id: agent.sessionId,
-    resumed,
-    ...(updatedAt !== undefined ? { updatedAt } : {}),
+/** Keeps failed switches pending until their first valid projection, without replaying live turns. */
+export function createSessionDisplay(
+  frontend: AgentPort,
+  view: Pick<TranscriptView, "notice" | "requestRender" | "openSession">,
+) {
+  let valid = true
+  let pending: { sessionId: string; switched: boolean } | undefined
+  const off = frontend.subscribe((update) => {
+    if (update.kind === "error") {
+      valid = false
+      view.notice("warning", update.error.message)
+    } else {
+      valid = true
+      if (pending?.sessionId === update.snapshot.state.sessionId) {
+        showAgentSession(view, update.snapshot, pending.switched)
+        pending = undefined
+      }
+    }
+    view.requestRender()
+  })
+  return {
+    show(sessionId: string, switched: boolean) {
+      pending = { sessionId, switched }
+      if (valid && frontend.snapshot.state.sessionId === sessionId) {
+        showAgentSession(view, frontend.snapshot, switched)
+        pending = undefined
+      }
+    },
+    dispose() {
+      pending = undefined
+      off()
+    },
   }
-  for (const entry of agent.session?.branch() ?? []) {
-    if (entry.type === "message") rememberMessageTime(entry.message, entry.ts)
+}
+
+/** Shows host-projected history without filesystem, store or Agent reads in the renderer. */
+export function showAgentSession(
+  view: Pick<TranscriptView, "openSession">,
+  snapshot: FrontendSnapshot,
+  switched: boolean,
+) {
+  const { state, transcript } = snapshot
+  const messages = transcript.messages.map((entry) => entry.message)
+  const compactions = new Map<Message, CompactionInfo | undefined>(
+    transcript.messages.map((entry) => [entry.message, entry.compaction]),
+  )
+  for (const entry of transcript.messages) {
+    if (entry.ts !== undefined) rememberMessageTime(entry.message, entry.ts)
   }
-  view.openSession(boundary, agent.messages, switched, (m) => agent.compactionInfo(m), displays)
+  view.openSession(
+    {
+      id: state.sessionId,
+      resumed: state.resumed,
+      ...(state.updatedAt !== undefined ? { updatedAt: state.updatedAt } : {}),
+    },
+    messages,
+    switched,
+    (message) => compactions.get(message),
+    displayHistory(snapshot),
+  )
 }
