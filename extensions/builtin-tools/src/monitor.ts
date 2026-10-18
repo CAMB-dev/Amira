@@ -18,6 +18,19 @@ export interface MonitorParams {
   description?: string
 }
 
+/** The monitor tool's description for the shell its commands run in. */
+export function monitorDescription(shell: "bash" | "powershell"): string {
+  return [
+    shell === "powershell"
+      ? "Monitor a PowerShell command (same shell as the powershell tool; PowerShell syntax); return job id immediately. Normal shell permissions apply."
+      : "Monitor a bash command (same shell as the bash tool: Git Bash on Windows; bash syntax, not PowerShell); return job id immediately. Normal shell permissions apply.",
+    "Never wrap the command in another shell (pwsh/powershell -Command, bash -c, cmd /c).",
+    "New/matching lines wake you. filter: case-insensitive line regex; invalid = literal. Narrow chatty output.",
+    "Batch ~1s; max one notice/2s, ~4KB each; pause output notices after 200 events. Final notice on exit/timeout.",
+    `Stop via job_stop; read via job_output. timeout_ms: default ${DEFAULT_MONITOR_TIMEOUT_MS / 60_000}m, max ${MAX_MONITOR_TIMEOUT_MS / 3_600_000}h. Child monitors end with owner; -p waits until exit/stop/timeout.`,
+  ].join("\n")
+}
+
 /** Uses the same runtime shell classification and permission checks as bash. */
 export function createMonitorTool(
   resolve?: () => Promise<Shell>,
@@ -27,12 +40,11 @@ export function createMonitorTool(
   const shell = resolve ?? (() => (mode() === "powershell" ? resolvePowerShell() : resolveShell()))
   return defineTool<MonitorParams>({
     name: "monitor",
-    description: [
-      "Monitor a session-shell command; return job id immediately. Normal shell permissions apply.",
-      "New/matching lines wake you. filter: case-insensitive line regex; invalid = literal. Narrow chatty output.",
-      "Batch ~1s; max one notice/2s, ~4KB each; pause output notices after 200 events. Final notice on exit/timeout.",
-      `Stop via job_stop; read via job_output. timeout_ms: default ${DEFAULT_MONITOR_TIMEOUT_MS / 60_000}m, max ${MAX_MONITOR_TIMEOUT_MS / 3_600_000}h. Child monitors end with owner; -p waits until exit/stop/timeout.`,
-    ].join("\n"),
+    // Read on every request: the session's shell mode can change, and naming the shell keeps
+    // the model from guessing PowerShell on Windows and nesting it inside bash.
+    get description() {
+      return monitorDescription(mode() === "powershell" ? "powershell" : "bash")
+    },
     parameters: {
       type: "object",
       properties: {

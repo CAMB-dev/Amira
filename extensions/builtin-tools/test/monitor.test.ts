@@ -604,3 +604,16 @@ test("a manual stop already in progress is not turned into a wake by the monitor
   expect(s.deliveries).toHaveLength(1)
   expect(s.deliveries[0]!.wake).toBe(false)
 })
+
+test("the monitor description names the shell its commands run in, following the session's mode", () => {
+  let mode: "bash" | "powershell" | undefined
+  const tool = createMonitorTool(undefined, {}, () => mode)
+  expect(tool.description).toContain("Monitor a bash command")
+  expect(tool.description).toContain("not PowerShell")
+  mode = "powershell"
+  expect(tool.description).toContain("Monitor a PowerShell command")
+  for (const m of [undefined, "powershell"] as const) {
+    mode = m
+    expect(tool.description).toContain("Never wrap the command in another shell")
+  }
+})
