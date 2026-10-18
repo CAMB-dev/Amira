@@ -223,6 +223,15 @@ test("revisioned forms expose every field kind without accepting callback or unk
     layout: "card",
     description: "Fixture",
     sections: [{ title: "Section", collapsed: true, help: "Help", optional: true }],
+    summaries: [
+      {
+        id: "details",
+        label: "Details",
+        fields: ["text", "select"],
+        summaryFields: ["text"],
+        when: { field: "check", is: [true] },
+      },
+    ],
     submitLabel: "Save",
     fields: [
       {
@@ -261,6 +270,8 @@ test("revisioned forms expose every field kind without accepting callback or unk
         label: "Load",
         placement: "footer",
         buttonLabel: "Load",
+        shortcut: "ctrl+t",
+        inline: "multi",
         recommended: true,
         auto: { watch: ["text", { field: "select", when: { check: true } }] },
       },
@@ -279,6 +290,29 @@ test("revisioned forms expose every field kind without accepting callback or unk
   expect(() =>
     validateRemoteDto("uiRequest", { ...form, fields: [{ ...form.fields[0], unexpected: true }] }),
   ).toThrow()
+  for (const action of [
+    { ...form.fields[7], shortcut: "ctrl+x" },
+    { ...form.fields[7], inline: true },
+  ])
+    expect(() => validateRemoteDto("uiRequest", { ...form, fields: [action] })).toThrow()
+  for (const summary of [
+    { label: "Missing id", fields: [], summaryFields: [] },
+    { ...form.summaries[0], fields: [true] },
+    { ...form.summaries[0], summaryFields: "text" },
+    { ...form.summaries[0], when: { field: "check", is: null } },
+    { ...form.summaries[0], when: { field: "check", is: true, unexpected: true } },
+    { ...form.summaries[0], unexpected: true },
+  ])
+    expect(() => validateRemoteDto("uiRequest", { ...form, summaries: [summary] })).toThrow()
+  for (const is of ["value", 1, true, ["a", "b"], [false, 2, ["a"]]])
+    validateRemoteDto("uiRequest", {
+      ...form,
+      summaries: [{ ...form.summaries[0], when: { field: "check", is } }],
+    })
+  validateRemoteDto("uiRequest", {
+    ...form,
+    summaries: [{ id: "always", label: "Always", fields: [], summaryFields: [] }],
+  })
   expect(() => validateRemoteDto("uiRequest", { ...form, validate: () => ({}) })).toThrow()
   expect(() =>
     validateRemoteDto("uiRequest", { ...form, fields: [{ type: "execute-code", id: "bad", label: "Bad" }] }),

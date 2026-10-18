@@ -15,41 +15,47 @@ async function directory() {
   return root
 }
 
+// Windows hosts without Git's sh on PATH cannot run the POSIX installer fragments.
+const hasSh = Bun.which("sh") !== null
+
 for (const fallback of [false, true]) {
-  test(`installer ${fallback ? "shasum" : "sha256sum"} hashes stdin for backslash-containing paths`, async () => {
-    const root = await directory()
-    // A native Windows path contains backslashes too; GNU checksum output escapes its filename.
-    const staging = process.platform === "win32" ? root : path.join(root, "home\\with-backslash")
-    await mkdir(staging, { recursive: true })
-    const bytes = Buffer.from("an isolated archive fixture")
-    await writeFile(path.join(staging, "archive.tar.gz"), bytes)
-    const source = await readFile(new URL("../install.sh", import.meta.url), "utf8")
-    const block = source.match(/if command -v sha256sum[^\n]*\n[\s\S]*?\nfi/)?.[0]
-    expect(block).toBeDefined()
-    // Exercise the fallback's stdin contract even on hosts without Perl's shasum.
-    const forceFallback = fallback
-      ? `
+  test.skipIf(!hasSh)(
+    `installer ${fallback ? "shasum" : "sha256sum"} hashes stdin for backslash-containing paths`,
+    async () => {
+      const root = await directory()
+      // A native Windows path contains backslashes too; GNU checksum output escapes its filename.
+      const staging = process.platform === "win32" ? root : path.join(root, "home\\with-backslash")
+      await mkdir(staging, { recursive: true })
+      const bytes = Buffer.from("an isolated archive fixture")
+      await writeFile(path.join(staging, "archive.tar.gz"), bytes)
+      const source = await readFile(new URL("../install.sh", import.meta.url), "utf8")
+      const block = source.match(/if command -v sha256sum[^\n]*\n[\s\S]*?\nfi/)?.[0]
+      expect(block).toBeDefined()
+      // Exercise the fallback's stdin contract even on hosts without Perl's shasum.
+      const forceFallback = fallback
+        ? `
 command() { return 1; }
 shasum() {
   [ "$#" -eq 2 ] && [ "$1" = -a ] && [ "$2" = 256 ] || return 1
   sha256sum
 }
 `
-      : ""
-    const child = Bun.spawn(["sh", "-c", `${forceFallback}\n${block}\nprintf '%s' "$actual"`], {
-      env: { ...process.env, staging },
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ])
-    expect(stderr).toBe("")
-    expect(code).toBe(0)
-    expect(stdout).toBe(createHash("sha256").update(bytes).digest("hex"))
-  })
+        : ""
+      const child = Bun.spawn(["sh", "-c", `${forceFallback}\n${block}\nprintf '%s' "$actual"`], {
+        env: { ...process.env, staging },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+      expect(stdout).toBe(createHash("sha256").update(bytes).digest("hex"))
+    },
+  )
 }
 
 test.skipIf(process.platform === "win32")("Unix installer accepts a literal backslash in HOME", async () => {

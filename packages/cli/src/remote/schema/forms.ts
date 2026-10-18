@@ -26,12 +26,13 @@ export const formAction = object({
   "values?": formValues,
   "options?": record(array(formOption)),
 })
+const fieldWhen = object({ field: text, is: union(formValue, array(formValue)) })
 const fieldBase = {
   id: text,
   label: text,
   "help?": text,
   "section?": text,
-  "when?": object({ field: text, is: union(formValue, array(formValue)) }),
+  "when?": fieldWhen,
 }
 const textOptions = { "placeholder?": text, "required?": bool }
 export const formField = union(
@@ -77,6 +78,8 @@ export const formField = union(
     ...fieldBase,
     "placement?": values("footer"),
     "buttonLabel?": text,
+    "shortcut?": values("ctrl+t"),
+    "inline?": text,
     "recommended?": bool,
     "auto?": object({ watch: array(union(text, object({ field: text, when: formValues }))) }),
   }),
@@ -87,6 +90,15 @@ export const formSchema = {
   "description?": text,
   fields: array(formField),
   "sections?": array(object({ title: text, "collapsed?": bool, "help?": text, "optional?": bool })),
+  "summaries?": array(
+    object({
+      id: text,
+      label: text,
+      fields: array(text),
+      summaryFields: array(text),
+      "when?": fieldWhen,
+    }),
+  ),
   "submitLabel?": text,
 }
 export const toolLine = object({
@@ -138,6 +150,11 @@ export const settingField = union(
 )
 export const askAnswer = object({ selected: array(text), "other?": text })
 const pendingBase = { requestId: text, "sessionId?": text, "source?": text, "sourceLabel?": text }
+const extensionStatus = object({
+  "status?": values("experimental", "wip", "deprecated"),
+  "statusMessage?": text,
+  "replacedBy?": text,
+})
 export const uiRequest = union(
   object({
     ...pendingBase,
@@ -158,6 +175,7 @@ export const uiRequest = union(
     "optionStatuses?": array(
       union(values("queued", "working", "idle", "paused", "done", "failed", "stopped"), nil),
     ),
+    "optionExtensionStatuses?": array(union(extensionStatus, nil)),
     "searchTexts?": array(text),
   }),
   object({
@@ -197,6 +215,7 @@ export const uiRequest = union(
     kind: values("extension-settings"),
     name: text,
     title: text,
+    "extensionStatus?": extensionStatus,
     fields: array(settingField),
     values: record(union(text, number, bool)),
     "sources?": record(values("user", "project", "project-local", "flags")),

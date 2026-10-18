@@ -102,7 +102,7 @@ test("installer retires only proven dead local owners", async () => {
   }
 }, 30_000)
 
-test.each(process.platform === "win32" ? ["powershell", "sh"] : ["sh"])(
+test.each([...(process.platform === "win32" ? ["powershell"] : []), ...(Bun.which("sh") ? ["sh"] : [])])(
   "%s installer waits for the shared short gate and observes a published lease",
   async (shell) => {
     const root = await fixture()

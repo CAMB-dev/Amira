@@ -34,8 +34,12 @@ type SelectRequest = Extract<EventMap["ui.request"], { kind: "select" }>
 /** JSON uses null for an unbadged select option; the in-process UI API uses undefined. */
 export type ServerUiRequest =
   | Exclude<EventMap["ui.request"], SelectRequest>
-  | (Omit<SelectRequest, "optionStatuses"> & {
+  | (Omit<SelectRequest, "optionStatuses" | "optionExtensionStatuses"> & {
       optionStatuses?: (Exclude<NonNullable<SelectRequest["optionStatuses"]>[number], undefined> | null)[]
+      optionExtensionStatuses?: (Exclude<
+        NonNullable<SelectRequest["optionExtensionStatuses"]>[number],
+        undefined
+      > | null)[]
     })
 export type ServerEvent =
   | Exclude<AnyEvent, { type: "ui.request" }>
@@ -43,8 +47,16 @@ export type ServerEvent =
 
 function requestDto(request: EventMap["ui.request"]): ServerUiRequest {
   const value =
-    request.kind === "select" && request.optionStatuses
-      ? { ...request, optionStatuses: Array.from(request.optionStatuses, (status) => status ?? null) }
+    request.kind === "select"
+      ? {
+          ...request,
+          ...(request.optionStatuses && {
+            optionStatuses: Array.from(request.optionStatuses, (status) => status ?? null),
+          }),
+          ...(request.optionExtensionStatuses && {
+            optionExtensionStatuses: Array.from(request.optionExtensionStatuses, (status) => status ?? null),
+          }),
+        }
       : request
   const dto = freezeSnapshot(frontendJson(value))
   validateRemoteDto("uiRequest", dto)

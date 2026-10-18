@@ -15,7 +15,8 @@ export type Schema<T = typeof untypedSchema> = SchemaShape &
       ? object
       : Definition<T>
     : Definition<T>)
-type ObjectType<P extends Record<string, Schema>> = {
+// Without object, an all-optional mapped intersection can also admit primitive values.
+type ObjectType<P extends Record<string, Schema>> = object & {
   [K in keyof P as K extends `${string}?` ? never : K]: SchemaType<P[K]>
 } & {
   [K in keyof P as K extends `${infer Name}?` ? Name : never]?: SchemaType<P[K]>

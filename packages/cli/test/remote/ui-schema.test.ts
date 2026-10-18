@@ -15,6 +15,10 @@ const requests = {
     descriptions: ["Finished", "Kept"],
     searchTexts: ["history", "changes"],
     optionStatuses: ["done", null],
+    optionExtensionStatuses: [
+      { status: "deprecated", statusMessage: "Use the replacement", replacedBy: "replacement" },
+      null,
+    ],
     sections: [{ at: 0, title: "Agents", choose: "Select", keys: [{ key: "d", label: "Delete" }] }],
   },
   confirm: {
@@ -65,6 +69,7 @@ const requests = {
     requestId: "q1",
     name: "fixture",
     title: "Settings",
+    extensionStatus: { status: "experimental", statusMessage: "Preview" },
     scope: "user",
     fields: [
       { type: "number", key: "count", label: "Count", default: 1, min: 0, max: 10, step: 1 },
@@ -96,17 +101,20 @@ for (const [kind, request] of Object.entries(requests)) {
   test(`UI request ${kind} has a closed, roundtrippable presentation DTO`, () => {
     const dto = { ...request, source: "fixture", sourceLabel: "Fixture", sessionId: "s1" }
     validateRemoteDto("uiRequest", dto)
-    const message = validateRemoteFrame({
-      v: 1,
-      kind: "event",
-      daemonEpoch: "epoch-1",
-      seq: 1,
-      payload: { seq: 1, ts: 1, sessionId: "s1", type: "ui.request", data: dto },
-    })
-    if (message.kind === "chunk") throw new Error("Expected a complete event")
-    const decoder = new RemoteDecoder()
-    expect([...encodeRemoteMessage(message)].flatMap((bytes) => decoder.push(bytes))).toEqual([message])
-    decoder.finish()
+    const event = { seq: 1, ts: 1, sessionId: "s1", type: "ui.request", data: dto }
+    for (const payload of [event, { kind: "startup", events: [event] }]) {
+      const message = validateRemoteFrame({
+        v: 1,
+        kind: "event",
+        daemonEpoch: "epoch-1",
+        seq: 1,
+        payload,
+      })
+      if (message.kind === "chunk") throw new Error("Expected a complete event")
+      const decoder = new RemoteDecoder()
+      expect([...encodeRemoteMessage(message)].flatMap((bytes) => decoder.push(bytes))).toEqual([message])
+      decoder.finish()
+    }
     for (const invalid of [
       { ...dto, unexpected: true },
       { ...dto, title: false },
@@ -115,6 +123,39 @@ for (const [kind, request] of Object.entries(requests)) {
       expect(() => validateRemoteDto("uiRequest", invalid)).toThrow()
   })
 }
+
+test("extension lifecycle metadata stays optional, typed and closed in both UI placements", () => {
+  for (const extensionStatus of [
+    {},
+    { status: "experimental" },
+    { status: "wip" },
+    { status: "deprecated", statusMessage: "Old", replacedBy: "replacement" },
+    { statusMessage: "Note", replacedBy: "replacement" },
+  ]) {
+    validateRemoteDto("uiRequest", { ...requests.select, optionExtensionStatuses: [null, extensionStatus] })
+    validateRemoteDto("uiRequest", { ...requests["extension-settings"], extensionStatus })
+  }
+  for (const extensionStatus of [
+    { status: "stable" },
+    { status: false },
+    { statusMessage: 1 },
+    { replacedBy: [] },
+    { unexpected: true },
+    "experimental",
+    [],
+  ]) {
+    expect(() =>
+      validateRemoteDto("uiRequest", { ...requests.select, optionExtensionStatuses: [extensionStatus] }),
+    ).toThrow()
+    expect(() =>
+      validateRemoteDto("uiRequest", { ...requests["extension-settings"], extensionStatus }),
+    ).toThrow()
+  }
+  expect(() => validateRemoteDto("uiRequest", { ...requests.select, optionExtensionStatuses: {} })).toThrow()
+  expect(() =>
+    validateRemoteDto("uiRequest", { ...requests["extension-settings"], extensionStatus: null }),
+  ).toThrow()
+})
 
 test("UI response variants remain typed and reject malformed nested answers", () => {
   for (const value of [
