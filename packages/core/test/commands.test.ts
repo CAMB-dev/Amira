@@ -249,6 +249,12 @@ test("frontends can focus an owned conversation without changing the main sessio
     cwd: "/work",
     data: { append: () => {}, read: () => [] },
     history: () => [],
+    usage: () => {
+      throw new Error("fixture does not read accounting")
+    },
+    complete: async () => {
+      throw new Error("fixture does not execute")
+    },
     status: () => ({ state: "idle", busy: false }),
     events: {
       async *[Symbol.asyncIterator]() {},

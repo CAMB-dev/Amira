@@ -1,5 +1,6 @@
-import type { ImageBlock, Message, MessageDisplay } from "@amira/ai"
+import type { ImageBlock, Message, MessageDisplay, Usage } from "@amira/ai"
 import type { AnyEvent } from "./events.ts"
+import type { CompleteRequest, CompleteResult } from "./extension.ts"
 import type { SpawnGroup, SpawnGroupOptions } from "./subagents.ts"
 import type { SessionData, ToolDefinition, ToolResult } from "./tools.ts"
 import type { AskAnswer, AskQuestion } from "./ui.ts"
@@ -31,6 +32,48 @@ export interface ConversationRuntime {
   ) => Promise<AskAnswer[] | undefined>
 }
 
+/** Owner-scoped identity; neither form accepts a filesystem path. */
+export type OwnedConversationRef = { id: string } | { key: string }
+
+/** Serializable reported spend, not a guarantee of provider-invoice completeness. */
+export interface AccountedUsage {
+  usage: Usage
+  /** Known priced subtotal, retained even when usage.cost is unavailable. */
+  knownCostUsd: number
+  /** False when reported accounting or price coverage is incomplete. */
+  complete: boolean
+}
+
+/** Replace older snapshots by revision; signed corrections can reduce the subtotal. */
+export interface ConversationUsageSnapshot {
+  sessionId: string
+  /** Accounting revision, independent of event sequence; survives reopening. */
+  revision: number
+  own: AccountedUsage
+  /** Own plus attributed descendants, each counted exactly once. */
+  total: AccountedUsage
+  descendants: readonly {
+    sessionId: string
+    parentSessionId: string
+    groupId?: string
+    ephemeral?: boolean
+    /** This descendant's own spend, not its subtree. */
+    usage: AccountedUsage
+  }[]
+}
+
+/** Inert, deeply immutable owner-authorized history and accounting. */
+export interface OwnedConversationSnapshot {
+  id: string
+  key: string
+  name: string
+  cwd: string
+  /** Reserved for durable archive support; currently always false. */
+  archived: boolean
+  history: readonly Message[]
+  usage: ConversationUsageSnapshot
+}
+
 /**
  * Owner identity and lifetime are supplied by the host, not by the extension.
  * The public conversation interfaces, api.conversations capability and ToolSession.restricted
@@ -44,6 +87,12 @@ export interface OwnedConversations {
   openOrCreate(spec: ConversationSpec, runtime: ConversationRuntime): Promise<OwnedConversation>
   /** Inert open, available during initialization; only this owner's ids, never file paths. */
   open(id: string, runtime: ConversationRuntime): Promise<OwnedConversation>
+  /**
+   * Inert read without model/runtime lookup, a writer lease, focus or filesystem repair.
+   * Uses this manager's live handle when available, persisted evidence otherwise (which may
+   * lag another writer and is then incomplete). Only genuinely missing records return undefined.
+   */
+  read(ref: OwnedConversationRef): Promise<OwnedConversationSnapshot | undefined>
 }
 
 export interface OwnedConversation {
@@ -60,6 +109,8 @@ export interface OwnedConversation {
   readonly data: SessionData
   /** Deeply immutable snapshot of the full current branch, including compacted originals. */
   history(): readonly Message[]
+  /** Immutable cumulative accounting; budget.update/events.lost invalidate this snapshot. */
+  usage(): ConversationUsageSnapshot
   status(): { state: "idle" | "working" | "blocked" | "stopped" | "error"; busy: boolean }
   /**
    * Conversation and ordinary descendant events only, never the main transcript bus.
@@ -95,6 +146,12 @@ export interface OwnedConversation {
     args: Record<string, unknown>,
     options?: { signal?: AbortSignal },
   ): Promise<ToolResult>
+  /**
+   * Text-only side call using the persisted model, without tools, search or history injection.
+   * All reported attempts are charged here, including retries/errors/aborts. No history turn
+   * is added. Rejects initialization and overlap with send/runTool/complete; stop/release drain it.
+   */
+  complete(request: Omit<CompleteRequest, "model">): Promise<CompleteResult>
   /** Cancels work, questions and descendants; a later explicit send can continue. */
   stop(reason?: string): Promise<void>
   /** Stops, awaits cleanup and relinquishes the lease. Idempotent; history is retained. */

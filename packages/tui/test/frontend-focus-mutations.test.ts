@@ -51,6 +51,12 @@ for (const destination of ["focused", "main", "replaced"] as const) {
       data: agent.data,
       events,
       history: () => [],
+      usage: () => {
+        throw new Error("fixture does not read accounting")
+      },
+      complete: async () => {
+        throw new Error("fixture does not complete")
+      },
       status: () => ({ state: "idle", busy: false }),
       send: async () => {
         throw new Error("Must send through the port")

@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import type { UsageCounts } from "@amira/ai-shared"
+import type { Ai, CompactReceipt, StreamEvent } from "../src/index.ts"
 
 test("the public ai exports stay stable", async () => {
   const actual = Object.keys(await import("../src/index.ts")).sort()
@@ -78,6 +80,62 @@ test("the public ai exports stay stable", async () => {
     "vendorPreset",
     "withoutDisplay",
   ])
+})
+
+test("Ai.compact accepts an additive fourth per-attempt usage observer", async () => {
+  const receipts: CompactReceipt[] = []
+  const onUsage: NonNullable<Parameters<Ai["compact"]>[3]> = async (receipt) => {
+    receipts.push(receipt)
+  }
+  await onUsage({
+    id: "physical-attempt-1",
+    late: false,
+    usage: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.003 },
+  })
+  await onUsage({ id: "physical-attempt-2", late: true, usage: undefined })
+  expect(receipts).toMatchInlineSnapshot(`
+    [
+      {
+        "id": "physical-attempt-1",
+        "late": false,
+        "usage": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "cost": 0.003,
+          "input": 10,
+          "output": 1,
+        },
+      },
+      {
+        "id": "physical-attempt-2",
+        "late": true,
+        "usage": undefined,
+      },
+    ]
+  `)
+})
+
+test("physical dispatch is a public stream event distinct from optional adapter metadata", () => {
+  const event: StreamEvent = { type: "request.attempt", id: "physical-attempt" }
+  expect(event).toMatchInlineSnapshot(`
+    {
+      "id": "physical-attempt",
+      "type": "request.attempt",
+    }
+  `)
+})
+
+test("shared usage counts expose reported-output coverage without changing the ai root exports", () => {
+  const usage: UsageCounts = { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, outputReported: false }
+  expect(usage).toMatchInlineSnapshot(`
+    {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 1,
+      "output": 0,
+      "outputReported": false,
+    }
+  `)
 })
 
 test("Ai exposes a non-secret live credential source query", async () => {

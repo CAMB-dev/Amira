@@ -21,6 +21,7 @@ export interface UsageCounts {
   webSearchCost?: number
   cost?: number
   pricingUnknown?: boolean
+  outputReported?: boolean
 }
 
 /** What these helpers read of a server tool block (@amira/ai's ServerToolBlock). */

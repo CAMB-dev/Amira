@@ -12,6 +12,7 @@ import type {
 } from "@amira/ai"
 import { hasFastMode } from "@amira/ai"
 import type { EventMap } from "@amira/api"
+import { markAccountingIncomplete, usageSnapshot } from "../accounting-receipts.ts"
 import type { AgentOptions } from "./types.ts"
 
 /** Live and restored status interpret the reported field for this model's fast option. */
@@ -36,7 +37,7 @@ export interface ModelCallOptions {
   fastMode?: boolean
   signal: AbortSignal
   emit: ModelCallEmit
-  /** Keep fast-fallback usage separate from the final response's reported speed. */
+  /** Book retried attempts separately from the final response's usage and reported speed. */
   recordAttempt?: (message: AssistantMessage) => void
 }
 
@@ -114,7 +115,10 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
   let modelError: ModelError | undefined
   let aborted = false
   let retrying = false
+  let backoff = false
+  let dispatched = false
   let endedAttempt: AssistantMessage | undefined
+  let latestUsage: Usage | undefined
   try {
     const stream = options.ai.stream(
       {
@@ -131,14 +135,40 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
       options.signal,
     )
     for await (const ev of stream) {
+      // An abort before a new attempt opens repeats the receipt already booked below.
+      if (
+        backoff &&
+        ev.type !== "retry" &&
+        ev.type !== "fast.fallback" &&
+        !(ev.type === "error" && ev.error.code === "aborted")
+      )
+        backoff = false
       if (retrying && ev.type !== "retry") {
         retrying = false
         options.emit("status.changed", { status: "working" })
       }
+      if (
+        (ev.type === "request.end" || ev.type === "done" || ev.type === "error") &&
+        !(backoff && ev.type === "error" && ev.error.code === "aborted" && options.recordAttempt)
+      )
+        latestUsage = ev.message.usage ? usageSnapshot(ev.message.usage, latestUsage) : latestUsage
       switch (ev.type) {
+        case "request.attempt":
+          if (dispatched) {
+            const previous = endedAttempt ?? final
+            if (previous && latestUsage) options.recordAttempt?.({ ...previous, usage: latestUsage })
+            endedAttempt = undefined
+            final = undefined
+            latestUsage = undefined
+          }
+          dispatched = true
+          break
         case "fast.fallback":
           if (endedAttempt) options.recordAttempt?.(endedAttempt)
           endedAttempt = undefined
+          latestUsage = undefined
+          dispatched = false
+          backoff = true
           options.emit("extension.notice", {
             source: "fast",
             text: "fast mode rate-limited; this request ran at standard speed — cache miss",
@@ -155,13 +185,18 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
           options.emit("message.stream", { kind: "thinkingEnd", index: ev.index })
           break
         case "request.end":
-          endedAttempt = ev.message
+          endedAttempt = { ...ev.message, usage: latestUsage }
           options.emit("message.stream", {
             kind: "end",
             outputTokens: ev.message.usage?.outputReported === false ? undefined : ev.message.usage?.output,
           })
           break
         case "retry":
+          if (endedAttempt) options.recordAttempt?.(endedAttempt)
+          endedAttempt = undefined
+          latestUsage = undefined
+          dispatched = false
+          backoff = true
           retrying = true
           options.emit("model.retry", {
             attempt: ev.attempt,
@@ -216,7 +251,7 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
             kind: "end",
             outputTokens: ev.message.usage?.outputReported === false ? undefined : ev.message.usage?.output,
           })
-          final = ev.message
+          final = backoff && options.recordAttempt ? { ...ev.message, usage: undefined } : ev.message
           if (ev.error.code === "aborted" || options.signal.aborted) aborted = true
           else {
             error = ev.error.message
@@ -226,17 +261,30 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
       }
     }
   } catch (err) {
+    const usage = latestUsage ?? final?.usage ?? endedAttempt?.usage
+    if (usage) markAccountingIncomplete(usage)
     if (options.signal.aborted) aborted = true
     else error = err instanceof Error ? err.message : String(err)
   }
-  if (!final && !error && !aborted) error = "the model stream ended without a final message"
+  if (!final) {
+    if (options.signal.aborted) aborted = true
+    if (!error && !aborted) error = "the model stream ended without a final message"
+    if (endedAttempt?.usage) markAccountingIncomplete(endedAttempt.usage)
+  }
 
-  const message: AssistantMessage = final ?? {
-    role: "assistant",
-    content: [],
-    model: options.modelRef,
+  // request.end may be the last receipt before an iterator throws, or a terminal
+  // event may omit usage already reported for this same attempt. Retry/fallback
+  // boundaries clear endedAttempt, so this never borrows a previous attempt's charge.
+  const reply: AssistantMessage = final ?? {
+    ...(endedAttempt ?? {
+      role: "assistant",
+      content: [],
+      model: options.modelRef,
+    }),
     stopReason: aborted ? "aborted" : "error",
   }
+  // Cleanup receipts may correct usage without replacing the reply's text or stop reason.
+  const message = latestUsage ? { ...reply, usage: latestUsage } : reply
   // An interrupted reply keeps its text but drops tool calls, which were never executed.
   if (aborted || error) message.content = message.content.filter((b) => b.type !== "toolCall")
 

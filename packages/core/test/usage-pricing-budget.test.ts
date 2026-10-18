@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { emptyUsage } from "@amira/ai"
+import { accountUsage } from "../src/session-usage.ts"
 import { addUsage, BudgetLedger, overBudget } from "../src/subagents/budget.ts"
 
 test("mutable tree/group accounting preserves prior known spending across an unpriced correction", () => {
@@ -43,4 +44,13 @@ test("carving uses the known minimum rather than resetting spending to zero for 
   ledger.add({ ...emptyUsage(), webSearchRequests: 1 })
   expect(ledger.usage.cost).toBeUndefined()
   expect(ledger.carve({ costUsd: 1 })).toEqual({ costUsd: 0.25 })
+})
+
+test("accounted snapshots explicitly serialize the known subtotal of unknown-price usage", () => {
+  const ledger = new BudgetLedger(undefined)
+  ledger.add({ ...emptyUsage(), cost: 2 })
+  ledger.add({ ...emptyUsage(), webSearchRequests: 1 })
+  const snapshot = accountUsage([{ usage: ledger.usage }])
+  expect(snapshot.usage.cost).toBeUndefined()
+  expect(JSON.parse(JSON.stringify(snapshot))).toMatchObject({ knownCostUsd: 2, complete: false })
 })

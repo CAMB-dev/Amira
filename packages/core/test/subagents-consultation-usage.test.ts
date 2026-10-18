@@ -5,6 +5,7 @@ import path from "node:path"
 import { type Ai, createAi, createMockDialect } from "@amira/ai"
 import { type ChildSession, defineTool, textResult } from "@amira/api"
 import { Agent } from "../src/agent.ts"
+import { conversationUsage } from "../src/owned-conversations-usage.ts"
 import { SessionStore } from "../src/session-store.ts"
 import { AgentTree } from "../src/subagents.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
@@ -159,11 +160,19 @@ test("late aborted consultation usage stays with its ended ephemeral child and g
     expect(tree.usage.cost).toBe(1)
     expect(group.info().usage.cost).toBe(1)
     expect(group.info().agents.ended).toBe(1)
+    const beforeLate = conversationUsage(parent)
+    expect(beforeLate.total.knownCostUsd).toBe(1)
     release.resolve()
     await charged.promise
     expect(mock.requests).toHaveLength(2)
     expect(tree.usage.cost).toBe(4)
     expect(group.info().usage.cost).toBe(4)
+    const afterLate = conversationUsage(parent)
+    expect(afterLate.own.knownCostUsd).toBe(0)
+    expect(afterLate.total.knownCostUsd).toBe(4)
+    expect(afterLate.descendants[0]?.usage.knownCostUsd).toBe(4)
+    expect(afterLate.revision).toBeGreaterThan(beforeLate.revision)
+    expect(conversationUsage(SessionStore.open(store.file))).toEqual(afterLate)
     const charges = store.entries.filter((entry) => entry.type === "side_usage")
     expect(charges.map((entry) => entry.usage.cost)).toEqual([1, 3])
     expect(charges.map((entry) => entry.model)).toEqual([

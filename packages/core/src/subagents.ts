@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs"
 import path from "node:path"
 import { type Ai, hasFastMode, type Message, type ModelInfo, type Usage, type UserMessage } from "@amira/ai"
 import {
@@ -21,10 +20,14 @@ import {
   type SubagentResult,
   type SubagentStatus,
 } from "@amira/api"
+import { accountingRecorded, emitUsageInvalidation, registerChildAccounting } from "./accounting-requests.ts"
 import { Agent, type TurnResult } from "./agent.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions } from "./context.ts"
 import { EventBus } from "./event-bus.ts"
+import { registerNativeAccounting } from "./native-compaction-usage.ts"
+import { usageReceiptDestination } from "./owned-conversations-receipts.ts"
+import { recordConversationUsage } from "./owned-conversations-usage.ts"
 import { intersectWriteRoots } from "./permissions/write-roots.ts"
 import { addNonInteractive, type PromptSection, setSection } from "./prompt.ts"
 import { registerSessionScope } from "./session-routing.ts"
@@ -32,13 +35,13 @@ import { SessionStore } from "./session-store.ts"
 import { addUsage, BudgetLedger, overBudget, usageTokens } from "./subagents/budget.ts"
 import { Child, Group, type SpawnedSubagent } from "./subagents/child.ts"
 import { ParentConsultant, parseParentAnswers } from "./subagents/consult-parent.ts"
-import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
+import { accountedConsultation } from "./subagents/consultation-accounting.ts"
 import { followChild, metaOf, parentMeta } from "./subagents/events.ts"
 import { finalText, forkHistory } from "./subagents/fork.ts"
 import { SpawnError, scopeAdmission } from "./subagents/lifecycle.ts"
 import { overlaps } from "./subagents/paths.ts"
 import { childQuestionRouting, hasHumanRouting } from "./subagents/question-routing.ts"
-import { runRoot } from "./subagents/root.ts"
+import { runRoot, runSide } from "./subagents/root.ts"
 import { Admission } from "./subagents/scheduler.ts"
 import { standardSections } from "./subagents/sections.ts"
 import {
@@ -163,7 +166,7 @@ export class AgentTree {
         const child = requestingChild?.ephemeral ? requestingChild : this.#live.get(parent.sessionId)
         const owner = requestingChild?.ephemeral ? requestingChild.agent : parent
         const model = { provider: parent.model.provider, model: parent.model.id }
-        return consultationUsageRecorder((usage) => this.#recordUsage(owner, usage, model, child))
+        return accountedConsultation(owner, (usage) => this.#recordUsage(owner, usage, model, child))
       },
     })
     this.resultRetries = Math.max(0, opts.resultRetries ?? 2)
@@ -181,6 +184,11 @@ export class AgentTree {
         spent: () => this.#ledger.exceeded,
       }),
     )
+  }
+
+  /** A physical side request shares admission without taking over its agent's active turn. */
+  runSide<T>(agent: Agent, task: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
+    return runSide({ agent, task, signal, admission: this.#admission, roots: this.#roots })
   }
 
   /** Unregisters a disposed scope from shared-budget cancellation. Does not affect its siblings. */
@@ -472,7 +480,7 @@ export class AgentTree {
       : given.length > MAX_TITLE_CHARS
         ? `${given.slice(0, MAX_TITLE_CHARS - 1)}…`
         : given
-    if (!ephemeral) parent.recordSubagent(agent.sessionId, opts.role, title)
+    if (!ephemeral) parent.recordSubagent(agent.sessionId, opts.role, title, groups[0]?.id)
     // Preserve the inherited deferred declarations and their load order before the first call.
     if (context === "fork" || ephemeral) agent.loadTools(parent.loadedTools)
     const child = new Child(
@@ -492,6 +500,8 @@ export class AgentTree {
       groups,
     )
     child.result$ = spec
+    registerChildAccounting(child)
+    registerNativeAccounting(child, (usage, model) => this.#recordUsage(agent, usage, model, child))
     agent.execution.onTools = {
       waiting: () => this.#admission.beginTools(child),
       returned: () => this.#admission.endTools(child),
@@ -539,28 +549,14 @@ export class AgentTree {
       addUsage(child.usage, usage)
       child.chargeUsage(usage, model)
     }
+    if (!child?.ephemeral) recordConversationUsage(agent, usage, model)
+    accountingRecorded(agent, usage)
     const tokens = usageTokens(this.#ledger.usage)
     const costUsd = this.#ledger.usage.cost
     const limit = this.budget
     const owner = child?.usageOwner ?? agent
-    owner.bus.emit(
-      "budget.update",
-      {
-        tokens,
-        ...(costUsd !== undefined ? { costUsd } : {}),
-        ...(this.#ledger.usage.pricingUnknown ? { pricingUnknown: true } : {}),
-        ...(limit ? { limit } : {}),
-      },
-      metaOf(owner),
-    )
-    for (const g of child?.groups ?? []) {
-      addUsage(g.usage, usage)
-      const over = g.state === "active" ? overBudget(g.usage, g.limits.budget) : undefined
-      if (over) {
-        g.exceeded = true
-        this.endGroup(g, `the group "${g.name}" ran out of budget (${over})`)
-      }
-    }
+    emitUsageInvalidation(owner, this.#ledger.usage, limit)
+    child?.chargeGroups(usage, (group, reason) => this.endGroup(group, reason))
     if (child) this.#groupsChanged(child)
     if (this.#ledger.exceeded || !limit) return
     const over = overBudget(this.#ledger.usage, limit)
@@ -878,14 +874,15 @@ export class AgentTree {
     // The end event is delivered before cleanup so observers can still inspect the final live
     // state; no job owned by the child may survive the end of its session.
     child.ended = result
-    // Keep what it did, not the session: one with a file is read back from it when asked for.
+    // Keep file/receipt identity, not the writer or transcript, even while its file is unavailable.
     if (!child.ephemeral) {
       const done = this.subagent(child.id) as SpawnedSubagent
-      const stored = child.agent.session?.file
-      const file = stored && existsSync(stored) ? stored : undefined
+      const store = child.agent.session
       this.#spawned.set(child.id, {
         info: done.info,
-        ...(file ? { file } : { messages: [...child.agent.messages] }),
+        ...(store
+          ? { file: store.file, accountingDestination: usageReceiptDestination(store) }
+          : { messages: [...child.agent.messages] }),
       })
     }
     const outcome = agentStatusState(result)

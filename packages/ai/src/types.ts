@@ -246,7 +246,9 @@ export interface ModelError {
 
 export type StreamEvent =
   | { type: "start" }
-  /** An actual provider request is about to be sent, once per attempt. */
+  /** SDK dispatch of one physical provider attempt, even if its iterator reports nothing. */
+  | { type: "request.attempt"; id: string }
+  /** Provider request metadata; unlike request.attempt, adapters may omit this event. */
   | { type: "request.start"; thinkingDisplay?: "summarized" | "omitted" | "raw" }
   /** A failed attempt that will be retried; terminal done/error covers the final attempt. */
   | { type: "request.end"; message: AssistantMessage }

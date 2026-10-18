@@ -6,14 +6,15 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs"
 import path from "node:path"
-import type { ConversationSpec } from "@amira/api"
-import { validateWriteRoots } from "./permissions/write-roots.ts"
+import type { ConversationSpec, OwnedConversationRef } from "@amira/api"
+import { validateStoredWriteRoots, validateWriteRoots } from "./permissions/write-roots.ts"
 import { SessionInUseError, SessionStore } from "./session-store.ts"
 
 export interface SavedConversation {
@@ -50,7 +51,8 @@ export function ownedDirectory(home: string, owner: string): string {
   return dir
 }
 
-export function validateSpec(value: ConversationSpec): ConversationSpec {
+export function validateSpec(value: ConversationSpec, options?: { historical?: boolean }): ConversationSpec {
+  const validateRoots = options?.historical ? validateStoredWriteRoots : validateWriteRoots
   if (!value || typeof value !== "object") throw new Error("invalid conversation spec")
   if (
     Object.keys(value).some(
@@ -101,12 +103,17 @@ export function validateSpec(value: ConversationSpec): ConversationSpec {
     ...(value.model !== undefined ? { model: value.model } : {}),
     systemPrompt: value.systemPrompt,
     callableTools: [...new Set(value.callableTools)].sort(),
-    ...(value.writeRoots !== undefined ? { writeRoots: [...validateWriteRoots(value.writeRoots)!] } : {}),
+    ...(value.writeRoots !== undefined ? { writeRoots: [...validateRoots(value.writeRoots)!] } : {}),
     descendants: value.descendants ?? "research",
   }
 }
 
-export function readOwned(home: string, owner: string, id: string): SavedConversation {
+export function readOwned(
+  home: string,
+  owner: string,
+  id: string,
+  options?: { historical?: boolean },
+): SavedConversation {
   if (!/^s_[a-f0-9]{32}$/.test(id)) throw new Error("invalid owned conversation id")
   const file = path.join(ownedDirectory(home, owner), `${id}.spec.json`)
   let saved: SavedConversation
@@ -119,7 +126,7 @@ export function readOwned(home: string, owner: string, id: string): SavedConvers
     if (!existsSync(sessionFile)) throw new Error("owned conversation not found for this owner")
     if (lstatSync(sessionFile).isSymbolicLink() || !lstatSync(sessionFile).isFile())
       throw new Error("invalid owned conversation session file")
-    const identity = SessionStore.open(sessionFile).header.owned
+    const identity = SessionStore.open(sessionFile, options).header.owned
     if (!identity) throw new Error("invalid conversation ownership record")
     saved = { ...identity, id }
   }
@@ -133,7 +140,7 @@ export function readOwned(home: string, owner: string, id: string): SavedConvers
   }
   if (Object.keys(saved).some((key) => !["v", "owner", "id", "spec", "runtimeTools"].includes(key)))
     throw new Error("unknown persisted conversation policy")
-  const spec = validateSpec(saved.spec)
+  const spec = validateSpec(saved.spec, options)
   if (saved.v === 1 && (spec.writeRoots !== undefined || spec.descendants === "inherit"))
     throw new Error("conversation policy requires metadata version 2")
   if (JSON.stringify(saved.spec.writeRoots) !== JSON.stringify(spec.writeRoots))
@@ -146,6 +153,65 @@ export function readOwned(home: string, owner: string, id: string): SavedConvers
     throw new Error("invalid persisted conversation spec")
   }
   return { ...saved, spec: { ...spec, model: spec.model } }
+}
+
+/** Resolve only validated owner identities, without claiming, publishing or repairing files. */
+export function readOwnedRef(
+  home: string,
+  owner: string,
+  ref: OwnedConversationRef,
+): SavedConversation | undefined {
+  if (!ref || typeof ref !== "object" || Object.keys(ref).length !== 1)
+    throw new Error("invalid owned conversation reference")
+  let id: string
+  if ("key" in ref) {
+    if (typeof ref.key !== "string" || !ref.key.trim() || ref.key.includes("\0"))
+      throw new Error("invalid owned conversation key")
+    id = ownedId(owner, ref.key)
+  } else if ("id" in ref && typeof ref.id === "string" && /^s_[a-f0-9]{32}$/.test(ref.id)) {
+    id = ref.id
+  } else {
+    throw new Error("invalid owned conversation reference")
+  }
+  const directory = ownedDirectory(home, owner)
+  if (existsSync(path.join(directory, `${id}.spec.json`)) || existsSync(path.join(directory, `${id}.jsonl`)))
+    return readOwned(home, owner, id, { historical: true })
+  // IDs do not encode the owner. Distinguish a foreign ID from a genuinely missing record
+  // using filenames only; never read or return another owner's metadata or transcript.
+  const base = path.dirname(directory)
+  if ("id" in ref && existsSync(base)) {
+    for (const entry of readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue
+      if (
+        existsSync(path.join(base, entry.name, `${id}.spec.json`)) ||
+        existsSync(path.join(base, entry.name, `${id}.jsonl`))
+      )
+        throw new Error("owned conversation belongs to another owner")
+    }
+  }
+  return undefined
+}
+
+/** Open an authorized store for reading only; no runtime, lease or directory creation. */
+export function readOwnedStore(home: string, saved: SavedConversation): SessionStore {
+  const file = path.join(ownedDirectory(home, saved.owner), `${saved.id}.jsonl`)
+  if (!existsSync(file)) throw new Error("owned conversation session is missing")
+  if (lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile())
+    throw new Error("invalid owned conversation session file")
+  const store = SessionStore.open(file, { historical: true })
+  const identity = store.header.owned
+  if (
+    store.id !== saved.id ||
+    store.header.cwd !== saved.spec.cwd ||
+    !identity ||
+    identity.owner !== saved.owner ||
+    identity.v !== saved.v ||
+    JSON.stringify(validateSpec(identity.spec, { historical: true })) !==
+      JSON.stringify(validateSpec(saved.spec, { historical: true })) ||
+    JSON.stringify(identity.runtimeTools) !== JSON.stringify(saved.runtimeTools)
+  )
+    throw new Error("conversation store identity does not match its spec")
+  return store
 }
 
 export function publishOwned(home: string, saved: SavedConversation): void {

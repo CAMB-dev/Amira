@@ -1,62 +1,72 @@
 import type { Usage } from "@amira/ai"
+import { hasUnpricedUsage, knownUsageCost, transferUsageAccounting } from "@amira/ai/accounting"
+import { usageCoverage } from "../accounting-coverage.ts"
+import {
+  accountingIncomplete,
+  retainAccountingReceipts,
+  retainReportedUsage,
+  usageSnapshot,
+} from "../accounting-receipts.ts"
+import { retainUsageStatement } from "../usage-statements.ts"
 
 /** One attempt is observed eagerly and settled once with its latest terminal usage. */
 export type ConsultationUsageRecorder = ((usage: Usage) => void) & {
-  observe?: (usage: Usage) => void
+  observe?: (usage: Usage) => Usage
 }
 
-/** Captured for a consultation; its receipt resets whenever an attempt is settled. */
+/** Captured for a consultation; its statement resets whenever an attempt is settled. */
 export function consultationUsageRecorder(book: (usage: Usage) => void): ConsultationUsageRecorder {
   let charged: Usage | undefined
-  const observe = (usage: Usage) => {
+  let id = crypto.randomUUID()
+  let revision = 0
+  const observe = (usage: Usage): Usage => {
     // Provider messages and their usage objects can be reused or changed after an event.
-    const snapshot = { ...usage }
     const previous = charged
-    for (const key of ["reasoning", "webSearchRequests", "webSearchCost", "cost"] as const) {
-      const known = previous?.[key]
-      if (snapshot[key] === undefined && known !== undefined) snapshot[key] = known
+    const snapshot = usageSnapshot(usage, previous)
+    if (previous && sameAccounting(snapshot, previous)) {
+      // Rebind only to this retained contribution. Its durable identity/commit proof, if any,
+      // permits acknowledging a newer physical receipt without manufacturing a charge.
+      retainAccountingReceipts(previous, usage)
+      return previous
     }
+    if (previous) {
+      const credit = inverse(previous)
+      retainUsageStatement(credit, id, revision, "credit", coverageOf(previous))
+      book(credit)
+    }
+    revision++
+    retainUsageStatement(snapshot, id, revision, "snapshot", coverageOf(snapshot))
     charged = snapshot
-    if (
-      previous &&
-      (previous.webSearchRequests ?? 0) > 0 &&
-      previous.webSearchCost === undefined &&
-      snapshot.webSearchCost !== undefined
-    ) {
-      // Pricing an earlier unknown search replaces that contribution, not another search.
-      // Signed journal rows also let freshly reopened sessions reconstruct the correction.
-      book(inverse(previous))
-      book(snapshot)
-    } else {
-      const delta = previous ? difference(snapshot, previous) : snapshot
-      if (!previous || hasAmounts(delta)) book(delta)
-    }
+    book(snapshot)
+    return snapshot
   }
   return Object.assign(
     (usage: Usage) => {
       try {
-        observe(usage)
+        return observe(usage)
       } finally {
         charged = undefined
+        id = crypto.randomUUID()
+        revision = 0
       }
     },
     { observe },
   )
 }
 
-function difference(usage: Usage, charged: Usage): Usage {
-  const delta: Usage = {
-    input: usage.input - charged.input,
-    output: usage.output - charged.output,
-    cacheRead: usage.cacheRead - charged.cacheRead,
-    cacheWrite: usage.cacheWrite - charged.cacheWrite,
-  }
-  // Missing metadata is unknown, not a negative charge or a reported zero.
-  for (const key of ["reasoning", "webSearchRequests", "webSearchCost", "cost"] as const) {
-    if (usage[key] !== undefined) delta[key] = usage[key] - (charged[key] ?? 0)
-  }
-  if (usage.outputReported !== undefined) delta.outputReported = usage.outputReported
-  return delta
+function coverageOf(usage: Usage) {
+  return usageCoverage(usage, knownUsageCost(usage) ?? 0, accountingIncomplete(usage))
+}
+
+function sameAccounting(left: Usage, right: Usage): boolean {
+  return (
+    Object.keys({ ...left, ...right }).every(
+      (key) => left[key as keyof Usage] === right[key as keyof Usage],
+    ) &&
+    knownUsageCost(left) === knownUsageCost(right) &&
+    hasUnpricedUsage(left) === hasUnpricedUsage(right) &&
+    accountingIncomplete(left) === accountingIncomplete(right)
+  )
 }
 
 function inverse(usage: Usage): Usage {
@@ -70,18 +80,9 @@ function inverse(usage: Usage): Usage {
     if (usage[key] !== undefined) credit[key] = -usage[key]
   }
   if (usage.outputReported !== undefined) credit.outputReported = usage.outputReported
+  if (usage.pricingUnknown) credit.pricingUnknown = true
+  transferUsageAccounting(usage, credit, -1)
+  retainAccountingReceipts(credit, usage)
+  retainReportedUsage(credit, usage)
   return credit
-}
-
-function hasAmounts(usage: Usage): boolean {
-  return [
-    usage.input,
-    usage.output,
-    usage.cacheRead,
-    usage.cacheWrite,
-    usage.reasoning,
-    usage.webSearchRequests,
-    usage.webSearchCost,
-    usage.cost,
-  ].some((value) => value !== undefined && value !== 0)
 }

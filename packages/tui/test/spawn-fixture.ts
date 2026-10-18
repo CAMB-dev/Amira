@@ -4,7 +4,7 @@ import { SPAWN_WAIT_TIMEOUT_MS, waitForSpawnWork as waitForWork } from "../../..
 import { guardedSpawnSync } from "./spawn-shell-guard.ts"
 
 /** Keep production editor selection and shell launches real, but never wait forever. */
-export function boundSpawnSync() {
+export function boundSpawnSync(fixtureCommand: (command: string) => string = (command) => command) {
   const spawnSync = childProcess.spawnSync
   return spyOn(childProcess, "spawnSync").mockImplementation(((
     command: string,
@@ -19,7 +19,8 @@ export function boundSpawnSync() {
       ...opts,
       timeout: Math.min(opts?.timeout || SPAWN_WAIT_TIMEOUT_MS, SPAWN_WAIT_TIMEOUT_MS),
     }
-    return opts?.shell ? guardedSpawnSync(command, args, bounded) : spawnSync(command, args, bounded)
+    const executable = fixtureCommand(command)
+    return opts?.shell ? guardedSpawnSync(executable, args, bounded) : spawnSync(executable, args, bounded)
   }) as typeof childProcess.spawnSync)
 }
 

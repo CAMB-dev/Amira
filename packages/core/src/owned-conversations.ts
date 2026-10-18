@@ -5,12 +5,14 @@ import type {
   ConversationRuntime,
   ConversationSpec,
   OwnedConversation,
+  OwnedConversationSnapshot,
   OwnedConversations,
   SpawnGroupOptions,
 } from "@amira/api"
 import { drainOwnedTools, runOwnedTool } from "./agent/owned-tool.ts"
 import { Agent } from "./agent.ts"
 import { checkAskAnswers } from "./ask-answers.ts"
+import { completeForAgent } from "./completion.ts"
 import { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import { ConversationEvents } from "./owned-conversations-events.ts"
@@ -22,9 +24,12 @@ import {
   ownedId,
   publishOwned,
   readOwned,
+  readOwnedRef,
+  readOwnedStore,
   type SavedConversation,
   validateSpec,
 } from "./owned-conversations-storage.ts"
+import { conversationUsage } from "./owned-conversations-usage.ts"
 import {
   registerConversationHold,
   registerConversationScope,
@@ -33,6 +38,7 @@ import {
   releaseConversationIncarnation,
   sessionScopeContains,
 } from "./session-routing.ts"
+import { sessionLockFile } from "./session-store.ts"
 import { approveWithHost } from "./subagents/host-approval.ts"
 import { scopeAdmission } from "./subagents/lifecycle.ts"
 import { routeTreeToHuman } from "./subagents/question-routing.ts"
@@ -108,6 +114,30 @@ export class OwnedConversationManager {
       open: async (id, runtime) => {
         check()
         return this.#open(readOwned(this.#home, owner, id), runtime)
+      },
+      read: async (ref) => {
+        check()
+        const saved = readOwnedRef(this.#home, owner, ref)
+        if (!saved) return undefined
+        const file = path.join(ownedDirectory(this.#home, owner), `${saved.id}.jsonl`)
+        const active = this.#handles.get(file)?.handle
+        if (active && !active.isReleased()) return active.snapshot()
+        const store = readOwnedStore(this.#home, saved)
+        // No lease is acquired for inspection. A foreign writer is an unverified coverage fact.
+        const usage = conversationUsage(store, undefined, [
+          { kind: "integrity", verified: !existsSync(sessionLockFile(file)) },
+        ])
+        return freeze({
+          id: saved.id,
+          key: saved.spec.key,
+          name: saved.spec.name,
+          cwd: saved.spec.cwd,
+          archived: false,
+          history: structuredClone(
+            store.branch().flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
+          ),
+          usage,
+        })
       },
     }
   }
@@ -185,6 +215,7 @@ export class OwnedConversationManager {
           },
           initialState,
           this.#opts.canExecute ?? (() => true),
+          this.#opts.ai,
         )
         this.#handles.set(file, { owner, handle })
         agent.start(create ? "startup" : "resume", { sessionFile: file })
@@ -320,6 +351,7 @@ class Handle implements OwnedConversation {
   readonly data: OwnedConversation["data"]
   readonly events: ConversationEvents
   #agent: Agent
+  #ai: Ai
   #state: InactiveConversationState
   #canExecute: () => boolean
   #stopping: Promise<void> | undefined
@@ -336,7 +368,9 @@ class Handle implements OwnedConversation {
     onRelease: () => void,
     state: InactiveConversationState,
     canExecute: () => boolean,
+    ai: Ai,
   ) {
+    this.#ai = ai
     this.#state = state
     this.#canExecute = canExecute
     this.id = agent.sessionId
@@ -383,6 +417,23 @@ class Handle implements OwnedConversation {
         this.#agent.session!.branch().flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
       ),
     )
+  }
+
+  usage(): ReturnType<OwnedConversation["usage"]> {
+    this.#check()
+    return conversationUsage(this.#agent)
+  }
+
+  snapshot(): OwnedConversationSnapshot {
+    return freeze({
+      id: this.id,
+      key: this.key,
+      name: this.name,
+      cwd: this.cwd,
+      archived: false,
+      history: this.history(),
+      usage: this.usage(),
+    })
   }
 
   status(): ReturnType<OwnedConversation["status"]> {
@@ -506,6 +557,48 @@ class Handle implements OwnedConversation {
       })
     await this.#running
     return operation
+  }
+
+  async complete(
+    request: Parameters<OwnedConversation["complete"]>[0],
+  ): ReturnType<OwnedConversation["complete"]> {
+    this.#check()
+    this.#executionReady()
+    if (this.#running || this.#agent.busy || this.#stopping) throw new Error("owned conversation is busy")
+    request.signal?.throwIfAborted()
+    const controller = new AbortController()
+    this.#abort = controller
+    const operation = completeForAgent({
+      ai: this.#ai,
+      agent: this.#agent,
+      model: this.#agent.model,
+      request,
+      signal: controller.signal,
+      label: "owned completion",
+      admission: true,
+    })
+      .then((result) => {
+        this.#state = "idle"
+        return result
+      })
+      .catch((error: unknown) => {
+        this.#state = controller.signal.aborted || request.signal?.aborted ? "stopped" : "error"
+        throw error
+      })
+    this.#running = operation
+      .then(
+        () => {},
+        () => {},
+      )
+      .finally(() => {
+        this.#running = undefined
+        this.#abort = undefined
+      })
+    try {
+      return await operation
+    } finally {
+      await this.#running
+    }
   }
 
   stop(reason = "owned conversation stopped"): Promise<void> {

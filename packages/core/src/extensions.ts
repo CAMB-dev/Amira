@@ -1,6 +1,6 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import type { Ai, AssistantMessage, ModelInfo } from "@amira/ai"
+import type { Ai } from "@amira/ai"
 import * as publicApi from "@amira/api"
 import {
   type AnyEvent,
@@ -39,6 +39,7 @@ import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { ownCommandViews } from "./command-view-context.ts"
 import { CommandRegistry, InputRegistry } from "./commands.ts"
+import { completeForAgent } from "./completion.ts"
 import type { SettingsSources } from "./config/load.ts"
 import type { EventBus } from "./event-bus.ts"
 import { ExtensionCleanup } from "./extension-cleanup.ts"
@@ -53,7 +54,6 @@ import { openExtensionPipe } from "./pipes.ts"
 import { ImageProviderRegistry, MarkdownRendererRegistry, ServiceRegistry } from "./render-registry.ts"
 import { SkillRegistry } from "./skills.ts"
 import { StatusRegistry } from "./status-registry.ts"
-import { overBudget } from "./subagents/budget.ts"
 import { ThemeRegistry } from "./theme-registry.ts"
 import type { ToolRegistry } from "./tool-registry.ts"
 import { ToolRendererRegistry } from "./tool-renderers.ts"
@@ -527,12 +527,7 @@ export class ExtensionHost {
     const ai = this.#opts.ai
     const agent = this.#agent?.()
     if (!ai || !agent) throw new Error("extension side calls are unavailable before session startup")
-    // Side calls spend from the same budget as the conversation: none once it is spent.
-    const spent = agent.tree && overBudget(agent.tree.usage, agent.tree.budget)
-    if (spent) throw new Error(`the agent tree's budget is spent (${spent})`)
     const model = request.model ? ai.model(request.model) : agent.model
-    const sideModel = { ...model, caps: { ...model.caps, webSearch: false } }
-    const label = sideLabel(request.label) ?? source
     const abort = new AbortController()
     const onAbort = () => abort.abort()
     if (request.signal) {
@@ -542,54 +537,7 @@ export class ExtensionHost {
     // Unloading the extension aborts the request; a finished one leaves nothing behind.
     disposers.push(onAbort)
     try {
-      if (abort.signal.aborted) throw abortError()
-      let message: AssistantMessage | undefined
-      for await (const event of ai.stream(
-        {
-          model: sideModel,
-          systemPrompt: request.system ?? "",
-          messages: request.messages,
-          tools: [],
-          ...sideMaxTokens(sideModel, request.maxTokens),
-        },
-        abort.signal,
-      )) {
-        if (event.type !== "done" && event.type !== "error") continue
-        if (abort.signal.aborted) throw abortError()
-        const usage = event.message.usage
-        if (usage) {
-          agent.tree?.recordUsage(agent, usage)
-          try {
-            agent.session?.append({
-              type: "side_usage",
-              model: { provider: model.provider, model: model.id },
-              usage,
-              label,
-            })
-          } catch {
-            // A failing disk is reported by the session's own writes; the reply still counts.
-          }
-        }
-        if (event.type === "error") {
-          if (event.error.code === "aborted" || event.message.stopReason === "aborted") throw abortError()
-          throw new Error(event.error.message)
-        }
-        message = event.message
-        break
-      }
-      if (!message || abort.signal.aborted) {
-        if (abort.signal.aborted) throw abortError()
-        throw new Error("model request ended without a reply")
-      }
-      return {
-        text: message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(""),
-        message,
-        ...(message.usage ? { usage: message.usage } : {}),
-      }
-    } catch (error) {
-      if (abort.signal.aborted || (error instanceof DOMException && error.name === "AbortError"))
-        throw abortError()
-      throw error
+      return await completeForAgent({ ai, agent, model, request, signal: abort.signal, label: source })
     } finally {
       request.signal?.removeEventListener("abort", onAbort)
       const at = disposers.indexOf(onAbort)
@@ -821,29 +769,6 @@ export class ExtensionHost {
       ui: this.#uiFor(source, track),
     }
   }
-}
-
-/** Reasoning models spend their output budget thinking first; a small one would end before any answer. */
-const SIDE_THINKING_TOKENS = 2048
-
-function sideMaxTokens(model: ModelInfo, asked?: number): { maxTokens?: number } {
-  if (!model.caps.thinking) return asked !== undefined ? { maxTokens: asked } : {}
-  if (asked === undefined) return {}
-  return { maxTokens: Math.max(asked, Math.min(SIDE_THINKING_TOKENS, model.maxOutput || Infinity)) }
-}
-
-/** What /cost calls a side request: one short line. */
-function sideLabel(label: string | undefined): string | undefined {
-  const clean = label
-    ?.replace(/\p{Cc}/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 60)
-  return clean || undefined
-}
-
-function abortError(): DOMException {
-  return new DOMException("The operation was aborted", "AbortError")
 }
 
 /**

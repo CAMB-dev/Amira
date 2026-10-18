@@ -161,6 +161,7 @@ test("downgraded, future-version and unknown metadata policy fields fail closed"
   ]) {
     writeFileSync(file, JSON.stringify(invalid))
     expect(() => readOwned(home, owner, saved.id)).toThrow()
+    expect(() => readOwned(home, owner, saved.id, { historical: true })).toThrow()
   }
 })
 
@@ -174,12 +175,15 @@ test("downgraded, future and unknown session header policy formats fail closed",
     { ...header, v: 1 },
     { ...header, v: 3 },
     { ...header, futurePolicy: true },
+    { ...header, writeRoots: ["relative"] },
+    { ...header, writeRoots: [home, home] },
     { ...header, owned: { ...header.owned, v: 3 } },
     { ...header, owned: { ...header.owned, v: 1 } },
     { ...header, owned: { ...header.owned, spec: { ...saved.spec, futurePolicy: true } } },
   ]) {
     writeFileSync(file, `${JSON.stringify(invalid)}\n`)
     expect(() => SessionStore.open(file)).toThrow()
+    expect(() => SessionStore.open(file, { historical: true })).toThrow()
   }
 })
 
@@ -210,6 +214,22 @@ test("owned reopen cannot drop or widen persisted writeRoots, including header-o
   const reopened = await owned.open(saved.id, runtime)
   expect(reopened.id).toBe(saved.id)
   expect(mock.requests).toHaveLength(0)
+})
+
+test("historical header parsing validates root spelling without granting execution authority", () => {
+  const { home } = fixture()
+  const root = path.join(home, "old-worktree")
+  mkdirSync(root)
+  const store = SessionStore.create({ cwd: home, dir: path.join(home, "sessions"), writeRoots: [root] })
+  store.appendDisplay({ type: "display", text: "persist", level: "info" })
+  rmSync(root, { recursive: true })
+  writeFileSync(root, "repurposed worktree")
+  const historical = SessionStore.open(store.file, { historical: true })
+  expect(historical.header.writeRoots).toEqual([root])
+  expect(historical.entries).toEqual(store.entries)
+  expect(() => SessionStore.open(store.file)).toThrow()
+  expect(() => historical.claim()).toThrow()
+  expect(() => historical.fork(null)).toThrow()
 })
 
 test("bounded ordinary child session headers retain their narrowed ceiling on restore and fork", async () => {

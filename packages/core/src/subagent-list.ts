@@ -1,9 +1,11 @@
 import { statSync } from "node:fs"
 import path from "node:path"
-import { addUsage, emptyUsage, type Message, type ModelRef } from "@amira/ai"
+import { emptyUsage, type Message, type ModelRef } from "@amira/ai"
 import { fallbackTitle, type SubagentInfo, type SubagentState } from "@amira/api"
 import type { Agent } from "./agent.ts"
+import { type ReceiptDestination, usageReceiptDestination } from "./owned-conversations-receipts.ts"
 import { SessionStore } from "./session-store.ts"
+import { storedSessionUsage } from "./session-usage.ts"
 import type { AgentTree } from "./subagents.ts"
 
 /** A sub-agent as listed for a session, with a way to get its conversation. */
@@ -11,6 +13,10 @@ export interface SubagentEntry {
   info: SubagentInfo
   /** Its session file, when known; it may not have been written yet. */
   file?: string
+  /** The inert/live evidence used by accounting readers. */
+  session?: SessionStore
+  /** Original receipt destination, available even when a finished child's file is not. */
+  accountingDestination?: ReceiptDestination
   /** Its conversation so far; a copy, so it does not change under the caller. */
   messages(): Message[]
   /**
@@ -43,29 +49,36 @@ export function subagentsOf(
   sessionId: string,
   session: SessionStore | undefined,
   tree?: AgentTree,
+  allBranches = false,
 ): SubagentEntry[] {
   const out: SubagentEntry[] = []
-  const seen = new Set<string>()
+  const seen = new Set<string>([sessionId])
   const visit = (parentId: string, store: SessionStore | undefined, depth: number) => {
+    const current = allBranches && store ? openStored(store.file) : undefined
+    if (current?.id === parentId && current.header.parent === store?.header.parent) store = current
     // Only the current branch: sub-agents of a branch left behind are not part of this session.
     const stored = store
-      ? store
-          .branch()
-          .flatMap((e) =>
-            e.type === "subagent" ? [{ id: e.childSessionId, role: e.role, title: e.title }] : [],
-          )
+      ? (allBranches ? store.entries : store.branch()).flatMap((e) =>
+          e.type === "subagent"
+            ? [{ id: e.childSessionId, role: e.role, title: e.title, groupId: e.groupId }]
+            : [],
+        )
       : []
     const ids = [...stored.map((s) => s.id), ...(tree?.childrenOf(parentId) ?? [])]
     for (const id of ids) {
-      if (seen.has(id) || !/^[\w-]+$/.test(id)) continue
+      if (typeof id !== "string" || !id || seen.has(id) || /[^\w-]/.test(id)) continue
       seen.add(id)
       const known = tree?.subagent(id)
       if (known) {
-        const own = known.session ?? (known.file ? openStored(known.file) : undefined)
+        const own =
+          known.session ??
+          (known.file ? openFinished(known.file, known.info, known.accountingDestination) : undefined)
         const kept = known.messages
         out.push({
           info: { ...known.info, depth },
           ...(own?.file || known.file ? { file: own?.file ?? known.file } : {}),
+          ...(own ? { session: own } : {}),
+          ...(known.accountingDestination ? { accountingDestination: known.accountingDestination } : {}),
           messages: () => (kept ? [...kept] : own ? [...own.restore().messages] : []),
           history: () => (own ? storedHistory(own) : kept ? [...kept] : []),
         })
@@ -77,8 +90,11 @@ export function subagentsOf(
       const file = path.join(path.dirname(store!.file), "subagents", `${id}.jsonl`)
       const child = openStored(file)
       out.push({
-        info: storedInfo(id, parentId, depth, role, entry?.title, child),
-        ...(child ? { file } : {}),
+        info: {
+          ...storedInfo(id, parentId, depth, role, entry?.title, child),
+          ...(entry?.groupId ? { groupId: entry.groupId } : {}),
+        },
+        ...(child ? { file, session: child } : {}),
         messages: () => (child ? [...child.restore().messages] : []),
         history: () => (child ? storedHistory(child) : []),
       })
@@ -102,10 +118,25 @@ export function subagentMessages(
   if (known?.messages) return [...known.messages]
   if (known?.session) return [...known.session.restore().messages]
   const file = known?.file
-  if (file) return [...(openStored(file)?.restore().messages ?? [])]
+  if (file)
+    return [...(openFinished(file, known.info, known.accountingDestination)?.restore().messages ?? [])]
   return listSubagents(agent, tree)
     .find((e) => e.info.id === id)
     ?.messages()
+}
+
+/** A different session at a finished child's pathname is unavailable, not its conversation. */
+function openFinished(
+  file: string,
+  info: SubagentInfo,
+  identity?: ReceiptDestination,
+): SessionStore | undefined {
+  const store = openStored(file)
+  return store?.id === info.id &&
+    store.header.parent === info.parentSessionId &&
+    (!identity || usageReceiptDestination(store) === identity)
+    ? store
+    : undefined
 }
 
 /** Stores read from disk, by file, kept while the file does not change; the most recent few. */
@@ -127,7 +158,7 @@ function openStored(file: string): SessionStore | undefined {
     return hit.store
   }
   try {
-    const store = SessionStore.open(file)
+    const store = SessionStore.open(file, { historical: true })
     cache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, store })
     if (cache.size > CACHED_FILES) cache.delete(cache.keys().next().value!)
     return store
@@ -145,10 +176,19 @@ function storedInfo(
   title: string | undefined,
   store: SessionStore | undefined,
 ): SubagentInfo {
-  let usage = emptyUsage()
   if (!store) {
-    return { id, parentSessionId, depth, role, title: title || role, task: "", status: "aborted", usage }
+    return {
+      id,
+      parentSessionId,
+      depth,
+      role,
+      title: title || role,
+      task: "",
+      status: "aborted",
+      usage: emptyUsage(),
+    }
   }
+  const usage = storedSessionUsage(store).usage
   const messages = store.entries.flatMap((e) => (e.type === "message" ? [e.message] : []))
   let model: ModelRef | undefined
   let status: SubagentState = "aborted"
@@ -162,13 +202,6 @@ function storedInfo(
         : m.stopReason === "aborted" || m.stopReason === "toolUse"
           ? "aborted"
           : "done"
-    if (!m.usage) continue
-    usage = addUsage(usage, m.usage)
-  }
-  // Bill every persisted attempt, not just the current model context. Private replies and
-  // consultations already have one side_usage receipt each; do not add descendant totals here.
-  for (const e of store.entries) {
-    if (e.type === "side_usage") usage = addUsage(usage, e.usage)
   }
   // A child has one turn: its task is the last user message (a forked one follows the history).
   const asked = messages.findLast((m) => m.role === "user")

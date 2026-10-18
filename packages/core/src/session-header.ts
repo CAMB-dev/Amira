@@ -1,5 +1,5 @@
 import type { OwnedSessionIdentity } from "./owned-session.ts"
-import { validateWriteRoots, writeRootPolicy } from "./permissions/write-roots.ts"
+import { validateStoredWriteRoots, validateWriteRoots, writeRootPolicy } from "./permissions/write-roots.ts"
 
 export interface SessionHeader {
   /** Policy-bearing headers use a discriminator rejected even by legacy parsers that ignore v. */
@@ -15,7 +15,8 @@ export interface SessionHeader {
   owned?: OwnedSessionIdentity
 }
 
-export function isSessionHeader(value: unknown): value is SessionHeader {
+export function isSessionHeader(value: unknown, options?: { historical?: boolean }): value is SessionHeader {
+  const validateRoots = options?.historical ? validateStoredWriteRoots : validateWriteRoots
   const h = value as SessionHeader | undefined
   if (!h || typeof h.id !== "string" || (h.v !== 1 && h.v !== 2)) return false
   if (h.type !== (h.v === 2 ? "session-policy" : "session")) return false
@@ -23,7 +24,7 @@ export function isSessionHeader(value: unknown): value is SessionHeader {
     if (h.v === 1 && h.writeRoots !== undefined) return false
     if (
       h.writeRoots !== undefined &&
-      JSON.stringify(validateWriteRoots(h.writeRoots)) !== JSON.stringify(h.writeRoots)
+      JSON.stringify(validateRoots(h.writeRoots)) !== JSON.stringify(h.writeRoots)
     )
       return false
     if (h.owned !== undefined) {
@@ -63,7 +64,7 @@ export function isSessionHeader(value: unknown): value is SessionHeader {
       if (o.v === 2 && h.v !== 2) return false
       if (
         o.spec.writeRoots !== undefined &&
-        JSON.stringify(validateWriteRoots(o.spec.writeRoots)) !== JSON.stringify(o.spec.writeRoots)
+        JSON.stringify(validateRoots(o.spec.writeRoots)) !== JSON.stringify(o.spec.writeRoots)
       )
         return false
     }
@@ -74,10 +75,12 @@ export function isSessionHeader(value: unknown): value is SessionHeader {
       )
     )
       return false
-    // Parsed paths are now an established ceiling, not a new request to resolve later.
-    if (h.writeRoots !== undefined) writeRootPolicy(Object.freeze(h.writeRoots)).assertUnchanged()
-    if (h.owned?.spec.writeRoots !== undefined)
-      writeRootPolicy(Object.freeze(h.owned.spec.writeRoots)).assertUnchanged()
+    // Only executable opens establish a ceiling against today's filesystem.
+    if (!options?.historical) {
+      if (h.writeRoots !== undefined) writeRootPolicy(Object.freeze(h.writeRoots)).assertUnchanged()
+      if (h.owned?.spec.writeRoots !== undefined)
+        writeRootPolicy(Object.freeze(h.owned.spec.writeRoots)).assertUnchanged()
+    }
     return true
   } catch {
     return false

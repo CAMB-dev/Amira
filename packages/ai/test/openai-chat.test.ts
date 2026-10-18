@@ -63,6 +63,7 @@ test("streams text, reasoning and usage", async () => {
   expect(seen.headers.authorization).toBe("Bearer k")
   expect(seen.body.messages[0]).toEqual({ role: "system", content: "sys" })
   expect(events.map((e) => e.type)).toEqual([
+    "request.attempt",
     "request.start",
     "start",
     "thinking.start",
@@ -96,6 +97,7 @@ test("announces reasoning when a Chat Completions server sends no reasoning text
     events.push(e)
 
   expect(events.map((e) => e.type)).toEqual([
+    "request.attempt",
     "request.start",
     "start",
     "thinking.start",
@@ -148,7 +150,7 @@ test("reports HTTP errors and marks 429 as retryable", async () => {
     tools: [],
   }))
     events.push(e)
-  expect(events.map((e) => e.type)).toEqual(["request.start", "error"])
+  expect(events.map((e) => e.type)).toEqual(["request.attempt", "request.start", "error"])
   const err = events.at(-1) as Extract<StreamEvent, { type: "error" }>
   expect(err.type).toBe("error")
   expect(err.retryable).toBe(true)

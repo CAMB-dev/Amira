@@ -51,12 +51,15 @@ test("retries a retryable failure with exponential backoff, then succeeds", asyn
   const evs = await stream()
   expect(calls.n).toBe(3)
   expect(types(evs)).toEqual([
+    "request.attempt",
     "request.start",
     "request.end",
     "retry",
+    "request.attempt",
     "request.start",
     "request.end",
     "retry",
+    "request.attempt",
     "request.start",
     "start",
     "text.delta",
@@ -81,10 +84,12 @@ test("retries a timeout body error returned before any content", async () => {
   const evs = await stream()
   expect(calls.n).toBe(2)
   expect(types(evs)).toEqual([
+    "request.attempt",
     "request.start",
     "start",
     "request.end",
     "retry",
+    "request.attempt",
     "request.start",
     "text.delta",
     "done",
@@ -115,10 +120,12 @@ test("times out a keep-alive-only attempt and retries it", async () => {
   expect(calls.n).toBe(2)
   expect(signals[0]?.aborted).toBe(true)
   expect(types(evs)).toEqual([
+    "request.attempt",
     "request.start",
     "start",
     "request.end",
     "retry",
+    "request.attempt",
     "request.start",
     "text.delta",
     "done",
@@ -277,7 +284,7 @@ test("ends a stream that goes silent after content without sending it again", as
   // The partial text was already shown: a second attempt would show it twice.
   expect(calls.n).toBe(1)
   expect(signals[0]?.aborted).toBe(true)
-  expect(types(evs)).toEqual(["request.start", "start", "text.delta", "error"])
+  expect(types(evs)).toEqual(["request.attempt", "request.start", "start", "text.delta", "error"])
   expect(evs.at(-1)).toMatchObject({
     error: {
       code: "timeout",
@@ -480,12 +487,15 @@ test("gives up after the configured number of retries", async () => {
   const evs = await stream()
   expect(calls.n).toBe(3)
   expect(types(evs)).toEqual([
+    "request.attempt",
     "request.start",
     "request.end",
     "retry",
+    "request.attempt",
     "request.start",
     "request.end",
     "retry",
+    "request.attempt",
     "request.start",
     "error",
   ])
@@ -493,7 +503,7 @@ test("gives up after the configured number of retries", async () => {
 
 test("does not retry errors that are not retryable", async () => {
   const { calls, stream } = scripted([status(400), ok])
-  expect(types(await stream())).toEqual(["request.start", "error"])
+  expect(types(await stream())).toEqual(["request.attempt", "request.start", "error"])
   expect(calls.n).toBe(1)
 })
 
@@ -501,7 +511,11 @@ test("waits as long as Retry-After says", async () => {
   const { stream } = scripted([status(429, { "retry-after": "0.05" }), ok])
   const started = performance.now()
   const evs = await stream()
-  expect(evs[0]).toEqual({ type: "request.start", thinkingDisplay: "raw" })
+  expect(evs[0]).toMatchObject({ type: "request.attempt", id: expect.any(String) })
+  expect(evs.filter((e) => e.type === "request.start")).toEqual([
+    { type: "request.start", thinkingDisplay: "raw" },
+    { type: "request.start", thinkingDisplay: "raw" },
+  ])
   expect(evs.find((e) => e.type === "retry")).toMatchObject({ type: "retry", delayMs: 50 })
   expect(performance.now() - started).toBeGreaterThanOrEqual(45)
   expect(evs.at(-1)?.type).toBe("done")
@@ -509,7 +523,7 @@ test("waits as long as Retry-After says", async () => {
 
 test("returns the error instead of waiting out a very long Retry-After", async () => {
   const { calls, stream } = scripted([status(429, { "retry-after": "3600" }), ok])
-  expect(types(await stream())).toEqual(["request.start", "error"])
+  expect(types(await stream())).toEqual(["request.attempt", "request.start", "error"])
   expect(calls.n).toBe(1)
 })
 
@@ -524,17 +538,19 @@ test("never retries once content has streamed", async () => {
   const { calls, stream } = scripted([cut, ok])
   const evs = await stream()
   expect(calls.n).toBe(1)
-  expect(types(evs)).toEqual(["request.start", "start", "text.delta", "error"])
+  expect(types(evs)).toEqual(["request.attempt", "request.start", "start", "text.delta", "error"])
 })
 
 test("a stream that failed after start but before content is retried with one start event", async () => {
   const empty = () => new Response("", { headers: SSE_HEADERS })
   const { calls, stream } = scripted([empty, ok])
   expect(types(await stream())).toEqual([
+    "request.attempt",
     "request.start",
     "start",
     "request.end",
     "retry",
+    "request.attempt",
     "request.start",
     "text.delta",
     "done",

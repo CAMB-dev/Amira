@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 import { addUsage, emptyUsage, type Usage } from "@amira/ai"
-import { knownUsageCost, transferUsageAccounting } from "@amira/ai/accounting"
+import {
+  hasUnpricedUsage,
+  isUsageAggregate,
+  knownUsageCost,
+  transferUsageAccounting,
+} from "@amira/ai/accounting"
 import { addUsage as apiAddUsage } from "../../api/src/ai.ts"
 
 test("a signed search correction restores previous known costs and search fees", () => {
@@ -161,13 +166,65 @@ test("search fee subtotals and output accounting remain independent of total cos
     webSearchRequests: 1,
     webSearchCost: 2,
   })
-  expect(knownUsageCost(restored)).toBeUndefined()
+  expect(knownUsageCost(restored)).toBe(2)
   expect(addUsage({ ...emptyUsage(), cost: 3 }, { ...emptyUsage(), input: 5 })).toEqual({
     ...emptyUsage(),
     input: 5,
     cost: 3,
   })
   expect(addUsage({ ...emptyUsage(), cost: 3 }, { ...emptyUsage(), cost: -3 }).cost).toBe(0)
+})
+
+test("raw signed unknown amounts cannot cancel missing-price evidence", () => {
+  const unknown = addUsage({ ...emptyUsage(), input: 10 }, { ...emptyUsage(), input: -10 })
+  const total = addUsage(unknown, { ...emptyUsage(), cost: 0.3 })
+  expect(total.input).toBe(0)
+  expect(knownUsageCost(total)).toBe(0.3)
+  expect(hasUnpricedUsage(total)).toBe(true)
+})
+
+test("unreported zero-counter metadata remains unknown through aggregation and copying", () => {
+  const total = addUsage({ ...emptyUsage(), outputReported: false }, { ...emptyUsage(), input: 2, cost: 0.3 })
+  const copy = { ...total }
+  transferUsageAccounting(total, copy)
+  expect(total.outputReported).toBe(false)
+  expect(hasUnpricedUsage(copy)).toBe(true)
+  expect(knownUsageCost(copy)).toBe(0.3)
+})
+
+test("an explicit search fee stays known when unreported token pricing prevents a total", () => {
+  const usage = { ...emptyUsage(), input: 2, webSearchRequests: 1, webSearchCost: 2 }
+  const total = addUsage(usage, emptyUsage())
+  expect(total.cost).toBeUndefined()
+  expect(knownUsageCost(total)).toBe(2)
+  expect(hasUnpricedUsage(total)).toBe(true)
+})
+
+test("only explicit aggregation, not copying sparse raw metadata, carries replacement provenance", () => {
+  const raw = { ...emptyUsage(), input: 10 }
+  const copy = { ...raw }
+  transferUsageAccounting(raw, copy)
+  expect(isUsageAggregate(copy)).toBe(false)
+  const aggregate = addUsage({ ...emptyUsage(), cost: 0.3 }, raw)
+  const retained = { ...aggregate }
+  transferUsageAccounting(aggregate, retained)
+  expect(isUsageAggregate(retained)).toBe(true)
+  retained.input++
+  expect(isUsageAggregate(retained)).toBe(false)
+})
+
+test("coverage flags disappearing from an aggregate cannot erase its known subtotal or old gaps", () => {
+  const aggregate = addUsage(
+    { ...emptyUsage(), input: 10, cost: 0.3 },
+    { ...emptyUsage(), webSearchRequests: 1, pricingUnknown: true, outputReported: false },
+  )
+  delete aggregate.pricingUnknown
+  delete aggregate.outputReported
+  const copy = { ...aggregate }
+  transferUsageAccounting(aggregate, copy)
+  expect(isUsageAggregate(copy)).toBe(true)
+  expect(knownUsageCost(copy)).toBe(0.3)
+  expect(hasUnpricedUsage(copy)).toBe(true)
 })
 
 test("accounting helpers are available only on the declared internal subpaths", async () => {
@@ -181,14 +238,64 @@ test("accounting helpers are available only on the declared internal subpaths", 
     "serverToolText",
   ])
   const internal = await import("@amira/ai-shared/accounting")
-  expect(Object.keys(internal).sort()).toEqual(["knownUsageCost", "transferUsageAccounting"])
+  expect(Object.keys(internal).sort()).toEqual([
+    "hasUnpricedUsage",
+    "isUsageAggregate",
+    "knownUsageCost",
+    "transferUsageAccounting",
+  ])
+  expect(internal.hasUnpricedUsage).toBe(hasUnpricedUsage)
+  expect(internal.isUsageAggregate).toBe(isUsageAggregate)
   expect(internal.knownUsageCost).toBe(knownUsageCost)
   expect(internal.transferUsageAccounting).toBe(transferUsageAccounting)
   expect(Object.keys(await import("@amira/ai/accounting")).sort()).toEqual([
+    "hasUnpricedUsage",
+    "isUsageAggregate",
     "knownUsageCost",
     "transferUsageAccounting",
   ])
 })
+
+test("unknown token prices cannot be hidden by a different contribution's visible subtotal", () => {
+  const partial = addUsage({ ...emptyUsage(), input: 10, cost: 0.3 }, { ...emptyUsage(), output: 5 })
+  expect(partial.cost).toBe(0.3)
+  expect(knownUsageCost(partial)).toBe(0.3)
+  expect(hasUnpricedUsage(partial)).toBe(true)
+  expect(hasUnpricedUsage(addUsage(emptyUsage(), partial))).toBe(true)
+  expect(hasUnpricedUsage(apiAddUsage(emptyUsage(), partial))).toBe(true)
+  expect(hasUnpricedUsage({ ...emptyUsage(), cost: 0 })).toBe(false)
+  expect(hasUnpricedUsage(emptyUsage())).toBe(false)
+})
+
+for (const contribution of [
+  { ...emptyUsage(), output: 5 },
+  { ...emptyUsage(), webSearchRequests: 1 },
+  { ...emptyUsage(), pricingUnknown: true },
+]) {
+  test(`copies and inverse accounting cancel unresolved ${JSON.stringify(contribution)}`, () => {
+    const partial = addUsage({ ...emptyUsage(), input: 10, cost: 0.3 }, contribution)
+    const copy = { ...partial }
+    transferUsageAccounting(partial, copy)
+    expect(hasUnpricedUsage(copy)).toBe(true)
+    const credit: Usage = {
+      input: -copy.input,
+      output: -copy.output,
+      cacheRead: -copy.cacheRead,
+      cacheWrite: -copy.cacheWrite,
+      ...(copy.cost !== undefined ? { cost: -copy.cost } : {}),
+      ...(copy.webSearchRequests !== undefined ? { webSearchRequests: -copy.webSearchRequests } : {}),
+      ...(copy.pricingUnknown ? { pricingUnknown: true } : {}),
+    }
+    transferUsageAccounting(copy, credit, -1)
+    expect(knownUsageCost(credit)).toBe(-0.3)
+    const canceled = addUsage(copy, credit)
+    expect(knownUsageCost(canceled)).toBe(0)
+    expect(hasUnpricedUsage(canceled)).toBe(false)
+    expect(canceled.pricingUnknown).toBeUndefined()
+    expect(hasUnpricedUsage(addUsage(canceled, { ...emptyUsage(), input: 2, cost: 0.4 }))).toBe(false)
+    expect(hasUnpricedUsage(partial)).toBe(true)
+  })
+}
 
 test("changing a returned aggregate's public pricing invalidates its old private subtotal", () => {
   const aggregate = addUsage(emptyUsage(), { ...emptyUsage(), cost: 3 })

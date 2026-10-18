@@ -1,7 +1,6 @@
 import {
   type Ai,
   type AssistantMessage,
-  addUsage,
   type CompactionLayout,
   type Message,
   type ModelInfo,
@@ -12,6 +11,13 @@ import {
   type Usage,
 } from "@amira/ai"
 import { formatTokens } from "@amira/api"
+import {
+  addAccountingUsage,
+  incompleteUsage,
+  markAccountingIncomplete,
+  retainAccountingReceipts,
+} from "./accounting-receipts.ts"
+import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
 
 export interface CompactionOptions {
   /** Compact once the context passes this fraction of the model's window. See DEFAULT_COMPACT_THRESHOLD. */
@@ -256,36 +262,71 @@ export async function summarize(
     : ""
   const request = `${current}Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
   let text = ""
+  let failure: string | undefined
   let usage: Usage | undefined
   let usageIncomplete = false
   const count = (u: Usage | undefined) => {
     if (u) {
-      usage = usage ? addUsage(usage, u) : u
-      usageIncomplete ||= u.outputReported === false
+      usage = usage ? addAccountingUsage(usage, u) : u
+      usageIncomplete ||= incompleteUsage(u)
+    } else usageIncomplete = true
+  }
+  let record = consultationUsageRecorder(count)
+  let backoff = false
+  let dispatched = false
+  const observe = (u: Usage | undefined) => {
+    if (u) {
+      record.observe?.(u)
+      if (usage) retainAccountingReceipts(usage, u)
+      usageIncomplete ||= incompleteUsage(u)
     } else usageIncomplete = true
   }
   // The summary comes from the transcript alone: no tools, and no hosted web search either.
   const writer: ModelInfo = { ...model, caps: { ...model.caps, webSearch: false } }
-  for await (const ev of ai.stream(
-    {
-      model: writer,
-      systemPrompt: SUMMARY_PROMPT,
-      messages: [{ role: "user", content: [{ type: "text", text: request }] }],
-      tools: [],
-    },
-    signal,
-  )) {
-    if (ev.type === "request.end") count(ev.message.usage)
-    if (ev.type === "error") {
-      count(ev.message.usage)
-      throw new SummaryError(ev.error.message, usage, usageIncomplete)
+  try {
+    for await (const ev of ai.stream(
+      {
+        model: writer,
+        systemPrompt: SUMMARY_PROMPT,
+        messages: [{ role: "user", content: [{ type: "text", text: request }] }],
+        tools: [],
+      },
+      signal,
+    )) {
+      if (ev.type === "retry" || ev.type === "fast.fallback") {
+        backoff = true
+        dispatched = false
+        continue
+      }
+      if (ev.type === "request.attempt") {
+        if (backoff || dispatched) record = consultationUsageRecorder(count)
+        backoff = false
+        dispatched = true
+        continue
+      }
+      // A synthetic backoff abort repeats the last receipt; only an opened attempt resets it.
+      if (backoff && !(ev.type === "error" && ev.error.code === "aborted")) {
+        record = consultationUsageRecorder(count)
+        backoff = false
+      }
+      if (ev.type === "request.end") observe(ev.message.usage)
+      if (ev.type === "error") {
+        observe(ev.message.usage)
+        failure ??= ev.error.message
+      }
+      if (ev.type === "done") {
+        text = ev.message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
+        observe(ev.message.usage)
+      }
     }
-    if (ev.type === "done") {
-      text = ev.message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
-      count(ev.message.usage)
-    }
+  } catch (err) {
+    if (err instanceof SummaryError) throw err
+    // The interrupted stream may hide more usage; retain the known subtotal without certifying it.
+    throw new SummaryError(err instanceof Error ? err.message : String(err), usage, true)
   }
+  if (failure !== undefined) throw new SummaryError(failure, usage, usageIncomplete)
   if (!text.trim()) throw new SummaryError("the model returned an empty summary", usage, usageIncomplete)
+  if (usage && usageIncomplete) markAccountingIncomplete(usage)
   return {
     summary: text.trim(),
     ...(usage ? { usage } : {}),
@@ -301,5 +342,6 @@ export class SummaryError extends Error {
     readonly usageIncomplete?: boolean,
   ) {
     super(message)
+    if (usage && usageIncomplete) markAccountingIncomplete(usage)
   }
 }

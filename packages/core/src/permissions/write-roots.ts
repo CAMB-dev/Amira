@@ -5,6 +5,21 @@ import { toolTraits } from "../tool-traits.ts"
 import { existingPrefix, safeName, safeParents, within } from "./path-containment.ts"
 import { toolPath, writtenPaths } from "./protected.ts"
 
+/** Validate persisted path spelling only; historical evidence grants no filesystem authority. */
+export function validateStoredWriteRoots(
+  value: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) throw new Error("writeRoots must be an array of absolute paths")
+  for (const root of value) {
+    if (typeof root !== "string" || safeName(root, true) !== root || path.resolve(root) !== root)
+      throw new Error("persisted writeRoots must contain canonical absolute paths")
+  }
+  if (JSON.stringify([...new Set(value)].sort()) !== JSON.stringify(value))
+    throw new Error("persisted writeRoots changed identity")
+  return value
+}
+
 /** Canonicalize new roots once; established ceilings retain their spelling and original identities. */
 export function validateWriteRoots(value: readonly string[] | undefined): readonly string[] | undefined {
   if (value === undefined) return undefined

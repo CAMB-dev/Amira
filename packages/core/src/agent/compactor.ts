@@ -1,7 +1,6 @@
 // Owns session compaction, checkpoint readability and compaction accounting.
 import {
   type Ai,
-  addUsage,
   type CompactionLayout,
   emptyUsage,
   isNoModel,
@@ -14,6 +13,7 @@ import {
 } from "@amira/ai"
 import type { CompactionInfo, CompactionReason, CompactionUsage } from "@amira/api"
 import { DEFAULT_COMPACT_LAYOUT, DEFAULT_COMPACT_THRESHOLD } from "@amira/api"
+import { addAccountingUsage, incompleteUsage, markAccountingIncomplete } from "../accounting-receipts.ts"
 import {
   type CompactionOptions,
   checkpointOf,
@@ -167,8 +167,8 @@ export class Compactor {
         usageIncomplete = true
         return
       }
-      usage = addUsage(usage, u)
-      usageIncomplete ||= u.outputReported === false
+      usage = addAccountingUsage(usage, u)
+      usageIncomplete ||= incompleteUsage(u)
       counted = true
     }
     try {
@@ -329,6 +329,7 @@ export class Compactor {
         ...(nativeRef ? { native: nativeRef, layout } : {}),
         ...(fallback ? { fallback } : {}),
       }
+      if (usageIncomplete) markAccountingIncomplete(usage)
       const entryId = this.#deps.history.store({
         type: "compaction",
         summary,
@@ -371,6 +372,7 @@ export class Compactor {
       })
       return true
     } catch (err) {
+      if (usageIncomplete) markAccountingIncomplete(usage)
       if (counted && !recorded) this.#recordCompactionUsage(usage, modelRef(writer), false)
       this.#deps.emit(turn, "compact.failed", {
         error: err instanceof Error ? err.message : String(err),
@@ -387,7 +389,7 @@ export class Compactor {
    * has it (in the compaction entry).
    */
   #recordCompactionUsage(usage: Usage | undefined, model: ModelRef, native: boolean, stored = false) {
-    if (!usage || usage.input + usage.output + usage.cacheRead + usage.cacheWrite === 0) return
+    if (!usage) return
     this.#deps.recordTreeUsage(usage)
     if (!stored || !this.#deps.session)
       this.#compactionCosts.push({ model, usage, ...(native ? { native } : {}) })
