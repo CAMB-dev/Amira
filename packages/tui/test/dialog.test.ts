@@ -20,6 +20,11 @@ function open(request: DialogRequest, keys?: Keybindings) {
   const rows = (width = 60) =>
     dialog.render(width, plain).flatMap((l, i, frame) => {
       const row = stripAnsi(l.replace(CURSOR_MARKER, ""))
+      if (row.startsWith("╭─ ")) return [row.slice(3).replace(/─*╮$/, "").trimEnd()]
+      if (request.kind === "ask" && row.startsWith("│ ")) {
+        const content = row.slice(2, -2).trimEnd()
+        return [i === frame.length - 2 || !content || /^\s|^›/.test(content) ? content : `  ${content}`]
+      }
       if (row.startsWith("╭ ")) return [row.slice(2).replace(/─*╮$/, "").trimEnd()]
       if (row.startsWith("╰")) return []
       if (row.startsWith("│›")) return [`› ${row.slice(2, -1).trimEnd()}`]
@@ -407,12 +412,15 @@ test("every dialog is a block with a bar down its left, the question, the option
     "╰──────────────────────────────────────────────────────────╯",
   ])
   expect(ask().dialog.render(60, plain)).toEqual([
-    "╭ \u001b[1mWhich approach do you prefer?\u001b[22m────────────────────────────╮",
+    "╭─ \u001b[1mWhich approach do you prefer?\u001b[22m ──────────────────────────╮",
+    "│                                                          │",
     "│ 1/2 · Approach                                           │",
     "│                                                          │",
-    "│›1 Rewrite (Recommended)  Start over                      │",
-    "│ 2 Patch                  Fix it in place                 │",
-    "│ 3 Other…                                                 │",
+    "│ › 1  Rewrite (Recommended)                               │",
+    "│        Start over                                        │",
+    "│   2  Patch                                               │",
+    "│        Fix it in place                                   │",
+    "│   3  Other…                                              │",
     "│                                                          │",
     "│ ←→ question · ↑↓ move · enter next · esc cancel          │",
     "╰──────────────────────────────────────────────────────────╯",
@@ -613,14 +621,15 @@ test("a tight approval gives up its blank rows and message before its options", 
 test("narrow, descriptions go under their labels; CJK text wraps by its width", () => {
   expect(ask().rows(30)).toEqual([
     "Which approach do you",
+    "",
     "  1/2 · Approach",
     "  prefer?",
     "",
-    "› 1 Rewrite (Recommended)",
-    "    Start over",
-    "  2 Patch",
-    "    Fix it in place",
-    "  3 Other…",
+    "› 1  Rewrite (Recommended)",
+    "       Start over",
+    "  2  Patch",
+    "       Fix it in place",
+    "  3  Other…",
     "",
     "←→ question · enter next",
   ])
@@ -635,14 +644,15 @@ test("narrow, descriptions go under their labels; CJK text wraps by its width", 
   ])
   const lines = cjk.dialog.render(30, plain)
   expect(lines.map(stripAnsi)).toEqual([
-    "╭ 你想用哪种方法来实现这个功─╮",
-    "│ 能？                       │",
+    "╭─ 你想用哪种方法来实现这个 ─╮",
     "│                            │",
-    "│›1 重写（推荐）             │",
-    "│   从头开始写这个模块       │",
-    "│ 2 修补                     │",
-    "│   就地修复                 │",
-    "│ 3 Other…                   │",
+    "│ 功能？                     │",
+    "│                            │",
+    "│ › 1  重写（推荐）          │",
+    "│        从头开始写这个模块  │",
+    "│   2  修补                  │",
+    "│        就地修复            │",
+    "│   3  Other…                │",
     "│                            │",
     "│ enter choose · esc cancel  │",
     "╰────────────────────────────╯",
@@ -655,19 +665,19 @@ test("several questions are asked one after another and answered together", () =
   type("2")
   expect(answers).toEqual([])
   expect(rows()[0]).toBe("What else should I do?")
-  expect(rows()).toContain("› 1 [ ] Tests")
+  expect(rows()).toContain("› 1  [ ] Tests")
   // ← goes back to the answered question, with the cursor on its answer; → no further than
   // the first question not answered.
   press("left")
   expect(rows()[0]).toBe("Which approach do you prefer?")
-  expect(rows()).toContain("› 2 Patch                  Fix it in place")
+  expect(rows()).toContain("› 2  Patch")
   press("right", "right")
   expect(rows()[0]).toBe("What else should I do?")
   // Space and digits check; Enter submits.
   press("space")
   type("3")
-  expect(rows()).toContain("  1 [x] Tests")
-  expect(rows()).toContain("› 3 [x] Changelog")
+  expect(rows()).toContain("  1  [x] Tests")
+  expect(rows()).toContain("› 3  [x] Changelog")
   expect(rows(80).at(-1)).toBe("←→ question · ↑↓ move · space toggle · enter submit · esc back")
   press("enter")
   expect(answers).toEqual([[{ selected: ["Patch"] }, { selected: ["Tests", "Changelog"] }]])
@@ -680,7 +690,7 @@ test("Esc on a later question goes back to the one before, keeping the answers; 
   press("escape")
   expect(answers).toEqual([])
   expect(rows()[0]).toBe("Which approach do you prefer?")
-  expect(rows()).toContain("› 1 Rewrite (Recommended)  Start over")
+  expect(rows()).toContain("› 1  Rewrite (Recommended)")
   press("escape")
   expect(answers).toEqual([undefined])
 })
@@ -689,12 +699,12 @@ test("in a multi-select, Other takes text next to the options checked", () => {
   const { answers, type, press, rows } = ask([QUESTIONS[1]!])
   type("1")
   press("up")
-  expect(rows()).toContain("› 4 [ ] Other…")
+  expect(rows()).toContain("› 4  [ ] Other…")
   // Enter on an empty Other opens it rather than submitting.
   press("enter")
   type("release notes")
   press("enter")
-  expect(rows()).toContain('› 4 [x] Other… "release notes"')
+  expect(rows()).toContain('› 4  [x] Other… "release notes"')
   expect(answers).toEqual([])
   press("enter")
   expect(answers).toEqual([[{ selected: ["Tests"], other: "release notes" }]])
@@ -718,11 +728,11 @@ test("the answer stays in the transcript as one line per question under the bar"
 
 test("colors: the bar and › in the accent, an approval's bar in the warning color; without color the glyphs still tell", () => {
   const ctx = { ...plain, theme: defaultTheme, color: true }
-  const accentBar = defaultTheme.accent("╭ ")
+  const accentBar = defaultTheme.accent("╭─ ")
   const lines = ask().dialog.render(60, ctx)
   const assertEdges = (rows: string[], style: (text: string) => string) => {
-    expect(rows[0]).toStartWith(style("╭ "))
-    expect(rows[0]).toEndWith(style(stripAnsi(rows[0]!).match(/─*╮$/)![0]))
+    expect(rows[0]).toStartWith(style(rows[0]!.includes("╭─ ") ? "╭─ " : "╭ "))
+    expect(rows[0]).toEndWith(style(stripAnsi(rows[0]!).match(/ ?─*╮$/)![0]))
     for (const row of rows.slice(1, -1)) {
       expect(row).toStartWith(style("│"))
       expect(row).toEndWith(style("│"))
@@ -736,7 +746,7 @@ test("colors: the bar and › in the accent, an approval's bar in the warning co
   assertEdges(warn, defaultTheme.warning)
   // Stripped of color, the selected row is the one with ›.
   expect(lines.map(stripAnsi).filter((l) => l.includes("›"))).toEqual([
-    "│›1 Rewrite (Recommended)  Start over                      │",
+    "│ › 1  Rewrite (Recommended)                               │",
   ])
 })
 

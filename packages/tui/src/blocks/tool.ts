@@ -124,10 +124,16 @@ export class ToolBlock extends Block {
     return this.folding ?? env.detail
   }
 
+  override cacheVersion(env: BlockEnv): number | string {
+    return !this.end && this.name === "ask_user" && env.askDialogVisible
+      ? `${this.version}:ask-dialog`
+      : this.version
+  }
+
   lines(env: BlockEnv): string[] {
     const tree = this.tree(env.nodes)
     this.running = this.started && (!this.end || tree.some(isActive))
-    if (!this.started) return []
+    if (!this.started || (!this.end && this.name === "ask_user" && env.askDialogVisible)) return []
     const presenter = env.presenters?.get(this.name)
     const { theme, width, now } = env
     const continuation = treeContinuation(theme, this.last)

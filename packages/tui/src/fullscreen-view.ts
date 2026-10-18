@@ -147,6 +147,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       now: Date.now(),
       spinner: host.spinner.glyph,
       detail: host.detail(),
+      askDialogVisible: host.askDialogVisible?.(),
       reasoningExpandKey: keys.label("tool-output"),
       presenters: host.presenters,
       hyperlinks: host.hyperlinks,

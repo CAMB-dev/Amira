@@ -16,11 +16,31 @@ export function dialogFrame(
   ctx: RenderContext,
   border: StyleFn = ctx.theme.accent,
   maxRows = Number.POSITIVE_INFINITY,
+  padded = false,
 ): string[] {
   // Below four rows there is not room for title, choice, hint AND both edges.
   // Use the compact bare fallback rather than drawing a broken partial perimeter.
-  if (width < 5 || maxRows < 4) {
+  if (width < (padded ? 6 : 5) || maxRows < 4) {
     return [title, ...body].map((row) => truncateToWidth(row, width)).slice(-Math.max(1, maxRows))
+  }
+  if (padded) {
+    const inner = Math.max(1, width - 4)
+    const label = truncateToWidth(title, Math.max(0, width - 6), glyphs.more)
+    const top =
+      border(`${glyphs.boxTopLeft}${glyphs.rule} `) +
+      label +
+      border(` ${glyphs.rule.repeat(Math.max(0, width - 5 - visibleWidth(label)))}${glyphs.boxTopRight}`)
+    const side = ctx.glyphs?.codeSide ?? "│"
+    const room = Math.max(0, maxRows - 2)
+    const kept = body.length <= room ? body : [...body.slice(0, room - 1), body.at(-1)!]
+    return [
+      top,
+      ...kept.map((line) => {
+        const fit = closeStyles(truncateToWidth(line, inner, glyphs.more))
+        return `${border(side)} ${fit}${" ".repeat(Math.max(0, inner - visibleWidth(fit)))} ${border(side)}`
+      }),
+      border(`${glyphs.boxBottomLeft}${glyphs.rule.repeat(width - 2)}${glyphs.boxBottomRight}`),
+    ]
   }
   const inner = Math.max(1, width - 3)
   const label = truncateToWidth(title, inner, glyphs.more)

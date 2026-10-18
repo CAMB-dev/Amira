@@ -41,6 +41,8 @@ export interface BlockEnv {
   renders?: BlockRenders
   /** Output lines a successful shell command shows at `summary` detail (tui.shellOutputLines). */
   outputLines?: number
+  /** A foreground ask dialog already presents the running ask_user call. */
+  askDialogVisible?: boolean
   /** Rows available to a running call from the shared transient-output budget. */
   liveOutputLines?: number
 }
