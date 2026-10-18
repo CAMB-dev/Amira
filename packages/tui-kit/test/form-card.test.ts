@@ -118,7 +118,7 @@ describe("opt-in form card", () => {
         return { lines, left }
       }
       const { lines, left } = checkBorders()
-      const hint = target(lines, "enter list")
+      const hint = target(lines, width >= 80 ? "↑↓/Tab" : "^S save")
       const button = target(lines, "[ Test ]")
       expect(hint.x).toBe(button.x)
       expect(hint.x).toBe(left + 3)
@@ -127,8 +127,8 @@ describe("opt-in form card", () => {
       focus(form, "\0section:Advanced")
       form.handleInput(key("enter"))
       checkBorders()
-      focus(form, "preview")
-      form.handleInput(key("end"))
+      form.handleInput(key("p", { ctrl: true }))
+      form.handleInput(key("pagedown"))
       checkBorders()
     })
   }
@@ -138,7 +138,7 @@ describe("opt-in form card", () => {
     [80, 24],
     [61, 21],
   ] as const) {
-    test(`insets wrapped coloured hints without clipping card borders at ${width}x${rows}`, () => {
+    test(`insets consistent coloured hints without clipping card borders at ${width}x${rows}`, () => {
       const { form } = make({
         fields: [{ id: "models", type: "multiselect", label: "Models", options: [{ value: "demo" }] }],
       })
@@ -159,7 +159,7 @@ describe("opt-in form card", () => {
         expect(visibleWidth(line) - left).toBe(Math.min(width - 8, 88))
       }
       const button = target(lines, "[ Save ]")
-      expect(bottom - button.y).toBeGreaterThan(2)
+      expect(bottom - button.y).toBe(2)
       for (const line of lines.slice(button.y + 1, bottom)) {
         expect(line.slice(left + 1, left + 3)).toBe("  ")
         expect(line[left + 3]).not.toBe(" ")
@@ -221,7 +221,8 @@ describe("opt-in form card", () => {
     expect(after.join("\n")).not.toContain("Field 0 ")
     expect(form.focused).toBe("f0") // Wheel scrolling does not edit or move focus.
     form.handleInput(key("pagedown"))
-    expect(view(80, 24).join("\n")).toContain("Field 5")
+    expect(view(80, 24)).not.toEqual(after)
+    expect(form.focused).toBe("f0") // Page keys scroll the body, not its field focus.
     focus(form, "f23")
     expect(view(80, 24).join("\n")).toContain("Field 23")
     expect(target(view(80, 24), "[ Save ]")).toEqual(footer)
@@ -251,17 +252,7 @@ describe("opt-in form card", () => {
   test("Tab order ends with Test, Save, Cancel; Enter/Space use existing action and submit paths", () => {
     const { form, events, view } = make({ preview: () => ["settings.json", "key: auth.json (masked)"] })
     view()
-    const order = [
-      "vendor",
-      "name",
-      "secret",
-      "fetch",
-      "\0section:Advanced",
-      "preview",
-      "test",
-      "submit",
-      "cancel",
-    ]
+    const order = ["vendor", "name", "secret", "fetch", "\0section:Advanced", "test", "submit", "cancel"]
     for (let i = 0; i < order.length; i++) {
       expect(form.focused).toBe(order[i]!)
       if (form.focused === "test") form.handleInput(key("space"))

@@ -245,7 +245,6 @@ export function providerVendorInitial(admin: ProviderAdmin, vendor: ProviderVend
     ...(vendor.baseUrl ? { baseUrl: vendor.baseUrl } : {}),
     keySource: setEnv ? "env" : "auth",
     ...(apiKeyEnv ? { apiKeyEnv } : {}),
-    ...(vendor.models ? { models: [...vendor.models] } : {}),
   }
 }
 
@@ -274,12 +273,33 @@ function safeAutoFetchUrl(value: string): boolean {
   )
 }
 
+/** Hide empty settings and provider defaults, but keep meaningful false overrides. */
+function previewEntry(value: unknown, path = ""): unknown {
+  if (value === undefined || value === "") return undefined
+  if (
+    value === false &&
+    (path === "catalogId" || /^defaultModel\.caps\.(thinking|images|promptCache)$/.test(path))
+  )
+    return undefined
+  if (Array.isArray(value)) {
+    const items = value.map((item) => previewEntry(item, path)).filter((item) => item !== undefined)
+    return items.length ? items : undefined
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, previewEntry(item, path ? `${path}.${key}` : key)] as const)
+      .filter(([, item]) => item !== undefined)
+    return entries.length ? Object.fromEntries(entries) : undefined
+  }
+  return value
+}
+
 /**
  * The form of /provider add and /provider edit: where the provider is, how it gets its key,
  * which models it offers (fetched from it, or typed), defaults for models the catalog does
- * not know, advanced overrides and a connection test before saving. Full-screen forms fetch
- * models when ready on add or when editing a provider with no models. Remote HTTP and
- * potentially billed probes require explicit consent. `initial` supplies command flags.
+ * not know, advanced overrides and an explicit connection test. Full-screen forms fetch
+ * models when ready on add or when editing a provider with no models. Remote HTTP requests
+ * require explicit consent. Save writes without a test. `initial` supplies command flags.
  */
 export function providerFormSpec(
   admin: ProviderAdmin,
@@ -330,7 +350,7 @@ export function providerFormSpec(
   const draft = (values: FormValues) =>
     draftFromValues({ ...defaults, ...values }, existing?.id, start.catalogId, existing)
   // Only endpoint inputs affect a model-list request. Defaults, fast options and unused key
-  // fields must not revoke consent or invalidate a connection test.
+  // fields must not revoke HTTP consent or invalidate a connection test.
   const requestSettings = (values: FormValues) => {
     const d = draft({ ...values, modelFast: "{}" })
     return {
@@ -347,7 +367,6 @@ export function providerFormSpec(
     const d = draft({ ...values, modelFast: "{}" })
     return JSON.stringify({ ...requestSettings(values), model: d.models[0], catalogId: d.catalogId })
   }
-  let tested: { fingerprint: string; ok: boolean } | undefined
   let currentFingerprint: string | undefined
   let testRevision = 0
   const pending = new Map<
@@ -374,15 +393,6 @@ export function providerFormSpec(
           "Allow unencrypted HTTP requests before sending credentials to this remote server, or use HTTPS.",
         tone: "error",
         values: { httpConsent: false },
-      }
-    const info = admin.describeModels(d, [model]).find((m) => m.id === model)
-    const free = info?.cost?.input === 0 && info.cost.output === 0
-    if (!free && values.testConsent !== true)
-      return {
-        message:
-          "This tiny connection test may be billed (price paid or unknown). Allow a potentially billed test to continue.",
-        tone: "error",
-        values: { testConsent: false },
       }
     const stamp = fingerprint(values)
     const revision = testRevision
@@ -416,13 +426,11 @@ export function providerFormSpec(
       signal.throwIfAborted()
       if (revision !== testRevision || currentFingerprint !== stamp)
         return { message: "Inputs changed; test again with the current settings.", tone: "error" }
-      tested = { fingerprint: stamp, ok }
       return {
         message: ok
           ? "Connection test passed."
-          : "Connection test failed. Fix the protocol, base URL, key or model and retry, or select Save anyway.",
+          : "Connection test failed. Fix the protocol, base URL, key or model and retry, or save without testing.",
         tone: ok ? "success" : "error",
-        ...(!ok ? { values: { saveAnyway: false } } : {}),
       }
     } finally {
       signal.removeEventListener("abort", cancel)
@@ -446,6 +454,15 @@ export function providerFormSpec(
       { title: DEFAULTS, optional: true, collapsed: true },
       { title: ADVANCED, optional: true, collapsed: true },
       { title: "Check" },
+    ],
+    summaries: [
+      {
+        id: "endpoint",
+        label: "Endpoint",
+        fields: ["id", "dialect", "baseUrl"],
+        summaryFields: ["dialect", "baseUrl"],
+        when: { field: "vendor", is: vendorOptions.filter((v) => v.value !== CUSTOM).map((v) => v.value) },
+      },
     ],
     fields: [
       {
@@ -540,6 +557,8 @@ export function providerFormSpec(
         type: "action",
         id: "fetchModels",
         label: "Fetch models",
+        buttonLabel: "Fetch",
+        inline: "models",
         section: "Models",
         recommended: true,
         ...(!editing || !existing.models.length
@@ -719,27 +738,14 @@ export function providerFormSpec(
         validate: validateFast,
       },
       {
-        type: "checkbox",
-        id: "testConsent",
-        label: "Allow a potentially billed connection test",
-        section: "Check",
-        help: "Save tests the first selected model with a tiny request (at most 16 output tokens). Permission is needed only for paid or unknown prices; known-free models need none.",
-      },
-      {
         type: "action",
         id: "testConnection",
         label: "Test connection",
         buttonLabel: "Test",
+        shortcut: "ctrl+t",
         placement: "footer",
         section: "Check",
         run: runTest,
-      },
-      {
-        type: "checkbox",
-        id: "saveAnyway",
-        label: "Save anyway after a failed connection test",
-        section: "Check",
-        help: "Use only after a failed test. Fix the protocol, base URL, credentials or model and test again when possible.",
       },
     ],
     visible: (fieldId, values) => {
@@ -747,14 +753,6 @@ export function providerFormSpec(
         const url = String(values.baseUrl ?? start.baseUrl ?? "")
         return !validateBaseUrl(url) && !safeAutoFetchUrl(url)
       }
-      if (fieldId === "testConsent") {
-        const d = draft({ ...values, modelFast: "{}" })
-        const model = d.models[0]
-        if (!model) return false
-        const cost = admin.describeModels(d, [model])[0]?.cost
-        return cost?.input !== 0 || cost.output !== 0
-      }
-      if (fieldId === "saveAnyway") return tested?.fingerprint === fingerprint(values) && !tested.ok
       return true
     },
     preview: (values) => {
@@ -791,7 +789,7 @@ export function providerFormSpec(
       }
       return [
         "settings.json",
-        JSON.stringify({ providers: { [d.id || "<id>"]: maskedEntry(entry) } }, null, 2),
+        JSON.stringify({ providers: { [d.id || "<id>"]: previewEntry(maskedEntry(entry)) } }, null, 2),
         ...(d.keySource === "auth"
           ? [
               d.apiKey
@@ -807,28 +805,6 @@ export function providerFormSpec(
       !String(values.apiKeyEnvFallbacks ?? "").trim()
         ? { apiKeyEnvFallbacks: "Set a primary environment variable or add a fallback in Advanced." }
         : undefined,
-    beforeSubmit: async (ctx) => {
-      if (ctx.signal.aborted) return { message: "Cancelled. Nothing was saved.", tone: "error" }
-      const stamp = fingerprint(ctx.values)
-      if (!draft(ctx.values).models.length) return undefined
-      if (tested?.fingerprint === stamp && !pending.has(stamp)) {
-        if (tested.ok || ctx.values.saveAnyway === true) return undefined
-        return {
-          message: "Connection test failed. Fix the settings and retry, or select Save anyway.",
-          tone: "error",
-        }
-      }
-      try {
-        return await runTest(ctx)
-      } catch {
-        return {
-          message: ctx.signal.aborted
-            ? "Cancelled. Nothing was saved."
-            : "Unable to test the connection. Check the settings and retry.",
-          tone: "error",
-        }
-      }
-    },
   }
   defaults = formDefaults(spec)
   const touched = new Set<string>()
@@ -854,7 +830,11 @@ export function providerFormSpec(
         ? providerVendorInitial(admin, vendor)
         : { id: "", dialect: "openai-chat", baseUrl: "", keySource: "auth", apiKeyEnv: "", models: [] }
       for (const key of ["id", "dialect", "baseUrl", "keySource", "apiKeyEnv", "models"] as const) {
-        if ((editing && key === "id") || touched.has(key)) continue
+        if (
+          (editing && key === "id") ||
+          (touched.has(key) && !(vendor && ["id", "dialect", "baseUrl"].includes(key)))
+        )
+          continue
         updates[key] = next[key] ?? (key === "models" ? [] : key === "dialect" ? "openai-chat" : "")
       }
     }
@@ -863,9 +843,6 @@ export function providerFormSpec(
     if (!same(requestSettings({ ...values, ...updates }), requestSettings(previous)))
       updates.httpConsent = false
     if (stamp !== fingerprint(previous)) {
-      updates.testConsent = false
-      updates.saveAnyway = false
-      tested = undefined
       testRevision++
       pending.clear()
     }

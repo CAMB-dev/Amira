@@ -247,6 +247,7 @@ export class FormView implements Component {
 
   handleInput(e: InputEvent): boolean {
     if (this.#closed) return false
+    this.#syncSummaries()
     const previous = this.form.values as FormValues
     const focused = this.form.focused
     const handled = this.form.handleInput(e)
@@ -267,7 +268,32 @@ export class FormView implements Component {
   }
 
   render(width: number, ctx: RenderContext): string[] {
+    this.#syncSummaries()
     return this.form.render(width, ctx)
+  }
+
+  #syncSummaries(): void {
+    const { schema } = this.#backend
+    const values = this.form.values
+    this.form.setSummaries(
+      (schema.summaries ?? []).flatMap((summary) => {
+        const condition = summary.when
+        const allowed = condition && (Array.isArray(condition.is) ? condition.is : [condition.is])
+        if (condition && !allowed!.some((value) => value === values[condition.field])) return []
+        return [
+          {
+            id: `${summary.id}:${condition ? String(values[condition.field]) : ""}`,
+            label: summary.label,
+            fields: summary.fields,
+            text: summary.summaryFields
+              .filter((id) => schema.fields.some((field) => field.id === id && field.type !== "secret"))
+              .map((id) => String(values[id] ?? ""))
+              .filter(Boolean)
+              .join(" · "),
+          },
+        ]
+      }),
+    )
   }
 
   #openEditor(): void {
@@ -663,6 +689,8 @@ function toView(f: FormFieldSchema): FormFieldView {
     ...(f.type === "textarea" && f.rows !== undefined ? { rows: f.rows } : {}),
     ...(f.type === "action" && f.placement !== undefined ? { placement: f.placement } : {}),
     ...(f.type === "action" && f.buttonLabel !== undefined ? { buttonLabel: f.buttonLabel } : {}),
+    ...(f.type === "action" && f.shortcut !== undefined ? { shortcut: f.shortcut } : {}),
+    ...(f.type === "action" && f.inline !== undefined ? { inline: f.inline } : {}),
   }
 }
 

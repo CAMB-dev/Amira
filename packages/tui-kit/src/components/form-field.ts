@@ -31,7 +31,9 @@ const separator = (ctx: RenderContext) => ctx.glyphs?.separator ?? defaultGlyphs
 
 /** A rendered control target, relative to the field's first line. */
 export interface FormFieldHit extends HitRect {
-  kind: "focus" | "activate" | "input" | "list" | "option"
+  /** An inline action owns this target rather than the surrounding field. */
+  focus?: string
+  kind: "focus" | "activate" | "input" | "list" | "option" | "bulk"
   index?: number
   value?: string
 }
@@ -45,7 +47,15 @@ export function renderFormField(
   ctx: RenderContext,
   focused: boolean,
   error: string | undefined,
-  lists: { filtered: FormChoice[]; checklist: FormChoice[]; total: number },
+  lists: {
+    filtered: FormChoice[]
+    checklist: FormChoice[]
+    total: number
+    bulk?: "all" | "none"
+    buttons?: boolean
+    actions?: FormFieldState[]
+    actionFocus?: string
+  },
   onHit?: (hit: FormFieldHit) => void,
   card = false,
 ): { lines: string[]; active: number } {
@@ -176,11 +186,38 @@ export function renderFormField(
       const checked = f.value as string[]
       const total = lists.total
       const rows = lists.checklist
-      first(
-        theme.muted(
-          `selected ${checked.length}/${total}${f.filter ? ` ${separator(ctx)} ${rows.length} shown` : ""}`,
-        ),
-      )
+      const count = `selected ${checked.length}/${total}${f.filter ? ` ${separator(ctx)} ${rows.length} shown` : ""}`
+      first(theme.muted(count))
+      const appendButton = (text: string, hit: Pick<FormFieldHit, "kind" | "value" | "focus">) => {
+        let y = out.length - 1
+        let x = visibleWidth(out[y]!) + 1
+        if (x + visibleWidth(text) > width) {
+          out.push(indent)
+          y++
+          x = visibleWidth(indent) + 1
+        }
+        out[y] += ` ${text}`
+        if (x + visibleWidth(text) <= width) onHit?.({ ...hit, x, y, width: visibleWidth(text), height: 1 })
+      }
+      if (lists.buttons)
+        for (const action of ["all", "none"] as const)
+          appendButton(formButton(action === "all" ? "All" : "None", lists.bulk === action, ctx), {
+            kind: "bulk",
+            value: action,
+          })
+      for (const action of lists.actions ?? []) {
+        appendButton(
+          formButton(action.def.buttonLabel ?? action.def.label, action.def.id === lists.actionFocus, ctx),
+          { kind: "activate", focus: action.def.id },
+        )
+      }
+      for (const action of lists.actions ?? []) {
+        if (action.action?.running)
+          hint(
+            `${chrome.more} ${action.action.text ?? "working"} ${separator(ctx)} ${formActionStopHint(action.def, action.def.id === lists.actionFocus)}`,
+          )
+        else if (action.action?.text) hint(action.action.text, formToneStyle(theme, action.action.tone))
+      }
       if (!focused) {
         hint(
           checked.length
@@ -192,19 +229,20 @@ export function renderFormField(
         break
       }
       const adds = f.def.allowCustom && f.filter.trim() && !rows.some((r) => r.value === f.filter.trim())
-      active = out.length
+      const buttonFocus = lists.bulk || lists.actions?.some((action) => action.def.id === lists.actionFocus)
+      active = buttonFocus ? 0 : out.length
       const query = truncateToWidth(
         `${theme.muted("filter:")} ${f.filter}`,
         Math.max(0, contentRoom - 1),
         chrome.more,
       )
       onHit?.({ kind: "focus", x: column, y: out.length, width: room, height: 1 })
-      out.push(indent + control(query + CURSOR_MARKER))
+      out.push(indent + control(query + (buttonFocus ? "" : CURSOR_MARKER)))
       if (adds) hint(`${keyLabel({ name: "enter" })} adds it`)
       if (!rows.length) hint(f.filter ? "no match" : "(no options yet)")
       else {
         const lines = list(rows, (o) => checked.includes(o.value), true)
-        active = out.length + listActiveRow(lines)
+        if (!buttonFocus) active = out.length + listActiveRow(lines)
         out.push(...lines)
       }
       break
@@ -217,7 +255,7 @@ export function renderFormField(
       first(formButton(f.def.buttonLabel ?? f.def.label, focused, ctx))
       if (action.running)
         hint(
-          `${chrome.more} ${action.text ?? "working"} ${separator(ctx)} ${keyLabel({ name: "escape" })} stops it`,
+          `${chrome.more} ${action.text ?? "working"} ${separator(ctx)} ${formActionStopHint(f.def, focused, keyLabel({ name: "escape" }))}`,
         )
       else if (action.text) hint(action.text, formToneStyle(theme, action.tone))
       break
@@ -242,6 +280,12 @@ export function renderFormField(
     const at = rows.findIndex((line) => line.includes(`${pointer(ctx)} `))
     return Math.max(0, at)
   }
+}
+
+export function formActionStopHint(field: FormFieldView, focused: boolean, escLabel = "Esc"): string {
+  return focused
+    ? `${escLabel} stops it`
+    : `Focus ${field.buttonLabel ?? field.label}, then ${escLabel} to stop`
 }
 
 export function formButton(label: string, focused: boolean, ctx: RenderContext): string {

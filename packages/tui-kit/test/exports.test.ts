@@ -101,21 +101,38 @@ test("the public theme exports are part of the stable package surface", async ()
 })
 
 test("the public form presentation contract is opt-in", () => {
-  const options: Pick<FormOptions, "layout"> = { layout: "card" }
-  const action: Pick<FormFieldView, "placement" | "buttonLabel"> = {
+  const options: Pick<FormOptions, "layout" | "summaries"> = {
+    layout: "card",
+    summaries: [{ id: "endpoint", fields: ["url"], label: "Endpoint", text: "https://example.test" }],
+  }
+  const action: Pick<FormFieldView, "placement" | "buttonLabel" | "shortcut" | "inline"> = {
     placement: "footer",
     buttonLabel: "Test",
+    shortcut: "ctrl+t",
+    inline: "models",
   }
   const card: Form["cardLayout"] = true
   expect({ options, action, card }).toMatchInlineSnapshot(`
     {
       "action": {
         "buttonLabel": "Test",
+        "inline": "models",
         "placement": "footer",
+        "shortcut": "ctrl+t",
       },
       "card": true,
       "options": {
         "layout": "card",
+        "summaries": [
+          {
+            "fields": [
+              "url",
+            ],
+            "id": "endpoint",
+            "label": "Endpoint",
+            "text": "https://example.test",
+          },
+        ],
       },
     }
   `)

@@ -126,6 +126,10 @@ export interface ActionField extends FieldBase {
   placement?: "footer"
   /** Shown on the button instead of `label`; dialogs keep the full label. */
   buttonLabel?: string
+  /** Explicit keyboard shortcut for a test action; supported by full-screen card forms. */
+  shortcut?: "ctrl+t"
+  /** In card forms, show this action and its status inside this multiselect's row. */
+  inline?: string
   run: (ctx: FormActionContext) => Promise<FormActionResult | undefined>
   /**
    * Where a form is asked one field at a time, the question whether to run it defaults to yes.
@@ -186,6 +190,17 @@ export interface FormSection {
   optional?: boolean
 }
 
+interface FormSummary {
+  id: string
+  label: string
+  /** Fields folded into one expandable card row; their values and validation are retained. */
+  fields: string[]
+  /** Non-secret field values joined with a separator in the summary. */
+  summaryFields: string[]
+  /** Show the summary only while this field has one of these values. */
+  when?: { field: string; is: FormValue | FormValue[] }
+}
+
 /** What `ui.form` takes. */
 export interface FormSpec {
   title: string
@@ -195,6 +210,8 @@ export interface FormSpec {
   description?: string
   fields: FormField[]
   sections?: FormSection[]
+  /** Optional card-only disclosures over related fields. Other frontends may show fields normally. */
+  summaries?: FormSummary[]
   /** Default "Save". */
   submitLabel?: string
   /** Live host-side updates. Results cannot set secret or unknown fields. */
@@ -225,6 +242,8 @@ export interface FormSchema {
   description?: string
   fields: FormFieldSchema[]
   sections?: FormSection[]
+  /** Optional card-only disclosures over related fields. Other frontends may show fields normally. */
+  summaries?: FormSummary[]
   submitLabel?: string
 }
 
@@ -244,6 +263,7 @@ export function toFormSchema(spec: FormSpec): FormSchema {
     ...(spec.description !== undefined ? { description: spec.description } : {}),
     fields,
     ...(spec.sections ? { sections: spec.sections } : {}),
+    ...(spec.summaries ? { summaries: structuredClone(spec.summaries) } : {}),
     ...(spec.submitLabel !== undefined ? { submitLabel: spec.submitLabel } : {}),
   }
 }

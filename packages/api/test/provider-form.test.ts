@@ -18,7 +18,7 @@ import {
   providerVendorLabel,
 } from "../src/provider-form.ts"
 import type { ProviderAdmin, ProviderDraft, ProviderVendor } from "../src/providers.ts"
-import type { ModelSettings } from "../src/settings.ts"
+import type { ModelSettings, ProviderSettings } from "../src/settings.ts"
 
 const VENDOR: ProviderVendor = {
   id: "vendor",
@@ -79,6 +79,7 @@ test("provider add and edit use a card with the existing connection action in th
         id: "testConnection",
         label: "Test connection",
         buttonLabel: "Test",
+        shortcut: "ctrl+t",
         placement: "footer",
         section: "Check",
       },
@@ -321,6 +322,7 @@ test("fetch results name the provider as list source and models.dev as metadata 
   expect(progress).toEqual(["asking the provider…"])
   expect(result.message).toBe("2 models listed · models.dev details for 1.")
   expect(result.options?.models?.map((option) => option.value)).toEqual(["known", "custom"])
+  expect(result.values).toBeUndefined()
   expect(seen).toHaveLength(1)
 })
 
@@ -452,7 +454,7 @@ test("a form connection test resolving after cancellation reports cancellation, 
   const result = await runFormAction(
     providerFormSpec(admin),
     "testConnection",
-    { models: ["m"], baseUrl: VENDOR.baseUrl!, testConsent: true },
+    { models: ["m"], baseUrl: VENDOR.baseUrl! },
     {
       signal: controller.signal,
       progress: () => {},
@@ -526,12 +528,12 @@ test("one-page vendor choices use only the cache and keep curated Popular order 
     baseUrl: VENDOR.baseUrl,
     keySource: "env",
     apiKeyEnv: "ALTERNATE_KEY",
-    models: ["cached-model"],
+    models: [],
   })
-  expect(result?.options?.models).toEqual([{ value: "cached-model" }])
+  expect(result?.options?.models).toEqual([])
 })
 
-test("vendor changes preserve custom IDs, edited fields, and fields changed back to their old default", () => {
+test("catalog vendor changes refill identity and endpoint but preserve selected models", () => {
   const { admin } = fakeAdmin()
   admin.cachedVendors = () => [
     VENDOR,
@@ -555,22 +557,21 @@ test("vendor changes preserve custom IDs, edited fields, and fields changed back
   choose({ dialect: "openai-chat" })
   choose({ vendor: "other" })
   expect(previous).toMatchObject({
-    id: "personal-id",
-    dialect: "openai-chat",
+    id: "other",
+    dialect: "anthropic-messages",
     models: ["custom/model"],
     baseUrl: "https://other.example",
   })
   expect(draftFromValues(previous).catalogId).toBe("other")
 })
 
-test("explicit initial flags survive vendor changes and edit IDs cannot be changed", () => {
+test("catalog vendor selection replaces initial endpoint flags but edit IDs cannot be changed", () => {
   const { admin } = fakeAdmin()
   admin.cachedVendors = () => [VENDOR]
   const form = providerFormSpec(admin, undefined, { id: "flag-id", baseUrl: "https://flag.example" })
   const previous = formDefaults(form)
   const result = form.change?.({ ...previous, vendor: "vendor" }, previous)
-  expect(result?.values).not.toHaveProperty("id")
-  expect(result?.values).not.toHaveProperty("baseUrl")
+  expect(result?.values).toMatchObject({ id: "vendor-3", baseUrl: VENDOR.baseUrl })
   const existing = { ...draftFromValues(READY_VALUES), id: "fixed" }
   const editing = providerFormSpec(admin, existing)
   expect(editing.fields.some((field) => field.id === "id")).toBe(false)
@@ -692,8 +693,8 @@ test("manual and automatic remote HTTP fetching requires explicit consent, and f
   expect(result.values).toBeUndefined()
 })
 
-test.each([undefined, { input: 1, output: 2 }])(
-  "save requires explicit consent for unknown or paid cost %j",
+test.each([undefined, { input: 1, output: 2 }, { input: 0, output: 0 }])(
+  "only explicit Test probes the first model, regardless of price %j",
   async (cost) => {
     const { admin } = fakeAdmin()
     let calls = 0
@@ -704,32 +705,17 @@ test.each([undefined, { input: 1, output: 2 }])(
       return { ok: true, latencyMs: 1, message: "OK" }
     }
     const form = providerFormSpec(admin)
-    expect((await form.beforeSubmit?.(actionContext(READY_VALUES)))?.tone).toBe("error")
+    expect(form.beforeSubmit).toBeUndefined()
+    expect(form.fields.some(({ id }) => id === "testConsent" || id === "saveAnyway")).toBe(false)
     expect(calls).toBe(0)
-    const allowed = { ...READY_VALUES, testConsent: true }
-    expect((await form.beforeSubmit?.(actionContext(allowed)))?.tone).toBe("success")
-    expect(calls).toBe(1)
-    expect(await form.beforeSubmit?.(actionContext(allowed))).toBeUndefined()
+    expect(
+      (await runFormAction(form, "testConnection", READY_VALUES, actionContext(READY_VALUES))).tone,
+    ).toBe("success")
     expect(calls).toBe(1)
   },
 )
 
-test("known-free tests need no billing consent; empty-model saves send no requests", async () => {
-  const { admin } = fakeAdmin()
-  let calls = 0
-  admin.describeModels = (_, ids) => ids.map((id) => ({ id, inCatalog: true, cost: { input: 0, output: 0 } }))
-  admin.test = async () => {
-    calls++
-    return { ok: true, latencyMs: 1, message: "OK" }
-  }
-  const form = providerFormSpec(admin)
-  expect((await form.beforeSubmit?.(actionContext(READY_VALUES)))?.tone).toBe("success")
-  expect(calls).toBe(1)
-  expect(await form.beforeSubmit?.(actionContext({ ...READY_VALUES, models: [] }))).toBeUndefined()
-  expect(calls).toBe(1)
-})
-
-test("failed probes block save with fix guidance until Save anyway; changing inputs revokes consent and failure override", async () => {
+test("failed explicit tests do not gate saving and empty-model tests send no requests", async () => {
   const { admin } = fakeAdmin()
   let calls = 0
   admin.test = async () => {
@@ -737,39 +723,15 @@ test("failed probes block save with fix guidance until Save anyway; changing inp
     return { ok: false, latencyMs: 1, message: "failure" }
   }
   const form = providerFormSpec(admin)
-  const values = { ...formDefaults(form), ...READY_VALUES, testConsent: true }
-  const failure = await form.beforeSubmit?.(actionContext(values))
-  expect(failure).toMatchObject({ tone: "error" })
-  expect(failure?.message).toContain("Fix")
-  expect((await form.beforeSubmit?.(actionContext(values)))?.tone).toBe("error")
+  const result = await runFormAction(form, "testConnection", READY_VALUES, actionContext(READY_VALUES))
+  expect(result).toMatchObject({ tone: "error" })
+  expect(result.message).not.toContain("Save anyway")
+  expect(result.values).toBeUndefined()
+  expect(form.beforeSubmit).toBeUndefined()
+  expect(checkForm(form, READY_VALUES).errors).toEqual({})
+  const empty = { ...READY_VALUES, models: [] }
+  expect((await runFormAction(form, "testConnection", empty, actionContext(empty))).tone).toBe("warning")
   expect(calls).toBe(1)
-  const override = { ...values, saveAnyway: true, httpConsent: true }
-  expect(await form.beforeSubmit?.(actionContext(override))).toBeUndefined()
-  const changed = { ...override, baseUrl: "https://changed.example/v1" }
-  const updates = form.change?.(changed, override).values
-  expect(updates).toMatchObject({ testConsent: false, httpConsent: false, saveAnyway: false })
-  expect((await form.beforeSubmit?.(actionContext({ ...changed, ...updates })))?.tone).toBe("error")
-  expect(calls).toBe(1)
-})
-
-test("save-time cancellation blocks persistence, and a late test cannot validate changed inputs", async () => {
-  const { admin } = fakeAdmin()
-  const controller = new AbortController()
-  admin.test = async () => {
-    controller.abort()
-    return { ok: true, latencyMs: 1, message: "OK" }
-  }
-  const form = providerFormSpec(admin)
-  const values = { ...formDefaults(form), ...READY_VALUES, testConsent: true }
-  expect(await form.beforeSubmit?.(actionContext(values, controller.signal))).toEqual({
-    message: "Cancelled. Nothing was saved.",
-    tone: "error",
-  })
-  admin.test = async () => {
-    form.change?.({ ...values, baseUrl: "https://changed.example" }, values)
-    return { ok: true, latencyMs: 1, message: "OK" }
-  }
-  expect((await form.beforeSubmit?.(actionContext(values)))?.message).toContain("Inputs changed")
 })
 
 test("incomplete persistence previews stay safe and malformed endpoints never start model requests", async () => {
@@ -846,22 +808,10 @@ test("dialog-normalized hidden key fields do not count as edits during vendor ch
   expect(custom.values).toHaveProperty("apiKeyEnv", "")
 })
 
-test("only relevant request changes revoke consent and cached connection results", async () => {
+test("only relevant request changes revoke HTTP consent", () => {
   const { admin } = fakeAdmin()
-  let calls = 0
-  admin.test = async () => {
-    calls++
-    return { ok: true, latencyMs: 1, message: "OK" }
-  }
   const form = providerFormSpec(admin)
-  const previous = {
-    ...formDefaults(form),
-    ...READY_VALUES,
-    httpConsent: true,
-    testConsent: true,
-    saveAnyway: true,
-  }
-  await form.beforeSubmit?.(actionContext(previous))
+  const previous = { ...formDefaults(form), ...READY_VALUES, httpConsent: true }
   const unrelated = {
     ...previous,
     contextWindow: 12345,
@@ -871,54 +821,33 @@ test("only relevant request changes revoke consent and cached connection results
     modelFast: '{"first":false}',
     apiKeyEnv: "HIDDEN_UNUSED_KEY",
   }
-  const updates = runFormChange(form, unrelated, previous).values
-  expect(updates).not.toHaveProperty("httpConsent")
-  expect(updates).not.toHaveProperty("testConsent")
-  expect(updates).not.toHaveProperty("saveAnyway")
-  expect(await form.beforeSubmit?.(actionContext(unrelated))).toBeUndefined()
-  expect(calls).toBe(1)
-  const modelChange = runFormChange(form, { ...unrelated, models: ["other"] }, unrelated).values
-  expect(modelChange).toMatchObject({ testConsent: false, saveAnyway: false })
-  expect(modelChange).not.toHaveProperty("httpConsent")
-  const endpointChange = runFormChange(form, { ...unrelated, headers: "X-Test=value" }, unrelated).values
-  expect(endpointChange).toMatchObject({ httpConsent: false, testConsent: false, saveAnyway: false })
-})
-
-test("a prechecked Save anyway cannot bypass the first failed test", async () => {
-  const { admin } = fakeAdmin()
-  admin.test = async () => ({ ok: false, latencyMs: 1, message: "failed" })
-  const form = providerFormSpec(admin)
-  const values = { ...READY_VALUES, testConsent: true, saveAnyway: true }
-  const result = await form.beforeSubmit?.(actionContext(values))
-  expect(result).toMatchObject({ tone: "error", values: { saveAnyway: false } })
-  expect((await form.beforeSubmit?.(actionContext({ ...values, ...result?.values })))?.tone).toBe("error")
-  expect(await form.beforeSubmit?.(actionContext(values))).toBeUndefined()
-})
-
-test("consent controls appear only for remote HTTP and paid models, and recovery only after failure", async () => {
-  const { admin } = fakeAdmin()
-  admin.describeModels = (_draft, ids) =>
-    ids.map((id) => ({ id, inCatalog: true, cost: { input: id === "free" ? 0 : 1, output: 0 } }))
-  admin.test = async () => ({ ok: false, latencyMs: 1, message: "Failed" })
-  const form = providerFormSpec(admin, undefined, {
-    id: "mine",
-    dialect: "openai-chat",
-    baseUrl: "https://example.test",
-    keySource: "none",
-    models: ["free"],
+  expect(runFormChange(form, unrelated, previous).values).not.toHaveProperty("httpConsent")
+  expect(runFormChange(form, { ...unrelated, models: ["other"] }, unrelated).values).not.toHaveProperty(
+    "httpConsent",
+  )
+  expect(runFormChange(form, { ...unrelated, headers: "X-Test=value" }, unrelated).values).toMatchObject({
+    httpConsent: false,
   })
-  const values = formDefaults(form)
-  const visible = (id: string, input = values) =>
-    isFieldVisible(form, form.fields.find((field) => field.id === id)!, input)
-  expect(visible("httpConsent")).toBe(false)
-  expect(visible("testConsent")).toBe(false)
-  expect(visible("saveAnyway")).toBe(false)
-  expect(visible("httpConsent", { ...values, baseUrl: "http://remote.test" })).toBe(true)
-  expect(visible("httpConsent", { ...values, baseUrl: "http://127.0.0.1:8080" })).toBe(false)
-  const paid = { ...values, models: ["paid"], testConsent: true }
-  expect(visible("testConsent", paid)).toBe(true)
-  expect((await form.beforeSubmit!(actionContext(paid)))?.tone).toBe("error")
-  expect(visible("saveAnyway", paid)).toBe(true)
+})
+
+test("HTTP consent appears only for unencrypted remote endpoints and also gates explicit tests", async () => {
+  const { admin } = fakeAdmin()
+  let calls = 0
+  admin.test = async () => {
+    calls++
+    return { ok: true, latencyMs: 1, message: "OK" }
+  }
+  const form = providerFormSpec(admin)
+  const field = form.fields.find((field) => field.id === "httpConsent")!
+  expect(isFieldVisible(form, field, READY_VALUES)).toBe(false)
+  expect(isFieldVisible(form, field, { ...READY_VALUES, baseUrl: "http://127.0.0.1:8080" })).toBe(false)
+  const remote = { ...READY_VALUES, baseUrl: "http://remote.test" }
+  expect(isFieldVisible(form, field, remote)).toBe(true)
+  expect((await runFormAction(form, "testConnection", remote, actionContext(remote))).tone).toBe("error")
+  expect(calls).toBe(0)
+  const allowed = { ...remote, httpConsent: true }
+  expect((await runFormAction(form, "testConnection", allowed, actionContext(allowed))).tone).toBe("success")
+  expect(calls).toBe(1)
 })
 
 test.each([false, "other"])("selecting the provider's own vendor replaces prior identity %j", (catalogId) => {
@@ -1013,130 +942,139 @@ test.each([true, false])(
   },
 )
 
-test.each(["none", "manual", "save"])(
-  "Save shares a pending manual probe with independent %s cancellation",
+test.each([false, true])(
+  "explicit pending tests share requests with independent cancellation %j",
   async (cancel) => {
     const { admin } = fakeAdmin()
+    const gate = Promise.withResolvers<void>()
     let calls = 0
-    const releases: (() => void)[] = []
     let requestSignal: AbortSignal | undefined
     admin.test = async (_draft, _model, signal) => {
       calls++
       requestSignal = signal
-      await new Promise<void>((resolve) => {
-        releases.push(resolve)
-      })
+      await gate.promise
       return { ok: true, latencyMs: 1, message: "OK" }
     }
     const form = providerFormSpec(admin)
-    const values = { ...READY_VALUES, testConsent: true }
-    const manual = new AbortController()
-    const save = new AbortController()
-    const testResult = runFormAction(form, "testConnection", values, actionContext(values, manual.signal))
-    const saveResult = form.beforeSubmit!(actionContext(values, save.signal))
-    if (cancel === "manual") {
-      manual.abort()
-      expect((await testResult)?.tone).toBe("warning")
+    const controller = new AbortController()
+    const first = runFormAction(
+      form,
+      "testConnection",
+      READY_VALUES,
+      actionContext(READY_VALUES, controller.signal),
+    )
+    const second = runFormAction(form, "testConnection", READY_VALUES, actionContext(READY_VALUES))
+    if (cancel) {
+      controller.abort()
+      expect((await first).tone).toBe("warning")
     }
-    if (cancel === "save") {
-      save.abort()
-      expect((await saveResult)?.tone).toBe("error")
-    }
-    const callsWhilePending = calls
-    const requestAborted = requestSignal?.aborted
-    for (const release of releases) release()
-    const results = await Promise.all([testResult, saveResult])
-    expect(callsWhilePending).toBe(1)
-    expect(requestAborted).toBe(false)
-    expect(results[0]?.tone).toBe(cancel === "manual" ? "warning" : "success")
-    expect(results[1]?.tone).toBe(cancel === "save" ? "error" : "success")
-    expect(await form.beforeSubmit!(actionContext(values))).toBeUndefined()
     expect(calls).toBe(1)
+    expect(requestSignal?.aborted).toBe(false)
+    gate.resolve()
+    expect((await first).tone).toBe(cancel ? "warning" : "success")
+    expect((await second).tone).toBe("success")
   },
 )
 
-test("a shared pending probe cannot validate changed inputs, even after returning to the old values", async () => {
+test("a late explicit test stays stale even after returning to its original inputs", async () => {
   const { admin } = fakeAdmin()
-  let release = () => {}
-  let calls = 0
+  const gate = Promise.withResolvers<void>()
   admin.test = async () => {
-    calls++
-    if (calls === 1)
-      await new Promise<void>((resolve) => {
-        release = resolve
-      })
+    await gate.promise
     return { ok: true, latencyMs: 1, message: "OK" }
   }
   const form = providerFormSpec(admin)
-  const values = { ...READY_VALUES, testConsent: true }
-  const manual = runFormAction(form, "testConnection", values, actionContext(values))
-  const save = form.beforeSubmit!(actionContext(values))
-  const changed = { ...values, baseUrl: "https://changed.example" }
-  runFormChange(form, changed, values)
-  runFormChange(form, values, changed)
-  release()
-  const results = await Promise.all([manual, save])
-  for (const result of results)
-    expect(result).toMatchObject({ tone: "error", message: expect.stringContaining("Inputs changed") })
-  expect(calls).toBe(1)
-  expect((await form.beforeSubmit!(actionContext(values)))?.tone).toBe("success")
-  expect(calls).toBe(2)
+  const pending = runFormAction(form, "testConnection", READY_VALUES, actionContext(READY_VALUES))
+  const changed = { ...READY_VALUES, baseUrl: "https://changed.example" }
+  runFormChange(form, changed, READY_VALUES)
+  runFormChange(form, READY_VALUES, changed)
+  gate.resolve()
+  expect(await pending).toMatchObject({ tone: "error", message: expect.stringContaining("Inputs changed") })
+  expect((await runFormAction(form, "testConnection", READY_VALUES, actionContext(READY_VALUES))).tone).toBe(
+    "success",
+  )
 })
 
-test("cancelling every probe caller aborts the request without caching a late result", async () => {
+test("cancelling an explicit test aborts the request and a later test starts fresh", async () => {
   const { admin } = fakeAdmin()
+  const gate = Promise.withResolvers<void>()
   let calls = 0
-  let release = () => {}
   let requestSignal: AbortSignal | undefined
   admin.test = async (_draft, _model, signal) => {
     calls++
     requestSignal = signal
-    if (calls === 1)
-      await new Promise<void>((resolve) => {
-        release = resolve
-      })
+    if (calls === 1) await gate.promise
     return { ok: true, latencyMs: 1, message: "OK" }
   }
   const form = providerFormSpec(admin)
-  const values = { ...READY_VALUES, testConsent: true }
-  const manual = new AbortController()
-  const save = new AbortController()
-  const testResult = runFormAction(form, "testConnection", values, actionContext(values, manual.signal))
-  const saveResult = form.beforeSubmit!(actionContext(values, save.signal))
-  manual.abort()
-  save.abort()
-  const results = await Promise.all([testResult, saveResult])
-  expect(calls).toBe(1)
+  const controller = new AbortController()
+  const pending = runFormAction(
+    form,
+    "testConnection",
+    READY_VALUES,
+    actionContext(READY_VALUES, controller.signal),
+  )
+  controller.abort()
+  expect((await pending).tone).toBe("warning")
   expect(requestSignal?.aborted).toBe(true)
-  expect(results.map((result) => result?.tone)).toEqual(["warning", "error"])
-  release()
-  expect((await form.beforeSubmit!(actionContext(values)))?.tone).toBe("success")
+  gate.resolve()
+  expect((await runFormAction(form, "testConnection", READY_VALUES, actionContext(READY_VALUES))).tone).toBe(
+    "success",
+  )
   expect(calls).toBe(2)
 })
 
-test("Save awaits the current manual retest rather than an older successful cached test", async () => {
+test("catalog presets never preselect catalog models", () => {
   const { admin } = fakeAdmin()
-  const gate = Promise.withResolvers<void>()
-  let calls = 0
-  admin.test = async () => {
-    if (++calls === 1) return { ok: true, latencyMs: 1, message: "old success" }
-    await gate.promise
-    return { ok: false, latencyMs: 1, message: "new failure" }
+  const vendor = { ...VENDOR, models: ["catalog-one", "catalog-two"] }
+  admin.cachedVendors = () => [vendor]
+  const initial = providerVendorInitial(admin, vendor)
+  expect(initial).not.toHaveProperty("models")
+  const form = providerFormSpec(admin, undefined, initial)
+  expect(formDefaults(form).models).toEqual([])
+})
+
+test.each([false, true])(
+  "preview omits empty settings and false defaults with persistence preview %j",
+  (persisted) => {
+    const { admin } = fakeAdmin()
+    if (persisted)
+      admin.preview = () => ({
+        dialect: "openai-chat",
+        baseUrl: "https://api.example/v1",
+        catalogId: false,
+        apiKeyEnv: "",
+        apiKeyEnvFallbacks: [],
+        headers: {},
+        compat: {},
+        models: [],
+        defaultModel: { caps: { thinking: false, images: false, promptCache: false } },
+      })
+    const form = providerFormSpec(admin)
+    const preview = form.preview?.({ ...READY_VALUES, models: [], keySource: "auth", apiKey: "secret" }) ?? []
+    const json = JSON.parse(preview[1]!)
+    expect(json).toEqual({
+      providers: { "new-provider": { dialect: "openai-chat", baseUrl: "https://api.example/v1" } },
+    })
+    expect(preview.at(-1)).toBe("key → auth.json: new-provider → •••• (new key)")
+  },
+)
+
+test("preview keeps meaningful false overrides and never mutates persisted settings", () => {
+  const { admin } = fakeAdmin()
+  const entry: ProviderSettings & { models: Array<ModelSettings & { empty: never[]; blank: string }> } = {
+    dialect: "openai-chat",
+    compat: { streamUsage: false },
+    models: [{ id: "first", fast: false, caps: { images: false }, empty: [], blank: "" }],
   }
+  admin.preview = () => entry
   const form = providerFormSpec(admin)
-  const values = { ...READY_VALUES, testConsent: true }
-  await runFormAction(form, "testConnection", values, actionContext(values))
-  const manual = runFormAction(form, "testConnection", values, actionContext(values))
-  let settled = false
-  const save = form.beforeSubmit!(actionContext(values)).then((result) => {
-    settled = true
-    return result
+  const preview = JSON.parse(form.preview?.(READY_VALUES)[1] ?? "{}")
+  expect(preview.providers["new-provider"]).toEqual({
+    dialect: "openai-chat",
+    compat: { streamUsage: false },
+    models: [{ id: "first", fast: false, caps: { images: false } }],
   })
-  await Bun.sleep(0)
-  const savedBeforeRetest = settled
-  gate.resolve()
-  const results = await Promise.all([manual, save])
-  expect(savedBeforeRetest).toBe(false)
-  expect(calls).toBe(2)
-  expect(results.map((result) => result?.tone)).toEqual(["error", "error"])
+  expect(entry.models[0]).toHaveProperty("empty", [])
+  expect(entry.models[0]).toHaveProperty("blank", "")
 })

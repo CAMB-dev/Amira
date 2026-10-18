@@ -8,9 +8,16 @@ test("RPC schema includes additive form grouping, disclosure and recovery metada
   expect(form.properties.sections.items.properties.collapsed).toEqual({ type: "boolean" })
   expect(form.properties.layout).toEqual({ enum: ["card"] })
   expect(form.required).not.toContain("layout")
+  expect(form.properties.summaries.items.properties.summaryFields).toEqual({
+    type: "array",
+    items: { type: "string" },
+  })
+  expect(form.required).not.toContain("summaries")
   const action = schema.$defs.FormField.oneOf.find((field: any) => field.properties.type.enum[0] === "action")
   expect(action.properties.placement).toEqual({ enum: ["footer"] })
   expect(action.properties.buttonLabel).toEqual({ type: "string" })
+  expect(action.properties.shortcut).toEqual({ enum: ["ctrl+t"] })
+  expect(action.properties.inline).toEqual({ type: "string" })
   expect(action.required).not.toContain("placement")
   expect(action.required).not.toContain("buttonLabel")
   const progress = schema.$defs.Event.anyOf.find((event: any) =>

@@ -103,21 +103,61 @@ test("card forms and footer action labels are additive public contracts without 
     label: "Test connection",
     placement: "footer",
     buttonLabel: "Test",
+    shortcut: "ctrl+t",
+    inline: "models",
     run: async () => undefined,
   }
-  const spec: FormSpec = { title: "Provider", layout: "card", fields: [action] }
+  const spec: FormSpec = {
+    title: "Provider",
+    layout: "card",
+    fields: [action],
+    summaries: [
+      {
+        id: "endpoint",
+        label: "Endpoint",
+        fields: ["url"],
+        summaryFields: ["url"],
+        when: { field: "vendor", is: ["demo"] },
+      },
+    ],
+  }
   const schema: FormSchema = api.toFormSchema(spec)
   const field: FormFieldSchema = schema.fields[0]!
-  expect({ version: api.API_VERSION, layout: schema.layout, field }).toMatchInlineSnapshot(`
+  expect({
+    version: api.API_VERSION,
+    layout: schema.layout,
+    summaries: schema.summaries,
+    field,
+  }).toMatchInlineSnapshot(`
     {
       "field": {
         "buttonLabel": "Test",
         "id": "testConnection",
+        "inline": "models",
         "label": "Test connection",
         "placement": "footer",
+        "shortcut": "ctrl+t",
         "type": "action",
       },
       "layout": "card",
+      "summaries": [
+        {
+          "fields": [
+            "url",
+          ],
+          "id": "endpoint",
+          "label": "Endpoint",
+          "summaryFields": [
+            "url",
+          ],
+          "when": {
+            "field": "vendor",
+            "is": [
+              "demo",
+            ],
+          },
+        },
+      ],
       "version": "0.1.60",
     }
   `)
