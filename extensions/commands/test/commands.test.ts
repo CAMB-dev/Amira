@@ -458,11 +458,11 @@ test("/fast toggles the requested choice, sets on/off, and warns only on changes
   const { run, calls, asked } = await setup()
   expect(await run("/fast")).toMatchObject({
     ok: true,
-    text: "Fast mode: requested on; applied on; last used not reported.\nChanging fast mode may invalidate the prompt cache.",
+    text: "Fast mode is on for deepseek/deepseek-flash. Last response: not reported.\nChanging fast mode may invalidate the prompt cache.",
   })
   expect((await run("/fast on", "rpc")).text).not.toContain("invalidate")
   expect(calls).toEqual(["setFastMode true"])
-  expect((await run("/fast off", "print")).text).toContain("requested off; applied off")
+  expect((await run("/fast off", "print")).text).toContain("Fast mode is off.")
   expect(calls).toEqual(["setFastMode true", "setFastMode false"])
   expect((await run("/fast off")).text).not.toContain("invalidate")
   await run("/fast")
@@ -482,7 +482,7 @@ test("/fast status reports requested, applied and last used without changing the
     })
     expect(await run("/fast status")).toMatchObject({
       ok: true,
-      text: `Fast mode: requested on; applied on; last used ${used ?? "not reported"}.`,
+      text: `Fast mode is on for deepseek/deepseek-flash. Last response: ${used ?? "not reported"}.`,
     })
     expect(calls).toEqual([])
   }
@@ -528,13 +528,13 @@ test("/fast status reports unknown actual tier after a completed response withou
       replies: () => agent.messages.filter((message) => message.role === "assistant"),
     })
     expect((await agent.prompt("first reply")).reason).toBe("done")
-    expect((await run("/fast status")).text).toContain("last used priority")
+    expect((await run("/fast status")).text).toContain("Last response: priority.")
     expect((await agent.prompt("reply without tier echo")).reason).toBe("done")
     expect(responses).toBe(2)
     expect(agent.messages.filter((message) => message.role === "assistant")).toHaveLength(2)
     expect(agent.lastSpeed).toBeUndefined()
     const status = await run("/fast status")
-    expect(status.text).toContain("requested on; applied on; last used not reported.")
+    expect(status.text).toContain("Fast mode is on for deepseek/deepseek-flash. Last response: not reported.")
     expect(status.text).not.toContain("not used yet")
     expect(calls).toEqual([])
   } finally {
@@ -555,14 +555,14 @@ test("/fast on remembers an unavailable request and toggles that request rather 
   })
   expect(await run("/fast on")).toMatchObject({
     ok: true,
-    text: "Fast mode: requested on; applied off; last used standard. Unavailable for deepseek/deepseek-flash; request kept for a supported model/provider.\nChanging fast mode may invalidate the prompt cache.",
+    text: "Fast mode is on, but deepseek/deepseek-flash does not support it; it takes effect on a supported model. Last response: standard.\nChanging fast mode may invalidate the prompt cache.",
   })
   expect(requested).toBe(true)
   expect((await run("/fast status")).text).toBe(
-    "Fast mode: requested on; applied off; last used standard. Unavailable for deepseek/deepseek-flash; request kept for a supported model/provider.",
+    "Fast mode is on, but deepseek/deepseek-flash does not support it; it takes effect on a supported model. Last response: standard.",
   )
   expect(choices).toEqual([true])
-  expect((await run("/fast")).text).toContain("requested off; applied off")
+  expect((await run("/fast")).text).toContain("Fast mode is off.")
   expect(choices).toEqual([true, false])
 })
 
@@ -580,8 +580,8 @@ test("/fast status explains unavailable tiers and highspeed model alternatives",
       }),
     })
     const result = await run("/fast status")
-    expect(result.text).toContain(`Unavailable for ${provider}/${model} (${reason})`)
-    expect(result.text).toContain("request kept")
+    expect(result.text).toContain(`but ${provider}/${model} does not support it (${reason})`)
+    expect(result.text).toContain("takes effect on a supported model")
     expect(calls).toEqual([])
   }
 })
@@ -595,7 +595,7 @@ test("/fast status notes unknown premium pricing without changing the request", 
     }),
   })
   expect((await run("/fast status")).text).toBe(
-    "Fast mode: requested on; applied on; last used priority. Premium pricing unknown; costs use a standard-rate estimate.",
+    "Fast mode is on for deepseek/deepseek-flash. Last response: priority. Premium pricing unknown; costs use a standard-rate estimate.",
   )
   expect(calls).toEqual([])
 })

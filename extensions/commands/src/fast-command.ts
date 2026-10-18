@@ -1,19 +1,24 @@
 import { type CommandContext, type CommandDefinition, modelLabel } from "@amira/api"
 
+/**
+ * "Requested" is the user's /fast choice; "applied" is whether the current model and provider
+ * support it, so the request really carries the fast option; the last response reports the
+ * tier the provider actually used.
+ */
 function report(ctx: CommandContext): void {
   const info = ctx.session.info()
   const { requested, applied, used, pricingUnknown, unavailableReason } = info.fastMode ?? {
     requested: false,
     applied: false,
   }
-  const unavailable =
-    requested && !applied
-      ? ` Unavailable for ${modelLabel(info.model)}${unavailableReason ? ` (${unavailableReason})` : ""}; request kept for a supported model/provider.`
-      : ""
+  const model = modelLabel(info.model)
+  const state = !requested
+    ? "Fast mode is off."
+    : applied
+      ? `Fast mode is on for ${model}.`
+      : `Fast mode is on, but ${model} does not support it${unavailableReason ? ` (${unavailableReason})` : ""}; it takes effect on a supported model.`
   const pricing = pricingUnknown ? " Premium pricing unknown; costs use a standard-rate estimate." : ""
-  ctx.print(
-    `Fast mode: requested ${requested ? "on" : "off"}; applied ${applied ? "on" : "off"}; last used ${used ?? "not reported"}.${unavailable}${pricing}`,
-  )
+  ctx.print(`${state} Last response: ${used ?? "not reported"}.${pricing}`)
 }
 
 export function fastCommand(): CommandDefinition {
@@ -25,7 +30,10 @@ export function fastCommand(): CommandDefinition {
       complete: () => [
         { value: "on", description: "Request fast mode" },
         { value: "off", description: "Stop requesting fast mode" },
-        { value: "status", description: "Show requested, applied and last-used mode" },
+        {
+          value: "status",
+          description: "Show whether fast mode is on and applied, and the last response's tier",
+        },
       ],
     },
     run(args, ctx) {

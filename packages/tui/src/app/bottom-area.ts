@@ -120,9 +120,12 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         priority: model?.priority ?? 40,
         text: `${model?.text ?? fallback} ${glyphs.separator} ${agent.permissions.mode}`,
       },
+      // Requested but not supported by the current model: say so, instead of hiding the choice.
       ...(agent.fastModeApplied
         ? [{ id: "fast", align: "right", tone: "accent", priority: 40, text: "fast" } as const]
-        : []),
+        : agent.fastMode
+          ? [{ id: "fast", align: "right", tone: "muted", priority: 40, text: "fast n/a" } as const]
+          : []),
     ]
   }
   const inputBox = new InputBox(editor, statusItems)
