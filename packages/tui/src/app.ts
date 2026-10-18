@@ -218,6 +218,7 @@ async function runFullscreen(
     view: () => view,
     noticeStrip: () => noticeStrip,
     dialogs: () => overlays.dialogs,
+    askDialogVisible: () => overlays.askDialogVisible,
     dock: () => overlays.dock,
     renderDock: (width, ctx, available) => overlays.renderDock(width, ctx, available),
     focusHint: (theme, width) => overlays.focusHint(theme, width),
@@ -299,6 +300,7 @@ async function runFullscreen(
     header,
     overlay: new View((width, ctx) => overlays.render(width, ctx)),
     overlayCard: (width, ctx) => overlays.overlayCard(width, ctx),
+    askDialogVisible: () => overlays.askDialogVisible,
     editorEmpty: () => editor.isEmpty,
     showNote,
     openSubagent: (sessionId: string) => {

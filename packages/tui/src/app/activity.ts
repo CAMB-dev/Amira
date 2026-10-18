@@ -89,6 +89,8 @@ export interface ActivityClock {
 export interface TurnActivityRenderOptions {
   running: readonly string[]
   waiting: boolean
+  /** The foreground ask dialog makes its waiting row redundant. */
+  askDialogVisible?: boolean
   spinner: Spinner
   stop?: string
   /** The theme picker keeps the same status-row animation alive while idle. */
@@ -315,6 +317,7 @@ export function createTurnActivity(): TurnActivity {
         stepKind = kind
         stepStartedAt = now
       }
+      if (options.askDialogVisible && label === "waiting for you") return []
       const turnMs = now - (working ? turnStartedAt : compactStartedAt)
       const stepMs = now - stepStartedAt
       const tokens = turnTokens + estimateTokens(streamedChars)

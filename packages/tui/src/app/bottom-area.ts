@@ -56,6 +56,7 @@ export interface BottomAreaDeps {
   view: () => Pick<TranscriptView, "runningTools" | "capturing">
   noticeStrip: () => NoticeStrip
   dialogs: () => readonly Dialog[]
+  askDialogVisible?: () => boolean
   steering: () => readonly string[]
   queued: () => readonly Outgoing[]
   hintNote: () => { text: string; until: number } | undefined
@@ -250,6 +251,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       activityRows = deps.activity().render(width, ctx, {
         running: deps.view().runningTools,
         waiting: deps.dialogs().length > 0 && !deps.themePreview?.(),
+        askDialogVisible: deps.askDialogVisible?.(),
         preview: deps.themePreview?.(),
         spinner,
         stop: deps.dock?.()

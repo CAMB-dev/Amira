@@ -16,6 +16,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { alwaysLabel, CONFIRM_LABELS } from "./dialog-echo.ts"
 import {
   cutEnd,
   cutMiddle,
@@ -31,6 +32,8 @@ import type { HintItem } from "./hint.ts"
 import { type Action, defaultKeybindings, type Keybindings, keyLabel } from "./keybindings.ts"
 import { styledStatusBadge } from "./status-badge.ts"
 
+export { CONFIRM_LABELS, dialogEchoLines } from "./dialog-echo.ts"
+
 export type DialogRequest = Exclude<EventMap["ui.request"], { kind: "form" | "extension-settings" }>
 
 /** How a dialog was answered; undefined cancels it. */
@@ -39,23 +42,7 @@ export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | SelectChoice |
 /** Options of a list shown at once; longer lists scroll with the selection. */
 const MAX_OPTIONS = 10
 
-/** The marker gutter used by committed answered-question rows. */
-const BAR_WIDTH = 2
-
-/** The labels of a confirm's choices, which its echo repeats. */
-export const CONFIRM_LABELS = {
-  yes: "Yes",
-  always: "Yes, and don't ask again this session",
-  no: "No",
-} as const
-
 const otherLabel = () => `Other${glyphs.more}`
-
-/** The "don't ask again" choice, saying how far it reaches when the asker says so. */
-const alwaysLabel = (always: boolean | string) =>
-  typeof always === "string" && always.trim()
-    ? `Yes, and don't ask again ${always.trim()}`
-    : CONFIRM_LABELS.always
 
 /** One choice of a list: what it reads and what choosing it answers. */
 interface Choice {
@@ -89,6 +76,8 @@ interface Fit {
   blanks: number
   /** Option descriptions on the label's row, cut to fit, rather than wrapped under it. */
   inlineDescriptions: boolean
+  /** Ask descriptions disappear only after spacer rows have given way. */
+  descriptions: boolean
   message: number
   options: number
   title: number
@@ -350,8 +339,9 @@ export class Dialog implements Component {
     }
     // Border semantics: approvals warn, other live questions use the interactive accent.
     const border = this.request.source === "approval" ? theme.warning : theme.accent
-    const inner = Math.max(1, width - 3)
-    const title = this.#titleRows(inner, theme)[0] ?? ""
+    const ask = this.request.kind === "ask"
+    const inner = Math.max(1, width - (ask ? 4 : 3))
+    const title = this.#titleRows(ask ? Math.max(1, inner - 2) : inner, theme)[0] ?? ""
     // Body producers include their two-cell gutter; the frame absorbs one into its side.
     const body =
       this.request.kind === "input"
@@ -364,8 +354,8 @@ export class Dialog implements Component {
             secret: this.#secret,
             placeholder: this.request.placeholder,
           })
-        : this.#renderList(inner + 2, ctx)
-    const { rows, kept } = this.#mouse.frame(title, body, width, ctx, border, this.maxRows)
+        : this.#renderList(ask ? inner : inner + 2, ctx)
+    const { rows, kept } = this.#mouse.frame(title, body, width, ctx, border, this.maxRows, ask)
     if (kept.some((row) => this.#animatedRows.has(row))) this.#refreshIntervalMs = Spinner.INTERVAL_MS
     return rows
   }
@@ -377,6 +367,7 @@ export class Dialog implements Component {
   #renderList(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const r = this.request
+    const ask = r.kind === "ask"
     const page = this.#current
     const choices = this.#choices()
     const title = this.#titleRows(Math.max(1, width - 2), theme).slice(1)
@@ -409,8 +400,9 @@ export class Dialog implements Component {
         ? [truncateToWidth(`${theme.muted("filter:")} ${this.#filter}`, Math.max(1, width - 2), glyphs.more)]
         : []
     const fit: Fit = {
-      blanks: 2,
+      blanks: ask && (indicator || title.length) ? 3 : 2,
       inlineDescriptions: false,
+      descriptions: true,
       message: message.length,
       options: Math.min(MAX_OPTIONS, Math.max(1, choices.length)),
       title: title.length,
@@ -420,17 +412,18 @@ export class Dialog implements Component {
     }
     const layout = (diffRows: number) => {
       const out: string[] = []
+      if (ask && fit.blanks > (indicator || title.length ? 2 : 1)) out.push("")
       if (fit.indicator && indicator) out.push(indicator)
       out.push(...fitTitle(title, fit.title))
       out.push(...cutEnd(message, fit.message, theme))
       if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme, Math.max(1, width - 2)))
-      if (fit.blanks > 1) out.push("")
+      if (fit.blanks > 1 && (!ask || indicator || title.length)) out.push("")
       out.push(...filter)
       const offset = out.length
       out.push(...this.#optionRows(choices, width, fit, theme))
       this.#mouse.placeOptions(offset)
       if (fit.blanks > 0) out.push("")
-      out.push(this.#mouse.footer(out.length, this.#footer(), Math.max(1, width - 2), theme))
+      out.push(this.#mouse.footer(out.length, this.#footer(), Math.max(1, width - (ask ? 0 : 2)), theme))
       return out
     }
     // The diff takes what the rest leaves, and a diff cut short is worth more than blank rows.
@@ -440,7 +433,13 @@ export class Dialog implements Component {
     // Each step gives up a row (or a way of drawing) while it can.
     const steps: [can: () => boolean, take: () => void][] = [
       [() => fit.blanks > 0, () => fit.blanks--],
-      [() => !fit.inlineDescriptions, () => (fit.inlineDescriptions = true)],
+      [
+        () => (ask ? fit.descriptions : !fit.inlineDescriptions),
+        () => {
+          if (ask) fit.descriptions = false
+          else fit.inlineDescriptions = true
+        },
+      ],
       [() => fit.message > 0, () => fit.message--],
       [() => fit.headings, () => (fit.headings = false)],
       [() => fit.options > 1, () => fit.options--],
@@ -474,7 +473,7 @@ export class Dialog implements Component {
       const i = start + j
       const selected = i === page.selected
       const marker = selected ? theme.accent(glyphs.choice) : " "
-      const digit = digits ? `${theme.muted(String(i + 1))} ` : ""
+      const digit = digits ? `${theme.muted(String(i + 1))}${this.request.kind === "ask" ? "  " : " "}` : ""
       const box = page.multi ? `${page.checked.has(i) ? glyphs.checked : glyphs.unchecked} ` : ""
       const status =
         this.request.kind === "select" && c.index !== undefined
@@ -489,7 +488,7 @@ export class Dialog implements Component {
           : c.label
       const label = digits && display.startsWith(`${i + 1}. `) ? display.slice(`${i + 1}. `.length) : display
       const typed = c.other && page.other ? `${label} ${theme.muted(JSON.stringify(page.other))}` : label
-      const description = c.description?.replace(/\s+/g, " ").trim() ?? ""
+      const description = fit.descriptions ? (c.description?.replace(/\s+/g, " ").trim() ?? "") : ""
       return { c, i, selected, lead, badge, typed, description, status }
     })
     // Descriptions line up in a column after the labels when every one fits there; else each
@@ -500,9 +499,10 @@ export class Dialog implements Component {
       ...described.map((it) => visibleWidth(it.lead) + visibleWidth(it.badge) + visibleWidth(it.typed)),
     )
     const inline =
-      fit.inlineDescriptions ||
-      (!(this.request.kind === "select" && this.request.searchTexts) &&
-        described.every((it) => column + 2 + visibleWidth(it.description) <= width))
+      this.request.kind !== "ask" &&
+      (fit.inlineDescriptions ||
+        (!(this.request.kind === "select" && this.request.searchTexts) &&
+          described.every((it) => column + 2 + visibleWidth(it.description) <= width)))
     const rows: string[] = []
     for (const { c, i, selected, lead, badge, typed, description, status } of items) {
       const heading = this.#heading(c)
@@ -533,8 +533,9 @@ export class Dialog implements Component {
         rows.push(truncateToWidth(`${head}${pad}  ${theme.muted(description)}`, width, glyphs.more))
       } else {
         rows.push(truncateToWidth(head, width, glyphs.more))
-        const indent = " ".repeat(leadWidth)
-        for (const l of wrapText(description, Math.max(1, width - leadWidth)))
+        const indentWidth = Math.min(width - 1, leadWidth + (this.request.kind === "ask" ? 2 : 0))
+        const indent = " ".repeat(indentWidth)
+        for (const l of wrapText(description, Math.max(1, width - indentWidth)))
           rows.push(`${indent}${theme.muted(l)}`)
       }
       this.#mouse.option(firstRow, rows.length, target)
@@ -828,8 +829,9 @@ function pagesOf(r: DialogRequest): Page[] {
         ),
       ]
     case "ask":
-      return r.questions.map((q) =>
-        page(
+      return r.questions.map((q) => {
+        const recommended = q.options.flatMap((o, i) => (o.label.endsWith("(Recommended)") ? [i] : []))
+        return page(
           q.question,
           [
             ...q.options.map((o) => ({
@@ -838,62 +840,15 @@ function pagesOf(r: DialogRequest): Page[] {
             })),
             { label: otherLabel(), other: true },
           ],
-          { multi: q.multiSelect === true, ...(q.header ? { header: q.header } : {}) },
-        ),
-      )
+          {
+            multi: q.multiSelect === true,
+            selected: q.multiSelect ? 0 : (recommended[0] ?? 0),
+            checked: new Set(q.multiSelect ? recommended : []),
+            ...(q.header ? { header: q.header } : {}),
+          },
+        )
+      })
     default:
       return [page(r.title, [])]
   }
-}
-
-/**
- * What stays in the transcript once a dialog is answered: a line per question under the same
- * empty marker gutter, "  Allow bash? › Yes". A secret answer is never shown.
- */
-export function dialogEchoLines(
-  r: DialogRequest,
-  answer: DialogAnswer,
-  theme: Theme,
-  width = Number.POSITIVE_INFINITY,
-): string[] {
-  // Completed questions are transcript content, not a live typing container.
-  const line = (question: string, shown: string) => {
-    const text = `${bold(theme.text(question))} ${theme.muted(`${glyphs.pointer} ${shown}`)}`
-    const rows = Number.isFinite(width) ? wrapText(text, Math.max(1, width - BAR_WIDTH)) : [text]
-    return rows.map((l) => `  ${l}`)
-  }
-  if (answer === undefined) return line(r.title, "cancelled")
-  if (r.kind === "ask" && Array.isArray(answer)) {
-    return r.questions.flatMap((q, i) =>
-      line(q.question, answer[i] ? askAnswerText(answer[i]) : "(no answer)"),
-    )
-  }
-  if (r.kind === "select" && typeof answer === "object" && "option" in answer) {
-    const key =
-      answer.key &&
-      sectionOf(r.sections, r.options.indexOf(answer.option))?.keys?.find((k) => k.key === answer.key)
-    return line(r.title, key ? `${answer.option} ${glyphs.separator} ${key.label}` : answer.option)
-  }
-  if (r.kind === "input" && r.secret) return line(r.title, "(hidden)")
-  if (r.kind === "input" && answer === "") return line(r.title, "(empty)")
-  if (r.kind === "confirm") {
-    const shown =
-      answer === true
-        ? CONFIRM_LABELS.yes
-        : answer === false
-          ? CONFIRM_LABELS.no
-          : answer === "always"
-            ? alwaysLabel(r.always ?? true)
-            : typeof answer === "object" && "other" in answer
-              ? JSON.stringify(answer.other)
-              : String(answer)
-    return line(r.title, shown)
-  }
-  return line(r.title, String(answer))
-}
-
-/** An ask answer in words: the labels chosen, then the text typed, quoted. */
-function askAnswerText(a: AskAnswer): string {
-  const parts = [...a.selected, ...(a.other !== undefined ? [JSON.stringify(a.other)] : [])]
-  return parts.length ? parts.join(", ") : "(none)"
 }

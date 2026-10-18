@@ -156,13 +156,18 @@ async function setup(steps: MockStep[], o: Options) {
     const lines = screen.lines
     const end = lines.findLastIndex((line) => /^╰─+╯$/.test(line.trimStart()))
     if (end === -1) return []
-    const start = lines.findLastIndex((line, i) => i < end && line.trimStart().startsWith("╭ "))
+    const start = lines.findLastIndex((line, i) => i < end && /^╭(?: |─ )/.test(line.trimStart()))
     if (start === -1) return []
     const left = lines[start]!.indexOf("╭")
     // The footer is an interior row; normalize only the intact frame and marker gutter.
     expect(lines[end]!.slice(left)).toMatch(/^╰─+╯$/)
     return lines.slice(start, end).map((line, i) => {
       const row = line.slice(left)
+      if (lines[start]!.includes("╭─ ")) {
+        if (i === 0) return `  ${row.slice(3, -1).replace(/─+$/, "").trimEnd()}`
+        const content = row.slice(2, -2).trimEnd()
+        return !content || /^\s|^›/.test(content) ? content : `  ${content}`
+      }
       if (i === 0) return `  ${row.slice(2, -1).replace(/─+$/, "").trimEnd()}`
       expect(row).toStartWith("│")
       expect(row).toEndWith("│")
@@ -196,25 +201,28 @@ for (const mode of MODES) {
       await waitFor(() => s.dialog().length > 0, "the dialog")
       expect(s.dialog()).toEqual([
         "  Which approach do you prefer?",
+        "",
         "  1/2 · Approach",
         "",
-        "› 1 Rewrite (Recommended)  Start over",
-        "  2 Patch                  Fix it in place",
-        "  3 Other…",
+        "› 1  Rewrite (Recommended)",
+        "       Start over",
+        "  2  Patch",
+        "       Fix it in place",
+        "  3  Other…",
         "",
         "  ←→ question · ↑↓ move · enter next · esc cancel",
       ])
       s.terminal.send("2")
-      await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
+      await waitFor(() => s.dialog()[2] === "  2/2 · Extras", "the second question")
       // Back to the first and forward again: the answer is kept.
       s.terminal.send(LEFT)
-      await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "back")
+      await waitFor(() => s.dialog().includes("› 2  Patch"), "back")
       s.terminal.send("\x1b[C")
-      await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "forward")
+      await waitFor(() => s.dialog()[2] === "  2/2 · Extras", "forward")
       s.terminal.send(" ")
       s.terminal.send("3")
-      await waitFor(() => s.dialog().includes("› 3 [x] Changelog"), "checked")
-      expect(s.dialog()).toContain("  1 [x] Tests")
+      await waitFor(() => s.dialog().includes("› 3  [x] Changelog"), "checked")
+      expect(s.dialog()).toContain("  1  [x] Tests")
       s.terminal.send("\r")
       await s.shows("Patching it.")
       await s.idle()
@@ -246,7 +254,7 @@ for (const mode of MODES) {
       s.terminal.send("go\r")
       await waitFor(() => s.dialog().length > 0, "the dialog")
       s.terminal.send("2")
-      await waitFor(() => s.dialog()[1] === "  2/2 · Extras", "the second question")
+      await waitFor(() => s.dialog()[2] === "  2/2 · Extras", "the second question")
       s.terminal.send(" ")
       s.terminal.send("2")
       s.terminal.send("4")
@@ -294,7 +302,7 @@ for (const mode of MODES) {
       await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
       // Digits and y are text in the field.
       s.terminal.send("both, 2 steps")
-      await waitFor(() => s.dialog().includes("› 3 both, 2 steps"), "typed")
+      await waitFor(() => s.dialog().includes("› 3  both, 2 steps"), "typed")
       expect(s.dialog().at(-1)).toBe("  enter submit · esc back")
       s.terminal.send("\r")
       await s.shows("ok")
@@ -313,7 +321,7 @@ for (const mode of MODES) {
       s.terminal.send(`${UP}\r`)
       await waitFor(() => s.dialog().some((l) => l.includes("Type your answer")), "the text field")
       s.terminal.send(ESC)
-      await waitFor(() => s.dialog().includes("› 3 Other…"), "the field closed")
+      await waitFor(() => s.dialog().includes("› 3  Other…"), "the field closed")
       s.terminal.send(ESC)
       await s.shows("fine")
       await s.idle()
@@ -344,13 +352,15 @@ for (const mode of MODES) {
       s.terminal.send("go\r")
       await waitFor(() => s.dialog().length > 0, "the dialog")
       expect(s.dialog()).toEqual([
-        "  Which approach do you prefer?",
+        "  Which approach do you",
         "",
-        "› 1 Rewrite (Recommended)",
-        "    Start over",
-        "  2 Patch",
-        "    Fix it in place",
-        "  3 Other…",
+        "  prefer?",
+        "",
+        "› 1  Rewrite (Recommended)",
+        "       Start over",
+        "  2  Patch",
+        "       Fix it in place",
+        "  3  Other…",
         "",
         "  enter choose · esc cancel",
       ])
@@ -360,14 +370,15 @@ for (const mode of MODES) {
       s.terminal.send("again\r")
       await waitFor(() => s.dialog().length > 0, "the CJK dialog")
       expect(s.dialog()).toEqual([
-        "  你想用哪种方法来实现这个功能",
-        "  ？",
+        "  你想用哪种方法来实现这个功",
         "",
-        "› 1 重写（推荐）",
-        "    从头开始写这个模块",
-        "  2 修补",
-        "    就地修复",
-        "  3 Other…",
+        "  能？",
+        "",
+        "› 1  重写（推荐）",
+        "       从头开始写这个模块",
+        "  2  修补",
+        "       就地修复",
+        "  3  Other…",
         "",
         "  enter choose · esc cancel",
       ])
@@ -498,13 +509,13 @@ test(
       expect(s.dialog().slice(0, 4)).toEqual([
         "  Which approach do you prefer?",
         "",
-        "› 1 Rewrite (Recommended)  Start over",
-        "  2 Patch                  Fix it in place",
+        "› 1  Rewrite (Recommended)",
+        "       Start over",
       ])
       // No colors at all: foreground colors are SGR 30–39 and 90–97.
       expect(s.terminal.output).not.toMatch(new RegExp(`${String.fromCharCode(27)}\\[(3\\d|9[0-7])m`))
       s.terminal.send(`${DOWN}`)
-      await waitFor(() => s.dialog().includes("› 2 Patch                  Fix it in place"), "moved")
+      await waitFor(() => s.dialog().includes("› 2  Patch"), "moved")
       s.terminal.send("\r")
       await s.shows("done")
       await s.idle()

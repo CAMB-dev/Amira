@@ -142,6 +142,11 @@ export class OverlayManager {
     return !!(this.form || this.viewer)
   }
 
+  /** Only the foreground question replaces its duplicate turn and tool activity. */
+  get askDialogVisible(): boolean {
+    return !this.hasFullscreen && this.dialogs[0]?.request.kind === "ask"
+  }
+
   /** Without focus reports, only permission and question dialogs warrant an alert. */
   get needsAttention(): boolean {
     return this.dialogs.some(

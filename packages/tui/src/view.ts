@@ -98,6 +98,8 @@ export interface ViewHost {
   overlay: Component
   /** Opts into terminal-sized overlay geometry, leaving the last margined transcript frame behind a card. */
   overlayCard?(width: number, ctx: RenderContext): boolean
+  /** A foreground ask dialog already presents the running ask_user call. */
+  askDialogVisible?(): boolean
   /** Whether the input box is empty. */
   editorEmpty(): boolean
   /** Shows a short note in place of the key hints for a few seconds. */
