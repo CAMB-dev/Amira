@@ -39,7 +39,13 @@ async function editWith(
     })
     expect(result.status).toBe(0)
   }
-  const boundedSpawn = boundSpawnSync()
+  let fallbackSelected = false
+  const boundedSpawn = boundSpawnSync((selected) => {
+    if (choice !== "notepad" || !selected.startsWith("notepad ")) return selected
+    fallbackSelected = true
+    // Assert the production choice, then invoke only the disposable console fixture.
+    return selected.replace(/^notepad/, command("fallback"))
+  })
   try {
     writeFileSync(env.GIT_CONFIG_GLOBAL, "")
     writeFileSync(
@@ -48,8 +54,6 @@ async function editWith(
         'if (process.argv[3] !== "--wait") process.exit(2)\n' +
         'appendFileSync(process.argv[4]!, " " + process.argv[2] + "\\n")\n',
     )
-    // Shadow the Windows fallback: never start the real Notepad during a regression.
-    writeFileSync(join(dir, "notepad.cmd"), `@"${process.execPath}" "${script}" notepad --wait %1\r\n`)
     git("init", "--quiet")
     if (gitEditor) git("config", "core.editor", command("git"))
     const { terminal, live, exited } = await setup([], {
@@ -63,9 +67,10 @@ async function editWith(
       terminal.send("\x07")
       await waitForSpawnCondition(
         "external editor result",
-        () => /│ › draft (visual|editor|git|notepad)/.test(live()) || live().includes("Cannot start"),
+        () => /│ › draft (visual|editor|git|fallback)/.test(live()) || live().includes("Cannot start"),
       )
-      expect(live()).toContain(`│ › draft ${choice}`)
+      expect(live()).toContain(`│ › draft ${choice === "notepad" ? "fallback" : choice}`)
+      if (choice === "notepad") expect(fallbackSelected).toBe(true)
     } finally {
       terminal.send("\x03\x03")
       await waitForSpawnWork(exited, "external editor app cleanup")

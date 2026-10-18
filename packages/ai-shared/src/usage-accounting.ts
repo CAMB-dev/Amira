@@ -1,15 +1,28 @@
 import type { UsageCounts } from "./index.ts"
 
 interface UsageAccounting {
+  readonly aggregate: boolean
   readonly knownCost: number | undefined
+  readonly hasReportedCost: boolean
   readonly knownSearchCost: number | undefined
   readonly unpricedSearchRequests: number
+  readonly unpricedTokens: number
+  readonly unknownContributions: number
+  readonly unpricedContributions: number
+  readonly unreportedContributions: number
 }
 
 interface StoredAccounting extends UsageAccounting {
   readonly visibleCost: number | undefined
   readonly visibleSearchCost: number | undefined
   readonly visibleSearchRequests: number | undefined
+  readonly visibleInput: number
+  readonly visibleOutput: number
+  readonly visibleCacheRead: number
+  readonly visibleCacheWrite: number
+  readonly visibleReasoning: number | undefined
+  readonly visiblePricingUnknown: boolean | undefined
+  readonly visibleOutputReported: boolean | undefined
 }
 
 // Only aggregate results (and explicit mutable copies) carry this constant-size state.
@@ -22,14 +35,55 @@ function readAccounting(usage: UsageCounts): UsageAccounting {
     stored &&
     stored.visibleCost === usage.cost &&
     stored.visibleSearchCost === usage.webSearchCost &&
-    stored.visibleSearchRequests === usage.webSearchRequests
-  )
-    return stored
+    stored.visibleSearchRequests === usage.webSearchRequests &&
+    stored.visibleInput === usage.input &&
+    stored.visibleOutput === usage.output &&
+    stored.visibleCacheRead === usage.cacheRead &&
+    stored.visibleCacheWrite === usage.cacheWrite &&
+    stored.visibleReasoning === usage.reasoning
+  ) {
+    if (
+      stored.visiblePricingUnknown === usage.pricingUnknown &&
+      stored.visibleOutputReported === usage.outputReported
+    )
+      return stored
+    // Coverage metadata disappearing does not erase known money or resolve old gaps.
+    // A new full contribution (or an explicit signed reversal) supplies replacement evidence.
+    return {
+      ...stored,
+      unknownContributions:
+        stored.unknownContributions +
+        (usage.pricingUnknown === true && stored.visiblePricingUnknown !== true ? 1 : 0),
+      unreportedContributions:
+        stored.unreportedContributions +
+        (usage.outputReported === false && stored.visibleOutputReported !== false ? 1 : 0),
+    }
+  }
   // Public usage objects remain editable; a changed price is a new raw contribution.
   return {
-    knownCost: usage.cost,
+    aggregate: false,
+    knownCost: usage.cost ?? usage.webSearchCost,
+    hasReportedCost: usage.cost !== undefined,
     knownSearchCost: usage.webSearchCost,
     unpricedSearchRequests: usage.webSearchCost === undefined ? (usage.webSearchRequests ?? 0) : 0,
+    unpricedTokens:
+      usage.cost === undefined
+        ? usage.input + usage.output + usage.cacheRead + usage.cacheWrite + (usage.reasoning ?? 0)
+        : 0,
+    unknownContributions: usage.pricingUnknown ? 1 : 0,
+    unpricedContributions:
+      usage.cost === undefined &&
+      [
+        usage.input,
+        usage.output,
+        usage.cacheRead,
+        usage.cacheWrite,
+        usage.reasoning ?? 0,
+        usage.webSearchRequests ?? 0,
+      ].some((amount) => amount !== 0)
+        ? 1
+        : 0,
+    unreportedContributions: usage.outputReported === false ? 1 : 0,
   }
 }
 
@@ -41,6 +95,13 @@ function retain(usage: UsageCounts, state: UsageAccounting): void {
       visibleCost: usage.cost,
       visibleSearchCost: usage.webSearchCost,
       visibleSearchRequests: usage.webSearchRequests,
+      visibleInput: usage.input,
+      visibleOutput: usage.output,
+      visibleCacheRead: usage.cacheRead,
+      visibleCacheWrite: usage.cacheWrite,
+      visibleReasoning: usage.reasoning,
+      visiblePricingUnknown: usage.pricingUnknown,
+      visibleOutputReported: usage.outputReported,
     }),
   )
 }
@@ -54,15 +115,42 @@ export function sumUsageAccounting(a: UsageCounts, b: UsageCounts, sum: UsageCou
   const left = readAccounting(a)
   const right = readAccounting(b)
   const state: UsageAccounting = Object.freeze({
+    aggregate: true,
     knownCost: subtotal(left.knownCost, right.knownCost),
+    hasReportedCost: left.hasReportedCost || right.hasReportedCost,
     knownSearchCost: subtotal(left.knownSearchCost, right.knownSearchCost),
     unpricedSearchRequests: left.unpricedSearchRequests + right.unpricedSearchRequests,
+    unpricedTokens: left.unpricedTokens + right.unpricedTokens,
+    unknownContributions: left.unknownContributions + right.unknownContributions,
+    unpricedContributions: left.unpricedContributions + right.unpricedContributions,
+    unreportedContributions: left.unreportedContributions + right.unreportedContributions,
   })
+  if (state.unreportedContributions > 0) sum.outputReported = false
+  else delete sum.outputReported
+  if (state.unknownContributions > 0) sum.pricingUnknown = true
+  else delete sum.pricingUnknown
   if (state.unpricedSearchRequests <= 0) {
-    if (state.knownCost !== undefined) sum.cost = state.knownCost
+    if (state.hasReportedCost && state.knownCost !== undefined) sum.cost = state.knownCost
     if (state.knownSearchCost !== undefined) sum.webSearchCost = state.knownSearchCost
   }
   retain(sum, state)
+}
+
+/** Unresolved token, search, or explicit pricing evidence, including hidden aggregate state. */
+export function hasUnpricedUsage(usage: UsageCounts): boolean {
+  const state = readAccounting(usage)
+  return (
+    state.unpricedTokens > 0 ||
+    state.unpricedSearchRequests > 0 ||
+    state.unknownContributions > 0 ||
+    state.unpricedContributions > 0 ||
+    state.unreportedContributions > 0
+  )
+}
+
+/** Explicit aggregate provenance survives copies and coverage flags, but not edits to its amount fields. */
+export function isUsageAggregate(usage: UsageCounts): boolean {
+  return readAccounting(usage).aggregate
 }
 
 /** Known USD subtotal, even when an unresolved search makes the displayed total unknown. */
@@ -71,6 +159,22 @@ export function knownUsageCost(usage: UsageCounts): number | undefined {
 }
 
 /** Call after copying numeric fields into a mutable aggregate; Object.assign loses private state. */
-export function transferUsageAccounting(from: UsageCounts, to: UsageCounts): void {
-  retain(to, readAccounting(from))
+export function transferUsageAccounting(from: UsageCounts, to: UsageCounts, sign: 1 | -1 = 1): void {
+  const state = readAccounting(from)
+  retain(
+    to,
+    sign === 1
+      ? state
+      : {
+          aggregate: state.aggregate,
+          knownCost: state.knownCost === undefined ? undefined : -state.knownCost,
+          hasReportedCost: state.hasReportedCost,
+          knownSearchCost: state.knownSearchCost === undefined ? undefined : -state.knownSearchCost,
+          unpricedSearchRequests: -state.unpricedSearchRequests,
+          unpricedTokens: -state.unpricedTokens,
+          unknownContributions: -state.unknownContributions,
+          unpricedContributions: -state.unpricedContributions,
+          unreportedContributions: -state.unreportedContributions,
+        },
+  )
 }

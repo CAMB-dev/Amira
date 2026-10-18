@@ -51,6 +51,12 @@ export async function focusFixture(
     cwd: owned.cwd,
     data: owned.data,
     history: () => owned.messages,
+    usage: () => {
+      throw new Error("fixture does not read accounting")
+    },
+    complete: async () => {
+      throw new Error("fixture does not complete")
+    },
     status: () => ({ state: owned.status === "idle" ? "idle" : "working", busy: owned.status !== "idle" }),
     events,
     send: async (text, options) => {

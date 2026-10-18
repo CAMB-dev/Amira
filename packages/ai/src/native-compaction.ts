@@ -34,7 +34,17 @@ export interface CompactAttempt {
   unsupported: boolean
 }
 
-/** What Ai.compact came to. `usage` counts every attempt, with its cost when prices are known. */
+/** One physical native-compaction attempt, delivered once when it settles, even after abort. */
+export interface CompactReceipt {
+  /** Unique to this attempt, independent of its usage and any subsequent retry. */
+  id: string
+  /** Excluded from CompactResult.usage because timeout/cancellation already won. */
+  late: boolean
+  /** Priced usage when reported; undefined means the attempt's usage is unknown. */
+  usage: Usage | undefined
+}
+
+/** What Ai.compact came to. `usage` counts attempts completed before it returns, with known prices. */
 export type CompactResult =
   | {
       ok: true

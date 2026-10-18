@@ -447,17 +447,60 @@ export default defineExtension((api) => {
 `api.conversations?: OwnedConversations` 是可选宿主能力，使用前必须检测。不能用临时子 agent 替代它，却声称历史已保存。与 `/btw` 风格的子 agent 不同，owned conversation 有稳定的 owner/key 身份、独立保存的会话和单写者租约。它属于扩展，不属于当前主会话；主会话的 `/clear`、`/resume`、rewind 和 fork 不会停止它或改变其绑定。关闭视图只隐藏内容。TUI 可将焦点切换到此会话，使用同一原生对话记录和输入框，主会话仍在后台继续运行。
 
 - `openOrCreate(spec, runtime): Promise<OwnedConversation>` 打开所属扩展已保存的 key，或创建新会话。`open(id, runtime)` 只能打开该扩展拥有的会话。另一个宿主或进程持有租约时会得到明确的 **in use** 错误。同一扩展实例重复打开会返回现有句柄。
+- `read(ref: OwnedConversationRef): Promise<OwnedConversationSnapshot | undefined>` 按 owner 范围内的 `{ id }` 或 `{ key }` 读取，不打开可执行句柄。本管理器有活跃句柄时使用其权威实时状态，否则读取经过校验的持久化证据；其他进程持有写入租约时，持久化快照可能滞后，并标记为不完整。只有记录确实不存在时才返回 `undefined`；无效或属于其他 owner 的身份会抛出错误。读取不要求已配置的模型、运行时工具或仍存在的 cwd，不构造 agent、查找模型、重新绑定运行时、取得写入租约、改变焦点、修复目录或请求 provider。
 - `ConversationSpec` 包含 `key`、`name`、绝对路径 `cwd`、可选的 `model`（`provider/model`）、`systemPrompt`、必填的 `callableTools: string[]`，以及可选的 `writeRoots: string[]` 和 `descendants: "research" | "inherit"`。宿主保存此规格；重新打开不能悄悄修改它或扩大工具权限。此类历史独立于普通主会话的列表、resume 和 fork 路径。
 - `ConversationRuntime` 包含必填的 `askUser(questions, { sessionId, signal }): Promise<AskAnswer[] | undefined>` 和可选的 `extraTools: ToolDefinition[]`。每次重新打开都要绑定回调与执行函数；它们不序列化。缺少必要工具时拒绝运行。提问直接进入此回调，绝不交给主会话模型回答。回调必须展示真实的人类选择、响应取消，并在返回前保存需要的决策证据。返回 `undefined` 表示取消。
-- 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()`、`runTool()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `OwnedConversation.send(text, { images?: ImageBlock[], display?: MessageDisplay, signal? })` 才启动一轮，仅发送图片时文本可为空；在该轮结束时完成，重叠的 send/tool 操作会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
+- 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()`、`runTool()`、`complete()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `OwnedConversation.send(text, { images?: ImageBlock[], display?: MessageDisplay, signal? })` 才启动一轮，仅发送图片时文本可为空；在该轮结束时完成，重叠的 send/tool/complete 操作会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
 - 保存的 callable allowlist 在审批前限制本地工具执行，并从 provider 请求中排除不允许的托管工具，包括压缩请求。`createGroup(options)` 绑定到此会话。后代继承 callable 和写入上限的交集，即使使用临时子 agent 或额外工具也不能扩大权限。允许工具名意味着信任其实现。
 - `descendants` 默认为 `"research"`：子 agent 不能运行 shell 工具、更改 cwd 或准备 worktree，保持现有已保存会话的行为。显式设置 `"inherit"` 后，子 agent 可正常使用 cwd/shell，包括不同 git worktree 的 cwd，但仍共享你的当前权限、所属会话的生命周期和用量统计，并将提问与审批直接交给人类，不向另一个模型咨询人类问题。`ToolSession.restricted` 仍表示仅研究限制。
 - `writeRoots` 是不可变的文件工具写入上限，根目录必须是有效绝对路径。省略表示不增加目录限制；`[]` 表示不允许文件工具写入。`SpawnOptions.writeRoots` 省略时继承父会话，指定时只能缩小上限；读取不受此目录限制。宿主在最终参数拦截后、审批和执行前检查全部写入路径，包括删除和 patch 移动的源与目标，并在变更钩子处再次检查。重新计算的路径报告必须一致；变化、越界、无法解析、格式错误或抛错的报告均在审批前拒绝，不会询问；审批、auto 模式和扩展数据目录豁免都不能覆盖此上限。受限写入拒绝多链接（硬链接）目标以及 symlink/junction 逃逸。带策略的元数据和会话头使用旧读取器会拒绝的格式；旧的无限制记录保持原有行为。
 - **这不是操作系统沙箱。** 写入上限约束文件工具（`write`、`edit`、`apply_patch` 及声明文件写入/路径能力的工具），不约束任意 shell 子进程、导入的程序或受信任扩展代码。shell 工具仍遵守你的当前权限模式和命令规则。自定义工具必须诚实报告全部写入，并按声明使用变更钩子；恶意并发文件系统变更仍存在竞态，不属于沙箱保证。
 - `runTool(name, args, { signal? }?): Promise<ToolResult>` 仅在会话空闲时调用持久化 callable 上限内的工具，不提供 cwd、权限或执行器覆盖。它复用模型工具调用的注册表/宿主启用限制、拦截器、权限上限、参数校验、权限/审批、事件、输出处理和变更钩子，但不请求 provider，也不添加模型历史消息。拒绝、取消、失败或超时都返回错误结果，绝不表示检查成功；请检查 `isError` 及工具的退出/结果详情。`stop()` 和 `release()` 会取消并等待执行器实际结束，即使超过中止宽限期，也保留 busy 状态和租约。取消后变更钩子失效；忽略取消的执行器可能使清理无限等待。与直接 owned 检查不同，普通模型调用仍允许 after 拦截器恢复执行错误；执行权限上限的拒绝仍不可覆盖。工具事件携带所属会话和操作 ID（`turnId` 中的 `o_…`），不伪造模型轮次或人类确认。独立的宿主 custom 记录（`amira.tool-operations`，v1 start/execute/end）保存执行证据。start 保留请求参数；相关联的 execute 记录在执行器派发前持久保存最终授权参数；end 保存结果及取消状态。execute 不代表执行已完成，重新打开不会重放未完成操作。相比之下，`api.runCommand` 仅管理进程，**不执行工具权限检查**：先单独确认再调用 `runCommand`，不等同于 plan 模式拒绝、命令规则或工具拦截器。
+- `complete(request: Omit<CompleteRequest, "model">): Promise<CompleteResult>` 使用持久化模型发起一次逻辑上的纯文本旁路请求。如需其他模型，请单独创建使用该模型的 owned conversation。它不使用工具或托管搜索，不注入会话历史，也不在历史中添加模型轮次；操作/label 来源单独保存。包括重试、错误和中止在内的全部已报告尝试均计入此 owner 和 `usage()`，即使你拒绝返回的内容。未报告的用量保持未知，不猜测费用。初始化期间，或与 `send`、`runTool`、另一次 `complete` 重叠时会拒绝；遵守共享准入/全局限制，`stop`、`release` 和扩展卸载会取消并等待其结束。
+- `usage(): ConversationUsageSnapshot` 返回累计账目，不是历史消息用量之和。`own` 只含本会话；`total` 将每个可归属后代恰好计入一次。后代行只含其自身用量，不是子树合计；不要把这些行或 runner/group 合计再次加到 `total`。账目包含已报告的重试、压缩（包括失败尝试）、旁路请求、咨询、取消的工作和延迟回执。私有后代可有账目行而无对话记录；旧匿名回执仍保留在其持久化 owner 的 `own` 小计内，不虚构子会话身份。
+- 用量和读取快照均深度冻结且可序列化。每份 `AccountedUsage` 保留已知定价小计 `knownCostUsd`，即使 `usage.cost` 缺失；`Usage.pricingUnknown` 和 `complete: false` 保留定价或账目覆盖缺失的状态。未持久化费用仍可见，但标为不完整；缺失或损坏的证据不代表已确认零费用。`complete` 只描述已报告账目/定价的覆盖，不保证覆盖 provider 发票。`revision` 是持久化账目版本，不是事件序号：按版本替换旧快照，不能取费用最大值，因为有符号修正可能降低合计。子 agent/group 结束不代表不会再收到用量。
+- `complete` 采用保守判定：只有每个计入的物理请求尝试都有明确且持久化的完整覆盖证据、每个后代引用都已解析、且没有未结束的请求围栏时，宿主才确认完整。已定价小计本身不是完整性证明。证据缺失、格式错误、未报告、未定价或未核对时，快照保持不完整；缺少充分覆盖证据的旧记录也不会被确认为完整。带有已报告小计的明确替换聚合会取代旧账目状态，包括金额不变但覆盖发生变化的更新；终端回执仅省略可选元数据时，保留已知金额，但覆盖仍标为不完整。读取只验证证据，不修复或写入。
+- v1 通过保留下来的请求围栏和回执证据处理进程崩溃、撕裂/部分写入、尾部截断及回执丢失。它不是可检测篡改的审计日志：故意删除完整账目事务（包括中间事务）不在保证范围内。全新读取者无法发现仍自洽的整笔事务删除，因此 `complete: true` 不证明会话文件从未被修改。
+- `budget.update`、相关完成事件和 `events.lost` 只用于使账目缓存失效，随后调用 `usage()`；不要把共享累计预算载荷当作 owner 账本。先订阅再读取快照，在 release 前及等待工作结束后刷新，release 或重启后通过 `read()` 核对。项目/阶段归属及停止策略由扩展负责；按已报告费用停止可能因在途工作而超支，不保证最大发票金额，也不隔离宿主共享预算。
 - 句柄提供 `id`、`key`、`name`、`cwd`、绑定的 `data: SessionData`、`history()`（当前完整分支的不可变快照，包含已被压缩替代的消息）、`status()`（state 和 busy）及 `events: AsyncIterable<AnyEvent>`。`OwnedConversation.events` 包含此会话及普通后代的事件，携带各自的 sessionId，不进入主对话总线。临时后代保留私有总线；扩展必须改用它们的 `ChildSession.events`。先订阅，再读取历史和状态快照。事件不重放；用 history 恢复保存的消息，按 session/turn/tool-call id 关联工具行。
 - 绑定的 `SessionData.append(key, data): void` 不提供持久写入确认。磁盘故障通过 `extension.error` 异步报告；`append()` 返回不代表已持久提交。如果决策证据要求持久提交，必须先提交到扩展自行控制的存储，再回答 `askUser` 问题。
-- `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。此 API 不提供删除；卸载或移除包后历史仍保留。
+- `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。此 API 不提供 archive/unarchive 或删除；`release()` 不会归档会话，卸载或移除包后历史仍保留。`OwnedConversationSnapshot.archived` 目前始终为 `false`。
+
+公共快照类型如下：
+
+```ts
+type OwnedConversationRef = { id: string } | { key: string }
+
+interface AccountedUsage {
+  usage: Usage
+  knownCostUsd: number
+  complete: boolean
+}
+
+interface ConversationUsageSnapshot {
+  sessionId: string
+  revision: number
+  own: AccountedUsage
+  total: AccountedUsage
+  descendants: readonly {
+    sessionId: string
+    parentSessionId: string
+    groupId?: string
+    ephemeral?: boolean
+    usage: AccountedUsage
+  }[]
+}
+
+interface OwnedConversationSnapshot {
+  id: string
+  key: string
+  name: string
+  cwd: string
+  archived: boolean
+  history: readonly Message[]
+  usage: ConversationUsageSnapshot
+}
+```
 
 `CommandContext.focusConversation?(owned: OwnedConversation): boolean` 聚焦独立会话；`unfocusConversation?(): boolean` 返回主会话。使用前检测这两个方法：仅全屏 TUI 提供；无法切换时返回 `false`（聚焦已释放句柄也会失败）。聚焦或返回都不停止工作，也不释放任何会话；释放已聚焦的句柄或卸载所属扩展会返回主会话。渲染器的保留控制属于宿主内部实现，不是公共扩展 API。
 
@@ -581,6 +624,8 @@ host 在 before 拦截器和审批之前固定 `shellKind()` 的结果，并通�
 
 `complete({ messages, system?, model?, maxTokens?, signal?, label? })` 在对话之外发起一次模型请求，不带工具，关闭托管网页搜索，返回回复的文本、消息和用量。默认使用会话当前的模型（`model` 接受 `provider/model` 引用）。每次请求都会消耗你的 token：用量保存在会话中，在 `/cost` 里以 `label`（未设置时为扩展来源）列出，并计入 agent 树的 `budget`；预算用完后调用直接被拒绝，不会发出请求。推理模型至少获得 2,048 个输出 token（不超过其上限），以便思考后仍能作答。provider 错误会让 promise 被拒绝；`signal` 中止或扩展被卸载时，以 `AbortError` 拒绝。`session()` 在宿主建好会话控制后返回顶层会话的 `SessionControl`；`rename(title, { source: "auto", sessionId })` 不会覆盖 `/rename` 设置的名称，`sessionId` 已不是当前会话时什么也不做。
 
+`api.complete` 计入当前主会话，不计入 owned conversation；`label` 不能覆盖归属。如需按 owner 记账，请使用上文绑定的 `OwnedConversation.complete`，固定模型并保持相同的纯文本语义。两条路径都会在拒绝前计入已报告的重试/错误/中止尝试；成功结果返回的 `usage` 本身不是完整账本。没有报告用量的请求保持未知，不能当作免费工作。
+
 ### 会话思考强度
 
 API 0.1.20 新增 `SessionControl.setThinking(level: ReasoningEffort | undefined): void`。通过命令上下文或 `api.session()` 获取控制对象；宿主注入之前，后者可能返回 `undefined`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。覆盖值只对当前会话生效，不写入设置文件，优先级高于 `--thinking`、模型级设置和顶层设置，后三者的优先级依次降低。传入 `undefined` 会明确屏蔽这些来源，不发送推理强度参数，沿用服务端默认值；它并不是移除运行时覆盖值。
@@ -664,7 +709,7 @@ if (session) {
 | `retries` | 已记录的模型重试条目数。 |
 | `subagents` | 已结束的直接子 agent，包含 ID、可选角色／标题、开始／结束时间、报告的存续时长、状态、可选用量和已知美元费用 `cost`。 |
 
-用量总计只涵盖已报告的用量，不保证覆盖全部计费工作。尤其是没有事件的旁路请求、没有模型事件的父模型咨询，以及未报告的失败请求用量，无法从追踪还原。需要子 agent 的详细时间或后代信息时，请单独读取它的追踪。
+用量总计只涵盖已报告的用量，不保证覆盖全部计费工作。尤其是没有事件的旁路请求、没有模型事件的父模型咨询，以及未报告的失败请求用量，无法从追踪还原。需要子 agent 的详细时间或后代信息时，请单独读取它的追踪。追踪和 `budget.update` 载荷不是 owner 账本，也不保证覆盖发票。owned 账目应使用 `OwnedConversation.usage()`，或等待 `OwnedConversations.read(ref)` 并检查结果后读取其 `usage`，不要使用绑定主会话的 `sideRequests()` 或追踪合计。不要将追踪/runner/group 合计再次加到快照的 `total`；保留 `knownCostUsd`、覆盖不完整状态及按 revision 更新的有符号修正。
 
 ### 工作区 provider
 

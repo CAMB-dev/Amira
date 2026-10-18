@@ -68,6 +68,15 @@ test("owner/key creation is durable and reopen is inert outside root enumeration
   const owner = manager.forOwner("project-extension")
   const handle = await owner.openOrCreate(f.spec, f.runtime)
   expect(f.mock.requests).toHaveLength(0)
+  expect(await owner.read({ key: f.spec.key })).toEqual({
+    id: handle.id,
+    key: handle.key,
+    name: handle.name,
+    cwd: handle.cwd,
+    archived: false,
+    history: [],
+    usage: handle.usage(),
+  })
   expect(await owner.openOrCreate(f.spec, f.runtime)).toBe(handle)
   handle.data.append("project.attachment", { value: "before the first turn" })
   await handle.release()

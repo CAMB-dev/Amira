@@ -1,8 +1,11 @@
 import { type Ai, type AssistantMessage, type Usage, userMessage } from "@amira/ai"
 import type { ApprovalRequest, AskAnswer, AskOutcome, AskQuestion, AskRequest } from "@amira/api"
+import { copyAccountingUsage } from "../accounting-receipts.ts"
+import { accountingRecorded, withAccountingRequests } from "../accounting-requests.ts"
 import type { Agent, ApprovalDecision } from "../agent.ts"
 import { withCallableServerTools } from "../callable-server-tools.ts"
 import { renderPrompt } from "../prompt.ts"
+import { consultationAccounting } from "./consultation-accounting.ts"
 import type { ConsultationUsageRecorder } from "./consultation-usage.ts"
 import { finalText, forkHistory } from "./fork.ts"
 
@@ -116,6 +119,7 @@ export class ParentConsultant {
     // Capture the accounting owner while it is still live, only for this consultation.
     const model = parent.model
     const recordUsage = this.deps.usageRecorder(parent, requester)
+    const accounting = consultationAccounting(recordUsage)
     let release: (() => void) | undefined
     let usage: Usage | undefined
     let retrying = false
@@ -128,8 +132,12 @@ export class ParentConsultant {
     // an ancestor waiting for its descendant's slot can block that descendant's escalation.
     let streamOwnsPermit = false
     const stream = async () => {
+      // Open the durable intent only at admitted dispatch, using the already captured owner.
+      const accounted = accounting
+        ? withAccountingRequests(ai, accounting.agent, () => accounting.target)
+        : ai
       try {
-        for await (const ev of ai.stream(
+        for await (const ev of accounted.stream(
           {
             model,
             systemPrompt: renderPrompt([...parent.sections]),
@@ -142,24 +150,39 @@ export class ParentConsultant {
           // A backoff abort repeats the failed attempt's usage, not a new request's.
           // Dialects without request.start begin the retry with their next non-abort event.
           if (
+            ev.type === "request.attempt" ||
             ev.type === "request.start" ||
             (retrying && ev.type !== "retry" && !(ev.type === "error" && ev.error.code === "aborted"))
           ) {
             record()
             retrying = false
           }
-          if (ev.type === "retry") retrying = true
+          if (ev.type === "retry" || ev.type === "fast.fallback") retrying = true
           if (ev.type === "done") reply = ev.message
           if (ev.type === "error") failure = ev.error.message
           if (ev.type === "done" || ev.type === "error" || ev.type === "request.end") {
             // Book completed spending before backoff/admission can allow more work.
             // Retain a copied final snapshot so abort/retry duplicates settle this attempt once.
             if (ev.message.usage) {
-              usage = { ...ev.message.usage }
-              recordUsage.observe?.(usage)
+              usage = copyAccountingUsage(ev.message.usage)
+              const retained = recordUsage.observe?.(usage)
+              // An unchanged revision can reuse a committed contribution without a second charge.
+              if (accounting && retained) accountingRecorded(accounting.agent, retained)
             }
           }
         }
+      } catch (error) {
+        // Settle every observed charge before retaining the unknown tail of a broken stream.
+        record()
+        usage = {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          outputReported: false,
+          pricingUnknown: true,
+        }
+        throw error
       } finally {
         try {
           record()

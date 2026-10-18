@@ -1,7 +1,7 @@
 import { transferUsageAccounting } from "./accounting.ts"
 import { catalogProviderId, type ModelCatalog } from "./catalog.ts"
 import { usageCost, withCost } from "./cost.ts"
-import type { Dialect, DialectContext } from "./dialect.ts"
+import type { Dialect, DialectCompactOutcome, DialectContext } from "./dialect.ts"
 import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { modelErrorKind } from "./errors.ts"
 import { fastOption, fastVendor, withFastFallback } from "./fast-mode.ts"
@@ -9,6 +9,7 @@ import {
   type CompactAttempt,
   CompactionFailures,
   type CompactionMemory,
+  type CompactReceipt,
   type CompactResult,
   endpointKey,
   type NativeCompaction,
@@ -106,8 +107,16 @@ export interface Ai {
    * remembered (compactionMemory) and skipped from then on. All attempts share the deadline
    * retry.nativeCompactionTimeoutMs (DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS); a timeout aborts the native request
    * and returns a failure for the caller to fall back to a text summary. Never throws.
+   * onUsage receives one receipt per physical attempt, including failures and late outcomes
+   * after timeout/cancellation. These are the same charges as returned usage, not extra usage.
+   * Observer errors are ignored; returned promises are caught but not awaited.
    */
-  compact(req: ModelRequest, signal?: AbortSignal, onProgress?: () => void): Promise<CompactResult>
+  compact(
+    req: ModelRequest,
+    signal?: AbortSignal,
+    onProgress?: () => void,
+    onUsage?: (receipt: CompactReceipt) => void | Promise<void>,
+  ): Promise<CompactResult>
 }
 
 export function createAi(opts: AiOptions = {}): Ai {
@@ -193,6 +202,7 @@ export function createAi(opts: AiOptions = {}): Ai {
     full: ModelRequest,
     signal: AbortSignal = new AbortController().signal,
     onProgress?: () => void,
+    onUsage?: (receipt: CompactReceipt) => void | Promise<void>,
   ): Promise<CompactResult> => {
     const usage = emptyUsage()
     let usageIncomplete = false
@@ -260,11 +270,46 @@ export function createAi(opts: AiOptions = {}): Ai {
         for (let attempt = 0; ; attempt++) {
           if (signal.aborted) return aborted()
           inFlight = true
-          const out = await native.compact(method, sendable, ctx, progress)
-          if (signal.aborted) return aborted()
+          const id = crypto.randomUUID()
+          let out: DialectCompactOutcome
+          try {
+            out = await native.compact(method, sendable, ctx, progress)
+          } catch (error) {
+            out = {
+              ok: false,
+              error: { message: error instanceof Error ? error.message : String(error) },
+              unsupported: false,
+              retryable: false,
+            }
+          }
+          const priced = out.usage ? withPrice(out.usage, model) : undefined
+          // Late receipts still belong to this call, but must not mutate its returned result.
+          const late = signal.aborted
+          if (!late) {
+            // Preserve each attempt's coverage before a later price can hide its missing cost.
+            if (
+              !priced ||
+              priced.outputReported === false ||
+              (priced.cost === undefined &&
+                [
+                  priced.input,
+                  priced.output,
+                  priced.cacheRead,
+                  priced.cacheWrite,
+                  priced.webSearchRequests ?? 0,
+                ].some((amount) => amount !== 0))
+            )
+              usageIncomplete = true
+            if (priced) addTo(usage, priced)
+          }
           inFlight = false
-          if (out.usage) addTo(usage, withPrice(out.usage, model))
-          else usageIncomplete = true
+          try {
+            const receiptUsage = priced ? { ...priced } : undefined
+            if (priced && receiptUsage) transferUsageAccounting(priced, receiptUsage)
+            const pending = onUsage?.({ id, late, usage: receiptUsage })
+            if (pending) void Promise.resolve(pending).catch(() => {})
+          } catch {}
+          if (signal.aborted) return aborted()
           if (out.ok) {
             const checkpoint: Signature = {
               dialect: model.dialect,
@@ -354,6 +399,7 @@ export function createAi(opts: AiOptions = {}): Ai {
                   : r.model.fast && r.model.fast.kind === "service-tier"
                     ? r.model.fast.responseHeader
                     : undefined
+              yield { type: "request.attempt", id: crypto.randomUUID() }
               let tier: string | null = null
               const fetchWithTier = (async (input, init) => {
                 const response = await ctx.fetch(input, init)
@@ -484,13 +530,15 @@ function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>):
 function withPrice(u: Usage, model: ModelInfo): Usage {
   if (!model.cost) return u
   const cost = usageCost(u, model.cost)
-  return {
+  const priced = {
     ...u,
     ...(cost !== undefined ? { cost } : {}),
     ...(u.webSearchRequests !== undefined && model.cost.webSearch !== undefined
       ? { webSearchCost: u.webSearchRequests * model.cost.webSearch }
       : {}),
   }
+  if (cost === undefined) transferUsageAccounting(u, priced)
+  return priced
 }
 
 function addTo(to: Usage, u: Usage) {

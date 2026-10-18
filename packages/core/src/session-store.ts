@@ -13,7 +13,8 @@ import {
 } from "node:fs"
 import path from "node:path"
 import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@amira/ai"
-import type { CompactionInfo, CompactionReason, NoticeLevel, PrintOptions } from "@amira/api"
+import type { CompactionInfo, CompactionReason } from "@amira/api"
+import * as accounting from "./accounting-receipts.ts"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
 import {
@@ -23,7 +24,6 @@ import {
   tryFileLock,
   withTransientFileLock,
 } from "./file-lock.ts"
-import type { FileJournalEntry } from "./file-rewind.ts"
 import type { OwnedSessionIdentity } from "./owned-session.ts"
 import { intersectWriteRoots } from "./permissions/write-roots.ts"
 import {
@@ -31,9 +31,11 @@ import {
   sessionClaimAcquired,
   withSessionClaim,
 } from "./session-acquisition.ts"
+import type { RestoredSession, SessionEntry, SessionEntryData } from "./session-entry.ts"
 import { isSessionHeader, type SessionHeader } from "./session-header.ts"
 import { canonicalSessionFile } from "./session-path.ts"
 import { sessionsDir } from "./session-project.ts"
+import { entryUsage } from "./session-usage.ts"
 
 export { projectKey, sessionsDir } from "./session-project.ts"
 
@@ -83,74 +85,8 @@ export class SessionInUseError extends Error {
   }
 }
 
+export type { CompactionExtras, RestoredSession, SessionEntry, SessionEntryData } from "./session-entry.ts"
 export type { SessionHeader } from "./session-header.ts"
-
-export type SessionEntryData =
-  | FileJournalEntry
-  | { type: "title"; title: string; source: "manual" | "auto" }
-  /** `label` says what the side request was for; entries without one are session titles. */
-  | { type: "side_usage"; model: ModelRef; usage: Usage; label?: string }
-  /** Display-only transcript content, skipped when restoring the model conversation. */
-  | ({ type: "display"; text: string; level: NoticeLevel } & Omit<PrintOptions, "persist">)
-  | { type: "message"; message: Message }
-  | { type: "model_change"; model: ModelRef }
-  /**
-   * `summary` stands in for the entries in `replaces`; they stay in the file. Why and how it
-   * was compacted (CompactionInfo) is missing from entries written before it was kept, as are
-   * the optional fields of CompactionExtras.
-   */
-  | ({ type: "compaction"; summary: string; replaces: string[] } & Partial<CompactionInfo> & CompactionExtras)
-  /** Makes `target` the tip of the current branch; null goes back to before the first entry. */
-  | { type: "checkout"; target: string | null }
-  | { type: "subagent"; childSessionId: string; role: string; title?: string }
-  /** Deferred tools the session loaded (via tool_search), offered to the model from then on. */
-  | { type: "tools_loaded"; names: string[] }
-  | { type: "custom"; ext: string; data: unknown }
-  /**
-   * How earlier tool results are sent from now on (context management): each view replaces
-   * one result's content in requests, the message itself stays whole. An Amira that does not
-   * know this entry type sends the results whole.
-   */
-  | { type: "context"; views: StoredView[] }
-
-/** Optional fields of a compaction entry (no session format version depends on them). */
-export interface CompactionExtras {
-  /**
-   * The provider's checkpoint of a server-side compaction (Signature.kind "checkpoint", with
-   * its provider, host and model). `summary` is then the server's readable text, or empty.
-   */
-  checkpoint?: Signature
-  /**
-   * Entries kept verbatim before the summary, in order ("recent-user" layout). They are also
-   * in `replaces`, so an Amira that does not know this field drops them.
-   */
-  retained?: string[]
-  /** Tokens and cost of the compaction's requests. */
-  usage?: Usage
-  /**
-   * This entry writes a text summary for an earlier compaction entry, whose checkpoint a model
-   * switched to could not read: it replaces that entry (`replaces` holds only its id) and
-   * keeps its checkpoint, so the original model can still use it.
-   */
-  fills?: string
-}
-
-export type SessionEntry = SessionEntryData & { id: string; parentId: string | null; ts: number }
-
-/** Messages rebuilt from a branch, with the entry id each one came from. */
-export interface RestoredSession {
-  messages: Message[]
-  entryIds: Map<Message, string>
-  model?: ModelRef
-  /** Context size from the last reply since the last compaction; older usage no longer applies. */
-  contextTokens?: number
-  /** Deferred tools loaded on this branch, in load order. */
-  loadedTools: string[]
-  /** Why each compaction happened, by its summary's user message; none for old entries. */
-  compactions: Map<Message, CompactionInfo>
-  /** How tool results on this branch are sent (context entries), by message. */
-  views: Map<Message, ContextView>
-}
 
 export function newSessionId(): string {
   return `s_${crypto.randomUUID().slice(0, 8)}`
@@ -174,6 +110,8 @@ export class SessionStore {
   /** The file ends in a torn line; the next write starts on a fresh line. */
   #needsNewline = false
   #pending: string[] = []
+  #accountingIntact = true
+  readonly #usageEvidence = new accounting.UsageWriteEvidence()
   /** Bytes in the file as far as this store knows; any other size means another writer. */
   #size = 0
   /** Generation last read/written under authority; never a substitute for claim-time refresh. */
@@ -219,21 +157,22 @@ export class SessionStore {
   }
 
   /** Reads a session file. Lines that do not parse, such as a torn last line, are skipped. */
-  static open(file: string): SessionStore {
-    return SessionStore.#read(file)
+  static open(file: string, options?: { historical?: boolean }): SessionStore {
+    return SessionStore.#read(file, options)
   }
 
-  static #read(file: string): SessionStore {
+  static #read(file: string, options?: { historical?: boolean }): SessionStore {
     const generation = statSync(file, { bigint: true })
     const bytes = readFileSync(file)
     const raw = bytes.toString("utf8")
     const lines = raw.split("\n")
     const header = parseLine(lines[0] ?? "")
-    if (!isSessionHeader(header)) throw new Error(`not an Amira session file: ${file}`)
+    if (!isSessionHeader(header, options)) throw new Error(`not an Amira session file: ${file}`)
     const store = new SessionStore(file, header, true)
     for (const line of lines.slice(1)) {
       const e = parseLine(line)
       if (isEntry(e)) store.#add(e)
+      else if (line.trim()) store.#accountingIntact = false
     }
     store.#needsNewline = raw.length > 0 && !raw.endsWith("\n")
     store.#size = bytes.length
@@ -411,6 +350,7 @@ export class SessionStore {
     if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
       throw new Error("session file belongs to a different session")
     }
+    this.#accountingIntact &&= fresh.#accountingIntact
     const unchanged =
       fresh.#size === this.#size && JSON.stringify(fresh.#entries) === JSON.stringify(this.#entries)
     if (unchanged) {
@@ -434,9 +374,16 @@ export class SessionStore {
 
   /** Only out-of-band metadata can follow another view; a model context cannot. */
   #withWriter(data: SessionEntryData, write: (writer: SessionStore) => string): string {
+    const accountingIntent = accounting.noteEntry(data)
     if (sessionFileKey(canonicalSessionFile(this.file)) !== sessionFileKey(this.file))
       throw new SessionConflictError(this.file)
-    if (this.#written || data.type === "message" || data.type === "display") {
+    if (
+      this.#written ||
+      data.type === "message" ||
+      data.type === "display" ||
+      data.type === "side_usage" ||
+      accountingIntent
+    ) {
       for (const scope of this.#writeClaims) {
         if (scope.claimed) continue
         // Claim under authority without merging underneath the child's live model history.
@@ -444,7 +391,8 @@ export class SessionStore {
         scope.claimed = true
       }
     }
-    const metadata = data.type === "display" || data.type === "side_usage" || data.type === "title"
+    const metadata =
+      data.type === "display" || data.type === "side_usage" || data.type === "title" || accountingIntent
     // The canonical file was revalidated above; reuse its physical lock namespace.
     const lockFile = `${this.file}.lock`
     const key = sessionFileKey(this.file)
@@ -470,6 +418,8 @@ export class SessionStore {
       !this.#written &&
       data.type !== "message" &&
       data.type !== "display" &&
+      data.type !== "side_usage" &&
+      !accountingIntent &&
       !existsSync(this.file) &&
       !existsSync(lockFile)
     ) {
@@ -485,6 +435,7 @@ export class SessionStore {
           if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
             throw new Error("session file belongs to a different session")
           }
+          this.#accountingIntact &&= fresh.#accountingIntact
           // Keep captured stale views unchanged. The temporary writer owns the fresh disk
           // snapshot; a current unclaimed view may keep its existing message identities.
           const current =
@@ -511,6 +462,16 @@ export class SessionStore {
 
   get entries(): readonly SessionEntry[] {
     return this.#entries
+  }
+
+  /** False after a damaged read, failed receipt write, or before buffered entries reach disk. */
+  get accountingDurable(): boolean {
+    return this.#accountingIntact && this.#pending.length === 0
+  }
+
+  /** Match a tree charge to its already-persisted attempt once, even if a provider reuses Usage. */
+  takeUsageReceipt(usage: Usage): boolean {
+    return this.#usageEvidence.take(usage)
   }
 
   get title(): string | undefined {
@@ -609,7 +570,17 @@ export class SessionStore {
 
   /** Appends an entry as a child of the current tip and returns its id. */
   append(data: SessionEntryData): string {
-    return this.#withWriter(data, (writer) => writer.#append(data))
+    const usage = entryUsage(data)
+    if (usage) accounting.prepareAccountingWrite(usage)
+    try {
+      const id = this.#withWriter(data, (writer) => writer.#append(data))
+      if (usage) this.#usageEvidence.commit(usage, id)
+      return id
+    } catch (error) {
+      if (data.type === "side_usage" || data.type === "compaction" || data.type === "message")
+        this.#accountingIntact = false
+      throw error
+    }
   }
 
   /** The single append implementation, reachable only while holding write authority. */
@@ -623,9 +594,27 @@ export class SessionStore {
     if (entry.type === "checkout" && entry.target !== null && !this.#byId.has(entry.target)) {
       throw new Error(`unknown entry ${entry.target}`)
     }
+    const usage = entryUsage(entry)
+    if (usage) {
+      entry.accounting = accounting.entryAccounting(usage)
+      // Provider-owned usage objects can be reused or mutated after their terminal event.
+      if (entry.type === "message" && entry.message.role === "assistant")
+        entry.message = { ...entry.message, usage: { ...usage } }
+      else if (entry.type === "side_usage" || entry.type === "compaction") entry.usage = { ...usage }
+    }
+    if (!this.#accountingIntact) entry.accounting = { ...entry.accounting, incomplete: true }
+    accounting.sealJournalEntry(entry, this.id)
     // Written first, so a failed write leaves no entry behind for later ones to point at.
-    this.#write(JSON.stringify(entry), entry.type === "message" || entry.type === "display")
+    // A paid side request must survive even when its owner has no conversational messages.
+    this.#write(
+      JSON.stringify(entry),
+      entry.type === "message" ||
+        entry.type === "display" ||
+        entry.type === "side_usage" ||
+        accounting.noteEntry(entry),
+    )
     this.#add(entry)
+    accounting.appendReferenceProof(entry, this.id, (data) => this.#append(data))
     return entry.id
   }
 
@@ -756,12 +745,19 @@ export class SessionStore {
   }
 
   #add(e: SessionEntry) {
+    if (
+      !accounting.validJournalEntry(e, ENTRY_TYPES, this.id) ||
+      this.#byId.has(e.id) ||
+      (e.parentId !== null && !this.#byId.has(e.parentId)) ||
+      e.accounting?.incomplete
+    )
+      this.#accountingIntact = false
     this.#tipBefore.set(e.id, this.#leaf)
     this.#entries.push(e)
     this.#byId.set(e.id, e)
     // Session-wide notes stay off the branch: a rewind keeps the name, and an older Amira that
     // skips these entry types never sees a message or checkout pointing at one.
-    if (e.type === "title" || e.type === "side_usage") return
+    if (e.type === "title" || e.type === "side_usage" || accounting.noteEntry(e)) return
     if (e.type !== "checkout") this.#leaf = e.id
     else if (e.target === null) this.#leaf = null
     else if (this.#byId.has(e.target)) this.#leaf = e.target

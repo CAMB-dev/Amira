@@ -16,6 +16,7 @@ import {
 import type { AnyEvent, EventMap } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
+import { conversationUsage } from "../src/owned-conversations-usage.ts"
 import { SessionStore } from "../src/session-store.ts"
 import { AgentTree } from "../src/subagents.ts"
 
@@ -440,6 +441,7 @@ for (const fill of [false, true]) {
       agent.setModel(ai.model("other/x"))
     }
     const before = tree.usage.input
+    const accountingBefore = conversationUsage(agent)
     const append = spyOn(session, "append").mockImplementation(() => {
       throw new Error("disk full")
     })
@@ -448,6 +450,10 @@ for (const fill of [false, true]) {
       expect(session.entries.filter((e) => e.type === "compaction")).toHaveLength(fill ? 1 : 0)
       expect(agent.compactionUsage.map((u) => u.usage.input)).toEqual(fill ? [2000, 70] : [2000])
       expect(tree.usage.input - before).toBe(fill ? 70 : 2000)
+      const accounting = conversationUsage(agent)
+      expect(accounting.own.usage.input - accountingBefore.own.usage.input).toBe(fill ? 70 : 2000)
+      expect(accounting.own.complete).toBe(false)
+      expect(accounting.revision).toBeGreaterThan(accountingBefore.revision)
     } finally {
       append.mockRestore()
     }
@@ -522,6 +528,9 @@ for (const path of ["native", "native-model", "text", "fill", "fill-error", "fal
       const expected = path.startsWith("native") ? 2000 : path === "fallback-error" ? 2070 : 70
       expect(agent.compactionUsage.map((u) => u.usage.input)).toEqual(filling ? [2000, 70] : [expected])
       expect(tree.usage.input - spent).toBe(expected)
+      const accounting = conversationUsage(agent)
+      expect(accounting.own.usage.input).toBe(tree.usage.input)
+      expect(conversationUsage(SessionStore.open(session.file))).toEqual(accounting)
       if (path === "native-model")
         expect(agent.compactionUsage[0]!.model).toEqual({ provider: "mock", model: "m2" })
       expect(ofType(events, "compact.end")).toEqual([])

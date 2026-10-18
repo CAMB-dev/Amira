@@ -36,12 +36,24 @@ for (const boundary of ["missing", "real", "end"] as const) {
       ai.stream({ model: ai.model("mock/m"), systemPrompt: "", messages: [], tools: [] }, controller.signal),
     )
     expect(mock.requests).toHaveLength(2)
+    const attempts = out.filter((event) => event.type === "request.attempt")
+    expect(attempts).toHaveLength(2)
+    expect(new Set(attempts.map((event) => event.id)).size).toBe(2)
     expect(out.map((event) => event.type)).toEqual(
       boundary === "real"
-        ? ["request.start", "start", "request.end", "retry", "request.start", "error"]
+        ? [
+            "request.attempt",
+            "request.start",
+            "start",
+            "request.end",
+            "retry",
+            "request.attempt",
+            "request.start",
+            "error",
+          ]
         : boundary === "end"
-          ? ["start", "request.end", "retry", "request.end", "error"]
-          : ["start", "request.end", "retry", "request.start", "error"],
+          ? ["request.attempt", "start", "request.end", "retry", "request.attempt", "request.end", "error"]
+          : ["request.attempt", "start", "request.end", "retry", "request.attempt", "error"],
     )
     const starts = out.filter((event) => event.type === "request.start")
     expect(starts).toEqual(
@@ -50,9 +62,7 @@ for (const boundary of ["missing", "real", "end"] as const) {
             { type: "request.start", thinkingDisplay: "omitted" },
             { type: "request.start", thinkingDisplay: "omitted" },
           ]
-        : boundary === "end"
-          ? []
-          : [{ type: "request.start" }],
+        : [],
     )
     const costs = out
       .filter(

@@ -71,12 +71,13 @@ import type { ArtifactScope, ArtifactStore, ArtifactUsage } from "./artifacts.ts
 
 export * from "./agent/exports.ts"
 
-import { withCallableServerTools } from "./callable-server-tools.ts"
+import { accountedAi, accountingAuxiliaryRecorded } from "./accounting-requests.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions, ContextView } from "./context.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FileRewind } from "./file-rewind.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
+import { recordConversationUsage } from "./owned-conversations-usage.ts"
 import { assertOwnedSession } from "./owned-session.ts"
 import { Permissions } from "./permissions/policy.ts"
 import { intersectWriteRoots } from "./permissions/write-roots.ts"
@@ -217,7 +218,7 @@ export class Agent {
       this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
       this.#compaction = opts.compaction ?? {}
       this.#context = opts.context ?? {}
-      const ai = withCallableServerTools(opts.ai, this.callableTools)
+      const ai = accountedAi(opts.ai, this, this.callableTools)
       const maxSteps = opts.maxSteps ?? DEFAULT_AGENT_MAX_STEPS
       if (!Number.isInteger(maxSteps) || maxSteps < 0)
         throw new Error("maxSteps must be a non-negative integer (0 means unlimited)")
@@ -329,7 +330,7 @@ export class Agent {
           buildContext: (signal) => this.#buildContext(signal),
           renderSections: () => renderPrompt(this.#sections),
           offeredTools: () => this.#offeredTools(),
-          recordTreeUsage: (usage) => this.#recordAuxiliaryUsage(usage),
+          recordTreeUsage: (usage) => this.#recordUsage(usage, true),
           budgetExceeded: () => this.tree?.budgetExceeded !== undefined,
           emit: (turn, type, data) => this.#emit(turn, type, data),
         },
@@ -383,7 +384,7 @@ export class Agent {
           const entry = { model: message.model, usage: message.usage, label: "request retry" }
           if (!this.session) this.#retryUsage.push(entry)
           this.#history.store({ type: "side_usage", ...entry })
-          this.#recordAuxiliaryUsage(message.usage)
+          this.#recordUsage(message.usage, true)
         },
         recordSpeed: (speed, pricingUnknown) => {
           this.lastSpeed = speed
@@ -403,7 +404,7 @@ export class Agent {
         disposed: () => this.#disposed,
         ownsIdleNotices: () => !!this.#onIdleNotice,
         endTurn: () => this.#endTurn?.(),
-        recordTreeUsage: (usage) => this.tree?.recordUsage(this, usage),
+        recordTreeUsage: (usage) => this.#recordUsage(usage),
         budgetExceeded: () => this.tree?.budgetExceeded !== undefined,
       })
     } catch (error) {
@@ -470,8 +471,14 @@ export class Agent {
   }
 
   /** Notes a sub-agent in this session's file, so its branch points at the child's session. */
-  recordSubagent(childSessionId: string, role: string | undefined, title?: string): void {
-    this.#history.store({ type: "subagent", childSessionId, role: role ?? "", ...(title ? { title } : {}) })
+  recordSubagent(childSessionId: string, role: string | undefined, title?: string, groupId?: string): void {
+    this.#history.store({
+      type: "subagent",
+      childSessionId,
+      role: role ?? "",
+      ...(title ? { title } : {}),
+      ...(groupId ? { groupId } : {}),
+    })
   }
 
   /**
@@ -869,10 +876,14 @@ export class Agent {
     return this.#compactor.usage
   }
 
-  /** Compaction and retries have no tool batch to finish before stopping. */
-  #recordAuxiliaryUsage(usage: Usage): void {
-    this.tree?.recordUsage(this, usage)
-    if (this.tree?.budgetExceeded) this.abort()
+  /** Compaction and retries settle their receipts before stopping, without a tool batch. */
+  #recordUsage(usage: Usage, auxiliary = false): void {
+    if (this.tree) this.tree.recordUsage(this, usage)
+    else recordConversationUsage(this, usage)
+    if (auxiliary) {
+      accountingAuxiliaryRecorded(this, usage)
+      if (this.tree?.budgetExceeded) this.abort()
+    }
   }
 
   #setStatus(turn: Turn, status: SessionStatus, reason?: string) {

@@ -1,4 +1,4 @@
-import type { FastOption, ModelInfo, ModelRequest, StreamEvent } from "./types.ts"
+import type { AssistantMessage, FastOption, ModelInfo, ModelRequest, StreamEvent } from "./types.ts"
 
 /** The fast-mode beta is independent of other Messages API betas (e.g. compaction). */
 export const FAST_MODE_BETA = "fast-mode-2026-02-01"
@@ -160,10 +160,36 @@ export async function* withFastFallback(
   signal: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
   let standard = false
+  let previous: AssistantMessage | undefined
   for (;;) {
+    // Check at dispatch, including after the previous iterator's asynchronous cleanup.
+    // An abort here repeats an existing receipt; no physical request has opened.
+    if (signal.aborted) {
+      yield {
+        type: "error",
+        error: { message: "aborted", code: "aborted" },
+        retryable: false,
+        message: {
+          ...(previous ?? {
+            role: "assistant",
+            content: [],
+            model: { provider: req.model.provider, model: req.model.id },
+          }),
+          stopReason: "aborted",
+        },
+      }
+      return
+    }
     let fallback = false
     let content = false
+    let observed = false
     for await (const ev of open(standard ? { ...req, fastMode: false, forceStandard: true } : req)) {
+      // Like an ordinary retry, an opened fallback must differ from a synthetic abort
+      // between attempts. Keep real boundaries (and their metadata) untouched. `start`
+      // is logical-stream-only and may be suppressed by the surrounding retry layer.
+      if (standard && !observed && ev.type === "error" && ev.error.code === "aborted")
+        yield { type: "request.start" }
+      if (ev.type !== "start") observed = true
       if (
         !standard &&
         fastOption(req) &&
@@ -173,6 +199,7 @@ export async function* withFastFallback(
         isFastCapacityError(ev.error) &&
         !signal.aborted
       ) {
+        previous = ev.message
         yield { type: "request.end", message: ev.message }
         yield { type: "fast.fallback" }
         fallback = true

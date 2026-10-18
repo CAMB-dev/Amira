@@ -24,8 +24,9 @@ test("an abort during delayMs ends promptly with one aborted error", async () =>
   const t0 = performance.now()
   const evs = await events(ai.stream(req(), ac.signal))
   expect(performance.now() - t0).toBeLessThan(1_000)
-  expect(evs).toHaveLength(1)
-  const e = evs[0] as ErrorEvent
+  expect(evs).toHaveLength(2)
+  expect(evs.map((e) => e.type)).toEqual(["request.attempt", "error"])
+  const e = evs[1] as ErrorEvent
   expect(e.error.code).toBe("aborted")
   expect(e.message.stopReason).toBe("aborted")
 })

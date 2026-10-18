@@ -716,6 +716,7 @@ test("owned conversation types are public and the extension capability remains o
     open: async (_id, _runtime) => {
       throw new Error("fixture does not execute")
     },
+    read: async (_ref) => undefined,
   }
   const present: Pick<ExtensionAPI, "conversations"> = { conversations: capabilities }
   expect(absent.conversations).toBeUndefined()

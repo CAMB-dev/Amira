@@ -11,6 +11,7 @@ export function withCallableServerTools(ai: Ai, callable: ReadonlySet<string> | 
   return {
     ...ai,
     stream: (request, signal) => ai.stream(restrict(request), signal),
-    compact: (request, signal, onProgress) => ai.compact(restrict(request), signal, onProgress),
+    compact: (request, signal, onProgress, onUsage) =>
+      ai.compact(restrict(request), signal, onProgress, onUsage),
   }
 }

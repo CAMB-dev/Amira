@@ -1,5 +1,34 @@
 import { expect, test } from "bun:test"
-import { type SessionHeader, ToolRegistry } from "../src/index.ts"
+import { tmpdir } from "node:os"
+import {
+  type SessionEntry,
+  type SessionEntryData,
+  type SessionHeader,
+  SessionStore,
+  type SpawnedSubagent,
+  type SubagentEntry,
+  ToolRegistry,
+} from "../src/index.ts"
+import { usageReceiptDestination } from "../src/owned-conversations-receipts.ts"
+
+test("finished subagent public types carry an opaque accounting destination, not a transcript", () => {
+  const store = SessionStore.create({ cwd: process.cwd(), dir: tmpdir() })
+  const identity: Pick<SpawnedSubagent, "accountingDestination"> &
+    Pick<SubagentEntry, "accountingDestination"> = {
+    accountingDestination: usageReceiptDestination(store),
+  }
+  expect({
+    fields: Object.keys(identity),
+    digest: /^[a-f0-9]{64}$/.test(identity.accountingDestination ?? ""),
+  }).toMatchInlineSnapshot(`
+    {
+      "digest": true,
+      "fields": [
+        "accountingDestination",
+      ],
+    }
+  `)
+})
 
 test("policy-bearing session header types remain exported with an explicit format discriminator", () => {
   const header: SessionHeader = {
@@ -42,6 +71,142 @@ test("tool enablement can check captured capabilities without changing the regis
     {
       "captured": false,
       "live": true,
+    }
+  `)
+})
+
+test("accounting evidence remains serializable through the public core session types", () => {
+  const receipt: SessionEntry = {
+    id: "receipt",
+    parentId: null,
+    ts: 1,
+    type: "side_usage",
+    model: { provider: "mock", model: "test" },
+    usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, pricingUnknown: true },
+    attribution: { sessionId: "private", parentSessionId: "owned", groupId: "group", ephemeral: true },
+    accounting: {
+      knownCostUsd: 0.25,
+      incomplete: true,
+      coverageIncomplete: true,
+      receiptId: "native-attempt",
+      coverage: { v: 1, reported: true, priced: false, fingerprint: "receipt-proof" },
+      source: "request",
+      attempts: [{ id: "physical-attempt", revision: 2 }],
+      statements: [
+        {
+          v: 1,
+          id: "logical-contribution",
+          revision: 2,
+          kind: "snapshot",
+          usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, pricingUnknown: true },
+          knownCostUsd: 0.25,
+          coverage: { v: 1, reported: true, priced: false, fingerprint: "statement-proof" },
+          attempts: [{ id: "physical-attempt", revision: 2 }],
+        },
+      ],
+      seal: "record-proof",
+      journal: { v: 1, sessionId: "owned", fingerprint: "journal-proof" },
+    },
+  }
+  const child: SessionEntryData = {
+    type: "subagent",
+    childSessionId: "child",
+    role: "worker",
+    groupId: "group",
+  }
+  expect({ receipt, child }).toMatchInlineSnapshot(`
+    {
+      "child": {
+        "childSessionId": "child",
+        "groupId": "group",
+        "role": "worker",
+        "type": "subagent",
+      },
+      "receipt": {
+        "accounting": {
+          "attempts": [
+            {
+              "id": "physical-attempt",
+              "revision": 2,
+            },
+          ],
+          "coverage": {
+            "fingerprint": "receipt-proof",
+            "priced": false,
+            "reported": true,
+            "v": 1,
+          },
+          "coverageIncomplete": true,
+          "incomplete": true,
+          "journal": {
+            "fingerprint": "journal-proof",
+            "sessionId": "owned",
+            "v": 1,
+          },
+          "knownCostUsd": 0.25,
+          "receiptId": "native-attempt",
+          "seal": "record-proof",
+          "source": "request",
+          "statements": [
+            {
+              "attempts": [
+                {
+                  "id": "physical-attempt",
+                  "revision": 2,
+                },
+              ],
+              "coverage": {
+                "fingerprint": "statement-proof",
+                "priced": false,
+                "reported": true,
+                "v": 1,
+              },
+              "id": "logical-contribution",
+              "kind": "snapshot",
+              "knownCostUsd": 0.25,
+              "revision": 2,
+              "usage": {
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "input": 1,
+                "output": 0,
+                "pricingUnknown": true,
+              },
+              "v": 1,
+            },
+          ],
+        },
+        "attribution": {
+          "ephemeral": true,
+          "groupId": "group",
+          "parentSessionId": "owned",
+          "sessionId": "private",
+        },
+        "id": "receipt",
+        "model": {
+          "model": "test",
+          "provider": "mock",
+        },
+        "parentId": null,
+        "ts": 1,
+        "type": "side_usage",
+        "usage": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "input": 1,
+          "output": 0,
+          "pricingUnknown": true,
+        },
+      },
+    }
+  `)
+})
+
+test("historical session inspection is an explicit structural-only open option", () => {
+  const options: Parameters<typeof SessionStore.open>[1] = { historical: true }
+  expect(options).toMatchInlineSnapshot(`
+    {
+      "historical": true,
     }
   `)
 })

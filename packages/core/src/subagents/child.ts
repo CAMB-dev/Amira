@@ -14,11 +14,14 @@ import {
   type SubagentInfo,
   type SubagentResult,
 } from "@amira/api"
+import { recordAccountingReceipts } from "../accounting-receipts.ts"
 import type { Agent } from "../agent.ts"
 import type { EmitMeta } from "../event-bus.ts"
+import { identifiedUsage, type ReceiptDestination } from "../owned-conversations-receipts.ts"
+import { recordConversationUsage } from "../owned-conversations-usage.ts"
 import type { SessionStore } from "../session-store.ts"
 import type { AgentTree } from "../subagents.ts"
-import { usageTokens } from "./budget.ts"
+import { addUsage, overBudget, usageTokens } from "./budget.ts"
 import { metaOf } from "./events.ts"
 import type { ResultSpec } from "./structured-result.ts"
 
@@ -33,6 +36,8 @@ export interface SpawnedSubagent {
   messages?: readonly Message[]
   session?: SessionStore
   file?: string
+  /** Retained receipt lookup only; never keeps the Agent, store or transcript alive. */
+  accountingDestination?: ReceiptDestination
 }
 
 export class Child implements ChildSession {
@@ -93,10 +98,23 @@ export class Child implements ChildSession {
 
   /** Private replies count in the owning persisted session without retaining their transcript. */
   chargeUsage(usage: Usage, model = this.model): void {
-    if (!this.ephemeral || !this.usageStore) return
+    if (!this.ephemeral) return
+    usage = identifiedUsage(usage)
+    const attribution = {
+      sessionId: this.id,
+      parentSessionId: this.parentSessionId,
+      ...(this.groupId ? { groupId: this.groupId } : {}),
+      ephemeral: true,
+    }
+    if (!this.usageStore) {
+      recordConversationUsage(this.agent, usage, model, attribution)
+      return
+    }
     try {
-      this.usageStore.append({ type: "side_usage", model, usage, label: this.title })
+      this.usageStore.append({ type: "side_usage", model, usage, label: this.title, attribution })
+      recordAccountingReceipts(usage)
     } catch (error) {
+      recordConversationUsage(this.agent, usage, model, attribution, this.usageStore)
       // Late receipts can outlive the owner's Agent. Report without disabling the resumed
       // writer or interrupting the tree/group accounting that still books this usage.
       const owner = this.usageOwner ?? this.agent
@@ -109,6 +127,18 @@ export class Child implements ChildSession {
         },
         metaOf(owner),
       )
+    }
+  }
+
+  /** Group views overlap; charge each view once without adding them to the tree total again. */
+  chargeGroups(usage: Usage, end: (group: Group, reason: string) => void): void {
+    for (const group of this.groups) {
+      addUsage(group.usage, usage)
+      const over = group.state === "active" ? overBudget(group.usage, group.limits.budget) : undefined
+      if (over) {
+        group.exceeded = true
+        end(group, `the group "${group.name}" ran out of budget (${over})`)
+      }
     }
   }
 

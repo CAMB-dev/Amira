@@ -254,9 +254,11 @@ test.each([429, 529])("fast HTTP %s falls back immediately once, ignoring Retry-
   expect(seen.map((s) => s.body.speed)).toEqual(["fast", undefined])
   expect(out.filter((e) => e.type === "fast.fallback")).toHaveLength(1)
   expect(out.map((e) => e.type)).toEqual([
+    "request.attempt",
     "request.start",
     "request.end",
     "fast.fallback",
+    "request.attempt",
     "request.start",
     "start",
     "content.start",
