@@ -1,7 +1,15 @@
 import type { AnyEvent, EventMap, OwnedConversation } from "@amira/api"
+import { type AgentPort, frontendIdentity } from "@amira/core"
 import type { Editor, EditorPart } from "@amira/tui-kit"
 import { truncateToWidth } from "@amira/tui-kit"
-import { conversationScopeContains } from "../../../core/src/session-routing.ts"
+import { bindLocalConversation } from "../../../core/src/frontend/operations.ts"
+import {
+  conversationHoldId,
+  conversationIncarnation,
+  conversationScopeContains,
+  conversationTurnId,
+  sendConversation,
+} from "../../../core/src/session-routing.ts"
 import { restoreEditorState } from "../../../tui-kit/src/internal/editor-state.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import { PromptHistory } from "../prompt-history.ts"
@@ -12,25 +20,37 @@ import { draftMessage, messageParts } from "./outbox.ts"
 
 type Entry = {
   conversation: OwnedConversation
+  incarnation: string
   view: TranscriptView
   activity: ReturnType<typeof createTurnActivity>
   history: PromptHistory
   draft: EditorPart[]
   iterator: AsyncIterator<AnyEvent>
   disposed: boolean
-  sentContent?: string
+  send?: { turnId: string; reconciled: boolean }
+  sending?: boolean
+  turnId?: string
+  unbind?: () => void
 }
 
 interface FocusDeps {
+  port?: AgentPort
   editor: Editor
   mainView: TranscriptView
   mainHistory: PromptHistory
   mainId: () => string
   mainContainsSession: (id: string) => boolean
   mainWorking: () => boolean
+  mainTurnId?: () => string | undefined
+  requireApprovalOwner?: boolean
+  approvalOwner?: (
+    requestId: string,
+  ) =>
+    | { readonly sessionId: string; readonly turnId?: string; readonly conversationIncarnation?: string }
+    | undefined
   mainAttention?: () => number
   onMainFocused?: () => void
-  interruptMain: () => void
+  interruptMain: (turnId?: string) => void
   canFocus: () => boolean
   createView: (conversation: OwnedConversation) => TranscriptView
   activate: (entry: Entry | undefined) => void
@@ -48,7 +68,10 @@ interface FocusDeps {
 export class ConversationFocus {
   private readonly entries = new Map<OwnedConversation, Entry>()
   private readonly released = new WeakSet<OwnedConversation>()
-  private readonly requests = new Map<string, { sessionId: string; data: EventMap["ui.request"] }>()
+  private readonly requests = new Map<
+    string,
+    { sessionId: string; data: EventMap["ui.request"]; cancelApproval?: () => void }
+  >()
   private current: Entry | undefined
   private mainDraft: EditorPart[] = []
   private pendingCommand: { entry: Entry; version: number; parts: EditorPart[] } | undefined
@@ -104,7 +127,7 @@ export class ConversationFocus {
     const entry = this.current
     if (!entry) return false
     try {
-      return entry.conversation.status().busy
+      return entry.sending === true || entry.conversation.status().busy
     } catch {
       this.released.add(entry.conversation)
       this.unfocus()
@@ -193,14 +216,18 @@ export class ConversationFocus {
         }
         const activity = createTurnActivity()
         if (conversation.status().busy) activity.beginSend()
+        const view = this.deps.createView(conversation)
+        const binding = this.deps.port ? bindLocalConversation(this.deps.port, conversation) : undefined
         entry = {
           conversation,
+          incarnation: binding?.incarnation ?? conversationIncarnation(conversation),
           iterator,
           history,
           activity,
-          view: this.deps.createView(conversation),
+          view,
           draft: [],
           disposed: false,
+          unbind: binding,
         }
       } catch {
         void iterator.return?.()
@@ -321,43 +348,161 @@ export class ConversationFocus {
       ? message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
       : message.text
     const images = message.content?.flatMap((b) => (b.type === "image" ? [b] : []))
-    entry.sentContent = JSON.stringify([...(body ? [{ type: "text", text: body }] : []), ...(images ?? [])])
-    void entry.conversation
-      .send(body, {
-        ...(images ? { images } : {}),
-        ...(message.display ? { display: { text: message.display } } : {}),
+    const receipt = { turnId: crypto.randomUUID(), reconciled: false }
+    entry.send = receipt
+    const port = this.deps.port
+    const sessionGeneration = port ? frontendIdentity(port).sessionGeneration : undefined
+    entry.sending = true
+    const options = {
+      ...(images ? { images } : {}),
+      ...(message.display ? { display: { text: message.display } } : {}),
+    }
+    void Promise.resolve()
+      .then(async () => {
+        await (port
+          ? port.execute(
+              "conversation.send",
+              {
+                conversationId: entry.conversation.id,
+                incarnation: entry.incarnation,
+                turnId: receipt.turnId,
+                message: {
+                  role: "user",
+                  content: message.content ?? (body ? [{ type: "text", text: body }] : []),
+                  ...(options.display ? { display: options.display } : {}),
+                },
+              },
+              { sessionGeneration },
+            )
+          : sendConversation(entry.conversation, body, options, receipt.turnId))
       })
       .catch((error) => {
-        entry.sentContent = undefined
-        if (entry.disposed) return
+        if (
+          entry.disposed ||
+          receipt.reconciled ||
+          (port && frontendIdentity(port).sessionGeneration !== sessionGeneration)
+        )
+          return
         if (this.current === entry) {
           if (this.deps.editor.isEmpty) this.deps.editor.setParts(parts)
         } else if (this.empty(entry.draft)) entry.draft = parts
         entry.view.notice("error", error instanceof Error ? error.message : String(error))
         entry.view.requestRender()
       })
+      .finally(() => {
+        if (entry.send !== receipt) return
+        entry.send = undefined
+        entry.sending = false
+        if (!entry.disposed) entry.view.requestRender()
+      })
     return true
   }
 
-  cancelApproval(sessionId?: string) {
-    const root = this.rootSession(sessionId ?? "host")
+  /** Local requests capture turn ownership synchronously, before queued delivery or focus changes. */
+  captureApprovalRequest(request: EventMap["ui.request"]): void {
+    if (this.disposed || request.source !== "approval" || this.requests.has(request.requestId)) return
+    const sessionId = this.deps.approvalOwner?.(request.requestId)?.sessionId ?? request.sessionId ?? "host"
+    this.requests.set(request.requestId, {
+      sessionId: sessionId === "host" ? this.deps.mainId() : sessionId,
+      data: request,
+      cancelApproval: this.requestApprovalCancellation(request),
+    })
+  }
+
+  approvalCancellation(request: EventMap["ui.request"]): () => void {
+    return this.requests.get(request.requestId)?.cancelApproval ?? this.requestApprovalCancellation(request)
+  }
+
+  private requestApprovalCancellation(request: EventMap["ui.request"]): () => void {
+    const owner = this.deps.approvalOwner?.(request.requestId)
+    // Missing host authority must never borrow a replacement turn during replay.
+    if (!owner && this.deps.requireApprovalOwner) return () => {}
+    return this.captureApprovalCancellation(request.sessionId, owner)
+  }
+
+  private captureApprovalCancellation(
+    sessionId?: string,
+    owner?: {
+      readonly sessionId: string
+      readonly turnId?: string
+      readonly conversationIncarnation?: string
+    },
+  ): () => void {
+    const root = owner?.sessionId ?? this.rootSession(sessionId ?? "host")
+    const port = this.deps.port
+    const sessionGeneration = port ? frontendIdentity(port).sessionGeneration : undefined
+    const current = () =>
+      !this.disposed && (!port || frontendIdentity(port).sessionGeneration === sessionGeneration)
     if (root === this.deps.mainId()) {
-      if (this.deps.mainWorking()) this.deps.interruptMain()
-      return
+      const turnId = owner ? owner.turnId : this.deps.mainTurnId?.()
+      return () => {
+        if (!current() || this.deps.mainId() !== root) return
+        if (this.deps.mainTurnId && (!turnId || this.deps.mainTurnId() !== turnId)) return
+        if (owner ? !!turnId : this.deps.mainWorking()) this.deps.interruptMain(turnId)
+      }
     }
-    const entry = [...this.entries.values()].find((candidate) => candidate.conversation.id === root)
-    if (entry) this.stopEntry(entry)
+    const findEntry = () =>
+      [...this.entries.values()].find(
+        (candidate) =>
+          candidate.conversation.id === root &&
+          (!owner?.conversationIncarnation || candidate.incarnation === owner.conversationIncarnation),
+      )
+    const initial = findEntry()
+    const turnId = owner
+      ? owner.turnId
+      : initial && (conversationTurnId(initial.conversation) ?? initial.turnId)
+    return () => {
+      const entry = findEntry()
+      if (
+        !current() ||
+        !entry ||
+        entry.disposed ||
+        !turnId ||
+        (conversationTurnId(entry.conversation) ?? entry.turnId) !== turnId
+      )
+        return
+      this.stopEntry(entry, turnId)
+    }
   }
 
   interrupt() {
     const entry = this.current
-    if (entry) this.stopEntry(entry)
+    if (!entry) return
+    const turnId = conversationTurnId(entry.conversation) ?? entry.turnId
+    if (turnId) this.stopEntry(entry, turnId)
+    else {
+      const holdId = conversationHoldId(entry.conversation)
+      if (holdId) this.stopEntry(entry, undefined, holdId)
+    }
   }
 
-  private stopEntry(entry: Entry) {
+  private stopEntry(entry: Entry, expectedTurnId?: string, expectedHoldId?: string) {
+    const port = this.deps.port
+    const sessionGeneration = port ? frontendIdentity(port).sessionGeneration : undefined
     void Promise.resolve()
-      .then(() => entry.conversation.stop("Interrupted from composer"))
+      .then(async () => {
+        if (
+          entry.disposed ||
+          (expectedTurnId
+            ? (conversationTurnId(entry.conversation) ?? entry.turnId) !== expectedTurnId
+            : !expectedHoldId || conversationHoldId(entry.conversation) !== expectedHoldId)
+        )
+          return
+        await (port
+          ? port.execute(
+              "conversation.stop",
+              {
+                conversationId: entry.conversation.id,
+                incarnation: entry.incarnation,
+                reason: "Interrupted from composer",
+                ...(expectedTurnId ? { expectedTurnId } : { expectedHoldId }),
+              },
+              { sessionGeneration },
+            )
+          : entry.conversation.stop("Interrupted from composer"))
+      })
       .catch((error) => {
+        if (entry.disposed || (port && frontendIdentity(port).sessionGeneration !== sessionGeneration)) return
         entry.view.notice("error", String(error))
         entry.view.requestRender()
       })
@@ -366,11 +511,15 @@ export class ConversationFocus {
   /** Host UI requests default to main; owner callbacks explicitly supply their sessionId. */
   onUiEvent(event: AnyEvent): boolean {
     if (event.type === "ui.request") {
-      const association = event.data.sessionId ?? event.sessionId
+      const association =
+        this.deps.approvalOwner?.(event.data.requestId)?.sessionId ?? event.data.sessionId ?? event.sessionId
       const sessionId = this.rootSession(association)
       this.requests.set(event.data.requestId, {
         sessionId: association === "host" ? this.deps.mainId() : association,
         data: event.data,
+        cancelApproval:
+          this.requests.get(event.data.requestId)?.cancelApproval ??
+          (event.data.source === "approval" ? this.requestApprovalCancellation(event.data) : undefined),
       })
       if (sessionId === (this.current?.conversation.id ?? this.deps.mainId())) this.deps.request(event.data)
       else if (this.current && sessionId === this.deps.mainId())
@@ -398,10 +547,24 @@ export class ConversationFocus {
     try {
       while (!entry.disposed) {
         const next = await entry.iterator.next()
-        if (next.done) break
+        if (next.done || entry.disposed) break
         const event = next.value
         if (event.seq <= seq) continue
         seq = event.seq
+        if (event.sessionId === entry.conversation.id) {
+          const send = entry.send
+          if (event.type === "turn.start") {
+            entry.turnId = event.turnId
+            if (send && send.turnId === event.turnId) send.reconciled = true
+          } else if (event.type === "turn.end") {
+            if (entry.turnId === event.turnId) entry.turnId = undefined
+            if (send && send.turnId === event.turnId) {
+              send.reconciled = true
+              entry.send = undefined
+              entry.sending = false
+            }
+          }
+        }
         if (this.onUiEvent(event)) continue
         if (event.type === "events.lost") {
           entry.view.openSession(
@@ -414,9 +577,7 @@ export class ConversationFocus {
           entry.view.notice("warning", "Live events were lost; conversation history refreshed.")
         } else if (event.sessionId === entry.conversation.id) {
           if (event.type === "turn.start" && !event.data.prompt.display?.origin) {
-            if (JSON.stringify(event.data.prompt.content) !== entry.sentContent)
-              entry.history.add(messageParts(event.data.prompt))
-            entry.sentContent = undefined
+            if (entry.send?.turnId !== event.turnId) entry.history.add(messageParts(event.data.prompt))
           }
           renderer.onEvent(event)
         } else if (entry.view.subagentEvent(event)) entry.view.requestRender()
@@ -428,6 +589,7 @@ export class ConversationFocus {
       this.released.add(entry.conversation)
       this.entries.delete(entry.conversation)
       entry.disposed = true
+      entry.unbind?.()
       entry.view.stop()
     }
   }
@@ -442,6 +604,7 @@ export class ConversationFocus {
     this.deps.mainView.setVisible(true)
     for (const entry of this.entries.values()) {
       entry.disposed = true
+      entry.unbind?.()
       void entry.iterator.return?.()
       entry.view.setVisible(false)
       entry.view.stop()

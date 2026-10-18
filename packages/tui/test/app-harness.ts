@@ -15,7 +15,7 @@ import {
   type TuiSettings,
   textResult,
 } from "@amira/api"
-import type { SessionStore } from "@amira/core"
+import type { AgentPort, SessionStore } from "@amira/core"
 import {
   Agent,
   AgentTree,
@@ -55,6 +55,8 @@ export async function waitFor(check: () => boolean, what: string, timeoutMs = 30
 }
 
 export interface SetupOptions {
+  frontend?: (agent: Agent, commands?: CommandHost) => AgentPort
+  requests?: InteractiveOptions["requests"]
   cwd?: string
   acceptsImages?: boolean
   clipboard?: (cwd: string, signal: AbortSignal) => Promise<ClipboardContent>
@@ -216,6 +218,8 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
   if (o.history) agent.messages.push(...o.history)
   await o.prepare?.(agent)
   const exited = runInteractive({
+    ...(o.frontend ? { frontend: o.frontend(agent, commands) } : {}),
+    ...(o.requests ? { requests: o.requests } : {}),
     bindTerminal: (terminal) => host.bindTerminal(terminal),
     agent,
     status: host.status,

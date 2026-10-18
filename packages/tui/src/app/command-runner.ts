@@ -1,7 +1,8 @@
 // Owns slash-command execution, cancellation, key help and command echo correlation.
-import type { FrontendView, KeyHelp, OwnedConversation, UserMessage } from "@amira/api"
-import type { CommandHost } from "@amira/core"
+import type { FrontendView, KeyHelp, OwnedConversation, SendOptions, UserMessage } from "@amira/api"
+import { type AgentPort, type CommandHost, type CommandRunOptions, frontendIdentity } from "@amira/core"
 import { type RenderContext, Spinner } from "@amira/tui-kit"
+import { bindLocalCommandContext } from "../../../core/src/frontend/operations.ts"
 import { userText } from "../format.ts"
 import { glyphs } from "../glyphs.ts"
 import { ACTIONS, type Action, type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
@@ -10,7 +11,7 @@ import { dockKeyHelp } from "./dock.ts"
 
 export interface CommandRunner {
   /** Runs at once, even during a turn; commands that need an idle session say so. */
-  run(line: string): Promise<void>
+  run(line: string, sequence?: number): Promise<void>
   /**
    * Cancels the newest running slash command (Esc or Ctrl+C, when no dialog has the key): its
    * signal aborts, the input stays as it is. Only the command is stopped: a turn running
@@ -43,9 +44,17 @@ export interface CommandRunner {
 
 export interface CommandRunnerOptions {
   commands?: CommandHost
+  port?: AgentPort
+  captureFrontend?: () => Pick<
+    CommandRunOptions,
+    "isFrontendCurrent" | "openView" | "focusConversation" | "unfocusConversation"
+  >
+  /** Local-only presentation callbacks, registered outside the serializable operation. */
+  bindCommandFrontend?: (invocationId: string, options: CommandRunOptions) => () => void
   keys: Keybindings
   reaches: (spec: KeySpec) => boolean
   commandEcho: (line: string) => void
+  onSend?: (text: string, options?: SendOptions, sequence?: number) => (() => void) | undefined
   commandOutput: (level: "info" | "warning" | "error", text: string) => void
   requestRender: () => void
   /** When supplied, the host schedules animation alongside visible dialogs and views. */
@@ -65,7 +74,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
   /** The slash commands running now, each with the name of the command its line resolved to. */
   const commandAborts = new Map<
     AbortController,
-    { name: string | undefined; startedAt: number; sessionId: string }
+    { name: string | undefined; startedAt: number; sessionId: string; current?: () => boolean }
   >()
   // Separate from the turn spinner: either can finish while the other still runs.
   const spinner = new Spinner()
@@ -95,7 +104,13 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
   const commandEchoes = new Map<AbortController, { line: string; text: string }>()
 
   /** The newest running command that was not cancelled yet; the interrupt key cancels it first. */
-  const cancellable = () => [...commandAborts].findLast(([controller]) => !controller.signal.aborted)
+  const cancellable = () =>
+    [...commandAborts].findLast(
+      ([controller, command]) =>
+        !controller.signal.aborted &&
+        command.sessionId === options.sessionId() &&
+        (command.current?.() ?? true),
+    )
   /**
    * The common keys, for /help: the actions with a help line, with their keys as bound now.
    */
@@ -110,44 +125,83 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
   ]
 
   return {
-    async run(line) {
+    async run(line, sequence) {
       const commands = options.commands
-      if (!commands || options.guardCommand?.(line)) return
-      const echo = commands.shouldEcho(line)
+      if ((!commands && !options.port) || options.guardCommand?.(line)) return
+      const echo = commands?.shouldEcho(line) ?? true
       if (echo) options.commandEcho(line)
       const abort = new AbortController()
+      const invocationId = crypto.randomUUID()
+      const generation = options.port ? frontendIdentity(options.port).sessionGeneration : undefined
+      const sessionId = options.sessionId()
+      const origin = options.captureFrontend?.()
       commandAborts.set(abort, {
-        name: commands.commandName(line),
+        name: commands?.commandName(line),
         startedAt: Date.now(),
         sessionId: options.sessionId(),
+        current: origin?.isFrontendCurrent,
       })
       syncAnimation()
       options.requestRender()
       let sent = false
-      await commands
-        .run(line, {
-          frontend: "tui",
-          quit: options.quit,
-          openView: options.openView,
-          openRewind: options.openRewind,
-          focusConversation: options.focusConversation,
-          unfocusConversation: options.unfocusConversation,
-          keys: keyHelp,
-          glyphs: () => ({ separator: glyphs.separator, more: glyphs.more }),
-          signal: abort.signal,
-          onSend: (text, sendOptions) => {
-            if (!echo || sent || sendOptions?.display?.text !== line) return
-            commandEchoes.set(abort, { line, text })
-            sent = true
-            return () => void commandEchoes.delete(abort)
-          },
-        })
+      const frontend: CommandRunOptions = {
+        frontend: "tui",
+        quit: options.quit,
+        openView: options.openView,
+        openRewind: options.openRewind,
+        focusConversation: options.focusConversation,
+        unfocusConversation: options.unfocusConversation,
+        keys: keyHelp,
+        glyphs: () => ({ separator: glyphs.separator, more: glyphs.more }),
+        signal: abort.signal,
+        ...origin,
+        onSend: (text, sendOptions) => {
+          const failed = options.onSend?.(text, sendOptions, sequence)
+          if (!echo || sent || sendOptions?.display?.text !== line) return failed
+          commandEchoes.set(abort, { line, text })
+          sent = true
+          return () => {
+            commandEchoes.delete(abort)
+            failed?.()
+          }
+        },
+      }
+      let unbind: (() => void) | undefined
+      const settled = () => {
+        if (!commandAborts.delete(abort)) return
+        syncAnimation()
+        if (origin?.isFrontendCurrent?.() ?? true) options.requestRender()
+      }
+      try {
+        if (options.port) {
+          unbind = options.bindCommandFrontend
+            ? options.bindCommandFrontend(invocationId, frontend)
+            : bindLocalCommandContext(options.port, invocationId, frontend, settled)
+          await options.port.execute(
+            "command.run",
+            {
+              line,
+              invocationId,
+              keys: keyHelp(),
+              glyphs: { separator: glyphs.separator, more: glyphs.more },
+            },
+            { signal: abort.signal, sessionGeneration: generation },
+          )
+        } else await commands!.run(line, frontend)
+      } catch (error) {
+        // A transport rejection is distinct from a command outcome (printed by the host).
+        if (
+          !abort.signal.aborted &&
+          (origin?.isFrontendCurrent?.() ?? true) &&
+          options.sessionId() === sessionId &&
+          (!options.port || frontendIdentity(options.port).sessionGeneration === generation)
+        )
+          options.commandOutput("error", error instanceof Error ? error.message : String(error))
+      } finally {
+        unbind?.()
         // A successful send may still be waiting to join a busy turn after its command ends.
-        .finally(() => {
-          commandAborts.delete(abort)
-          syncAnimation()
-          options.requestRender()
-        })
+        settled()
+      }
     },
     cancel() {
       const operation = cancellable()
@@ -212,7 +266,9 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
       ]
     },
     abortAll(reason) {
-      for (const abort of commandAborts.keys()) abort.abort(reason)
+      for (const abort of commandAborts.keys()) {
+        abort.abort(reason)
+      }
       syncAnimation()
     },
   }

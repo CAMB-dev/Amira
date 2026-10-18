@@ -1,11 +1,19 @@
 // Owns submission validation and routing to commands, skills, input handlers or the outbox.
 import { isNoModel } from "@amira/ai"
-import { type Agent, type CommandHost, parseCommandLine } from "@amira/core"
+import {
+  type Agent,
+  type AgentPort,
+  type CommandHost,
+  type CommandRunOptions,
+  frontendIdentity,
+  parseCommandLine,
+} from "@amira/core"
 import type { Editor, EditorPart } from "@amira/tui-kit"
+import { bindLocalCommandContext } from "../../../core/src/frontend/operations.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { PromptHistory } from "../prompt-history.ts"
 import type { TranscriptView } from "../view.ts"
-import type { CommandRunner } from "./command-runner.ts"
+import type { CommandRunner, CommandRunnerOptions } from "./command-runner.ts"
 import type { Composer } from "./composer.ts"
 import type { Outbox, WhileWorking } from "./outbox.ts"
 
@@ -14,9 +22,12 @@ interface SubmissionDeps {
   editor: Pick<Editor, "setParts" | "clear" | "getText" | "getParts" | "getDisplayText">
   history: Pick<PromptHistory, "add">
   commands?: CommandHost
+  port?: AgentPort
+  captureFrontend?: CommandRunnerOptions["captureFrontend"]
+  bindCommandFrontend?: (invocationId: string, options: CommandRunOptions) => () => void
   composer: Pick<Composer, "clipboardPending" | "resetHistory">
   commandRunner: Pick<CommandRunner, "run">
-  outbox: Pick<Outbox, "prepare" | "dispatch">
+  outbox: Pick<Outbox, "prepare" | "dispatch"> & Partial<Pick<Outbox, "commandSend">>
   view: Pick<TranscriptView, "notice" | "commandEcho" | "requestRender">
   composerView?: () => SubmissionDeps["view"]
   enterDoes: WhileWorking
@@ -93,9 +104,11 @@ export function createSubmission(deps: SubmissionDeps) {
     history.add(parts)
     composer.resetHistory()
     const message = outbox.prepare(trimmed, parts, display)
-    if (!hasImages && commands && parseCommandLine(trimmed)) commandRunner.run(trimmed)
-    else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed)
-    else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display)
+    const commandPort = deps.port && deps.port.supportedOperations?.includes("command.run") !== false
+    if (!hasImages && (commands || commandPort) && parseCommandLine(trimmed))
+      void commandRunner.run(trimmed, message.seq)
+    else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed, message.seq)
+    else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display, message.seq)
     else outbox.dispatch(message, parts, how)
     view.requestRender()
   }
@@ -109,17 +122,67 @@ export function createSubmission(deps: SubmissionDeps) {
    * Runs a "$skill" line. No echo: the message the skill sends shows as typed, with a note of
    * what it loaded; a failure shows on its own.
    */
-  function runSkill(line: string) {
-    void commands!.runSkill(line, deps.context).then(() => view.requestRender())
+  function runSkill(line: string, sequence?: number) {
+    runHandler("skill.run", line, sequence)
   }
 
   /**
    * Runs a line an extension's input handler claimed (e.g. "@writer shorter, please" while a
    * swarm runs), at once, even during a turn. It shows as typed; the model never gets it.
    */
-  function runInput(line: string, display?: string) {
+  function runInput(line: string, display?: string, sequence?: number) {
     view.commandEcho(display ?? line)
-    void commands!.runInput(line, deps.context).then(() => view.requestRender())
+    runHandler("input.run", line, sequence)
+  }
+
+  function runHandler(operation: "skill.run" | "input.run", line: string, sequence?: number) {
+    const origin = { ...deps.context, ...deps.captureFrontend?.() }
+    const context: CommandRunOptions = outbox.commandSend
+      ? {
+          ...origin,
+          onSend: (text, options) => {
+            const undo = outbox.commandSend!(text, options, sequence)
+            const failed = deps.context.onSend?.(text, options)
+            return () => {
+              undo()
+              failed?.()
+            }
+          },
+        }
+      : origin
+    const generation = deps.port ? frontendIdentity(deps.port).sessionGeneration : undefined
+    const invocationId = crypto.randomUUID()
+    let unbind: (() => void) | undefined
+    void Promise.resolve()
+      .then(async () => {
+        if (deps.port) {
+          unbind = deps.bindCommandFrontend
+            ? deps.bindCommandFrontend(invocationId, context)
+            : bindLocalCommandContext(deps.port, invocationId, context)
+          await deps.port.execute(
+            operation,
+            {
+              line,
+              invocationId,
+              ...(context.keys ? { keys: [...context.keys()] } : {}),
+              ...(context.glyphs ? { glyphs: context.glyphs() } : {}),
+            },
+            { signal: context.signal, sessionGeneration: generation },
+          )
+        } else if (operation === "skill.run") await commands!.runSkill(line, context)
+        else await commands!.runInput(line, context)
+      })
+      .catch((error) => {
+        if (
+          (context.isFrontendCurrent?.() ?? true) &&
+          (!deps.port || frontendIdentity(deps.port).sessionGeneration === generation)
+        )
+          view.notice("error", error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => {
+        unbind?.()
+        if (context.isFrontendCurrent?.() ?? true) view.requestRender()
+      })
   }
 
   return { noProviders, noModelYet, submit, submitDraft, runSkill }

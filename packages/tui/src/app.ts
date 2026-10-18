@@ -34,6 +34,7 @@ import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
 import { activePointerHint, pointerGeometry, routePointer } from "./app/pointer.ts"
+import { detachesOnQuit, interruptedText, quitWarning, runningJobCount } from "./app/quit.ts"
 import { createSessionDisplay } from "./app/session-display.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
@@ -63,7 +64,7 @@ import { mouseLabels } from "./mouse-labels.ts"
 import { PromptHistory } from "./prompt-history.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import { TerminalStatus } from "./terminal-status.ts"
-import { INTERRUPTED_NOTICE, modelErrorNotice } from "./transcript.ts"
+import { modelErrorNotice } from "./transcript.ts"
 import { detailCommand, toggleDetail } from "./verbose.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
@@ -239,6 +240,7 @@ async function runFullscreen(
 
   const overlays = new OverlayManager({
     ui: opts.ui,
+    requests: opts.requests,
     views: opts.views,
     keys,
     theme,
@@ -255,7 +257,7 @@ async function runFullscreen(
     },
     working: () => activity.working,
     interrupt: () => outbox.interrupt(),
-    approvalCancelled: (request) => focus.cancelApproval(request.sessionId),
+    approvalCancellation: (request) => focus.approvalCancellation(request),
     conversationChrome: (width, ctx) => {
       const indicator = focus.indicator(width)
       return indicator ? [ctx.theme.accent(indicator)] : []
@@ -311,6 +313,8 @@ async function runFullscreen(
   const mainView = createFullscreenView(host)
   let view: TranscriptView = mainView
   const focus = createNativeFocus({
+    port: opts.frontend,
+    ui: opts.ui,
     editor,
     mainView,
     mainHistory,
@@ -322,7 +326,7 @@ async function runFullscreen(
     showNote,
     agent: () => agent,
     activity,
-    interruptMain: () => outbox.interrupt(),
+    interruptMain: (turnId) => outbox.interrupt(turnId),
     mainAttention: () => rewind.attention,
     onMainFocused: () => rewind.flush(),
     activate: (next) => {
@@ -339,6 +343,7 @@ async function runFullscreen(
   )
   const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
   const outbox = createOutbox({
+    frontend: opts.frontend,
     agent: () => agent,
     editor: focus.mainEditor,
     activity,
@@ -354,6 +359,7 @@ async function runFullscreen(
     },
   })
   const rewind = createMainRewind({
+    port: opts.frontend,
     agent: () => agent,
     commands,
     dialogs: overlays.dialogs,
@@ -371,10 +377,13 @@ async function runFullscreen(
     waitingChanged: (change) => overlays.waitingChanged(change),
   })
   const commandRunner = createCommandRunner({
+    port: opts.frontend,
+    captureFrontend: focus.commandContext,
     commands,
     keys,
     reaches,
     commandEcho: (line) => mainView.commandEcho(line),
+    onSend: (text, options, sequence) => outbox.commandSend(text, options, sequence),
     commandOutput: (level, text) => mainView.commandOutput(level, text),
     requestRender: () => view.requestRender(),
     animationChanged: () => overlays.syncAnimation(),
@@ -390,6 +399,8 @@ async function runFullscreen(
   })
 
   const submission = createSubmission({
+    port: opts.frontend,
+    captureFrontend: focus.commandContext,
     agent: () => agent,
     editor,
     history: focus.history,
@@ -405,6 +416,7 @@ async function runFullscreen(
     context: {
       frontend: "tui",
       quit: () => quit(),
+      openRewind: () => rewind.openRewind(),
       openView: focus.openView,
       focusConversation: focus.focus,
       unfocusConversation: focus.unfocus,
@@ -485,7 +497,7 @@ async function runFullscreen(
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting, and takes held ones along.
         noticeStrip.turnStarted(prompt)
-        const shown = outbox.turnStarted(prompt)
+        const shown = outbox.turnStarted(prompt, e.turnId)
         if (commandRunner.takeEcho(prompt)) commandRunner.echoedNote(prompt)
         else for (const m of shown) view.user(m)
         activity.turnStarted(() => {
@@ -562,7 +574,7 @@ async function runFullscreen(
         outbox.clearSteering()
         activity.setRetry(undefined)
         if (e.data.reason === "error") errorNotice(e.data)
-        else if (e.data.reason === "aborted") view.notice("interrupted", interruptedText())
+        else if (e.data.reason === "aborted") view.notice("interrupted", interruptedText(state().children))
         else if (!turnShowedOutput) view.notice("info", "No reply")
         outbox.turnEnded()
         break
@@ -610,7 +622,7 @@ async function runFullscreen(
           if (e.data.state === "injected") view.user(e.data.message)
           break
         }
-        if (outbox.steer(e.data.message, e.data.state)) return redraw()
+        if (outbox.steer(e.data.message, e.data.state, !!e.turnId)) return redraw()
         break
       }
       case "ui.request":
@@ -637,23 +649,6 @@ async function runFullscreen(
     view.notice("error", f.hint ? `${f.summary}\n${f.hint}` : modelErrorNotice(f.summary), f.detail)
   }
 
-  /** "Interrupted", and that sub-agents run on in the background (an interrupt stops only the turn). */
-  function interruptedText(): string {
-    const n = state().children
-    return n
-      ? `${INTERRUPTED_NOTICE} · ${n} sub-agent${n === 1 ? "" : "s"} still running · /agents`
-      : INTERRUPTED_NOTICE
-  }
-
-  /** Background jobs (dev servers, watchers) still running. */
-  const runningJobs = () => {
-    try {
-      return opts.runningJobs?.() ?? 0
-    } catch {
-      return 0
-    }
-  }
-
   // Lifecycle: confirmation before quitting with background work still running.
   /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents or background jobs run. */
   let quitArmedUntil = 0
@@ -663,17 +658,11 @@ async function runFullscreen(
    */
   function quitOrWarn(action: "cancel" | "exit") {
     const n = state().children
-    const jobs = runningJobs()
-    if ((!n && !jobs) || Date.now() < quitArmedUntil) return quit()
+    const jobs = runningJobCount(opts.runningJobs)
+    if (detachesOnQuit(opts.frontend) || (!n && !jobs) || Date.now() < quitArmedUntil) return quit()
     quitArmedUntil = Date.now() + HINT_NOTE_MS
     const key = keys.label(action) ?? keyLabel({ name: "c", ctrl: true })
-    const what = [
-      n ? `${n} sub-agent${n === 1 ? "" : "s"}` : "",
-      jobs ? `${jobs} background job${jobs === 1 ? "" : "s"}` : "",
-    ]
-      .filter(Boolean)
-      .join(" and ")
-    showNote(`${what} still running — ${key} again to stop them and quit`)
+    showNote(quitWarning(n, jobs, key))
   }
 
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
@@ -706,8 +695,8 @@ async function runFullscreen(
     quitting = true
     focus.dispose()
     files.dispose()
-    commandRunner.abortAll(new Error("quitting"))
-    overlays.dispose()
+    if (!detachesOnQuit(opts.frontend)) commandRunner.abortAll(new Error("quitting"))
+    overlays.dispose(detachesOnQuit(opts.frontend))
     off()
     offSwitch?.()
     sessions.dispose()
@@ -716,7 +705,8 @@ async function runFullscreen(
     hint.dispose()
     outbox.dispose()
     composer.dispose()
-    for (const d of overlays.dialogs.splice(0)) opts.ui?.cancel(d.request.requestId)
+    for (const d of overlays.dialogs.splice(0))
+      if (!detachesOnQuit(opts.frontend)) opts.ui?.cancel(d.request.requestId)
     overlays.waitingChanged("resolved")
     spinner.stop()
     shimmerClock.dispose()
@@ -728,7 +718,12 @@ async function runFullscreen(
       themes.dispose()
       unbindTerminal?.()
       termStatus.stop()
-      resolveExit(code)
+      if (detachesOnQuit(opts.frontend))
+        void opts.frontend.detach().then(
+          () => resolveExit(code),
+          () => resolveExit(1),
+        )
+      else resolveExit(code)
     }
   }
 

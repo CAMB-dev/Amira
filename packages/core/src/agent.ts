@@ -87,6 +87,7 @@ import {
   renderPrompt,
   setSection,
 } from "./prompt.ts"
+import { registerAgentSession, unregisterAgentSession } from "./session-routing.ts"
 import { newSessionId, type SessionStore } from "./session-store.ts"
 import { scopeAdmission } from "./subagents/lifecycle.ts"
 import { PauseGate } from "./subagents/pause.ts"
@@ -410,6 +411,7 @@ export class Agent {
       this.#releaseSessionLease?.()
       throw error
     }
+    registerAgentSession(this)
   }
 
   /**
@@ -586,6 +588,11 @@ export class Agent {
     return this.#hold.what
   }
 
+  /** Unique identity of the current between-turn operation, for scoped cancellation. */
+  get holdId(): string | undefined {
+    return this.#hold.id
+  }
+
   /** Tokens the context held at the last reply; unknown before one and right after a compaction. */
   get contextTokens(): number | undefined {
     return this.#contextManager.tokens
@@ -737,6 +744,7 @@ export class Agent {
   }
 
   async #dispose(reason: EventMap["session.end"]["reason"]): Promise<void> {
+    unregisterAgentSession(this)
     this.#inbox.cancelRetry()
     this.#turnState.abort?.abort()
     this.#turnState.steerAbort?.abort()

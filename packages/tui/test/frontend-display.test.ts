@@ -69,9 +69,8 @@ test("projection failure is visible without replaying transcript effects; unsubs
         listener = undefined
       }
     },
-    async execute(operation) {
-      const results = { "state.read": snapshot.state, "transcript.read": snapshot.transcript }
-      return results[operation]
+    async execute() {
+      throw new Error("This display-only fixture does not execute operations")
     },
     async detach() {},
   }

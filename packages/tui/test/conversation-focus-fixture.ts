@@ -1,7 +1,14 @@
+import { spyOn } from "bun:test"
 import type { MockStep } from "@amira/ai"
 import type { CommandContext, OwnedConversation } from "@amira/api"
 import { Agent, EventBus } from "@amira/core"
 import { ConversationEvents } from "../../core/src/owned-conversations-events.ts"
+import {
+  registerConversationHold,
+  registerConversationSend,
+  registerConversationTurn,
+} from "../../core/src/session-routing.ts"
+import * as runner from "../src/app/command-runner.ts"
 import { exchange, inputImage, type SetupOptions, setup } from "./app-harness.ts"
 
 export async function focusFixture(
@@ -13,6 +20,12 @@ export async function focusFixture(
 ) {
   let conversation!: OwnedConversation
   let context!: CommandContext
+  let frontend!: runner.CommandRunnerOptions
+  const create = runner.createCommandRunner
+  const capture = spyOn(runner, "createCommandRunner").mockImplementation((options) => {
+    frontend = options
+    return create(options)
+  })
   const s = await setup(steps, {
     rows: 24,
     acceptsImages: true,
@@ -32,7 +45,7 @@ export async function focusFixture(
       { name: "clear", description: "Main only", run: (_args, ctx) => ctx.print("CLEARED MAIN") },
     ],
     ...options,
-  })
+  }).finally(() => capture.mockRestore())
   const bus = new EventBus()
   const events = new ConversationEvents(bus)
   const owned = new Agent({
@@ -44,6 +57,17 @@ export async function focusFixture(
   })
   owned.messages.push(...exchange("Design history"))
   let stops = 0
+  const send = async (text: string, options?: Parameters<OwnedConversation["send"]>[1], turnId?: string) => {
+    const result = await owned.prompt(
+      {
+        role: "user",
+        content: [...(text ? [{ type: "text" as const, text }] : []), ...(options?.images ?? [])],
+        ...(options?.display ? { display: options.display } : {}),
+      },
+      { turnId },
+    )
+    if (result.reason === "error") throw new Error(result.error ?? "owned conversation turn failed")
+  }
   conversation = {
     id: owned.sessionId,
     key: "design",
@@ -51,15 +75,9 @@ export async function focusFixture(
     cwd: owned.cwd,
     data: owned.data,
     history: () => owned.messages,
-    status: () => ({ state: owned.status === "idle" ? "idle" : "working", busy: owned.status !== "idle" }),
+    status: () => ({ state: owned.busy ? "working" : "idle", busy: owned.busy }),
     events,
-    send: async (text, options) => {
-      await owned.prompt({
-        role: "user",
-        content: [...(text ? [{ type: "text" as const, text }] : []), ...(options?.images ?? [])],
-        ...(options?.display ? { display: options.display } : {}),
-      })
-    },
+    send,
     runTool: async () => {
       throw new Error("fixture does not invoke tools")
     },
@@ -75,6 +93,11 @@ export async function focusFixture(
       throw new Error("not used")
     },
   }
+  registerConversationTurn(conversation, () => owned.turnId)
+  registerConversationHold(conversation, () => owned.holdId)
+  registerConversationSend(conversation, (text, options, turnId) =>
+    Reflect.apply(conversation.send, conversation, [text, options, turnId]),
+  )
   const viewContext = async () => {
     let captured: CommandContext | undefined
     const off = s.host.commands.register(
@@ -90,10 +113,10 @@ export async function focusFixture(
     try {
       await s.commands!.run("/capture-view-context", {
         frontend: "tui",
-        openView: context.openView,
-        quit: context.quit,
-        focusConversation: context.focusConversation,
-        unfocusConversation: context.unfocusConversation,
+        openView: frontend.openView,
+        quit: frontend.quit,
+        focusConversation: frontend.focusConversation,
+        unfocusConversation: frontend.unfocusConversation,
       })
     } finally {
       off()
@@ -101,5 +124,25 @@ export async function focusFixture(
     if (!captured) throw new Error("No active frontend context")
     return captured
   }
-  return { ...s, conversation, owned, ownedBus: bus, context: () => context, viewContext, stops: () => stops }
+  // Most focus tests use context() as a live keyboard/test driver, not a retained command.
+  // Keep actual invocation capabilities separately so origin-fencing tests do not bypass them.
+  const driver = () =>
+    context && {
+      ...context,
+      openView: frontend.openView,
+      openRewind: frontend.openRewind,
+      quit: frontend.quit,
+      focusConversation: frontend.focusConversation,
+      unfocusConversation: frontend.unfocusConversation,
+    }
+  return {
+    ...s,
+    conversation,
+    owned,
+    ownedBus: bus,
+    context: driver,
+    invocationContext: () => context,
+    viewContext,
+    stops: () => stops,
+  }
 }

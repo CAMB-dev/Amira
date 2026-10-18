@@ -1,7 +1,8 @@
-import type { Agent } from "@amira/core"
+import type { Agent, AgentPort, CommandRunOptions, UiRequests } from "@amira/core"
 import type { Editor } from "@amira/tui-kit"
 import { registerCommandViewContext } from "../../../core/src/command-view-context.ts"
 import { sessionScopeContains } from "../../../core/src/session-routing.ts"
+import { onUiRequestCreated, uiRequestOwner } from "../../../core/src/ui-request-capture.ts"
 import { discardPendingPaste } from "../../../tui-kit/src/input-paste-control.ts"
 import type { Keybindings } from "../keybindings.ts"
 import type { PromptHistory } from "../prompt-history.ts"
@@ -28,8 +29,10 @@ export function createNativeFocus(deps: {
   mainView: TranscriptView
   mainHistory: PromptHistory
   agent: () => Agent
+  port?: AgentPort
+  ui?: UiRequests
   activity: TurnActivity
-  interruptMain: () => void
+  interruptMain: (turnId?: string) => void
   mainAttention?: () => number
   onMainFocused?: () => void
   host: ViewHost
@@ -43,12 +46,16 @@ export function createNativeFocus(deps: {
 }) {
   const { overlays, composer } = deps
   const focus = new ConversationFocus({
+    port: deps.port,
     editor: deps.editor,
     mainView: deps.mainView,
     mainHistory: deps.mainHistory,
     mainId: () => deps.agent().sessionId,
     mainContainsSession: (id) => sessionScopeContains(deps.agent().tree, id, deps.agent().sessionId),
     mainWorking: () => deps.activity.working || deps.activity.compacting,
+    mainTurnId: () => deps.agent().turnId,
+    requireApprovalOwner: true,
+    approvalOwner: (requestId) => deps.ui && uiRequestOwner(deps.ui, requestId),
     mainAttention: deps.mainAttention,
     onMainFocused: deps.onMainFocused,
     interruptMain: deps.interruptMain,
@@ -94,5 +101,48 @@ export function createNativeFocus(deps: {
       }
     },
   )
-  return Object.assign(focus, { openView })
+  const commandContext = (): Pick<
+    CommandRunOptions,
+    "isFrontendCurrent" | "openView" | "focusConversation" | "unfocusConversation"
+  > => {
+    let owner = focus.conversation
+    const current = () => !deps.quitting() && owner === focus.conversation
+    const open = (view: Parameters<OverlayManager["openView"]>[0]) => {
+      if (!current()) return false
+      try {
+        focus.conversation?.status()
+      } catch {
+        return false
+      }
+      return overlays.openView(view)
+    }
+    return {
+      isFrontendCurrent: current,
+      openView: registerCommandViewContext(open, (rootCurrent) => (view) => rootCurrent() && open(view)),
+      focusConversation: (conversation) => {
+        if (!current()) return false
+        const changed = focus.focus(conversation)
+        if (changed) owner = focus.conversation
+        return changed
+      },
+      unfocusConversation: () => {
+        if (!current()) return false
+        const changed = focus.unfocus()
+        if (changed) owner = focus.conversation
+        return changed
+      },
+    }
+  }
+  const offRequests = deps.ui
+    ? onUiRequestCreated(deps.ui, (request) => focus.captureApprovalRequest(request))
+    : undefined
+  const dispose = focus.dispose.bind(focus)
+  return Object.assign(focus, {
+    openView,
+    commandContext,
+    dispose() {
+      offRequests?.()
+      dispose()
+    },
+  })
 }

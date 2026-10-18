@@ -3,7 +3,7 @@ import * as fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
-import { SessionStore, sessionLockFile } from "@amira/core"
+import { createLocalAgentPort, SessionStore, sessionLockFile } from "@amira/core"
 import { runInteractive } from "@amira/tui"
 import { FakeTerminal } from "@amira/tui-kit"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
@@ -496,3 +496,114 @@ test("cancelling C selected during B's committed handover never disposes or pois
     fs.rmSync(f.dir, { recursive: true, force: true })
   }
 })
+
+for (const detach of [false, true]) {
+  for (const operation of ["session.clear", "session.resume", "session.fork", "session.rewind"] as const) {
+    test(`a delayed ${operation} cannot cross an already-committed handover's root boundary (detach ${detach})`, async () => {
+      const f = await fixture()
+      const old = f.host.agent
+      const b = f.target("B history differs at the same index")
+      const c = f.target("C")
+      const port = createLocalAgentPort({ agent: old, commands: f.host })
+      const barrier = Promise.withResolvers<void>()
+      const original = old.dispose
+      const dispose = spyOn(old, "dispose").mockImplementation(async (reason) => {
+        await barrier.promise
+        await original.call(old, reason)
+      })
+      const handover = spyOn(f.session.host.backgroundJobs, "handoverRoot")
+      const generation = port.identity!.sessionGeneration
+      const first = port.execute("session.resume", { id: b.id }, { sessionGeneration: generation })
+      let delayed: Promise<unknown> | undefined
+      try {
+        await until(() => dispose.mock.calls.length === 1)
+        expect(f.host.agent).toBe(old)
+        delayed = (
+          operation === "session.clear"
+            ? port.execute(operation, {}, { sessionGeneration: generation })
+            : operation === "session.resume"
+              ? port.execute(operation, { id: c.id }, { sessionGeneration: generation })
+              : operation === "session.fork"
+                ? port.execute(operation, { index: 0 }, { sessionGeneration: generation })
+                : port.execute(
+                    operation,
+                    { index: 0, restoreFiles: false },
+                    { sessionGeneration: generation },
+                  )
+        ).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        )
+        await Bun.sleep(0)
+        if (detach) await port.detach()
+        barrier.resolve()
+        await first
+        const outcome = await delayed
+        expect(outcome).toMatchObject({ error: { code: "stale_session" } })
+        expect(f.host.agent.sessionId).toBe(b.id)
+        expect(f.host.agent.messages).toEqual([userMessage("B history differs at the same index")])
+        expect(handover).toHaveBeenCalledTimes(1)
+        expect(f.announcements).toEqual([b.id])
+      } finally {
+        barrier.resolve()
+        await first.catch(() => {})
+        await delayed
+        dispose.mockRestore()
+        handover.mockRestore()
+        await port.detach()
+        await f.host.agent.dispose()
+        f.session.host.unloadAll()
+        fs.rmSync(f.dir, { recursive: true, force: true })
+      }
+    })
+  }
+}
+
+for (const method of ["newSession", "resume", "fork", "rewind"] as const) {
+  test(`a command's ${method} queued inside a committed handover cannot adopt the unrelated winner`, async () => {
+    const f = await fixture()
+    const old = f.host.agent
+    const b = f.target("B")
+    const c = f.target("C")
+    const gate = Promise.withResolvers<void>()
+    const original = old.dispose
+    const dispose = spyOn(old, "dispose").mockImplementation(async (reason) => {
+      await gate.promise
+      await original.call(old, reason)
+    })
+    const unregister = f.session.host.commands.register(
+      {
+        name: "scope-wait",
+        description: "Wait",
+        run: async (_line, ctx) => {
+          if (method === "newSession") await ctx.session.newSession()
+          else if (method === "resume") await ctx.session.resume(c.id)
+          else if (method === "fork") await ctx.session.fork!(0)
+          else await ctx.session.rewind!(0, { restoreFiles: false })
+        },
+      },
+      "test",
+    )
+    const first = f.host.control.resume(b.id)
+    let pending: ReturnType<typeof f.host.run> | undefined
+    try {
+      await until(() => dispose.mock.calls.length === 1)
+      pending = f.host.run("/scope-wait", { frontend: "tui" })
+      await Bun.sleep(0)
+      gate.resolve()
+      await first
+      expect((await pending).ok).toBe(false)
+      expect(f.host.agent.sessionId).toBe(b.id)
+      expect(f.announcements).toEqual([b.id])
+    } finally {
+      gate.resolve()
+      await first.catch(() => {})
+      await pending
+      dispose.mockRestore()
+      unregister()
+      await f.host.agent.dispose()
+      f.session.host.unloadAll()
+      fs.rmSync(f.dir, { recursive: true, force: true })
+    }
+  })
+}
