@@ -22,9 +22,8 @@ export interface MonitorParams {
 export function monitorDescription(shell: "bash" | "powershell"): string {
   return [
     shell === "powershell"
-      ? "Monitor a PowerShell command (same shell as the powershell tool; PowerShell syntax); return job id immediately. Normal shell permissions apply."
-      : "Monitor a bash command (same shell as the bash tool: Git Bash on Windows; bash syntax, not PowerShell); return job id immediately. Normal shell permissions apply.",
-    "Never wrap the command in another shell (pwsh/powershell -Command, bash -c, cmd /c).",
+      ? "Monitor a PowerShell command (powershell tool's shell; no nested shells); returns job id. Shell rules apply."
+      : "Monitor a bash command (bash tool's shell, not PowerShell; no nested shells); returns job id. Shell rules apply.",
     "New/matching lines wake you. filter: case-insensitive line regex; invalid = literal. Narrow chatty output.",
     "Batch ~1s; max one notice/2s, ~4KB each; pause output notices after 200 events. Final notice on exit/timeout.",
     `Stop via job_stop; read via job_output. timeout_ms: default ${DEFAULT_MONITOR_TIMEOUT_MS / 60_000}m, max ${MAX_MONITOR_TIMEOUT_MS / 3_600_000}h. Child monitors end with owner; -p waits until exit/stop/timeout.`,

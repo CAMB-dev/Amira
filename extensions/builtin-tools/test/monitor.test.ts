@@ -614,6 +614,6 @@ test("the monitor description names the shell its commands run in, following the
   expect(tool.description).toContain("Monitor a PowerShell command")
   for (const m of [undefined, "powershell"] as const) {
     mode = m
-    expect(tool.description).toContain("Never wrap the command in another shell")
+    expect(tool.description).toContain("no nested shells")
   }
 })
