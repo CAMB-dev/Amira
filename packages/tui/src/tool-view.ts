@@ -340,23 +340,29 @@ function headLine(
   return `${cut}${" ".repeat(Math.max(2, width - visibleWidth(cut) - visibleWidth(right)))}${right}`
 }
 
-/** "… 3 more lines", said the same way everywhere a body is cut. */
-export function moreLines(n: number): string {
-  return `${glyphs.more} ${plural(n, "more line")}`
+/** "… 3 more lines", said the same way everywhere a body is cut. Views pass their own marker. */
+export function moreLines(n: number, marker = glyphs.more): string {
+  return `${marker} ${plural(n, "more line")}`
 }
 
 /** Cuts a body to what `detail` shows: failures keep their start and end, the rest its start. */
-export function cutBody(body: ToolLine[], detail: ToolDetailLevel, failed: boolean): ToolLine[] {
+export function cutBody(
+  body: ToolLine[],
+  detail: ToolDetailLevel,
+  failed: boolean,
+  marker = glyphs.more,
+): ToolLine[] {
   if (detail === "collapsed") return []
   if (detail === "full") return body
   const max = failed ? FAILURE_LINES : BODY_LINES
   if (body.length <= max) return body
-  if (!failed) return [...body.slice(0, max - 1), { kind: "muted", text: moreLines(body.length - max + 1) }]
+  if (!failed)
+    return [...body.slice(0, max - 1), { kind: "muted", text: moreLines(body.length - max + 1, marker) }]
   const head = Math.ceil((max - 1) / 2)
   const tail = max - 1 - head
   return [
     ...body.slice(0, head),
-    { kind: "muted", text: moreLines(body.length - head - tail) },
+    { kind: "muted", text: moreLines(body.length - head - tail, marker) },
     ...body.slice(body.length - tail),
   ]
 }
@@ -554,6 +560,7 @@ export function finishedToolLines(
       rows.map((text) => ({ kind: "text", text })),
       detail === "full" ? "full" : "summary",
       failed,
+      cutMarker(opts),
     )
     for (const [i, line] of resultRows.entries()) {
       const markWidth = i === 0 && !diffOutcome ? visibleWidth(mark) + (result ? 1 : 0) : 0
@@ -573,7 +580,7 @@ export function finishedToolLines(
     opts.onRow &&
     ((row: number, from: number) => opts.onRow!(bodyOffset + row, visibleWidth(continuation) + from))
   const bodyRows = renderToolLines(
-    cutBody(body, detail, failed),
+    cutBody(body, detail, failed, cutMarker(opts)),
     theme,
     Math.max(0, width - visibleWidth(continuation)),
     "",

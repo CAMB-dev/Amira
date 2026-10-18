@@ -28,7 +28,7 @@ import { terminalText } from "./diff-view.ts"
 import { oneLine, wrapViewLines } from "./extension-view-rendering.ts"
 import { replyRows } from "./format.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
-import { fitHint } from "./hint.ts"
+import { fitViewHint } from "./hint.ts"
 import {
   keyLabel as bindingLabel,
   defaultKeybindings,
@@ -252,7 +252,7 @@ export class ExtensionViewer implements Component {
   focusHint(theme: Theme, width: number, inputEmpty = true): string {
     const toggle = this.needsTab ? (this.#keys.label("view.focus") ?? "") : "tab"
     if (!this.focused) return viewInputHint(theme, width, toggle, inputEmpty, this.#opts.placement === "dock")
-    return fitHint(
+    return fitViewHint(
       [
         !this.#prompt &&
           !this.#confirm && {
@@ -816,7 +816,7 @@ export class ExtensionViewer implements Component {
     if (this.#opts.placement === "dock" && !this.focused) {
       const follow = this.#keys.label("scroll.bottom")
       return theme.muted(
-        fitHint(
+        fitViewHint(
           [
             !this.#ui && { text: scrollPosition(this.scroll), priority: 2 },
             {
@@ -843,7 +843,7 @@ export class ExtensionViewer implements Component {
       return theme.muted(truncateToWidth(this.#backHint(), width, viewEllipsis()))
     if (this.#ui)
       return theme.muted(
-        fitHint(
+        fitViewHint(
           [
             ...keyHints(this.#view.keys ?? []),
             ...(this.#opts.hostFocus
@@ -870,7 +870,7 @@ export class ExtensionViewer implements Component {
     const scroll = this.scroll
     const p = scroll.position
     // The way back stays longest, then the view's own keys; the scroll keys go first.
-    const hint = fitHint(
+    const hint = fitViewHint(
       [
         (p.total > p.height || !!this.#view.scrollKey) && { text: scrollPosition(scroll), priority: 3 },
         ...keyHints(this.#view.keys ?? []),

@@ -1,13 +1,30 @@
 // A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
-import { type AnyEvent, defineTool, type FormSpec, type FormValues, textResult } from "@amira/api"
+import {
+  type AnyEvent,
+  defineTool,
+  type FormActionResult,
+  type FormSpec,
+  type FormValues,
+  textResult,
+} from "@amira/api"
 import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
-import { FakeTerminal, key, modes, textKey } from "@amira/tui-kit"
+import {
+  defaultGlyphs,
+  FakeTerminal,
+  key,
+  modes,
+  type RenderContext,
+  textKey,
+  visibleWidth,
+} from "@amira/tui-kit"
+import ascii from "../../cli/themes/ascii.json"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { FormView, runFormScreen, specFormBackend } from "../src/form-view.ts"
+import { glyphs, setGlyphs } from "../src/glyphs.ts"
 
 const noProbe = async () => ({
   capabilities: { win32InputMode: false, kittyKeyboard: true, synchronizedOutput: false, shiftEnter: true },
@@ -340,6 +357,153 @@ test("form view applies live updates and previews, blocks failed checks, and let
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(saved).toEqual({ name: "A", summary: "For A", saveAnyway: true })
   expect(view.closed).toBe(true)
+})
+
+/** A card form with a summary row, two waiting dialogs and a pending save check. */
+const probeSpec: FormSpec = {
+  title: "Probe",
+  layout: "card",
+  fields: [
+    { id: "first", type: "text", label: "First", default: "First" },
+    { id: "second", type: "text", label: "Second", default: "Second" },
+  ],
+  summaries: [{ id: "both", label: "Both", fields: ["first", "second"], summaryFields: ["first", "second"] }],
+  beforeSubmit: () => new Promise<FormActionResult>(() => {}),
+}
+
+function probeRows(width: number, ctx: RenderContext = plain): string[] {
+  const view = new FormView(
+    specFormBackend(probeSpec, () => {}),
+    {
+      requestRender: () => {},
+      onClose: () => {},
+      waiting: () => ["First", "Second"],
+    },
+  )
+  try {
+    view.handleInput(key("s", { ctrl: true }))
+    return view.render(width, { ...ctx, rows: 24 })
+  } finally {
+    view.close()
+  }
+}
+
+test("ASCII forms spell notices, summaries and checking status in ASCII", () => {
+  const before = { ...glyphs }
+  try {
+    setGlyphs(ascii.glyphs)
+    const rows = probeRows(80, { ...plain, glyphs: ascii.glyphs })
+    expect(rows.join("\n")).not.toMatch(/[^\p{ASCII}]/u)
+    expect(rows.filter(Boolean).every((row) => visibleWidth(row) === 76)).toBe(true)
+    expect(rows.find((row) => row.includes("Both First"))).toContain("Both First . Second [ Edit ]")
+    expect(rows.find((row) => row.includes("dialogs wait"))).toContain(
+      "! 2 dialogs wait behind this form: First . Second",
+    )
+    expect(rows.find((row) => row.includes("Checking before saving"))).toContain("Checking before saving...")
+
+    // A narrow form cuts the notice and status again: those cuts still end in a complete ellipsis.
+    const narrow = probeRows(24, { ...plain, glyphs: ascii.glyphs }).filter(Boolean)
+    expect(narrow.join("\n")).not.toMatch(/[^\p{ASCII}]/u)
+    const notice = narrow.find((row) => row.includes("dialogs wait"))!
+    const status = narrow.find((row) => row.includes("Checking"))!
+    expect(notice).toBe("! 2 dialogs wait behi...")
+    expect(status).toBe("Checking before savin...")
+    expect(visibleWidth(notice)).toBe(24)
+    expect(visibleWidth(status)).toBe(24)
+
+    // Outside ASCII mode the same rows keep the middle dot and the true ellipsis.
+    setGlyphs()
+    const unicodeRows = probeRows(80)
+    expect(unicodeRows.filter(Boolean).every((row) => visibleWidth(row) === 76)).toBe(true)
+    expect(unicodeRows.find((row) => row.includes("Both First"))).toContain("Both First · Second [ Edit ]")
+    expect(unicodeRows.find((row) => row.includes("dialogs wait"))).toContain(
+      "⚠️ 2 dialogs wait behind this form: First · Second",
+    )
+    expect(unicodeRows.find((row) => row.includes("Checking before saving"))).toContain(
+      "Checking before saving…",
+    )
+  } finally {
+    setGlyphs(before)
+  }
+})
+
+test("form cuts follow the render context's marker, never a global one", () => {
+  const before = { ...glyphs }
+  try {
+    setGlyphs()
+    const base = probeRows(24).filter(Boolean)
+    expect(base).toEqual([
+      "  \u001b[1mProbe\u001b[22m",
+      "────────────────────────",
+      "  Both First ·… [ Edit ]",
+      "────────────────────────",
+      "⚠️ 2 dialogs wait behin…",
+      "Checking before saving…",
+      "› [ Save ]    [ Cancel ]",
+      "^S save · Esc back",
+    ])
+
+    // A context marker reaches every cut, the notice and status rows included.
+    expect(probeRows(24, { ...plain, glyphs: { ...defaultGlyphs, more: "~" } }).filter(Boolean)).toEqual([
+      "  \u001b[1mProbe\u001b[22m",
+      "────────────────────────",
+      "  Both First ·~ [ Edit ]",
+      "────────────────────────",
+      "⚠️ 2 dialogs wait behin~",
+      "Checking before saving…",
+      "› [ Save ]    [ Cancel ]",
+      "^S save · Esc back",
+    ])
+
+    // A custom global marker never overrides the context's own: these rows stay byte-identical.
+    setGlyphs({ more: "*" })
+    expect(probeRows(24).filter(Boolean)).toEqual(base)
+    expect(probeRows(16).filter(Boolean)).toEqual([
+      "  \u001b[1mProbe\u001b[22m",
+      "────────────────",
+      "  Both … [ Edit ]",
+      "────────────────",
+      "⚠️ 2 dialogs wa…",
+      "Checking before…",
+      "› [ Save ]    [ ",
+      "^S save · Esc b…",
+    ])
+    // In a narrow context, the context's marker still ends the cut notice and status.
+    setGlyphs()
+    expect(probeRows(16, { ...plain, glyphs: { ...defaultGlyphs, more: "~" } }).filter(Boolean)).toEqual([
+      "  \u001b[1mProbe\u001b[22m",
+      "────────────────",
+      "  Both ~ [ Edit ]",
+      "────────────────",
+      "⚠️ 2 dialogs wa~",
+      "Checking before~",
+      "› [ Save ]    [ ",
+      "^S save · Esc b~",
+    ])
+  } finally {
+    setGlyphs(before)
+  }
+})
+
+test("custom non-ASCII separators leave form rows byte-identical", () => {
+  const before = { ...glyphs }
+  try {
+    const expectedByWidth = new Map<number, string[]>()
+    for (const width of [24, 40, 60, 80, 120]) {
+      setGlyphs()
+      expectedByWidth.set(width, probeRows(width))
+    }
+    setGlyphs({ separator: "|" })
+    for (const [width, expected] of expectedByWidth) expect(probeRows(width)).toEqual(expected)
+    // The theme's separator reaches its chrome, but not these host-composed form labels.
+    expect(probeRows(80).filter((row) => /Both First|dialogs wait|Checking before/.test(row))).toEqual([
+      "    │  Both First · Second [ Edit ]                                        │",
+      "    │⚠️ 2 dialogs wait behind this form: First · Second                    │",
+      "    │Checking before saving…                                               │",
+    ])
+  } finally {
+    setGlyphs(before)
+  }
 })
 
 test.each(["n", "y"])(

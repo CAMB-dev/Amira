@@ -42,8 +42,17 @@ import {
   type Theme,
 } from "@amira/tui-kit"
 import { operationFormBackend } from "./form-operation-backend.ts"
-import { glyphs } from "./glyphs.ts"
+import { asciiGlyphs, glyphs, viewEllipsis } from "./glyphs.ts"
 import { mousePasteHint } from "./mouse-labels.ts"
+
+/** "Checking form…", spelled with an ASCII ellipsis when the active theme asks for one. */
+const checking = (what: string): string => `${what}${viewEllipsis("…")}`
+
+/**
+ * Between host-composed form labels. ASCII mode uses the active separator glyph; other themes
+ * keep the middle dot these labels have always used, whatever separator they configure.
+ */
+const formSeparator = (): string => (asciiGlyphs() ? glyphs.separator : "·")
 
 /** Where a form's checks and actions run, and where its answer goes. */
 export interface FormBackend {
@@ -209,11 +218,12 @@ export class FormView implements Component {
         if (this.#pendingActions.delete(id)) this.form.setActionState(id, { running: false })
       },
       preview: () => this.#evaluation?.preview ?? backend.preview?.(this.form.values as FormValues) ?? [],
+      more: () => (asciiGlyphs() ? viewEllipsis() : undefined),
       notice: () => {
         const titles = opts.waiting?.() ?? []
         if (!titles.length) return []
         const what = titles.length === 1 ? "1 dialog waits" : `${titles.length} dialogs wait`
-        return [`${glyphs.warning} ${what} behind this form: ${titles.join(" · ")}`]
+        return [`${glyphs.warning} ${what} behind this form: ${titles.join(` ${formSeparator()} `)}`]
       },
     })
     // Synchronous local mounts still populate the first frame; transports claim authority once.
@@ -289,7 +299,7 @@ export class FormView implements Component {
               .filter((id) => schema.fields.some((field) => field.id === id && field.type !== "secret"))
               .map((id) => String(values[id] ?? ""))
               .filter(Boolean)
-              .join(" · "),
+              .join(` ${formSeparator()} `),
           },
         ]
       }),
@@ -423,12 +433,12 @@ export class FormView implements Component {
 
   #submit(values: Record<string, FormInputValue>) {
     if (!this.#ready || (this.#backend.evaluate && this.#evaluation?.revision !== this.#revision)) {
-      this.form.setStatus("Checking form…")
+      this.form.setStatus(checking("Checking form"))
       this.#opts.requestRender()
       return
     }
     if (this.#submitting) {
-      this.form.setStatus("Checking before saving…")
+      this.form.setStatus(checking("Checking before saving"))
       return
     }
     if (!this.#backend.beforeSubmit) {
@@ -437,7 +447,7 @@ export class FormView implements Component {
     }
     const controller = new AbortController()
     this.#submitting = controller
-    this.form.setStatus("Checking before saving…")
+    this.form.setStatus(checking("Checking before saving"))
     this.#opts.requestRender()
     void this.#backend
       .beforeSubmit(values as FormValues, {
@@ -476,7 +486,7 @@ export class FormView implements Component {
     })
     if (problem instanceof Promise) {
       this.#submitting = controller
-      this.form.setStatus("Checking before saving…")
+      this.form.setStatus(checking("Checking before saving"))
       void problem.then(
         (reply) => {
           if (
@@ -588,7 +598,7 @@ export class FormView implements Component {
     if (!this.#ready) {
       if (!automatic) {
         this.#checkingClaimAction = true
-        this.form.setStatus("Checking form…")
+        this.form.setStatus(checking("Checking form"))
         this.#opts.requestRender()
       }
       return
@@ -596,7 +606,7 @@ export class FormView implements Component {
     if (this.#backend.evaluate && this.#evaluation?.revision !== this.#revision) {
       if (!automatic) {
         this.#pendingActions.set(id, { revision: this.#revision, editor: this.#editor })
-        this.form.setActionState(id, { running: true, text: "Checking form…" })
+        this.form.setActionState(id, { running: true, text: checking("Checking form") })
         this.#opts.requestRender()
       }
       return
