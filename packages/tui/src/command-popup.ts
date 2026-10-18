@@ -8,7 +8,7 @@ import {
   type RenderContext,
   truncateToWidth,
 } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { pickerRows } from "./picker.ts"
 
@@ -267,7 +267,7 @@ export class CommandPopup implements Component {
       if (!info) return []
       const aliases = info.aliases?.length ? ` (${info.aliases.join(", ")})` : ""
       const usage = `${this.sigil}${info.name}${aliases}${info.hint ? ` ${info.hint}` : ""}  ${info.description}`
-      return [muted(truncateToWidth(`  ${usage}`, width, "…"))]
+      return [muted(truncateToWidth(`  ${usage}`, width, viewEllipsis("…")))]
     }
     // A command row shows its aliases, a settings alias what it runs: "/quit (exit, q)"; and the
     // arguments it takes, muted: "/model [provider/model]".

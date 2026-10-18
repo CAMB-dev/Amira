@@ -22,6 +22,8 @@ interface FooterState {
   actions: FormFieldState[]
   submitLabel?: string
   notice: string[]
+  /** Ends a cut notice or status; the chrome's marker by default. */
+  more?: string
   hintInset: number
   card?: boolean
   preview?: boolean
@@ -36,8 +38,9 @@ export function renderFormFooter(
 ): string[] {
   const { theme } = ctx
   const chrome = chromeGlyphs(ctx.glyphs)
+  const more = state.more ?? chrome.more
   const out = [theme.border((ctx.glyphs?.rule ?? "─").repeat(width))]
-  for (const n of state.notice) out.push(theme.warning(truncateToWidth(n, width, chrome.more)))
+  for (const n of state.notice) out.push(theme.warning(truncateToWidth(n, width, more)))
   if (state.confirming) {
     const text = `Discard your changes? y discard ${separator(ctx)} n keep editing`
     const shown = truncateToWidth(text, width, chrome.more)
@@ -69,7 +72,7 @@ export function renderFormFooter(
       ),
     )
   if (state.status)
-    out.push(formToneStyle(theme, state.status.tone)(truncateToWidth(state.status.text, width, chrome.more)))
+    out.push(formToneStyle(theme, state.status.tone)(truncateToWidth(state.status.text, width, more)))
   for (const f of state.actions) {
     const action = f.action
     if (action?.running || action?.text) {

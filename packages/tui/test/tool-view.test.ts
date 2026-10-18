@@ -25,6 +25,7 @@ import {
   relativePaths,
   runningToolLines,
 } from "../src/tool-view.ts"
+import { viewMarkers } from "../src/view-lines.ts"
 
 const theme = defaultTheme
 const plain = (l: string[]) => l.map(stripAnsi)
@@ -342,6 +343,41 @@ test("a failure shows its output under the result, its start and end when it is 
   // collapsed keeps the result line alone; full shows everything.
   expect(show(undefined, call, "collapsed")).toHaveLength(1)
   expect(show(undefined, call, "full")).toHaveLength(22)
+})
+
+test("ASCII views mark omitted tool-body lines with three periods; transcripts keep the theme marker", () => {
+  const before = { ...glyphs }
+  const body = Array.from({ length: 25 }, (_, i) => ({
+    kind: "text" as const,
+    text: `line ${i + 1} ${"x".repeat(50)}`,
+  }))
+  const presenter: ToolPresenter = { body: () => body }
+  const call: FinishedCall = { name: "long", args: {}, result: textResult("ok") }
+  try {
+    setGlyphs(ascii.glyphs)
+    const view = finishedToolLines(theme, presenter, call, "summary", 40, { markers: viewMarkers() })
+    expect(view.join("\n")).not.toMatch(/[^\p{ASCII}]/u)
+    const plainView = view.map(stripAnsi)
+    expect(plainView).toContain("| ... 6 more lines")
+    expect(plainView.every((row) => visibleWidth(row) <= 40)).toBe(true)
+    // A body row cut to the width is exactly 40 cells and ends with three periods.
+    expect(visibleWidth(view[1]!)).toBe(40)
+    expect(plainView[1]).toEndWith("...")
+    // Transcript callers keep the theme's own one-cell marker.
+    expect(finishedToolLines(theme, presenter, call, "summary", 40).map(stripAnsi)).toContain(
+      "| . 6 more lines",
+    )
+
+    // In Unicode the view marker is the theme marker, so view and transcript rows are identical.
+    setGlyphs()
+    const unicodeView = finishedToolLines(theme, presenter, call, "summary", 40, {
+      markers: viewMarkers(),
+    })
+    expect(unicodeView).toEqual(finishedToolLines(theme, presenter, call, "summary", 40))
+    expect(unicodeView.map(stripAnsi)).toContain("│ … 6 more lines")
+  } finally {
+    setGlyphs(before)
+  }
 })
 
 test("calls that did not run to completion are muted with their own marker, never the red cross", () => {

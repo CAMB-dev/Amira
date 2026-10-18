@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { diffToolLines, type ToolCallView, type UiNode, type ViewDefinition } from "@amira/api"
 import { CURSOR_MARKER, defaultTheme, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"
 import ascii from "../../../cli/themes/ascii.json"
+import { plain } from "../../../tui-kit/test/context.ts"
 import { MAX_DIFF_LINE_ROWS } from "../../src/diff-view.ts"
 import { ExtensionViewer } from "../../src/extension-view.ts"
 import { glyphs, setGlyphs } from "../../src/glyphs.ts"
@@ -227,6 +228,36 @@ test("Unicode view prompts keep their raw styling and ellipses", () => {
     const footer = promptFrame().at(-1)!
     expect(footer).toBe(`  \u001b[36mMessag…\u001b[39m${CURSOR_MARKER}\u001b[90menter…\u001b[39m`)
   } finally {
+    setGlyphs(before)
+  }
+})
+
+test("ASCII view hints cut with three periods and keep their exact width", () => {
+  const before = { ...glyphs }
+  const definition: ViewDefinition = {
+    kind: "hint-proof",
+    title: () => "Hints",
+    ui: () => ({ type: "text", lines: [] }),
+  }
+  const viewer = new ExtensionViewer(definition, {})
+  try {
+    setGlyphs(ascii.glyphs)
+    for (const focused of [false, true]) {
+      viewer.focused = focused
+      const hint = viewer.focusHint(plain.theme, 8)
+      expect(hint).not.toMatch(/[^\p{ASCII}]/u)
+      expect(hint).toBe("tab r...")
+      expect(visibleWidth(hint)).toBe(8)
+    }
+
+    // The same cuts in Unicode mode are byte-identical to the rows the view drew before.
+    setGlyphs()
+    for (const focused of [false, true]) {
+      viewer.focused = focused
+      expect(viewer.focusHint(plain.theme, 8)).toBe(focused ? "tab → i…" : "tab → v…")
+    }
+  } finally {
+    viewer.dispose()
     setGlyphs(before)
   }
 })

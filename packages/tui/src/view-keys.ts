@@ -1,7 +1,7 @@
 import type { ViewKey } from "@amira/api"
 import { type Theme, truncateToWidth } from "@amira/tui-kit"
 import { terminalText } from "./diff-view.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import type { HintItem } from "./hint.ts"
 import { keyLabel as bindingLabel } from "./keybindings.ts"
 
@@ -40,7 +40,9 @@ export function viewInputHint(
     toggle && `${toggle} ${glyphs.arrowRight} view`,
     inputEmpty ? `esc ${glyphs.arrowRight} view` : dock && "esc close dock",
   ]
-  return theme.muted(truncateToWidth(hints.filter(Boolean).join(` ${glyphs.separator} `), width, glyphs.more))
+  return theme.muted(
+    truncateToWidth(hints.filter(Boolean).join(` ${glyphs.separator} `), width, viewEllipsis()),
+  )
 }
 
 function keyLabel(key: string): string {

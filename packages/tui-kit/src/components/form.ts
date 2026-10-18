@@ -91,6 +91,12 @@ export interface FormOptions {
   onActionCancel?: (id: string) => void
   /** Warning lines above the buttons, e.g. dialogs waiting behind the form. */
   notice?: () => string[]
+  /**
+   * Ends a notice or status cut to the width. Hosts whose glyph set draws a one-cell `more`
+   * pass their own marker, so a cut ends in a complete ellipsis; `undefined` keeps the render
+   * context's own marker.
+   */
+  more?: () => string | undefined
   /** Computed display lines supplied by the host backend. */
   preview?: () => string[]
   /** Card-only expandable summaries; grouped fields retain their values. */
@@ -874,6 +880,7 @@ export class Form implements Component {
   }
 
   private footer(width: number, ctx: RenderContext, hits: FormHit[], hintInset = 0): string[] {
+    const more = this.opts.more?.()
     return renderFormFooter(width, ctx, hits, {
       focus: this.focus,
       field: this.field(this.focus),
@@ -883,6 +890,7 @@ export class Form implements Component {
       actions: this.footerActions(),
       submitLabel: this.opts.submitLabel,
       notice: this.opts.notice?.() ?? [],
+      ...(more !== undefined ? { more } : {}),
       hintInset,
       card: this.cardLayout,
       preview: this.hasPreview,

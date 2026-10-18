@@ -11,9 +11,11 @@ import {
   SkillRegistry,
   UiRequests,
 } from "@amira/core"
-import { key } from "@amira/tui-kit"
+import { key, visibleWidth } from "@amira/tui-kit"
+import ascii from "../../cli/themes/ascii.json"
 import { plain } from "../../tui-kit/test/context.ts"
 import { CommandPopup, type CompletionSource } from "../src/command-popup.ts"
+import { glyphs, setGlyphs } from "../src/glyphs.ts"
 
 const COMMANDS: CommandInfo[] = [
   { name: "clear", aliases: [], description: "Start over", source: "b" },
@@ -111,6 +113,36 @@ test("a command without candidates shows its usage and leaves Enter to the edito
   expect(lines()).toEqual(["  /compact [instructions]  Summarize"])
   expect(popup.handleKey(key("enter"))).toBeUndefined()
   expect(popup.handleKey(key("up"))).toBeUndefined()
+})
+
+test("ASCII command usage cuts with three periods and keeps its exact width", async () => {
+  const before = { ...glyphs }
+  const usage: CommandInfo = {
+    name: "long",
+    aliases: ["l"],
+    description: "A description long enough to be cut",
+    hint: "[argument]",
+    source: "b",
+  }
+  const src: CompletionSource = {
+    list: () => [usage],
+    complete: () => ({ command: "long", candidates: [] }),
+  }
+  const popup = new CommandPopup(src, () => {})
+  await popup.update("/long x")
+  try {
+    setGlyphs(ascii.glyphs)
+    const asciiLine = popup.render(30, plain)[0]!
+    expect(asciiLine).not.toMatch(/[^\p{ASCII}]/u)
+    expect(asciiLine).toBe("  /long (l) [argument]  A d...")
+    expect(visibleWidth(asciiLine)).toBe(30)
+
+    // Outside ASCII mode the usage line keeps its true ellipsis.
+    setGlyphs()
+    expect(popup.render(30, plain)).toEqual(["  /long (l) [argument]  A des…"])
+  } finally {
+    setGlyphs(before)
+  }
 })
 
 test("Esc closes the popup until the text changes", async () => {
