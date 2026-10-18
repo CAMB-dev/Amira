@@ -40,6 +40,32 @@ test("web_fetch: the URL as head, where it ended up and its size as result", () 
   )
 })
 
+test("web_fetch: saved binaries show name, type and bytes rather than text length", () => {
+  const result = {
+    ...textResult("Saved: /outputs/report-123.pdf"),
+    details: {
+      url: "https://x.dev/start",
+      finalUrl: "https://x.dev/report.pdf",
+      status: 200,
+      length: 0,
+      saved: {
+        path: "/outputs/report-123.pdf",
+        name: "report-123.pdf",
+        contentType: "application/pdf",
+        bytes: 1234,
+      },
+    },
+  }
+  expect(webFetchPresenter.result!(view({ url: "u" }, result) as never)).toBe(
+    "→ https://x.dev/report.pdf · saved report-123.pdf (application/pdf, 1234 bytes)",
+  )
+  const same = { ...result, details: { ...result.details, url: result.details.finalUrl } }
+  expect(webFetchPresenter.result!(view({ url: "u" }, same) as never)).toBe(
+    "saved report-123.pdf (application/pdf, 1234 bytes)",
+  )
+  expect(webFetchPresenter.result!(view({ url: "u" }, { ...result, isError: true }) as never)).toBeUndefined()
+})
+
 test("web_search also shows the provider's hosted search rows: sources, pages opened", () => {
   const native = {
     backend: "provider search",

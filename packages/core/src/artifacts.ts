@@ -79,6 +79,16 @@ export class ArtifactStore implements OutputStore {
     this.#readOnly = opts.readOnly === true
   }
 
+  /**
+   * Shared session storage, not extension-owned; private sessions cannot write there. Direct
+   * writers must pin real paths to the session-storage root and create unique files exclusively,
+   * never overwriting or removing other tools' files. These direct writes are outside artifact
+   * quota and /prune, and grant no protected-write exemption outside an extension's own data area.
+   */
+  get writableDir(): string | undefined {
+    return this.#readOnly ? undefined : this.dir
+  }
+
   /** Reads what an earlier run saved, once. */
   #scan() {
     if (this.#scanned) return

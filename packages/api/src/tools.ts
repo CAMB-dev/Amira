@@ -71,6 +71,14 @@ export interface ToolSession {
    * when the session has no file.
    */
   readonly dir?: string
+  /**
+   * Shared session storage for generated output files, not an extension-owned directory; absent
+   * when saving is unavailable. Pin its real path and each ancestor to the session-storage root
+   * (the parent of dir) before writing. Create only unique files exclusively; never overwrite
+   * or remove other tools' files. Directly created files are outside artifact quota and /prune.
+   * This grants no protected-write exemption outside an extension's own data area.
+   */
+  readonly outputDir?: string
   /** Records extensions keep in this session (see SessionData). */
   readonly data?: SessionData
   /**

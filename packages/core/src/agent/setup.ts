@@ -195,6 +195,7 @@ export function setupToolSession(deps: ToolSessionSetup): ToolSession {
   return {
     ...deferred,
     ...(deps.session ? { dir: deps.session.file.replace(/\.jsonl$/, "") } : {}),
+    ...(deps.session && deps.artifacts.writableDir ? { outputDir: deps.artifacts.writableDir } : {}),
     data: deps.history.data,
     outputs: deps.artifacts,
     contextHas: deps.contextHas,

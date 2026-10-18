@@ -299,7 +299,8 @@ Amira に組み込みのプロバイダーはありません。各エントリ�
 | `web.search.tavily.searchDepth` | `"basic" \| "advanced"` | `"basic"` | Tavily の検索の深さです。`"basic"` または `"advanced"` を指定します。 |  |
 | `web.search.searxng.url` | `string` | このバックエンドでは必須 | JSON 形式が有効な SearXNG インスタンスです。 | はい |
 | `web.fetch.maxChars` | `number` | `20000` | 呼び出しで指定しない場合に、1 回で返す変換後テキストの文字数です。 |  |
-| `web.fetch.maxBytes` | `number` | `5242880` (5 MiB) | 読み取るレスポンス本文の最大バイト数です。超過した部分は切り捨てます。 |  |
+| `web.fetch.maxBytes` | `number` | `5242880` (5 MiB) | 読み取るテキストレスポンス本文の最大バイト数です。超過した部分は切り捨てます。 |  |
+| `web.fetch.maxBinaryBytes` | `number` | `52428800` (50 MiB) | セッションの出力ディレクトリに保存する PDF またはバイナリの最大サイズです。超過した場合は失敗し、未完成のファイルを削除します。セッションディレクトリのないホストでは保存できません。テキストのアーティファクトではないため、他のツールで読み取ってください。アーティファクトの容量制限と `/prune` の対象外です。 |  |
 | `web.fetch.timeoutMs` | `number` | `30000` | リクエストのタイムアウト（ミリ秒）です。 |  |
 | `web.fetch.allowPrivateNetwork` | `boolean` | `false` | localhost とプライベートネットワークのアドレスへのアクセスを許可します。 | はい |
 

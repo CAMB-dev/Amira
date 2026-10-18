@@ -120,7 +120,7 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
   const webFetch = defineTool<{ url: string; prompt?: string; maxChars?: number; offset?: number }>({
     name: WEB_FETCH_TOOL,
     description: [
-      "Fetch http(s) pages as Markdown; JSON/plain text as text. No PDFs/binaries. Follows redirects, reports final URL. Refuses local/private networks. Cite used URLs.",
+      "Fetch http(s) pages as Markdown; JSON/plain text as text. Saves PDFs/binaries. Follows redirects, reports final URL. Refuses local/private networks. Cite used URLs.",
       "Long pages end with continuation offset. Cached 15 minutes; paging doesn't refetch.",
     ].join("\n"),
     parameters: {
@@ -161,6 +161,9 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
             url,
             {
               maxBytes: fetchSettings.maxBytes ?? DEFAULT_WEB_FETCH_MAX_BYTES,
+              maxBinaryBytes: fetchSettings.maxBinaryBytes,
+              outputDir: ctx.session?.outputDir,
+              sessionDir: ctx.session?.dir,
               timeoutMs: fetchSettings.timeoutMs ?? DEFAULT_WEB_FETCH_TIMEOUT_MS,
               allowPrivateNetwork:
                 fetchSettings.allowPrivateNetwork ?? DEFAULT_WEB_FETCH_ALLOW_PRIVATE_NETWORK,
@@ -169,12 +172,19 @@ export function webTools(settings: WebSettings, opts: WebExtensionOptions = {}) 
             },
             ctx.signal,
           )
-          cache.set(url, page)
+          if (!page.saved) cache.set(url, page)
         }
         const prompt = typeof p.prompt === "string" ? p.prompt : undefined
         return {
           content: [{ type: "text", text: renderPage(page, offset, limit, prompt) }],
-          details: { url: page.url, finalUrl: page.finalUrl, status: page.status, length: page.text.length },
+          details: {
+            url: page.url,
+            finalUrl: page.finalUrl,
+            status: page.status,
+            length: page.text.length,
+            ...(page.saved ? { saved: page.saved } : {}),
+          },
+          ...(page.saved ? { persistDetails: true } : {}),
         }
       } catch (err) {
         if (ctx.signal.aborted) throw err

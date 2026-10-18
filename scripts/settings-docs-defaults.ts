@@ -57,6 +57,7 @@ export const settingsDefaults = {
   "web.search.tavily.searchDepth": d.DEFAULT_TAVILY_SEARCH_DEPTH,
   "web.fetch.maxChars": d.DEFAULT_WEB_FETCH_MAX_CHARS,
   "web.fetch.maxBytes": d.DEFAULT_WEB_FETCH_MAX_BYTES,
+  "web.fetch.maxBinaryBytes": d.DEFAULT_WEB_FETCH_MAX_BINARY_BYTES,
   "web.fetch.timeoutMs": d.DEFAULT_WEB_FETCH_TIMEOUT_MS,
   "web.fetch.allowPrivateNetwork": d.DEFAULT_WEB_FETCH_ALLOW_PRIVATE_NETWORK,
   "subagents.maxDepth": d.DEFAULT_SUBAGENT_MAX_DEPTH,
@@ -94,6 +95,7 @@ export function documentedDefault(key: DefaultKey): string | { en: string; zh: s
   switch (key) {
     case "backgroundJobs.maxLogBytes":
     case "web.fetch.maxBytes":
+    case "web.fetch.maxBinaryBytes":
       return `${code} (${Number(value) / 1024 / 1024} MiB)`
     case "backgroundJobs.printWaitMs":
     case "retry.firstContentTimeoutMs":

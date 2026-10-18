@@ -299,7 +299,8 @@ Amira 没有内置 provider：每个条目都需要 `dialect` 和 `baseUrl`，�
 | `web.search.tavily.searchDepth` | `"basic" \| "advanced"` | `"basic"` | Tavily 搜索深度：`"basic"` 或 `"advanced"`。 |  |
 | `web.search.searxng.url` | `string` | 使用该后端时必填 | 已启用 JSON 格式的 SearXNG 实例地址。 | 是 |
 | `web.fetch.maxChars` | `number` | `20000` | 调用未指定时，每次返回的转换后文本字符数。 |  |
-| `web.fetch.maxBytes` | `number` | `5242880` (5 MiB) | 读取的响应体上限（字节），超出部分被截断。 |  |
+| `web.fetch.maxBytes` | `number` | `5242880` (5 MiB) | 读取的文本响应体上限（字节），超出部分被截断。 |  |
+| `web.fetch.maxBinaryBytes` | `number` | `52428800` (50 MiB) | 保存到会话输出目录的 PDF 或二进制下载上限。超限时下载失败并删除未完成的文件。没有会话目录的宿主无法保存二进制文件。这些文件不是文本工件：请用其他工具读取；工件配额和 `/prune` 不管理这些文件。 |  |
 | `web.fetch.timeoutMs` | `number` | `30000` | 请求超时（毫秒）。 |  |
 | `web.fetch.allowPrivateNetwork` | `boolean` | `false` | 允许访问 localhost 和私有网络地址。 | 是 |
 
