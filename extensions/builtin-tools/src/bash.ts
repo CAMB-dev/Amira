@@ -161,7 +161,6 @@ export const bashTool = shellTool(
   "bash",
   [
     "Bash: combined stdout/stderr + exit code. Windows uses Git Bash (POSIX syntax, forward slashes), or PowerShell fallback (Shell: edition); use PowerShell syntax for fallback.",
-    "Never wrap commands in another shell (pwsh/powershell -Command, cmd /c); on Windows the powershell tool runs PowerShell.",
     "pipefail: any nonzero fails, except a successful final pipeline command with earlier statuses only 0/141 (SIGPIPE). That exception still blocks && inside the shell; prefer output-limit options when chaining.",
     "UTF-8; legacy Windows code pages may garble non-ASCII.",
     ...sharedNotes("cd dir && cmd", "`a && b`"),
@@ -176,7 +175,6 @@ export function powershellDescription(path: string): string[] {
   return [
     `Run ${edition}; returns all streams (errors/warnings/Write-Host included) as UTF-8 text and exit code.`,
     "Use for Windows-specific work (registry/services/processes, Windows paths/APIs, .ps1); prefer bash for general git/package/POSIX work when available.",
-    "Never wrap commands in another shell (bash -c, cmd /c, a nested pwsh); use the bash tool for bash.",
     `PowerShell syntax: ; or newlines, $env:NAME.${legacy ? " No &&/||; test $LASTEXITCODE after native commands." : ""}`,
     `Exit: last native $LASTEXITCODE, or 1 if final statement failed; earlier cmdlet failure only prints error. Codes mod 256. Fail-fast: $ErrorActionPreference = 'Stop'.${legacy ? " Native stderr also stops scripts in this edition." : ""}`,
     ...sharedNotes("cd dir; cmd", legacy ? "`a; if ($LASTEXITCODE -eq 0) { b }`" : "`a && b`"),
