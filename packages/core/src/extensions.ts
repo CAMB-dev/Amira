@@ -46,6 +46,7 @@ import { extensionDataOwner } from "./extension-data.ts"
 import { ExtensionSettingsRegistry, type ExtensionSettingsRegistryOptions } from "./extension-settings.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
+import { PackageModules } from "./module-cache.ts"
 import { OwnedConversationManager, type OwnedConversationManagerOptions } from "./owned-conversations.ts"
 import { PanelRegistry } from "./panel-registry.ts"
 import { openExtensionPipe } from "./pipes.ts"
@@ -153,6 +154,7 @@ export class ExtensionHost {
   #renderPending = false
   /** Extension files imported before, which a reload must import anew. */
   #imported = new Set<string>()
+  #packageModules = new PackageModules()
   /** What to add to an extension's failures, by source: e.g. how to turn its package off. */
   #hints = new Map<string, string>()
   /** Events the extensions being loaded get first (replayOnLoad). */
@@ -346,7 +348,7 @@ export class ExtensionHost {
    */
   async loadFile(
     file: string,
-    label: { source?: string; name?: string; hint?: string } = {},
+    label: { source?: string; name?: string; hint?: string; root?: string } = {},
   ): Promise<boolean> {
     installVirtualApi()
     const abs = path.resolve(file)
@@ -354,8 +356,10 @@ export class ExtensionHost {
     if (label.hint) this.#hints.set(source, label.hint)
     let mod: { default?: unknown }
     // The module cache would hand back the old code on a reload (Bun ignores a query on a file
-    // URL, but drops an ES module from require.cache). Files the extension imports stay cached.
+    // URL, but drops an ES module from require.cache). With a package root, the files the entry
+    // imports are dropped too, so an update never pairs a new entry with stale modules.
     if (this.#imported.has(abs)) delete require.cache[abs]
+    if (label.root) this.#packageModules.beforeImport(label.root, abs)
     this.#imported.add(abs)
     try {
       mod = await import(pathToFileURL(abs).href)
