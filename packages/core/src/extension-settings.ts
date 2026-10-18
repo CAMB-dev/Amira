@@ -7,13 +7,16 @@ import {
   type ExtensionSettingsScope,
   type ExtensionSettingsValues,
   type ExtensionSettingValue,
+  type ExtensionStatusMetadata,
   extensionSettingsDefaults,
   type MarkdownRenderResult,
   type Settings,
   type SettingsLayer,
   type SettingsLayers,
+  type SettingsView,
   validateExtensionSetting,
 } from "@amira/api"
+import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import { loadSettings, type SettingsSources } from "./config/load.ts"
 import { isPlainObject, UNSAFE_KEYS } from "./config/merge.ts"
 import { SettingsError } from "./config/schema.ts"
@@ -27,6 +30,7 @@ type SettingsListener = (values: Values) => unknown
 export interface ExtensionSettingsRegistration {
   readonly name: string
   readonly source: string
+  readonly extensionStatus?: ExtensionStatusMetadata
   readonly fields: readonly ExtensionSettingsField[]
   get(): Values
   /** Explicit values for each field, lowest precedence first, including invalid values. */
@@ -84,6 +88,7 @@ export class ExtensionSettingsRegistry {
     name: string,
     source: string,
     declaration: ExtensionSettingsDeclaration<F>,
+    status?: ExtensionStatusMetadata,
   ): { handle: ExtensionSettingsHandle<F>; dispose: () => void } {
     if (!name || UNSAFE_KEYS.has(name)) throw new Error("Invalid extension settings identity")
     if (this.#entries.has(name)) throw new Error(`Settings already declared for ${name}`)
@@ -98,6 +103,7 @@ export class ExtensionSettingsRegistry {
     const registration: ExtensionSettingsRegistration = {
       name,
       source,
+      ...(status ? { extensionStatus: freeze(extensionStatusMetadata(status)) } : {}),
       fields,
       get: () => entry.values,
       get sources() {
@@ -312,6 +318,28 @@ function validateDeclaration(
     const problem = validateExtensionSetting(field, field.default)
     if (problem) throw new Error(`Default for "${field.key}" ${problem}`)
   }
+}
+
+/**
+ * The frozen settings snapshot with non-enumerable methods, so spreading, `Object.keys`,
+ * JSON and `structuredClone` still see plain settings.
+ */
+export function settingsView(
+  settings: Settings,
+  layers: SettingsLayers,
+  declare: SettingsView["declare"],
+): SettingsView {
+  const view = structuredClone(settings)
+  const layerSnapshot = freeze(structuredClone(layers))
+  const emptyLayers: readonly SettingsLayer[] = Object.freeze([])
+  Object.defineProperty(view, "declare", { value: declare })
+  Object.defineProperty(view, "layers", {
+    value: <K extends keyof Settings>(key: K) =>
+      (Object.hasOwn(layerSnapshot, key) ? layerSnapshot[key] : emptyLayers) as readonly SettingsLayer<
+        NonNullable<Settings[K]>
+      >[],
+  })
+  return freeze(view) as SettingsView
 }
 
 function freeze<T>(value: T): T {

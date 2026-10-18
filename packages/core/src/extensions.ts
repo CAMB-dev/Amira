@@ -12,6 +12,7 @@ import {
   type Extension,
   type ExtensionAPI,
   type ExtensionSettingsTarget,
+  type ExtensionStatusMetadata,
   type FileRestorationOwner,
   hostBackgroundJobs,
   installHostNet,
@@ -21,9 +22,7 @@ import {
   type RunCommandResult,
   type SessionControl,
   type Settings,
-  type SettingsLayer,
   type SettingsLayers,
-  type SettingsView,
   type TerminalApi,
 } from "@amira/api"
 import { fetchPublic, guardedFetch, isPrivateAddress, NetError, parseHttpUrl, readCapped } from "@amira/net"
@@ -44,7 +43,11 @@ import type { SettingsSources } from "./config/load.ts"
 import type { EventBus } from "./event-bus.ts"
 import { ExtensionCleanup } from "./extension-cleanup.ts"
 import { extensionDataOwner } from "./extension-data.ts"
-import { ExtensionSettingsRegistry, type ExtensionSettingsRegistryOptions } from "./extension-settings.ts"
+import {
+  ExtensionSettingsRegistry,
+  type ExtensionSettingsRegistryOptions,
+  settingsView,
+} from "./extension-settings.ts"
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { PackageModules } from "./module-cache.ts"
@@ -307,7 +310,12 @@ export class ExtensionHost {
   }
 
   /** `name` is a host-known state identity; package modules may share it. */
-  async load(ext: Extension, source: string, name = source): Promise<boolean> {
+  async load(
+    ext: Extension,
+    source: string,
+    name = source,
+    extensionStatus?: ExtensionStatusMetadata,
+  ): Promise<boolean> {
     if (this.#disposers.has(source)) return this.#fail(source, "already loaded")
     const disposers: (() => void)[] = []
     const lifetime = new AbortController()
@@ -325,7 +333,7 @@ export class ExtensionHost {
       }
     }
     try {
-      await ext(this.#apiFor(source, disposers, name, lifetime.signal, handlers))
+      await ext(this.#apiFor(source, disposers, name, lifetime.signal, handlers, extensionStatus))
     } catch (err) {
       unload()
       for (const d of disposers.reverse()) d()
@@ -348,7 +356,13 @@ export class ExtensionHost {
    */
   async loadFile(
     file: string,
-    label: { source?: string; name?: string; hint?: string; root?: string } = {},
+    label: {
+      source?: string
+      name?: string
+      hint?: string
+      root?: string
+      extensionStatus?: ExtensionStatusMetadata
+    } = {},
   ): Promise<boolean> {
     installVirtualApi()
     const abs = path.resolve(file)
@@ -370,7 +384,7 @@ export class ExtensionHost {
       return this.#fail(source, "extension must default-export a function")
     this.ui.setSourceLabel(source, label.name ?? path.basename(file))
     const identity = process.platform === "win32" ? abs.toLowerCase() : abs
-    return this.load(mod.default as Extension, source, label.name ?? identity)
+    return this.load(mod.default as Extension, source, label.name ?? identity, label.extensionStatus)
   }
 
   /**
@@ -551,6 +565,7 @@ export class ExtensionHost {
     name: string,
     lifetime: AbortSignal,
     unloadHandlers: Set<() => void>,
+    extensionStatus?: ExtensionStatusMetadata,
   ): ExtensionAPI {
     const { bus, interceptors, tools } = this.#opts
     const home = amiraHome()
@@ -710,7 +725,7 @@ export class ExtensionHost {
       // Each extension gets its own frozen copy, so none can change what another reads.
       settings: settingsView(this.#opts.settings ?? {}, this.#opts.settingsLayers ?? {}, (declaration) => {
         if (lifetime.aborted) throw new Error("Cannot declare settings after extension unload")
-        const registered = this.extensionSettings.register(name, source, declaration)
+        const registered = this.extensionSettings.register(name, source, declaration, extensionStatus)
         track(() => {
           registered.dispose()
           this.ui.cancelExtensionSettings(name)
@@ -792,33 +807,3 @@ export function runExtensionCommand(argv: string[], options: RunCommandOptions):
 }
 
 const NOTICE_LEVELS: readonly NoticeLevel[] = ["info", "success", "warning", "error"]
-
-function deepFreeze<T>(value: T): T {
-  if (value && typeof value === "object") {
-    for (const v of Object.values(value)) deepFreeze(v)
-    Object.freeze(value)
-  }
-  return value
-}
-
-/**
- * The frozen settings snapshot with non-enumerable methods, so spreading, `Object.keys`,
- * JSON and `structuredClone` still see plain settings.
- */
-function settingsView(
-  settings: Settings,
-  layers: SettingsLayers,
-  declare: SettingsView["declare"],
-): SettingsView {
-  const view = structuredClone(settings)
-  const layerSnapshot = deepFreeze(structuredClone(layers))
-  const emptyLayers: readonly SettingsLayer[] = Object.freeze([])
-  Object.defineProperty(view, "declare", { value: declare })
-  Object.defineProperty(view, "layers", {
-    value: <K extends keyof Settings>(key: K) =>
-      (Object.hasOwn(layerSnapshot, key) ? layerSnapshot[key] : emptyLayers) as readonly SettingsLayer<
-        NonNullable<Settings[K]>
-      >[],
-  })
-  return deepFreeze(view) as SettingsView
-}

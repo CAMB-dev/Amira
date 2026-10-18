@@ -25,6 +25,7 @@ import {
   renderDialogInput,
 } from "./dialog-render.ts"
 import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
+import { styledExtensionLabel } from "./extension-status.ts"
 import { glyphs } from "./glyphs.ts"
 import type { HintItem } from "./hint.ts"
 import { type Action, defaultKeybindings, type Keybindings, keyLabel } from "./keybindings.ts"
@@ -186,6 +187,7 @@ export class Dialog implements Component {
       ...current,
       optionLabels: request.optionLabels,
       optionStatuses: request.optionStatuses,
+      optionExtensionStatuses: request.optionExtensionStatuses,
       descriptions: request.descriptions,
     }
     for (const c of this.#current.choices) c.description = request.descriptions?.[c.index ?? 0]
@@ -518,7 +520,11 @@ export class Dialog implements Component {
         rows.push(`${lead}${field}`)
         continue
       }
-      const head = `${lead}${badge}${selected ? theme.accent(typed) : typed}`
+      const extensionStatus =
+        this.request.kind === "select" && c.index !== undefined
+          ? this.request.optionExtensionStatuses?.[c.index]
+          : undefined
+      const head = `${lead}${badge}${styledExtensionLabel(typed, extensionStatus, theme, selected)}`
       const optionRow = rows.length
       if (!description) {
         rows.push(truncateToWidth(head, width, glyphs.more))

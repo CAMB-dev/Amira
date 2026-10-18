@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import type { ExtensionStatusMetadata } from "@amira/api"
 import { amiraHome, projectAmiraDir } from "@amira/core"
 import { isValidPackageName, PackageError } from "./manifest.ts"
 
@@ -30,7 +31,7 @@ export interface LockEntry {
   version: string
   source: PackageSource
   /** Set when the package was found through an extensions index: `amira ext update` asks it again. */
-  index?: { name: string; url: string }
+  index?: { name: string; url: string } & ExtensionStatusMetadata
   /** What was actually installed: the git commit, or the npm version and tarball integrity. */
   pinned: { commit?: string; version?: string; integrity?: string }
   installedAt: string

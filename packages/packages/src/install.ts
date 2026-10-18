@@ -10,6 +10,8 @@ import {
   writeFileSync,
 } from "node:fs"
 import path from "node:path"
+import type { ExtensionStatusMetadata } from "@amira/api"
+import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import { isProcessAlive } from "@amira/core"
 import { defaultGitCacheDir, GitCache, type GitContext, type GitPhase, isFullCommitId } from "./git-cache.ts"
 import { type IndexOptions, type LoadedIndex, loadIndex } from "./index-file.ts"
@@ -41,6 +43,8 @@ export interface InstallOptions {
   log?: (line: string) => void
   /** What each package is doing, for a progress display. */
   onProgress?: (p: InstallProgress) => void
+  /** Once per attempt; index metadata is reported before downloading, otherwise the manifest. */
+  onStatus?: (name: string, status: ExtensionStatusMetadata) => void
   /** Where git repositories are cached (whatever the scope). Default ~/.amira/cache/git. */
   cacheDir?: string
   /**
@@ -78,7 +82,7 @@ function withGitCache(opts: InstallOptions): InstallOptions {
   return opts.gitCache ? opts : { ...opts, gitCache: new GitCache(opts.cacheDir ?? defaultGitCacheDir()) }
 }
 
-export interface InstallResult {
+export interface InstallResult extends ExtensionStatusMetadata {
   name: string
   entry: LockEntry
   /** The lock entry this install replaced, if the package was already there. */
@@ -110,7 +114,16 @@ async function installFromIndex(name: string, opts: InstallOptions, report: Repo
       `"${name}" is not in the extensions index (${url}); see amira ext search, or use npm:${name} for an npm package`,
     )
   }
-  const result = await install(entry.source, { expectName: name, index: { name, url } }, opts, report)
+  const result = await install(
+    entry.source,
+    {
+      expectName: name,
+      index: { name, url, ...extensionStatusMetadata(entry) },
+      statusMetadata: entry,
+    },
+    opts,
+    report,
+  )
   return { ...result, warnings: [...warnings, ...result.warnings] }
 }
 
@@ -133,7 +146,8 @@ export async function restorePackages(
     opts.signal?.throwIfAborted()
     const r = await install(
       entry.source,
-      { expectName: name, pinned: entry.pinned, keep: entry },
+      { expectName: name, pinned: entry.pinned, keep: entry, statusMetadata: entry.index },
+
       opts,
       reporter(opts, name),
     )
@@ -145,14 +159,15 @@ export async function restorePackages(
 
 /** One package's update: what it moved to, or why it could not (the installed one is kept). */
 export type UpdateResult =
-  | {
+  | (ExtensionStatusMetadata & {
       name: string
       from: LockEntry
       to: LockEntry
       /** Whether a different commit or version was installed. */
       changed: boolean
-    }
-  | { name: string; from: LockEntry; error: string }
+      warnings?: string[]
+    })
+  | { name: string; from: LockEntry; error: string; warnings?: string[] }
 
 /**
  * Fetches the newest files each source offers (a branch's head, the highest matching npm
@@ -180,47 +195,71 @@ export async function updatePackages(
     let p = indexes.get(url)
     if (!p) {
       p = loadIndex({ ...opts.index, refresh: true, url })
-      p.then(
-        (loaded) => {
-          for (const w of loaded.warnings) opts.log?.(`warning: ${w}`)
-        },
-        () => {},
-      )
       indexes.set(url, p)
     }
     return p
   }
   const out: UpdateResult[] = []
+  const reportedIndexWarnings = new Set<string>()
   for (const name of selected) {
     opts.signal?.throwIfAborted()
     const from = lock.packages[name]!
     const report = reporter(opts, name)
     let result: UpdateResult
+    const warnings: string[] = []
     try {
       let source = from.source
       let index = from.index
+      let statusMetadata: ExtensionStatusMetadata | undefined = from.index
       if (from.index) {
         report("resolving", "extensions index")
         const loaded = await readIndex(from.index.url)
+        if (!reportedIndexWarnings.has(loaded.url)) {
+          if (opts.log) {
+            for (const warning of loaded.warnings) opts.log(`warning: ${warning}`)
+          } else warnings.push(...loaded.warnings)
+          reportedIndexWarnings.add(loaded.url)
+        }
         const e = loaded.index.extensions.find((x) => x.name === from.index!.name)
-        if (e) source = e.source
-        else
+        if (e) {
+          source = e.source
+          statusMetadata = e
+        } else
           opts.log?.(
             `warning: ${name} is no longer in the extensions index; updating from its recorded source`,
           )
-        index = { name: from.index.name, url: loaded.url }
+        index = { name: from.index.name, url: loaded.url, ...extensionStatusMetadata(statusMetadata ?? {}) }
       }
       const r = await install(
         source,
-        { expectName: name, ...(index ? { index } : {}), current: from },
+        { expectName: name, ...(index ? { index } : {}), current: from, statusMetadata },
         opts,
         report,
       )
-      result = { name, from, to: r.entry, changed: pinKey(from) !== pinKey(r.entry) }
+      if (index && !sameJson(r.entry.index, index)) {
+        const latest = readLock(opts.scope.lockFile)
+        r.entry = { ...r.entry, index }
+        latest.packages[name] = r.entry
+        writeLock(opts.scope.lockFile, latest)
+      }
+      warnings.push(...r.warnings)
+      result = {
+        name,
+        from,
+        to: r.entry,
+        changed: pinKey(from) !== pinKey(r.entry),
+        ...extensionStatusMetadata(r),
+        ...(warnings.length ? { warnings } : {}),
+      }
     } catch (err) {
       // Stopped (Ctrl+C): do not go on to the next package.
       if (opts.signal?.aborted) throw err
-      result = { name, from, error: errorMessage(err) }
+      result = {
+        name,
+        from,
+        error: errorMessage(err),
+        ...(warnings.length ? { warnings } : {}),
+      }
     }
     each?.(result)
     out.push(result)
@@ -251,7 +290,9 @@ interface InstallHow {
   /** The package must have this name (index entries, lock entries). */
   expectName?: string
   pinned?: LockEntry["pinned"]
-  index?: { name: string; url: string }
+  index?: LockEntry["index"]
+  /** Catalog metadata is a fallback when the manifest has no valid status. */
+  statusMetadata?: ExtensionStatusMetadata
   /** Restoring: keep this entry's record rather than writing a new one. */
   keep?: LockEntry
   /**
@@ -261,12 +302,29 @@ interface InstallHow {
   current?: LockEntry
 }
 
+function sameIndex(a: LockEntry["index"], b: LockEntry["index"]): boolean {
+  return a?.name === b?.name && a?.url === b?.url
+}
+
+function installMetadata(manifest: PackageManifest, how: InstallHow) {
+  return {
+    ...extensionStatusMetadata(manifest.status ? manifest : (how.statusMetadata ?? manifest)),
+    warnings: manifest.warnings ?? [],
+  }
+}
+
 async function install(
   source: PackageSource,
   how: InstallHow,
   opts: InstallOptions,
   report: Report,
 ): Promise<InstallResult> {
+  const catalogStatus = extensionStatusMetadata(how.statusMetadata ?? {})
+  if (catalogStatus.status && how.expectName) opts.onStatus?.(how.expectName, catalogStatus)
+  const notifyManifest = (manifest: PackageManifest) => {
+    if (!catalogStatus.status && manifest.status)
+      opts.onStatus?.(manifest.name, extensionStatusMetadata(manifest))
+  }
   mkdirSync(opts.scope.dir, { recursive: true })
   removeStaleWork(opts.scope.dir)
   // Inside the scope directory so the final rename stays on one volume.
@@ -281,13 +339,20 @@ async function install(
       !!current &&
       !!installedDir &&
       sameJson(current.source, source) &&
-      sameJson(current.index, how.index) &&
+      sameIndex(current.index, how.index) &&
       existsSync(installedDir)
     const fetched = await fetchSource(source, how.pinned, work, opts, report, current?.pinned.commit, mayKeep)
     if ("kept" in fetched && current && installedDir) {
       report("verifying")
       const manifest = readManifest(installedDir)
-      return { name: manifest.name, entry: current, previous: current, manifest, warnings: [] }
+      notifyManifest(manifest)
+      return {
+        name: manifest.name,
+        entry: current,
+        previous: current,
+        manifest,
+        ...installMetadata(manifest, how),
+      }
     }
     const { root, pinned, sameTree } = fetched as Fetched
     report("verifying")
@@ -309,6 +374,7 @@ async function install(
         `expected a package named "${how.expectName}", but ${where} is "${manifest.name}"`,
       )
     }
+    notifyManifest(manifest)
     const mismatch = engineMismatch(manifest)
     if (mismatch) throw new PackageError(mismatch)
     if (
@@ -319,10 +385,16 @@ async function install(
       (pinKey(current) === pinKey({ ...current, version: manifest.version, pinned }) ||
         (sameTree === true && current.version === manifest.version)) &&
       sameJson(current.source, source) &&
-      sameJson(current.index, how.index) &&
+      sameIndex(current.index, how.index) &&
       existsSync(packageDir(opts.scope, manifest.name))
     ) {
-      return { name: manifest.name, entry: current, previous: current, manifest, warnings: [] }
+      return {
+        name: manifest.name,
+        entry: current,
+        previous: current,
+        manifest,
+        ...installMetadata(manifest, how),
+      }
     }
     const staged = path.join(work, "package")
     // The source may contain the scope itself (`amira ext install --project .` in a package's
@@ -362,7 +434,13 @@ async function install(
       }
       throw err
     }
-    return { name: manifest.name, entry, ...(previous ? { previous } : {}), manifest, warnings: [] }
+    return {
+      name: manifest.name,
+      entry,
+      ...(previous ? { previous } : {}),
+      manifest,
+      ...installMetadata(manifest, how),
+    }
   } finally {
     if (!keepWork) rmSync(work, { recursive: true, force: true, maxRetries: 3 })
   }

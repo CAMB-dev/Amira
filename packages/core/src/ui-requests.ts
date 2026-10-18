@@ -8,6 +8,7 @@ import {
   type ExtensionSettingsPreviewContext,
   type ExtensionSettingsScope,
   type ExtensionSettingsValues,
+  type ExtensionStatusMetadata,
   type FormActionResult,
   type FormOption,
   type FormSpec,
@@ -30,6 +31,7 @@ import {
   type UiRequestOptions,
   validateExtensionSetting,
 } from "@amira/api"
+import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import { checkAskAnswers } from "./ask-answers.ts"
 import type { EventBus } from "./event-bus.ts"
 import type { UiResponseAck } from "./frontend/form-backend.ts"
@@ -53,6 +55,7 @@ export interface ExtensionSettingsBackend {
   /** Canonical host identity, even when the page was opened through a display alias. */
   name?: string
   title?: string
+  extensionStatus?: ExtensionStatusMetadata
   sources?: Readonly<Record<string, readonly SettingsLayer[]>>
   fields: readonly ExtensionSettingField[]
   get(): ExtensionSettingsValues
@@ -177,6 +180,9 @@ export class UiRequests {
         kind: "extension-settings",
         name: settings.name ?? name,
         title: settings.title ?? name,
+        ...(settings.extensionStatus
+          ? { extensionStatus: extensionStatusMetadata(settings.extensionStatus) }
+          : {}),
         fields: structuredClone([...settings.fields]),
         values: structuredClone(settings.get()),
         sources: Object.fromEntries(
@@ -672,7 +678,16 @@ export class UiRequests {
         return typeof answer === "object" ? answer.option : answer
       },
       choose: async (title, options, opts) => {
-        const { sections, descriptions, searchTexts, optionStatuses, live, initial, ...rest } = opts
+        const {
+          sections,
+          descriptions,
+          searchTexts,
+          optionStatuses,
+          optionExtensionStatuses,
+          live,
+          initial,
+          ...rest
+        } = opts
         const problem = sectionProblem(options, sections)
         if (problem) throw new Error(`ui.choose: ${problem}`)
         const request = {
@@ -684,6 +699,13 @@ export class UiRequests {
           ...(descriptions ? { descriptions: [...descriptions] } : {}),
           ...(searchTexts ? { searchTexts: [...searchTexts] } : {}),
           ...(optionStatuses ? { optionStatuses: [...optionStatuses] } : {}),
+          ...(optionExtensionStatuses
+            ? {
+                optionExtensionStatuses: optionExtensionStatuses.map((status) =>
+                  status ? extensionStatusMetadata(status) : undefined,
+                ),
+              }
+            : {}),
         }
         const answer = (await this.#ask(request, o(rest), undefined, undefined, live)) as
           | UiAnswer["select"]

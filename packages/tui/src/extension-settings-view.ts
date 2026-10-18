@@ -26,6 +26,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import { styledExtensionStatusBadge } from "./extension-status.ts"
 import { glyphs } from "./glyphs.ts"
 import { imageFallback, nodeRows } from "./markdown-nodes.ts"
 
@@ -402,7 +403,13 @@ export class ExtensionSettingsView implements Component {
       }
     }
     const footer = hints.map(theme.muted)
-    const title = truncateToWidth(bold(theme.accent(this.#backend.request.title)), room, glyphs.more)
+    const status = this.#backend.request.extensionStatus
+    const badge = status ? styledExtensionStatusBadge(status, theme) : ""
+    const title = truncateToWidth(
+      `${bold(theme.accent(this.#backend.request.title))}${badge ? ` ${badge}` : ""}`,
+      room,
+      glyphs.more,
+    )
     // Short terminals keep the action keys and a focused control before optional preview/description.
     const footerRows = footer.slice(0, Math.max(1, Math.min(footer.length, height - 2)))
     const bodyBudget = Math.max(0, height - 1 - footerRows.length)

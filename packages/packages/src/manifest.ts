@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
-import { API_VERSION } from "@amira/api"
+import { API_VERSION, type ExtensionStatusMetadata } from "@amira/api"
+import { parseExtensionStatus } from "@amira/api/internal/extension-status"
 
 /** A package that cannot be installed or loaded; the message says which and why. */
 export class PackageError extends Error {
@@ -11,7 +12,9 @@ export class PackageError extends Error {
  * What a package contributes (D24), from `amira-package.json` or the `amira` field of its
  * package.json. Paths are absolute.
  */
-export interface PackageManifest {
+export interface PackageManifest extends ExtensionStatusMetadata {
+  /** Invalid optional metadata, without preventing the package from loading. */
+  warnings?: string[]
   name: string
   version: string
   /** Semver range of the extension API (`@amira/api`) the package works with. */
@@ -84,7 +87,15 @@ export function readManifest(dir: string): PackageManifest {
   const themes = paths("themes")
   const description = field("description")
   const deps = pkg?.dependencies
+  const warnings: string[] = []
+  const status = parseExtensionStatus(
+    { status: field("status"), statusMessage: field("statusMessage"), replacedBy: field("replacedBy") },
+    (message) => warnings.push(message),
+    name,
+  )
   return {
+    ...status,
+    ...(warnings.length ? { warnings } : {}),
     name,
     version,
     ...(engine ? { engine } : {}),

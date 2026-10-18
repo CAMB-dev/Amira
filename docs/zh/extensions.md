@@ -28,7 +28,9 @@ amira ext enable <name>
 amira ext remove <name>
 ```
 
-这些命令支持多个包名或来源。更新时不指定名称，会更新所选范围内的全部包；安装时不指定来源，会按该范围的锁文件恢复缺失的包。禁用会保留包和锁定记录，删除则移除两者。安装、更新和删除支持 `--quiet`（只输出结果）和 `--json`（每行一个结果对象）。
+这些命令支持多个包名或来源。更新时不指定名称，会更新所选范围内的全部包；安装时不指定来源，会按该范围的锁文件恢复缺失的包。禁用会保留包和锁定记录，删除则移除两者。安装、更新和删除支持 `--quiet`（只输出结果和警告）和 `--json`（每行一个结果对象）。
+
+安装和更新时，`experimental` 包会显示提示，`wip` 和 `deprecated` 包会显示警告。`--quiet` 隐藏实验性提示，但保留警告；`--json` 会输出单独的 `type: "status"` 事件，其中包含结构化的 `status` 对象（`kind`，以及可选的 `message` 和 `replacedBy`）；结果事件的 `status` 仍表示原有的操作结果。`amira ext list --json` 返回数组，其中受影响的包带有相同结构的状态对象。
 
 安装本地目录会复制文件，不会建立实时链接。修改源目录后需要重新安装。Git commit 和 npm 版本会明确锁定在 `packages.lock` 中；更新会重新解析来源并写入新的锁定值。
 
@@ -102,8 +104,21 @@ amira ext untrust
 | `skills` | Skill 目录路径 |
 | `themes` | 主题 JSON 文件路径，默认为 `[]`（见[主题](themes.md)） |
 | `commands` | 顶层 CLI 命令名到模块的映射 |
+| `status` | 可选：`experimental`、`wip` 或 `deprecated` |
+| `statusMessage` | 可选的状态说明 |
+| `replacedBy` | 可选的替代包名称；仅在状态为 `deprecated` 时使用，其他情况下忽略 |
 
 版本范围针对扩展 API，而不是 CLI 发布版本。[公共 API](../../packages/api/src/index.ts) 导出的 `API_VERSION` 是当前版本。未指定扩展列表时，Amira 依次查找 `index.ts` 和 `src/index.ts`；只提供 CLI 命令或主题的包可以不带扩展入口。
+
+### 扩展状态
+
+状态元数据均为可选。在 `package.json` 中，将它们放在 `amira` 对象内，即 `amira.status`、`amira.statusMessage` 和 `amira.replacedBy`；在 `amira-package.json` 中，使用同名的顶层字段。`experimental` 表示实验性包，`wip` 表示仍在开发中，`deprecated` 表示不再推荐使用的包。用 `statusMessage` 补充说明，弃用包可用 `replacedBy` 指定替代包。
+
+未知状态会被忽略，并产生清单警告。状态元数据及其警告不会阻止安装或加载；`replacedBy` 不会自动安装替代包。
+
+`index.json` 的每个条目也可以在顶层提供相同的可选字段 `status`、`statusMessage` 和 `replacedBy`（不嵌套在 `amira` 中），以便在安装前的查找过程中显示状态。允许的状态值和 `replacedBy` 的使用限制相同。索引状态会在下载前提示；已安装包的元数据优先采用清单中的有效状态。清单没有有效状态时，索引元数据会保存在锁文件中，供离线列表和设置页使用。
+
+`amira ext list`、`/extensions` 和扩展设置页面会显示状态徽标。会话启动时，以及使用扩展自身的命令或视图时，不会显示状态提示。
 
 ## 一个完整的小扩展
 

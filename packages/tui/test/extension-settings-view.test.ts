@@ -575,3 +575,24 @@ for (const mode of ["fullscreen"] as const) {
     }
   })
 }
+
+test.each(["experimental", "wip", "deprecated"] as const)(
+  "settings title shows a host-owned ASCII %s badge without adding a notice",
+  (status) => {
+    try {
+      setGlyphs({ pointer: ">", more: "...", separator: "|" })
+      const p = page()
+      p.backend.request.extensionStatus = { status }
+      const title = p.rows()[0]!
+      expect(stripAnsi(title)).toBe(`Diagram settings [${status}]`)
+      const style = status === "experimental" ? defaultTheme.muted : defaultTheme.warning
+      expect(title).toContain(style(`[${status}]`))
+      expect(p.plain()).not.toContain("warning:")
+      expect(p.rows(16).every((row) => visibleWidth(row) <= 16)).toBe(true)
+      p.backend.request.extensionStatus = {}
+      expect(stripAnsi(p.rows()[0]!)).toBe("Diagram settings")
+    } finally {
+      setGlyphs()
+    }
+  },
+)

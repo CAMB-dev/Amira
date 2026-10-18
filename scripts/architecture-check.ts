@@ -55,10 +55,23 @@ const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> 
   "packages/api": ["@amira/ai"],
 }
 
-// This is a workspace implementation boundary, not an extension-facing API. The API
-// renderer and agent extension share transcript helpers; other extensions use the
-// public subagentTranscriptText renderer instead of importing helpers from agent.
+// Internal API subpaths are workspace implementation boundaries, not extension-facing API.
+// Status parsing is host-only. The API renderer and agent extension share transcript helpers;
+// other extensions use the public subagentTranscriptText renderer instead.
 const internalApiSubpathConsumers = new Map<string, ReadonlySet<string>>([
+  [
+    "@amira/api/internal/extension-status",
+    new Set([
+      "packages/cli/src/session/extension-loading.ts",
+      "packages/core/src/extension-settings.ts",
+      "packages/core/src/ui-requests.ts",
+      "packages/packages/src/admin.ts",
+      "packages/packages/src/index-file.ts",
+      "packages/packages/src/install.ts",
+      "packages/packages/src/installed.ts",
+      "packages/packages/src/manifest.ts",
+    ]),
+  ],
   [
     "@amira/api/internal/subagent-transcript",
     new Set(["extensions/agent/src/agents-command.ts", "extensions/agent/src/subagent-view.ts"]),

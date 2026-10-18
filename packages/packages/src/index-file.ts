@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import type { ExtensionStatusMetadata } from "@amira/api"
+import { parseExtensionStatus } from "@amira/api/internal/extension-status"
 import { amiraHome } from "@amira/core"
 import type { PackageSource } from "./lock.ts"
 import { isValidPackageName, PackageError } from "./manifest.ts"
@@ -27,7 +29,7 @@ export interface ExtensionIndex {
   extensions: IndexEntry[]
 }
 
-export interface IndexEntry {
+export interface IndexEntry extends ExtensionStatusMetadata {
   /** The name `amira ext install <name>` takes; also the package's own name. */
   name: string
   description: string
@@ -59,7 +61,7 @@ export interface IndexOptions {
 export interface LoadedIndex {
   url: string
   index: ExtensionIndex
-  /** Entries that were skipped, and why the cache was used when the download failed. */
+  /** Invalid entries or optional metadata, and why the cache was used when the download failed. */
   warnings: string[]
 }
 
@@ -163,6 +165,7 @@ export function parseIndex(data: unknown): { index: ExtensionIndex; warnings: st
     const tags = Array.isArray(e.tags) ? e.tags.filter((t: unknown) => typeof t === "string") : []
     seen.add(e.name)
     extensions.push({
+      ...parseExtensionStatus(e, (message) => warnings.push(message), e.name),
       name: e.name,
       description: typeof e.description === "string" ? e.description : "",
       version: typeof e.version === "string" ? e.version : "",

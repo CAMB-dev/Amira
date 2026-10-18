@@ -1,4 +1,5 @@
 import type { ExtensionSettingField, ExtensionSettingsValues } from "./extension-settings.ts"
+import type { ExtensionStatusMetadata } from "./extension-status.ts"
 import type { FormSchema, FormSpec, FormValues } from "./form.ts"
 import type { SettingsLayerScope } from "./settings.ts"
 import type { AgentStatusState } from "./themes.ts"
@@ -61,6 +62,8 @@ type UiRequestData =
       descriptions?: string[]
       /** Host-rendered status badges, aligned with options; undefined leaves an option unbadged. */
       optionStatuses?: (AgentStatusState | undefined)[]
+      /** Package lifecycle badges aligned with options, rendered with the host theme. */
+      optionExtensionStatuses?: (ExtensionStatusMetadata | undefined)[]
       /** Full conversation text: substring filtering and matching snippets; section keys use Ctrl. */
       searchTexts?: string[]
     }
@@ -100,6 +103,8 @@ type UiRequestData =
       kind: "extension-settings"
       name: string
       title: string
+      /** Lifecycle metadata from the owning package, supplied by the host. */
+      extensionStatus?: ExtensionStatusMetadata
       fields: ExtensionSettingField[]
       values: ExtensionSettingsValues
       /** Highest explicit source of each field; omitted keys use the default. */
@@ -229,6 +234,8 @@ export interface UiApi {
       descriptions?: string[]
       searchTexts?: string[]
       optionStatuses?: (AgentStatusState | undefined)[]
+      /** Package lifecycle badges aligned with options, rendered with the host theme. */
+      optionExtensionStatuses?: (ExtensionStatusMetadata | undefined)[]
       /**
        * Host-only presentation, read initially and on host events until the choice closes.
        * Options stay fixed. Changed presentation re-emits ui.request with the same requestId;

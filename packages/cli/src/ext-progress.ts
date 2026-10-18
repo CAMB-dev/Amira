@@ -1,3 +1,4 @@
+import { type ExtensionStatusMetadata, extensionStatusNotice } from "@amira/api"
 import type { InstallProgress } from "@amira/packages"
 import { cyan, dim, green, red, truncateToWidth, visibleWidth, yellow } from "@amira/tui-kit"
 
@@ -123,6 +124,25 @@ export class ExtProgress {
   /** The package being worked on, if any: the one a Ctrl+C cancels. */
   active(): string | undefined {
     return this.rows.find((r) => !r.outcome && r.phase)?.name
+  }
+
+  /** Returns whether a notice was emitted; JSON result.status remains the operation outcome. */
+  packageStatus(name: string, value: ExtensionStatusMetadata): boolean {
+    const notice = extensionStatusNotice(name, value)
+    if (!notice || (this.opts.mode === "quiet" && notice.level !== "warning")) return false
+    if (this.opts.mode === "json") {
+      this.json({
+        type: "status",
+        name,
+        status: {
+          kind: value.status,
+          ...(value.statusMessage ? { message: value.statusMessage } : {}),
+          ...(value.status === "deprecated" && value.replacedBy ? { replacedBy: value.replacedBy } : {}),
+        },
+        ...notice,
+      })
+    } else this.note(notice.message)
+    return true
   }
 
   /** A warning or hint, printed above the package lines. */

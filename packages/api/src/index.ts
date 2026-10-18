@@ -25,6 +25,12 @@ export * from "./conversations.ts"
 export * from "./events.ts"
 export * from "./extension.ts"
 export * from "./extension-settings.ts"
+export {
+  type ExtensionStatus,
+  type ExtensionStatusMetadata,
+  extensionStatusBadge,
+  extensionStatusNotice,
+} from "./extension-status.ts"
 export * from "./extensions-admin.ts"
 export * from "./file-rewind.ts"
 export * from "./form.ts"
