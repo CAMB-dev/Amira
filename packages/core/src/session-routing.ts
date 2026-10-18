@@ -19,6 +19,11 @@ export function unregisterAgentSession(agent: Agent): void {
   if (busAgents.get(agent.bus)?.deref() === agent) busAgents.delete(agent.bus)
 }
 
+/** Whether `agent` still holds its session id, rather than a newer Agent for the same session. */
+export function holdsAgentSession(agent: Agent): boolean {
+  return agents.get(agent.sessionId)?.deref() === agent
+}
+
 /** A successfully selected root, not a merely constructed candidate, owns host-default requests. */
 export function activateAgentSession(agent: Agent): void {
   busAgents.set(agent.bus, new WeakRef(agent))

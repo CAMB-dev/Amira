@@ -88,7 +88,7 @@ import {
   renderPrompt,
   setSection,
 } from "./prompt.ts"
-import { registerAgentSession, unregisterAgentSession } from "./session-routing.ts"
+import { holdsAgentSession, registerAgentSession, unregisterAgentSession } from "./session-routing.ts"
 import { newSessionId, type SessionStore } from "./session-store.ts"
 import { scopeAdmission } from "./subagents/lifecycle.ts"
 import { PauseGate } from "./subagents/pause.ts"
@@ -413,6 +413,7 @@ export class Agent {
       throw error
     }
     registerAgentSession(this)
+    if (this.tree) scopeAdmission(this.tree).reopenParent(this.sessionId)
   }
 
   /**
@@ -737,7 +738,8 @@ export class Agent {
   dispose(reason: EventMap["session.end"]["reason"] = "exit"): Promise<void> {
     if (this.#disposePromise) return this.#disposePromise
     this.#disposed = true
-    if (this.tree) scopeAdmission(this.tree).closeParent(this.sessionId)
+    // A replacement for the same session (rewind, same-session switch) keeps spawning.
+    if (this.tree && holdsAgentSession(this)) scopeAdmission(this.tree).closeParent(this.sessionId)
     this.#disposePromise = this.#dispose(reason)
     return this.#disposePromise
   }
