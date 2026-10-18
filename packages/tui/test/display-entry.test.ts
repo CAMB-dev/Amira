@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
-import { SessionStore } from "@amira/core"
+import { createLocalAgentPort, SessionStore } from "@amira/core"
 import { stripAnsi } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { DisplayBlock, displayEnv } from "../src/blocks/display.ts"
@@ -116,7 +116,9 @@ for (const mode of ["fullscreen"] as const) {
     try {
       await waitFor(() => s.live().includes("btw: saved question"), "resumed display")
       expect(s.live()).not.toContain("saved side answer")
-      const saved = displayHistory(s.agent)
+      const frontend = createLocalAgentPort({ agent: s.agent })
+      const saved = displayHistory(JSON.parse(JSON.stringify(frontend.snapshot)))
+      await frontend.detach()
       expect(saved[0]?.before).toBe(1)
       const env = displayEnv(plain.theme, 60, "summary")
       const blocks = historyBlocks(s.agent.messages, () => env, {

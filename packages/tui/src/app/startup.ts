@@ -1,13 +1,15 @@
 // Owns interactive options, shared UI constants and startup helpers.
 import { homedir } from "node:os"
 import type { AnyEvent, CommandDefinition, ShimmerEffect, TerminalApi, TuiSettings } from "@amira/api"
-import type {
-  Agent,
-  CommandHost,
-  PanelRegistry,
-  StatusRegistry,
-  ThemeRegistry,
-  UiRequests,
+import {
+  type Agent,
+  type AgentPort,
+  type CommandHost,
+  createLocalAgentPort,
+  type PanelRegistry,
+  type StatusRegistry,
+  type ThemeRegistry,
+  type UiRequests,
 } from "@amira/core"
 import type { InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
 import type { ViewSource } from "../extension-view.ts"
@@ -20,6 +22,8 @@ import type { PresenterSource } from "../tool-view.ts"
 
 export interface InteractiveOptions {
   agent: Agent
+  /** Host-owned display reads. Omitted by local embedders: composed for this UI's lifetime. */
+  frontend?: AgentPort
   status: StatusRegistry
   /** Live panels registered by extensions, shown above the activity line. */
   panels?: PanelRegistry
@@ -94,6 +98,19 @@ export interface InteractiveOptions {
    * now. Quitting while some run asks first, as it does for sub-agents; they stop on exit.
    */
   runningJobs?: () => number
+}
+
+/** Local embedding compatibility; the CLI normally supplies its own port. */
+export async function withFrontend<T>(
+  opts: InteractiveOptions,
+  run: (opts: InteractiveOptions & { frontend: AgentPort }) => Promise<T>,
+): Promise<T> {
+  const frontend = opts.frontend ?? createLocalAgentPort({ agent: opts.agent, commands: opts.commands })
+  try {
+    return await run({ ...opts, frontend })
+  } finally {
+    if (!opts.frontend) await frontend.detach()
+  }
 }
 
 /** One notice for either legacy inline request, even when both the flag and setting are present. */

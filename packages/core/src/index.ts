@@ -19,6 +19,17 @@ export {
   waitFileLock,
 } from "./file-lock.ts"
 export * from "./file-rewind.ts"
+export { createLocalAgentPort, type LocalAgentPortOptions } from "./frontend/local-port.ts"
+export type { AgentPort, FrontendOperations, FrontendUpdate } from "./frontend/port.ts"
+export type {
+  FrontendDisplayEntry,
+  FrontendJson,
+  FrontendMessage,
+  FrontendMessageEntry,
+  FrontendSnapshot,
+  FrontendState,
+  FrontendTranscript,
+} from "./frontend/snapshot.ts"
 export * from "./git.ts"
 export * from "./home.ts"
 export * from "./instructions.ts"
