@@ -23,6 +23,7 @@ interface SessionHoldDeps {
 export class SessionHold {
   readonly #deps: SessionHoldDeps
   #what: string | undefined
+  #id: string | undefined
   #next: AfterCompaction | undefined
 
   constructor(deps: SessionHoldDeps) {
@@ -31,6 +32,10 @@ export class SessionHold {
 
   get what(): string | undefined {
     return this.#what
+  }
+
+  get id(): string | undefined {
+    return this.#id
   }
 
   get prompted(): boolean {
@@ -42,11 +47,13 @@ export class SessionHold {
     const abort = new AbortController()
     this.#deps.state.abort = abort
     this.#what = what
+    this.#id = `hold_${crypto.randomUUID()}`
     try {
       return await work(abort.signal)
     } finally {
       this.#deps.state.abort = undefined
       this.#what = undefined
+      this.#id = undefined
       const noticed = this.#deps.inbox.takeNoticedDuringHold()
       // Held input starts one turn; notices join it, or wake their own turn unless aborted.
       this.#start(abort.signal.aborted, what)

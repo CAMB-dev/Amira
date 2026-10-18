@@ -192,6 +192,11 @@ export class Dialog implements Component {
     return true
   }
 
+  /** A rejected acknowledgement resumes the same editor, including multi-question drafts. */
+  retryAnswer(): void {
+    if (this.#pages.length) this.#done = false
+  }
+
   /** Releases unfinished answers without invoking the request's answer callback. */
   close(): void {
     this.#done = true

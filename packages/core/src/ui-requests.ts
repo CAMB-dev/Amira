@@ -32,6 +32,8 @@ import {
 } from "@amira/api"
 import { checkAskAnswers } from "./ask-answers.ts"
 import type { EventBus } from "./event-bus.ts"
+import type { UiResponseAck } from "./frontend/form-backend.ts"
+import { captureUiRequest, releaseUiRequestOwner } from "./ui-request-capture.ts"
 
 type Value = UiAnswer[keyof UiAnswer]
 type SelectLive = NonNullable<Parameters<UiApi["choose"]>[2]["live"]>
@@ -69,13 +71,27 @@ interface Pending {
   /** For a form: the spec with its validators and actions, which never leave the host. */
   form?: FormState
   settings?: ExtensionSettingsBackend
+  settingsEditor?: object
   saving?: boolean
+}
+
+interface AutomaticFormAttempt {
+  key: string
+  running?: { controller: AbortController; accept?: () => boolean }
+}
+
+interface FormEditorState {
+  revision: number
+  editor?: string
+  cachedChange?: { revision: number; key: string; result: FormActionResult }
 }
 
 interface FormState {
   spec: FormSpec
+  /** Editor authority lives only as long as the pending request, across adapter recreation. */
+  authority: FormEditorState
   /** Private in-memory approval; never persisted or emitted. */
-  approved?: string
+  approved?: { editor?: string; revision: number; values: string }
   checking?: boolean
   /** Filtered updates from a refused direct submission; no secret values. */
   recovery?: FormValues
@@ -83,6 +99,8 @@ interface FormState {
   options: Record<string, FormOption[]>
   /** Actions running now; aborted when the form closes. */
   running: Set<AbortController>
+  /** Completed attempts survive replacement; obsolete running attempts may be retried. */
+  automatic: Map<string, AutomaticFormAttempt>
 }
 
 /**
@@ -136,6 +154,15 @@ export class UiRequests {
   /** A pending settings page's callbacks; undefined once resolved or for another request kind. */
   extensionSettingsBackend(requestId: string): ExtensionSettingsBackend | undefined {
     return this.#pending.get(requestId)?.settings
+  }
+
+  /** Local settings adapters share request-lifetime editor authority, just like forms. */
+  claimExtensionSettingsEditor(requestId: string): () => boolean {
+    const pending = this.#pending.get(requestId)
+    if (!pending?.settings) return () => false
+    const editor = {}
+    pending.settingsEditor = editor
+    return () => this.#pending.get(requestId) === pending && pending.settingsEditor === editor
   }
 
   extensionSettings(
@@ -220,7 +247,13 @@ export class UiRequests {
         controller.abort()
       })
     }
-    const form: FormState = { spec, options: {}, running: new Set() }
+    const form: FormState = {
+      spec,
+      authority: { revision: -1 },
+      options: {},
+      running: new Set(),
+      automatic: new Map(),
+    }
     return this.#ask({ kind: "form", ...toFormSchema(spec) }, opts, form) as Promise<FormValues | undefined>
   }
 
@@ -281,6 +314,7 @@ export class UiRequests {
           this.#bus.emit("ui.request", pending.request, { sessionId })
         })
       }
+      captureUiRequest(this, event, this.#bus)
       this.#bus.emit("ui.request", event, { sessionId })
     })
   }
@@ -305,12 +339,14 @@ export class UiRequests {
         p.form.options,
       )
       if (Object.keys(errors).length) return `invalid form values: ${describeFormErrors(p.form.spec, errors)}`
-      if (p.form.spec.beforeSubmit && p.form.approved !== JSON.stringify(values)) {
+      if (p.form.spec.beforeSubmit && !formApproved(p.form, values)) {
         if (p.form.checking) return "form is being checked"
         p.form.checking = true
+        const { editor, revision } = p.form.authority
         void this.beforeSubmitForm(requestId, values).then((result) => {
           if (this.#pending.get(requestId) !== p) return
           p.form!.checking = false
+          if (p.form!.authority.editor !== editor || p.form!.authority.revision !== revision) return
           const final = checkForm(p.form!.spec, { ...values, ...result.values }, p.form!.options)
           if (result.tone === "error" || Object.keys(final.errors).length) {
             p.form!.approved = undefined
@@ -339,8 +375,9 @@ export class UiRequests {
     if (p.settings) {
       if (p.saving) return "settings are being saved"
       // RPC responders keep their synchronous contract. Native pages await this operation below.
+      const editor = p.settingsEditor
       void this.submitExtensionSettings(requestId, value as UiAnswer["extension-settings"]).then((error) => {
-        if (error && this.#pending.has(requestId))
+        if (error && this.#pending.get(requestId) === p && p.settingsEditor === editor)
           this.#bus.emit(
             "ui.progress",
             { requestId, action: "save", text: error },
@@ -351,6 +388,30 @@ export class UiRequests {
     }
     this.#settle(requestId, value as Value)
     return undefined
+  }
+
+  /** Acknowledged responses never treat transport loss as cancellation. Legacy respond stays synchronous. */
+  respondAcknowledged(requestId: string, value: unknown): UiResponseAck {
+    if (this.requestState(requestId) === "settled") return { status: "settled" }
+    const pending = this.#pending.get(requestId)
+    if (value !== null && value !== undefined) {
+      // Only the revisioned submit operation may start an asynchronous save/check. An invalid
+      // acknowledgement must not secretly schedule a legacy submission that later settles.
+      if (pending?.settings) return { status: "invalid", message: "use the settings submit operation" }
+      const form = pending?.form
+      if (form?.spec.beforeSubmit && typeof value === "object" && !Array.isArray(value)) {
+        const checked = checkForm(form.spec, { ...form.recovery, ...value }, form.options)
+        if (!formApproved(form, checked.values))
+          return { status: "invalid", message: "form must be checked before submission" }
+      }
+    }
+    const problem = this.respond(requestId, value)
+    if (problem) return { status: "invalid", message: problem }
+    if (value === null || value === undefined) return { status: "cancelled" }
+    // Async legacy form/settings submissions are not yet acknowledged resolutions.
+    if (this.requestState(requestId) !== "settled")
+      return { status: "invalid", message: "request is being checked" }
+    return { status: "accepted" }
   }
 
   /** Saves a settings draft, resolving the request only after the host accepts and persists it. */
@@ -366,10 +427,13 @@ export class UiRequests {
     pending.saving = true
     const values = structuredClone(answer.values)
     const scope = answer.scope
+    const editor = pending.settingsEditor
     try {
       await pending.settings.save(values, scope)
-      // A cancelled/unloaded request must not settle a second time.
-      if (this.#pending.get(requestId) === pending) this.#settle(requestId, { values, scope })
+      // Persistence already admitted cannot be undone, but its abandoned editor cannot close a replacement.
+      if (this.#pending.get(requestId) !== pending || pending.settingsEditor !== editor)
+        return "stale settings editor"
+      this.#settle(requestId, { values, scope })
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     } finally {
@@ -408,10 +472,21 @@ export class UiRequests {
   async beforeSubmitForm(
     requestId: string,
     values: FormValues,
-    opts: { signal?: AbortSignal; onProgress?: (text: string) => void } = {},
+    opts: {
+      signal?: AbortSignal
+      onProgress?: (text: string) => void
+      accept?: () => boolean
+      automatic?: boolean
+    } = {},
   ): Promise<FormActionResult> {
     const form = this.#pending.get(requestId)?.form
     if (!form) return { message: `no pending form "${requestId}"`, tone: "error" }
+    const { editor, revision } = form.authority
+    const current = () =>
+      this.#pending.get(requestId)?.form === form &&
+      form.authority.editor === editor &&
+      form.authority.revision === revision &&
+      (opts.accept?.() ?? true)
     const controller = new AbortController()
     const onAbort = () => controller.abort()
     opts.signal?.addEventListener("abort", onAbort, { once: true })
@@ -421,21 +496,35 @@ export class UiRequests {
       const result = await runFormBeforeSubmit(form.spec, checkForm(form.spec, values, form.options).values, {
         signal: controller.signal,
         progress: (text) => {
-          if (!controller.signal.aborted) opts.onProgress?.(text)
+          if (!controller.signal.aborted && current()) opts.onProgress?.(text)
         },
       })
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && current()) {
         if (result.options) Object.assign(form.options, result.options)
         if (result.tone !== "error")
-          form.approved = JSON.stringify(
-            checkForm(form.spec, { ...values, ...result.values }, form.options).values,
-          )
+          form.approved = {
+            editor,
+            revision,
+            values: JSON.stringify(
+              checkForm(form.spec, { ...values, ...result.values }, form.options).values,
+            ),
+          }
       }
       return result
     } finally {
       form.running.delete(controller)
       opts.signal?.removeEventListener("abort", onAbort)
     }
+  }
+
+  /** Shared host editor state; deleting the pending request releases its authority and cache. */
+  formEditorState(requestId: string): FormEditorState | undefined {
+    return this.#pending.get(requestId)?.form?.authority
+  }
+
+  /** Retained display options let a newly mounted editor recover completed action output. */
+  formOptions(requestId: string): Record<string, FormOption[]> {
+    return structuredClone(this.#pending.get(requestId)?.form?.options ?? {})
   }
 
   /** Computes conditional presentation without sending host callbacks to a frontend. */
@@ -461,23 +550,68 @@ export class UiRequests {
     requestId: string,
     action: string,
     values: Record<string, unknown>,
-    opts: { signal?: AbortSignal; onProgress?: (text: string) => void } = {},
+    opts: {
+      signal?: AbortSignal
+      onProgress?: (text: string) => void
+      accept?: () => boolean
+      automatic?: boolean
+    } = {},
   ): Promise<FormActionResult> {
     const pending = this.#pending.get(requestId)
     if (!pending?.form) return { message: `no pending form "${requestId}"`, tone: "error" }
     const form = pending.form
+    const { editor, revision } = form.authority
+    const accept = () =>
+      this.#pending.get(requestId) === pending &&
+      form.authority.editor === editor &&
+      form.authority.revision === revision &&
+      (opts.accept?.() ?? true)
+    const field = form.spec.fields.find((field) => field.id === action)
+    // Field checks do not matter here; an action may run on a half-filled form.
+    const current = checkForm(form.spec, values, form.options).values
+    // Fingerprints stay host-local; only completed or still-current attempts suppress admission.
+    const automaticKey =
+      opts.automatic && field?.type === "action" && field.auto
+        ? JSON.stringify([
+            action,
+            field.auto.watch.map((dependency) => {
+              const name = typeof dependency === "string" ? dependency : dependency.field
+              const applies =
+                typeof dependency === "string" ||
+                Object.entries(dependency.when).every(([id, value]) => current[id] === value)
+              const watched = form.spec.fields.find((field) => field.id === name)
+              return applies && watched && isFieldVisible(form.spec, watched, current)
+                ? current[name]
+                : undefined
+            }),
+          ])
+        : undefined
+    if (automaticKey !== undefined) {
+      const previous = form.automatic.get(action)?.running
+      if (previous && (previous.controller.signal.aborted || !(previous.accept?.() ?? true))) {
+        previous.controller.abort()
+        form.automatic.delete(action)
+      }
+      if (
+        form.automatic.get(action)?.key === automaticKey ||
+        !this.autoFormActions(requestId, values).includes(action)
+      )
+        return {}
+    }
     const controller = new AbortController()
+    const attempt: AutomaticFormAttempt | undefined =
+      automaticKey === undefined ? undefined : { key: automaticKey, running: { controller, accept } }
+    // Record a unique attempt before extension code; an old finally cannot erase its replacement.
+    if (attempt) form.automatic.set(action, attempt)
     const onAbort = () => controller.abort()
     opts.signal?.addEventListener("abort", onAbort, { once: true })
     if (opts.signal?.aborted) controller.abort()
     form.running.add(controller)
-    // Field checks do not matter here; an action may run on a half-filled form.
-    const current = checkForm(form.spec, values, form.options).values
     try {
       const result = await runFormAction(form.spec, action, current, {
         signal: controller.signal,
         progress: (text) => {
-          if (controller.signal.aborted) return
+          if (controller.signal.aborted || !accept()) return
           opts.onProgress?.(text)
           this.#bus.emit(
             "ui.progress",
@@ -486,9 +620,14 @@ export class UiRequests {
           )
         },
       })
-      if (!controller.signal.aborted && result.options) Object.assign(form.options, result.options)
+      if (!controller.signal.aborted && accept() && result.options)
+        Object.assign(form.options, result.options)
       return result
     } finally {
+      if (attempt && form.automatic.get(action) === attempt) {
+        if (controller.signal.aborted || !accept()) form.automatic.delete(action)
+        else attempt.running = undefined
+      }
       form.running.delete(controller)
       opts.signal?.removeEventListener("abort", onAbort)
     }
@@ -589,6 +728,7 @@ export class UiRequests {
   #settle(requestId: string, value: Value | undefined) {
     const p = this.#pending.get(requestId)!
     this.#pending.delete(requestId)
+    releaseUiRequestOwner(this, requestId)
     this.#settled.add(requestId)
     p.cleanup()
     // Form values and secret answers stay out of events, which frontends and extensions log.
@@ -609,6 +749,14 @@ export class UiRequests {
     )
     p.resolve(value)
   }
+}
+
+function formApproved(form: FormState, values: FormValues): boolean {
+  return (
+    form.approved?.editor === form.authority.editor &&
+    form.approved?.revision === form.authority.revision &&
+    form.approved?.values === JSON.stringify(values)
+  )
 }
 
 /** The caller's signal, joined with a timeout when one is given. */

@@ -264,3 +264,73 @@ for (const mode of ["fullscreen"] as const) {
     })
   }
 }
+
+for (const source of ["command", "skill", "input"] as const) {
+  for (const effect of ["openRewind", "focusConversation", "unfocusConversation", "quit"] as const) {
+    test(`delayed ${source} ${effect} cannot act on replacement foreground focus`, async () => {
+      const gate = Promise.withResolvers<void>()
+      const done = Promise.withResolvers<void>()
+      let started = false
+      let ended = false
+      let target!: Parameters<NonNullable<CommandContext["focusConversation"]>>[0]
+      const extension: Extension = (api) => {
+        const run = async (_args: string, ctx: CommandContext) => {
+          started = true
+          await gate.promise
+          if (effect === "focusConversation") expect(ctx.focusConversation!(target)).toBe(false)
+          else if (effect === "quit") ctx.quit()
+          else expect(ctx[effect]!()).toBe(false)
+          done.resolve()
+        }
+        api.registerCommand({ name: "later-origin", description: "Delayed", run })
+        api.registerSkill({ name: "later-origin", description: "Delayed", run })
+        api.registerInputHandler({
+          name: "later-origin",
+          claims: (line) => line === "later-origin-input",
+          run,
+        })
+      }
+      const s = await focusFixture("fullscreen", [], "/work/design", { extensions: [extension] })
+      target = s.conversation
+      void s.exited.then(() => {
+        ended = true
+      })
+      try {
+        s.terminal.send(
+          `${source === "command" ? "/later-origin" : source === "skill" ? "$later-origin" : "later-origin-input"}\r`,
+        )
+        await waitFor(() => started, "delayed invocation")
+        s.terminal.send("/design\r")
+        await waitFor(() => s.live().includes("Design · fixture"), "replacement focus")
+        s.terminal.send("Owned draft")
+        await waitFor(() => s.live().includes("Owned draft"), "owned draft")
+        gate.resolve()
+        await done.promise
+        await s.bus.flush()
+        await Bun.sleep(10)
+        expect(ended).toBe(false)
+        expect(s.live()).toContain("Design · fixture")
+        expect(s.live()).toContain("Owned draft")
+        expect(s.all()).not.toContain("Rewind is waiting on main")
+      } finally {
+        gate.resolve()
+        await close(s)
+      }
+    })
+  }
+}
+
+test("live fixture controls do not grant a retained invocation fresh foreground authority", async () => {
+  const s = await focusFixture("fullscreen", [])
+  try {
+    s.terminal.send("/design\r")
+    await waitFor(() => s.live().includes("Design · fixture"), "owned focus")
+    const retained = s.invocationContext()
+    s.terminal.send(F6)
+    await waitFor(() => !s.live().includes("main idle"), "main focus")
+    expect(retained.focusConversation?.(s.conversation)).toBe(false)
+    expect(s.context().focusConversation?.(s.conversation)).toBe(true)
+  } finally {
+    await close(s)
+  }
+})

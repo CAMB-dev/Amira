@@ -25,7 +25,14 @@ import {
   type SavedConversation,
   validateSpec,
 } from "./owned-conversations-storage.ts"
-import { registerConversationScope, sessionScopeContains } from "./session-routing.ts"
+import {
+  registerConversationHold,
+  registerConversationScope,
+  registerConversationSend,
+  registerConversationTurn,
+  releaseConversationIncarnation,
+  sessionScopeContains,
+} from "./session-routing.ts"
 import { approveWithHost } from "./subagents/host-approval.ts"
 import { scopeAdmission } from "./subagents/lifecycle.ts"
 import { routeTreeToHuman } from "./subagents/question-routing.ts"
@@ -336,7 +343,11 @@ class Handle implements OwnedConversation {
     registerConversationScope(
       this,
       (id) => !this.#released && sessionScopeContains(agent.tree, id, agent.sessionId),
+      agent,
     )
+    registerConversationTurn(this, () => (this.#released ? undefined : agent.turnId))
+    registerConversationHold(this, () => (this.#released ? undefined : agent.holdId))
+    registerConversationSend(this, (text, options, turnId) => this.send(text, options, turnId))
     this.key = spec.key
     this.name = spec.name
     this.cwd = spec.cwd
@@ -389,7 +400,11 @@ class Handle implements OwnedConversation {
     }
   }
 
-  async send(text: string, options?: Parameters<OwnedConversation["send"]>[1]): Promise<void> {
+  async send(
+    text: string,
+    options?: Parameters<OwnedConversation["send"]>[1],
+    turnId?: string,
+  ): Promise<void> {
     this.#check()
     if (options?.signal?.aborted) {
       if (!this.#running) this.#state = "stopped"
@@ -420,6 +435,7 @@ class Handle implements OwnedConversation {
                 : options?.display
                   ? userMessage(text, options.display)
                   : text,
+              { turnId },
             )
             .then(async (result) => {
               await drainOwnedTools(this.#agent)
@@ -514,6 +530,7 @@ class Handle implements OwnedConversation {
   release(): Promise<void> {
     if (this.#release) return this.#release
     this.#released = true
+    releaseConversationIncarnation(this)
     scopeAdmission(this.#agent.tree!).suspend()
     this.#abort?.abort(new Error("owned conversation released"))
     this.#release = (async () => {

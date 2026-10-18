@@ -19,8 +19,37 @@ export {
   waitFileLock,
 } from "./file-lock.ts"
 export * from "./file-rewind.ts"
+export {
+  createUiFormBackend,
+  type FormDraft,
+  type FormEditor,
+  type FormEvaluation,
+  type FormMutationResult,
+  type FormOperationOptions,
+  type FormRequest,
+  type FrontendFormBackend,
+  type UiResponseAck,
+} from "./frontend/form-backend.ts"
 export { createLocalAgentPort, type LocalAgentPortOptions } from "./frontend/local-port.ts"
-export type { AgentPort, FrontendOperations, FrontendUpdate } from "./frontend/port.ts"
+export {
+  bindLocalCommandContext,
+  bindLocalConversation,
+  type FrontendAcknowledgement,
+  type FrontendCommandParams,
+  type FrontendErrorCode,
+  type FrontendExecuteOptions,
+  type FrontendMutations,
+  FrontendOperationError,
+  isFrontendError,
+  type LocalConversationBinding,
+} from "./frontend/operations.ts"
+export {
+  type AgentPort,
+  type FrontendOperations,
+  type FrontendSessionIdentity,
+  type FrontendUpdate,
+  frontendIdentity,
+} from "./frontend/port.ts"
 export type {
   FrontendDisplayEntry,
   FrontendJson,

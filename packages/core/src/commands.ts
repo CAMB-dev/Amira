@@ -8,13 +8,15 @@ import type {
   CommandOutputLevel,
   FrontendView,
   InputHandler,
+  OwnedConversation,
   SendOptions,
   SessionControl,
   SkillInfo,
 } from "@amira/api"
 import type { Agent } from "./agent.ts"
-import { bindCommandViewContext } from "./command-view-context.ts"
+import { CommandContextScope } from "./command-context-scope.ts"
 import type { EventBus } from "./event-bus.ts"
+import { activateAgentSession } from "./session-routing.ts"
 import { parseSkillLine, type SkillRegistry } from "./skills.ts"
 import type { UiRequests } from "./ui-requests.ts"
 
@@ -262,6 +264,8 @@ export function rankMatches<T>(
 
 export interface CommandRunOptions {
   frontend: CommandFrontend
+  /** Optional invocation-origin focus/lifetime fence for local frontend effects. */
+  isFrontendCurrent?: () => boolean
   /** What /quit does; frontends without one leave it out. */
   quit?: () => void
   signal?: AbortSignal
@@ -328,12 +332,13 @@ type Resolved =
 export class CommandHost {
   #opts: CommandHostOptions
   #agent: Agent
-  #contextGeneration = 0
+  #contexts = new CommandContextScope()
   #listeners = new Set<(agent: Agent) => void>()
 
   constructor(opts: CommandHostOptions) {
     this.#opts = opts
     this.#agent = opts.agent
+    activateAgentSession(opts.agent)
   }
 
   get agent(): Agent {
@@ -346,9 +351,11 @@ export class CommandHost {
 
   /** Makes `agent` the active session and tells every listener. */
   switchTo(agent: Agent): void {
-    this.#contextGeneration++
-    this.#agent = agent
-    for (const fn of this.#listeners) fn(agent)
+    this.#contexts.switched(() => {
+      this.#agent = agent
+      activateAgentSession(agent)
+      for (const fn of this.#listeners) fn(agent)
+    })
   }
 
   onSwitch(listener: (agent: Agent) => void): () => void {
@@ -487,10 +494,14 @@ export class CommandHost {
     })
     let all: CommandCandidate[] | Promise<CommandCandidate[]>
     try {
-      all = complete(prefix, {
-        cwd: this.#agent.cwd,
-        session: this.#opts.contextControl?.(entry.source) ?? this.#opts.control,
-      })
+      all = this.#contexts.run(() =>
+        complete(prefix, {
+          cwd: this.#agent.cwd,
+          session: this.#contexts
+            .capture()
+            .control(this.#opts.contextControl?.(entry.source) ?? this.#opts.control),
+        }),
+      )
     } catch {
       return { command, candidates: [] }
     }
@@ -524,7 +535,7 @@ export class CommandHost {
     const { entry: command, prepend } = resolved
     const args = [prepend, parsed.args].filter(Boolean).join(" ")
     try {
-      await command.def.run(args, this.#context(opts, print, command.source))
+      await this.#contexts.run(() => command.def.run(args, this.#context(opts, print, command.source)))
       return { ok: true, command: name, output }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -551,7 +562,7 @@ export class CommandHost {
       return { ok: false, ...(parsed ? { command: parsed.name } : {}), output, error }
     }
     try {
-      await skill.def.run(parsed.args, this.#context(opts, print, skill.source))
+      await this.#contexts.run(() => skill.def.run(parsed.args, this.#context(opts, print, skill.source)))
       return { ok: true, command: parsed.name, output }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -583,7 +594,7 @@ export class CommandHost {
       return { ok: false, output, error }
     }
     try {
-      await handler.run(text, this.#context(opts, print))
+      await this.#contexts.run(() => handler.run(text, this.#context(opts, print)))
       return { ok: true, command: handler.name, output }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -635,38 +646,34 @@ export class CommandHost {
   }
 
   #context(opts: CommandRunOptions, print: CommandContext["print"], source?: string): CommandContext {
-    const agent = this.#agent
-    const generation = this.#contextGeneration
-    const currentRoot = () => this.#agent === agent && this.#contextGeneration === generation
+    const scope = this.#contexts.capture(opts.signal)
     const control = this.#opts.contextControl?.(source) ?? this.#opts.control
+    const frontendCurrent = () => scope.current() && (opts.isFrontendCurrent?.() ?? true)
+    const openView = opts.openView && scope.view(opts.openView, opts.isFrontendCurrent)
     return {
       cwd: this.#agent.cwd,
-      session: opts.onSend
-        ? {
-            ...control,
-            send: async (text, sendOpts) => {
-              const failed = opts.onSend!(text, sendOpts)
-              try {
-                await control.send(text, sendOpts)
-              } catch (error) {
-                failed?.()
-                throw error
-              }
-            },
-          }
-        : control,
+      session: scope.control(control, opts.onSend),
       frontend: opts.frontend,
       signal: opts.signal ?? new AbortController().signal,
-      ui: this.#opts.ui.api(),
+      ui: scope.ui(this.#opts.ui.api()),
       print,
       commands: () => this.list(),
       skills: () => this.skills(),
       aliases: () => this.aliases(),
-      quit: opts.quit ?? (() => {}),
-      ...(opts.openView ? { openView: bindCommandViewContext(opts.openView, currentRoot) } : {}),
-      ...(opts.openRewind ? { openRewind: opts.openRewind } : {}),
-      ...(opts.focusConversation ? { focusConversation: opts.focusConversation } : {}),
-      ...(opts.unfocusConversation ? { unfocusConversation: opts.unfocusConversation } : {}),
+      quit: () => {
+        if (frontendCurrent()) opts.quit?.()
+      },
+      ...(openView ? { openView } : {}),
+      ...(opts.openRewind ? { openRewind: () => frontendCurrent() && opts.openRewind!() } : {}),
+      ...(opts.focusConversation
+        ? {
+            focusConversation: (conversation: OwnedConversation) =>
+              frontendCurrent() && opts.focusConversation!(conversation),
+          }
+        : {}),
+      ...(opts.unfocusConversation
+        ? { unfocusConversation: () => frontendCurrent() && opts.unfocusConversation!() }
+        : {}),
       ...(opts.keys ? { keys: opts.keys } : {}),
       ...(opts.glyphs ? { glyphs: opts.glyphs } : {}),
     }

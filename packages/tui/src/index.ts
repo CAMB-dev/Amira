@@ -1,3 +1,4 @@
+export type { OverlayRequestBackend } from "./app/overlays.ts"
 export { type InteractiveOptions, runInteractive } from "./app.ts"
 export {
   type ExtensionSettingsRequest,
@@ -7,6 +8,7 @@ export {
   uiExtensionSettingsBackend,
 } from "./extension-settings-view.ts"
 export { ExtensionViewer, type ExtensionViewerOptions, type ViewSource } from "./extension-view.ts"
+export { operationFormBackend } from "./form-operation-backend.ts"
 export {
   type FormBackend,
   type FormScreenOptions,

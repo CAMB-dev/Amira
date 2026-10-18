@@ -6,7 +6,7 @@ import {
   isSubagentView,
   type ToolDetailLevel,
 } from "@amira/api"
-import type { UiRequests } from "@amira/core"
+import { createUiFormBackend, type UiRequests, type UiResponseAck } from "@amira/core"
 import {
   type ImageStore,
   type InputEvent,
@@ -23,10 +23,12 @@ import {
   type ExtensionSettingsRequest,
   ExtensionSettingsView,
   type ExtensionSettingsViewOptions,
+  type SettingsPageBackend,
   uiExtensionSettingsBackend,
 } from "../extension-settings-view.ts"
 import { ExtensionViewer, type ViewSource } from "../extension-view.ts"
-import { type FormRequest, FormView, uiFormBackend } from "../form-view.ts"
+import { operationFormBackend } from "../form-operation-backend.ts"
+import { type FormBackend, type FormRequest, FormView } from "../form-view.ts"
 import { KeyReference } from "../key-reference.ts"
 import type { Keybindings, KeySpec } from "../keybindings.ts"
 import type { PresenterSource } from "../tool-view.ts"
@@ -35,8 +37,17 @@ import type { CommandRunner } from "./command-runner.ts"
 import { DockedView } from "./dock.ts"
 import { overlayKeys } from "./startup.ts"
 
+/** Cached request lifecycle plus acknowledged mutations; no host callbacks reach remote editors. */
+export interface OverlayRequestBackend {
+  requestState(requestId: string): "pending" | "settled" | "unknown"
+  respond(requestId: string, value: unknown): UiResponseAck | Promise<UiResponseAck>
+  form(request: FormRequest): FormBackend
+  settings(request: ExtensionSettingsRequest): SettingsPageBackend
+}
+
 export interface OverlayManagerDeps {
   ui?: UiRequests
+  requests?: OverlayRequestBackend
   views?: ViewSource
   keys: Keybindings
   theme: Theme
@@ -52,6 +63,8 @@ export interface OverlayManagerDeps {
   working: () => boolean
   interrupt: () => void
   approvalCancelled?: (request: EventMap["ui.request"]) => void
+  /** Captures the owning turn when a dialog is first announced, not when it is answered. */
+  approvalCancellation?: (request: EventMap["ui.request"]) => () => void
   conversationChrome?: (width: number, ctx: RenderContext) => string[]
   pointerHint?: () => string | undefined
   quitting: () => boolean
@@ -92,12 +105,33 @@ export class OverlayManager {
   private form: FormView | ExtensionSettingsView | undefined
   /** Pending requests retain their actual editors while their conversation is hidden. */
   private readonly requestDialogs = new Map<string, Dialog>()
+  /** Responses outlive resolved presentation, but never a session change or disposal. */
+  private readonly dialogResponses = new Map<Dialog, { visible: boolean }>()
   private readonly requestForms = new Map<
     string,
-    { request: FormRequest | ExtensionSettingsRequest; view?: FormView | ExtensionSettingsView }
+    {
+      request: FormRequest | ExtensionSettingsRequest
+      view?: FormView | ExtensionSettingsView
+      replay?: boolean
+    }
   >()
 
   constructor(private readonly deps: OverlayManagerDeps) {}
+
+  private get requests(): OverlayRequestBackend | undefined {
+    if (this.deps.requests) return this.deps.requests
+    const ui = this.deps.ui
+    if (!ui) return undefined
+    return {
+      requestState: (id) => ui.requestState(id),
+      respond: (id, value) =>
+        ui.requestState(id) === "unknown"
+          ? { status: value === undefined ? "cancelled" : "accepted" }
+          : ui.respondAcknowledged(id, value),
+      form: (request) => operationFormBackend(createUiFormBackend(ui, request)),
+      settings: (request) => uiExtensionSettingsBackend(ui, request),
+    }
+  }
 
   /** Echoes of existing dialogs use the theme active when they are answered or redrawn. */
   setTheme(theme: Theme): void {
@@ -394,6 +428,7 @@ export class OverlayManager {
 
   /** A side view belongs to the session that opened it. */
   sessionChanged(): void {
+    this.dialogResponses.clear()
     this.closeDock()
   }
 
@@ -408,6 +443,7 @@ export class OverlayManager {
       const form = this.form
       const viewer = this.viewer
       this.dialogs.splice(0)
+      for (const response of this.dialogResponses.values()) response.visible = false
       this.forms.splice(0)
       this.form = undefined
       this.viewer = undefined
@@ -463,9 +499,17 @@ export class OverlayManager {
 
   /** Shows the first waiting form, unless a dialog, the viewer or another form is up. */
   private openNextForm() {
-    const ui = this.deps.ui
+    const requests = this.requests
     const next = this.forms[0]
-    if (!ui || !next || this.detaching || this.disposed || this.form || this.viewer || this.dialogs.length)
+    if (
+      !requests ||
+      !next ||
+      this.detaching ||
+      this.disposed ||
+      this.form ||
+      this.viewer ||
+      this.dialogs.length
+    )
       return
     const entry = this.requestForms.get(next.requestId)
     if (!entry) return
@@ -474,17 +518,18 @@ export class OverlayManager {
         if (this.form === form) this.deps.view().requestOverlayRender()
       },
       waiting: this.waitingTitles,
+      replay: entry.replay,
       onClose: () => this.closeForm(next.requestId, form),
     }
     const form =
       entry.view ??
       (next.kind === "extension-settings"
-        ? new ExtensionSettingsView(uiExtensionSettingsBackend(ui, next), {
+        ? new ExtensionSettingsView(requests.settings(next), {
             ...options,
             images: this.deps.images,
             previewTheme: this.deps.previewTheme,
           })
-        : new FormView(uiFormBackend(ui, next), options))
+        : new FormView(requests.form(next), options))
     entry.view = form
     this.form = form
     this.dock?.hide()
@@ -532,23 +577,24 @@ export class OverlayManager {
     }
   }
 
-  onUiRequest(data: EventMap["ui.request"]) {
-    const ui = this.deps.ui
+  onUiRequest(data: EventMap["ui.request"], options: { replay?: boolean } = {}) {
+    const requests = this.requests
     // Unknown IDs can be first external announcements. Settled IDs are stale, even if cloned
     // or delivered before their initial request/resolved events have reached this frontend.
     if (
-      !ui ||
+      !requests ||
       this.disposed ||
       this.settledRequests.has(data.requestId) ||
-      ui.requestState(data.requestId) === "settled"
+      requests.requestState(data.requestId) === "settled"
     )
       return
     if (data.kind === "form" || data.kind === "extension-settings") {
       if (this.forms.some((request) => request.requestId === data.requestId)) return
-      if (!this.requestForms.has(data.requestId)) this.requestForms.set(data.requestId, { request: data })
+      if (!this.requestForms.has(data.requestId))
+        this.requestForms.set(data.requestId, { request: data, replay: options.replay })
       this.forms.push(data)
       this.openNextForm()
-      this.waitingChanged("opened")
+      this.waitingChanged(options.replay ? "visibility" : "opened")
       return
     }
     const existing = this.requestDialogs.get(data.requestId)
@@ -556,13 +602,22 @@ export class OverlayManager {
       if (existing.update(data)) this.deps.view().requestRender()
       return
     }
+    const cancelApproval =
+      !existing && data.source === "approval" ? this.deps.approvalCancellation?.(data) : undefined
     const dialog =
-      existing ?? new Dialog(data, (answer) => this.answerDialog(ui, dialog, answer), this.deps.keys)
+      existing ??
+      new Dialog(
+        data,
+        (answer) => this.answerDialog(requests, dialog, answer, cancelApproval),
+        this.deps.keys,
+      )
     if (existing) existing.update(data)
     this.requestDialogs.set(data.requestId, dialog)
     this.dialogs.push(dialog)
-    // Over the viewer or a form it shows only as a banner; the bell rings so it is noticed.
-    this.waitingChanged("opened")
+    const response = this.dialogResponses.get(dialog)
+    if (response) response.visible = true
+    // Replayed requests restore display only, without another opened notification.
+    this.waitingChanged(options.replay ? "visibility" : "opened")
   }
 
   onUiResolved(data: EventMap["ui.resolved"]) {
@@ -592,14 +647,14 @@ export class OverlayManager {
 
   /** A settled host request must stop owning input even before its queued event is drained. */
   reconcileResolvedRequests(): void {
-    const ui = this.deps.ui
-    if (!ui) return
+    const backend = this.requests
+    if (!backend) return
     const requests = [
       ...[...this.requestDialogs.values()].map((dialog) => dialog.request),
       ...[...this.requestForms.values()].map((entry) => entry.request),
     ]
     for (const request of requests) {
-      if (ui.requestState(request.requestId) === "settled") this.forgetResolvedRequest(request.requestId)
+      if (backend.requestState(request.requestId) === "settled") this.forgetResolvedRequest(request.requestId)
     }
   }
 
@@ -643,46 +698,80 @@ export class OverlayManager {
     return true
   }
 
-  private answerDialog(ui: UiRequests, dialog: Dialog, answer: DialogAnswer) {
-    const i = this.dialogs.indexOf(dialog)
-    if (i === -1 || this.disposed) return
-    this.dialogs.splice(i, 1)
+  private answerDialog(
+    backend: OverlayRequestBackend,
+    dialog: Dialog,
+    answer: DialogAnswer,
+    cancelApproval?: () => void,
+  ) {
+    if (!this.dialogs.includes(dialog) || this.disposed || this.dialogResponses.has(dialog)) return
     const { requestId } = dialog.request
-    this.requestDialogs.delete(requestId)
-    dialog.close()
-    if (!this.disposed) this.settledRequests.add(requestId)
-    const refused = answer !== undefined && ui.respond(requestId, answer) !== undefined
-    if (answer === undefined || refused) ui.cancel(requestId)
-    // Esc on an approval denies the call and stops the whole turn, as the dialog's keys say.
-    if (answer === undefined && dialog.request.source === "approval") {
-      if (this.deps.approvalCancelled) this.deps.approvalCancelled(dialog.request)
-      else if (this.deps.working()) this.deps.interrupt()
+    const response = { visible: true }
+    this.dialogResponses.set(dialog, response)
+    const finish = (ack: UiResponseAck) => {
+      if (this.dialogResponses.get(dialog) !== response || this.disposed) return
+      this.dialogResponses.delete(dialog)
+      if (ack.status === "invalid" || ack.status === "disconnected") {
+        if (this.settledRequests.has(requestId) || backend.requestState(requestId) === "settled") {
+          this.forgetResolvedRequest(requestId)
+        } else if (this.requestDialogs.get(requestId) === dialog) {
+          // Retained hidden dialogs need re-arming too; keep their draft and selected question.
+          dialog.retryAnswer()
+        }
+        this.deps.view().requestRender()
+        return
+      }
+      const i = this.dialogs.indexOf(dialog)
+      if (i !== -1) this.dialogs.splice(i, 1)
+      if (this.requestDialogs.get(requestId) === dialog) this.requestDialogs.delete(requestId)
+      dialog.close()
+      this.settledRequests.add(requestId)
+      // Esc on an approval denies the call and stops the whole turn, as the dialog's keys say.
+      if (answer === undefined && dialog.request.source === "approval" && ack.status !== "settled") {
+        if (cancelApproval) cancelApproval()
+        else if (this.deps.approvalCancelled) this.deps.approvalCancelled(dialog.request)
+        else if (this.deps.working()) this.deps.interrupt()
+      }
+      const echoed = ack.status === "settled" ? undefined : answer
+      // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
+      // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
+      const kind = dialog.request.kind
+      if (response.visible && kind !== "confirm" && kind !== "ask" && (ack.status !== "settled" || i !== -1))
+        this.deps
+          .view()
+          .dialogEcho((width) => dialogEchoLines(dialog.request, echoed, this.deps.theme, width))
+      this.deps.view().requestRender()
+      if (i !== -1) {
+        this.openNextForm()
+        this.waitingChanged("resolved")
+      }
     }
-    const echoed = refused ? undefined : answer
-    // Confirms and questions leave no echo: the tool call that asked shows how it went (allowed,
-    // declined, the answer). A command's picker or input keeps one, since nothing else shows it.
-    const kind = dialog.request.kind
-    if (kind !== "confirm" && kind !== "ask")
-      this.deps.view().dialogEcho((width) => dialogEchoLines(dialog.request, echoed, this.deps.theme, width))
-    this.deps.view().requestRender()
-    this.openNextForm()
-    this.waitingChanged("resolved")
+    try {
+      const ack = backend.respond(requestId, answer)
+      if (ack instanceof Promise)
+        void ack.then(finish, (error) => finish({ status: "disconnected", message: String(error) }))
+      else finish(ack)
+    } catch (error) {
+      finish({ status: "disconnected", message: String(error) })
+    }
   }
 
   /** Releases visible and suspended request editors and closes terminal overlays. */
-  dispose() {
+  dispose(detach = false) {
     if (this.disposed) return
     this.disposed = true
+    this.dialogResponses.clear()
     this.syncAnimation()
     this.closeDock()
     for (const [requestId, entry] of this.requestForms) {
-      this.deps.ui?.cancel(requestId)
-      entry.view?.close()
+      if (!detach && !this.deps.requests) this.deps.ui?.cancel(requestId)
+      if (entry.view instanceof FormView) entry.view.close(detach)
+      else entry.view?.close()
     }
     this.requestForms.clear()
     this.forms.splice(0)
     for (const [requestId, dialog] of this.requestDialogs) {
-      this.deps.ui?.cancel(requestId)
+      if (!detach && !this.deps.requests) this.deps.ui?.cancel(requestId)
       dialog.close()
     }
     this.requestDialogs.clear()

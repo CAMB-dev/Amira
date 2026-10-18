@@ -1,6 +1,6 @@
 // Owns queued and steering messages, interrupt flushing and the pending-notice strip.
-import type { UserMessage } from "@amira/api"
-import { type Agent, AgentBusyError } from "@amira/core"
+import type { SendOptions, UserMessage } from "@amira/api"
+import { type Agent, type AgentPort, frontendIdentity, isFrontendError, newTurnId } from "@amira/core"
 import {
   type Editor,
   type EditorPart,
@@ -78,22 +78,25 @@ export interface Outbox {
   /** Records an accepted submission and releases any older batch waiting out a double press. */
   prepare(text: string, parts: EditorPart[], display?: string): Outgoing
   dispatch(message: Outgoing, parts: EditorPart[], how: WhileWorking): void
-  turnStarted(prompt: UserMessage): UserMessage[]
+  /** Tracks a command/skill send at its original input position, independently of echo text. */
+  commandSend(text: string, options?: SendOptions, sequence?: number): () => void
+  turnStarted(prompt: UserMessage, turnId?: string): UserMessage[]
   /** Clears pending steering before the turn's retry state and notices are updated. */
   clearSteering(): void
   /** Releases waiting messages after the turn's notices have been shown. */
   turnEnded(): void
   /** Handles user steering after NoticeStrip; true means the restored editor needs a redraw. */
-  steer(message: UserMessage, state: NoticeSteerState): boolean
+  steer(message: UserMessage, state: NoticeSteerState, duringTurn?: boolean): boolean
   /** Returns waiting messages to the editor when following another session. */
   reset(): void
-  interrupt(): void
+  interrupt(turnId?: string): void
   pressInterrupt(): void
   dispose(): void
 }
 
 export interface OutboxDeps {
-  agent: () => Agent
+  agent: () => Pick<Agent, "model"> & Partial<Pick<Agent, "turnId" | "holdId">>
+  frontend: AgentPort
   editor: Pick<Editor, "getParts" | "setParts" | "isEmpty">
   activity: Pick<TurnActivity, "working" | "compacting" | "beginSend" | "sendFailed">
   spinner: Pick<Spinner, "stop">
@@ -104,6 +107,29 @@ export interface OutboxDeps {
   canRewind: () => boolean
   openRewind: () => boolean
   onInterrupt: () => void
+}
+
+function sameOutgoing(outgoing: Outgoing, message: UserMessage): boolean {
+  const input = toPrompt(outgoing)
+  const own =
+    typeof input === "string"
+      ? { role: "user" as const, content: [{ type: "text" as const, text: input }] }
+      : input
+  const key = (value: UserMessage) =>
+    JSON.stringify([
+      value.content.map((block) =>
+        block.type === "text"
+          ? ["text", block.text]
+          : [
+              "image",
+              block.name ?? `image.${block.mimeType.split("/")[1] ?? "png"}`,
+              block.mimeType,
+              block.data,
+            ],
+      ),
+      value.display?.text ?? null,
+    ])
+  return key(own) === key(message)
 }
 
 /** Messages waiting for a turn, including steering released by an interrupt. */
@@ -122,7 +148,11 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   /** Counts the messages typed, so that steering and queued ones merge in the order they were. */
   let typed = 0
   /** Pending steering's typing order and folded parts, by its text. */
-  const steered = new Map<string, Outgoing>()
+  const steered: Outgoing[] = []
+  const announced = new WeakSet<Outgoing>()
+  let pendingPrompt: Outgoing | undefined
+  let pendingPromptId: string | undefined
+  let heldRecovery: { waiting: Set<Outgoing>; dropped: Outgoing[] } | undefined
   /**
    * Set when the user stopped a turn while messages waited: the steering it drops is collected
    * here, to go out with the queued messages at turn.end (or back into the editor to rewind).
@@ -133,11 +163,15 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   /** A normal turn's queue also waits a microtask before sending. */
   let pending: Outgoing[] | undefined
   let generation = 0
+  let disposed = false
+  let endedTurns = 0
+  const admissions = new Set<{ message: Outgoing; reconciled: boolean; turnId?: string }>()
   /** When the interrupt key was last pressed, to tell a double press. */
   let lastInterruptAt = 0
 
   /** The user's message shows up in the transcript on turn.start. */
   function send(message: Outgoing) {
+    if (disposed) return
     if (message.content?.some((b) => b.type === "image") && !deps.agent().model.caps.images) {
       putBack([message])
       view.notice(
@@ -149,27 +183,53 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     }
     const clock = activity.beginSend()
     const sentIn = generation
+    const endedBeforeSend = endedTurns
+    const admission = { message, reconciled: false, turnId: newTurnId() }
+    admissions.add(admission)
+    pendingPrompt = message
+    pendingPromptId = admission.turnId
     view.requestRender()
-    deps
-      .agent()
-      .prompt(toPrompt(message))
+    deps.frontend
+      .execute(
+        "turn.prompt",
+        {
+          message: toPrompt(message),
+          turnId: admission.turnId,
+          ...(deps.agent().holdId ? { expectedHoldId: deps.agent().holdId } : {}),
+        },
+        {
+          sessionGeneration: frontendIdentity(deps.frontend).sessionGeneration,
+        },
+      )
       .catch((err) => {
+        if (disposed || admission.reconciled) return
+        if (pendingPromptId === admission.turnId) {
+          pendingPrompt = undefined
+          pendingPromptId = undefined
+        }
+        if (recoverRejected(message)) {
+          view.requestRender()
+          return
+        }
         if (sentIn !== generation) {
           putBack([message])
           view.requestRender()
           return
         }
-        const busy = err instanceof AgentBusyError
+        const busy = isFrontendError(err, "agent_busy")
         activity.sendFailed(clock, busy)
         if (busy) {
           // A turn we did not know about is running; send this one after it, and keep its clock.
           queued.unshift(message)
+          if (endedTurns !== endedBeforeSend && !activity.working && !activity.compacting) releaseQueued()
         } else {
           spinner.stop()
+          putBack([message])
           view.notice("error", err instanceof Error ? err.message : String(err))
         }
         view.requestRender()
       })
+      .finally(() => admissions.delete(admission))
   }
 
   /** Keeps the folded pastes of the last few messages sent, for a steer the turn drops. */
@@ -190,7 +250,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     const shown = next.map((q) => q.display ?? q.text)
     const display = next.some((q) => q.display) ? shown.join("\n\n") : undefined
     mergedQueue = next.length > 1 ? shown : undefined
-    const message = outgoing(text, display)
+    const message: Outgoing = { ...outgoing(text, display), seq: next[0]?.seq }
     message.parts = next.flatMap((q, i) => [
       ...(i ? ["\n\n"] : []),
       ...(q.parts ?? sentParts.get(q.text) ?? [q.text]),
@@ -209,6 +269,37 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     send(message)
   }
 
+  function releaseQueued() {
+    if (!queued.length) return
+    const next = queued.splice(0, queued.length)
+    pending = next
+    queueMicrotask(() => {
+      if (pending !== next) return
+      pending = undefined
+      sendMerged(next)
+    })
+  }
+
+  function reconcileAdmission(message: Outgoing | undefined) {
+    if (!message) return
+    for (const admission of admissions) if (admission.message === message) admission.reconciled = true
+  }
+
+  function restoreHeld(): boolean {
+    if (!heldRecovery || heldRecovery.waiting.size) return false
+    const next = heldRecovery.dropped.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+    heldRecovery = undefined
+    putBack(next)
+    return true
+  }
+
+  function recoverRejected(message: Outgoing): boolean {
+    if (!heldRecovery?.waiting.delete(message)) return false
+    heldRecovery.dropped.push(message)
+    restoreHeld()
+    return true
+  }
+
   /** Puts messages that were about to go back into the editor, before what it holds. */
   function putBack(next: Outgoing[]) {
     if (!next.length) return
@@ -225,11 +316,28 @@ export function createOutbox(deps: OutboxDeps): Outbox {
    * Esc or Ctrl+C while working. With steering or queued messages waiting, the turn stops and
    * they go out at once, merged in the order they were typed (on turn.end).
    */
-  function interrupt() {
+  function interrupt(expectedTurnId?: string) {
+    const agent = deps.agent()
+    if (expectedTurnId !== undefined && agent.turnId !== expectedTurnId) return
+    const turnId = expectedTurnId ?? agent.turnId
+    const holdId = turnId === undefined ? agent.holdId : undefined
+    if (turnId === undefined && holdId === undefined) return
+    const target = turnId !== undefined ? { turnId } : { holdId }
+    const sessionGeneration = frontendIdentity(deps.frontend).sessionGeneration
     deps.onInterrupt()
     if (activity.working && !flush && (queued.length || steering.length))
       flush = { dropped: [], rewind: false }
-    deps.agent().abort()
+    void deps.frontend.execute("turn.abort", target, { sessionGeneration }).catch((error) => {
+      const current = deps.agent()
+      if (
+        disposed ||
+        frontendIdentity(deps.frontend).sessionGeneration !== sessionGeneration ||
+        (turnId !== undefined ? current.turnId !== turnId : current.holdId !== holdId)
+      )
+        return
+      view.notice("error", error instanceof Error ? error.message : String(error))
+      view.requestRender()
+    })
   }
 
   return {
@@ -247,14 +355,62 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       }
       return message
     },
+    commandSend(text, options, sequence) {
+      if (options?.display?.origin) return () => {} // NoticeStrip owns background-notice recovery.
+      const parts: EditorPart[] = [text]
+      const message = {
+        ...draftMessage(text, options?.display?.text, parts),
+        parts,
+        seq: sequence ?? ++typed,
+      }
+      steered.push(message)
+      return () => {
+        const index = steered.indexOf(message)
+        if (index !== -1) steered.splice(index, 1)
+        if (recoverRejected(message)) view.requestRender()
+      }
+    },
     dispatch(message, parts, how) {
       if (activity.working && how === "steer") {
-        steered.set(message.text, message)
-        deps.agent().steer(toPrompt(message))
+        steered.push(message)
+        const sentIn = generation
+        const admission = { message, reconciled: false, turnId: newTurnId() }
+        const active = deps.agent()
+        const target = active.turnId
+          ? { expectedTurnId: active.turnId }
+          : active.holdId
+            ? { expectedHoldId: active.holdId }
+            : { expectedIdle: true }
+        admissions.add(admission)
+        void deps.frontend
+          .execute(
+            "turn.steer",
+            { message: toPrompt(message), turnId: admission.turnId, ...target },
+            {
+              sessionGeneration: frontendIdentity(deps.frontend).sessionGeneration,
+            },
+          )
+          .catch((error) => {
+            if (disposed || admission.reconciled) return
+            const index = steered.indexOf(message)
+            if (index !== -1) steered.splice(index, 1)
+            if (!recoverRejected(message)) putBack([message])
+            if (sentIn === generation)
+              view.notice("error", error instanceof Error ? error.message : String(error))
+            view.requestRender()
+          })
+          .finally(() => admissions.delete(admission))
       } else if (activity.working) queued.push(message)
       else if (!deps.noModelYet(parts)) send(message)
     },
-    turnStarted(prompt) {
+    turnStarted(prompt, turnId) {
+      if (turnId !== undefined) {
+        for (const admission of admissions) if (admission.turnId === turnId) admission.reconciled = true
+        if (pendingPromptId === turnId) {
+          pendingPrompt = undefined
+          pendingPromptId = undefined
+        }
+      }
       // Messages queued together go as one prompt but read as what they were: one each.
       const merged = mergedQueue && messageText(prompt) === mergedQueue.join("\n\n") ? mergedQueue : undefined
       mergedQueue = undefined
@@ -263,9 +419,10 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     clearSteering() {
       // Steering the turn never reached becomes the next turn, which shows it again.
       steering.length = 0
-      steered.clear()
+      steered.length = 0
     },
     turnEnded() {
+      endedTurns++
       if (flush) {
         // Stopped with Esc: the steering the turn dropped and the queued messages go out as
         // one, in the order they were typed; unless a second Esc asked to rewind instead.
@@ -280,24 +437,55 @@ export function createOutbox(deps: OutboxDeps): Outbox {
           const wait = Math.max(0, DOUBLE_ESC_MS - (Date.now() - lastInterruptAt))
           flushTimer = { next, timer: setTimeout(() => sendMerged(next), wait) }
         }
-      } else if (queued.length) {
-        const next = queued.splice(0, queued.length)
-        pending = next
-        queueMicrotask(() => {
-          if (pending !== next) return
-          pending = undefined
-          sendMerged(next)
-        })
-      }
+      } else releaseQueued()
     },
-    steer(message, state) {
+    steer(message, state, duringTurn = true) {
       const text = messageText(message)
       if (state === "queued") {
+        let queued = steered.find((entry) => sameOutgoing(entry, message) && !announced.has(entry))
+        if (!queued) {
+          const parts = messageParts(message)
+          queued = { ...draftMessage(userText(message), message.display?.text, parts), parts, seq: ++typed }
+          steered.push(queued)
+        }
+        announced.add(queued)
+        reconcileAdmission(queued)
         steering.push(text)
         return false
       }
-      const pendingSteer = steered.get(userText(message))
-      steered.delete(userText(message))
+      const pendingSteer = steered.find((entry) => sameOutgoing(entry, message))
+      if (state === "dropped" && !duringTurn) {
+        // All inputs of the cancelled hold drop without turn.end. Wait for the whole known
+        // batch, including acknowledgements already received, instead of prepending each event.
+        heldRecovery ??= {
+          waiting: new Set([...(pendingPrompt ? [pendingPrompt] : []), ...steered]),
+          dropped: [...(flush?.dropped ?? []), ...queued.splice(0)],
+        }
+        const original = [...heldRecovery.waiting].find((entry) => sameOutgoing(entry, message))
+        if (original) heldRecovery.waiting.delete(original)
+        if (pendingPrompt === original) {
+          pendingPrompt = undefined
+          pendingPromptId = undefined
+        }
+        const candidate = original ?? pendingSteer
+        const index = candidate ? steered.indexOf(candidate) : -1
+        if (index !== -1) steered.splice(index, 1)
+        heldRecovery.dropped.push(
+          original ?? {
+            ...draftMessage(userText(message), message.display?.text, messageParts(message)),
+            parts: messageParts(message),
+            seq: ++typed,
+          },
+        )
+        reconcileAdmission(original)
+        activity.sendFailed({ turnStartedAt: 0, turnTokens: 0 }, false)
+        spinner.stop()
+        flush = undefined
+        steering.length = 0
+        return restoreHeld()
+      }
+      reconcileAdmission(pendingSteer)
+      if (pendingSteer) steered.splice(steered.indexOf(pendingSteer), 1)
       const i = steering.indexOf(text)
       if (i !== -1) steering.splice(i, 1)
       const echoed = state !== "promoted" && deps.takeEcho(message)
@@ -329,20 +517,26 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     reset() {
       generation++
       if (flushTimer) clearTimeout(flushTimer.timer)
+      const held = [...(heldRecovery?.dropped ?? []), ...(heldRecovery?.waiting ?? [])]
+      for (const admission of admissions) if (held.includes(admission.message)) admission.reconciled = true
       putBack(
         [
           ...queued.splice(0),
           ...(flush?.dropped ?? []),
           ...(flushTimer?.next ?? []),
           ...(pending ?? []),
+          ...held,
         ].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
       )
       flush = undefined
       flushTimer = undefined
       pending = undefined
       mergedQueue = undefined
+      pendingPrompt = undefined
+      pendingPromptId = undefined
+      heldRecovery = undefined
       steering.length = 0
-      steered.clear()
+      steered.length = 0
       sentParts.clear()
       typed = 0
       lastInterruptAt = 0
@@ -377,6 +571,11 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       } else if (!activity.compacting) deps.openRewind()
     },
     dispose() {
+      disposed = true
+      pending = undefined
+      pendingPrompt = undefined
+      pendingPromptId = undefined
+      heldRecovery = undefined
       if (flushTimer) clearTimeout(flushTimer.timer)
     },
   }

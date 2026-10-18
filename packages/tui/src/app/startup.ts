@@ -19,6 +19,7 @@ import type { Keybindings } from "../keybindings.ts"
 import type { ImageSource, MarkdownRenderSource } from "../markdown-nodes.ts"
 import type { PromptHistory } from "../prompt-history.ts"
 import type { PresenterSource } from "../tool-view.ts"
+import type { OverlayRequestBackend } from "./overlays.ts"
 
 export interface InteractiveOptions {
   agent: Agent
@@ -29,6 +30,8 @@ export interface InteractiveOptions {
   panels?: PanelRegistry
   /** Extension dialogs, answered inline. Without it they are left to other frontends. */
   ui?: UiRequests
+  /** Transport-backed dialogs/forms; presentation reads its cached lifecycle state. */
+  requests?: OverlayRequestBackend
   /**
    * Slash commands and their completion popup. It owns the active session: the UI follows
    * the agent it switches to (/clear, /resume).

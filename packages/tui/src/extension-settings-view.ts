@@ -6,7 +6,7 @@ import {
   type MarkdownRenderResult,
   validateExtensionSetting,
 } from "@amira/api"
-import type { UiRequests } from "@amira/core"
+import type { UiRequests, UiResponseAck } from "@amira/core"
 import {
   bold,
   type Component,
@@ -38,8 +38,15 @@ export interface SettingsPageBackend {
     values: ExtensionSettingsValues,
     context: ExtensionSettingsPreviewContext,
   ): MarkdownRenderResult | Promise<MarkdownRenderResult>
-  submit(values: ExtensionSettingsValues, scope: "user" | "project"): Promise<string | undefined>
-  cancel(): void
+  evaluate?(
+    draft: { revision: number; values: ExtensionSettingsValues },
+    context: ExtensionSettingsPreviewContext,
+  ): Promise<{ revision: number; preview: MarkdownRenderResult }>
+  submit(
+    values: ExtensionSettingsValues,
+    scope: "user" | "project",
+  ): Promise<string | undefined | UiResponseAck>
+  cancel: (() => void) | (() => UiResponseAck | Promise<UiResponseAck>)
 }
 
 export function uiExtensionSettingsBackend(
@@ -47,11 +54,20 @@ export function uiExtensionSettingsBackend(
   request: ExtensionSettingsRequest,
 ): SettingsPageBackend {
   const backend = ui.extensionSettingsBackend(request.requestId)
+  const current = ui.claimExtensionSettingsEditor(request.requestId)
+  const stale = (): UiResponseAck => ({ status: "invalid", message: "stale settings editor" })
   return {
     request,
-    ...(backend?.preview ? { preview: (values, context) => backend.preview!(values, context) } : {}),
-    submit: (values, scope) => ui.submitExtensionSettings(request.requestId, { values, scope }),
-    cancel: () => void ui.cancel(request.requestId),
+    ...(backend?.preview
+      ? { preview: (values, context) => (current() ? backend.preview!(values, context) : { lines: [] }) }
+      : {}),
+    submit: async (values, scope) => {
+      if (!current()) return stale()
+      const error = await ui.submitExtensionSettings(request.requestId, { values, scope })
+      if (error) return { status: "invalid", message: error }
+      return { status: "accepted" }
+    },
+    cancel: () => (current() ? ui.respondAcknowledged(request.requestId, undefined) : stale()),
   }
 }
 
@@ -91,9 +107,11 @@ export class ExtensionSettingsView implements Component {
   #scope: "user" | "project"
   #choosingScope = false
   #saving = false
+  #cancelling = 0
   #error: string | undefined
   #closed = false
   #previewKey = ""
+  #revision = 0
   #preview: MarkdownRenderResult | undefined
   #previewError: string | undefined
   #previewRunning = false
@@ -145,6 +163,7 @@ export class ExtensionSettingsView implements Component {
   }
 
   #changed(key: string, value: string | number | boolean): void {
+    this.#revision++
     this.#values = { ...this.#values, [key]: value }
     this.#error = undefined
     // Cancel immediately, before the next frame has a chance to start its replacement.
@@ -159,8 +178,7 @@ export class ExtensionSettingsView implements Component {
     if (this.#saving) return true
     if (event.type === "mouse") return this.#handleMouse(event)
     if (matchesKey(event, "escape")) {
-      this.#backend.cancel()
-      this.close()
+      void this.#cancel()
       return true
     }
     if (this.#choosingScope) {
@@ -295,12 +313,33 @@ export class ExtensionSettingsView implements Component {
     this.#mouseActions.set(target.id, target.action)
   }
 
+  async #cancel(): Promise<void> {
+    const sequence = ++this.#cancelling
+    const values = this.#values
+    const scope = this.#scope
+    const current = () =>
+      !this.#closed && sequence === this.#cancelling && values === this.#values && scope === this.#scope
+    try {
+      const result = this.#backend.cancel()
+      const ack = result instanceof Promise ? await result : result
+      if (!current()) return
+      if (!ack || typeof ack !== "object" || ["accepted", "cancelled", "settled"].includes(ack.status))
+        this.close()
+      else if ("message" in ack) this.#error = ack.message
+    } catch (error) {
+      if (!current()) return
+      this.#error = error instanceof Error ? error.message : String(error)
+    }
+    this.#opts.requestRender()
+  }
+
   async #submit(): Promise<void> {
     this.#saving = true
     this.#opts.requestRender()
     let error: string | undefined
     try {
-      error = await this.#backend.submit(this.values, this.#scope)
+      const response = await this.#backend.submit(this.values, this.#scope)
+      error = typeof response === "object" ? ("message" in response ? response.message : undefined) : response
     } catch (cause) {
       error = cause instanceof Error ? cause.message : String(cause)
     }
@@ -536,7 +575,7 @@ export class ExtensionSettingsView implements Component {
   }
 
   #previewRows(width: number, budget: number, ctx: RenderContext): string[] {
-    if (!this.#backend.preview) return []
+    if (!this.#backend.preview && !this.#backend.evaluate) return []
     if (budget < 1) {
       this.#controller?.abort()
       this.#previewKey = ""
@@ -556,15 +595,20 @@ export class ExtensionSettingsView implements Component {
       this.#previewError = undefined
       this.#previewRunning = true
       const draft = this.values
+      const revision = ++this.#revision
       // Defer callbacks until this frame has completed; synchronous previews redraw too.
       void Promise.resolve()
-        .then(() => {
+        .then(async () => {
           controller.signal.throwIfAborted()
-          return this.#backend.preview!(draft, { ...context, signal: controller.signal })
+          const options = { ...context, signal: controller.signal }
+          if (!this.#backend.evaluate) return this.#backend.preview!(draft, options)
+          const reply = await this.#backend.evaluate({ revision, values: draft }, options)
+          if (reply.revision !== revision) return undefined
+          return reply.preview
         })
         .then(
           (result) => {
-            if (controller.signal.aborted || this.#closed) return
+            if (controller.signal.aborted || this.#closed || this.#revision !== revision) return
             this.#preview = result
             this.#previewRunning = false
             this.#opts.requestRender()

@@ -16,6 +16,7 @@ test("the public TUI exports stay stable", async () => {
     "finishedToolLines",
     "glyphs",
     "loadKeybindings",
+    "operationFormBackend",
     "runFormScreen",
     "runInteractive",
     "specFormBackend",

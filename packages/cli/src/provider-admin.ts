@@ -56,6 +56,8 @@ export interface ProviderAdminOptions {
    * in use. Returns the model it runs on then ("provider/model"), if it changed to it.
    */
   onSaved?: (id: string, models: string[]) => string | undefined
+  /** Capture session-specific authority before an admitted save crosses an async filesystem step. */
+  captureOnSaved?: () => ProviderAdminOptions["onSaved"]
   /** Makes auth.json private on Windows; injectable for tests. */
   restrict?: (file: string) => Promise<string | undefined>
 }
@@ -368,6 +370,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
       }
     },
     save: async (d, saveOptions = {}) => {
+      const onSaved = opts.captureOnSaved ? opts.captureOnSaved() : opts.onSaved
       const apiKey = d.apiKey?.trim()
       check(d)
       const { catalogId } = catalogFor(d, d.models)
@@ -420,7 +423,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         d.models.map((id) => ({ id })),
       )
       if (infos.length) lines.push(`Models: ${infos.map(modelNote).join("; ")}.`)
-      const now = opts.onSaved?.(d.id, d.models)
+      const now = onSaved?.(d.id, d.models)
       if (now) lines.push(inUse ? `In use: the changes apply now (${now}).` : `Now using ${now}.`)
       else if (inUse) lines.push("It is in use: run /model again to pick up the changes.")
       else lines.push(`Switch to it with /model ${d.id}/${d.models[0] ?? "<model>"}.`)

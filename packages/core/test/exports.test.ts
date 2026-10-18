@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test"
-import { type SessionHeader, ToolRegistry } from "../src/index.ts"
+import {
+  type FormEditor,
+  type LocalConversationBinding,
+  type SessionHeader,
+  ToolRegistry,
+} from "../src/index.ts"
 
 test("policy-bearing session header types remain exported with an explicit format discriminator", () => {
   const header: SessionHeader = {
@@ -22,6 +27,29 @@ test("policy-bearing session header types remain exported with an explicit forma
       "writeRoots": [],
     }
   `)
+})
+
+test("form editor identity and resumed revision remain host-library exports", () => {
+  const editor: FormEditor = { editor: "editor-1", revision: 7 }
+  expect(editor).toMatchInlineSnapshot(`
+    {
+      "editor": "editor-1",
+      "revision": 7,
+    }
+  `)
+})
+
+test("local conversation bindings retain callable cleanup and host-issued incarnation metadata", () => {
+  let released = false
+  const binding: LocalConversationBinding = Object.assign(
+    () => {
+      released = true
+    },
+    { incarnation: "host-token" },
+  )
+  expect(binding.incarnation).toMatchInlineSnapshot(`"host-token"`)
+  binding()
+  expect(released).toBe(true)
 })
 
 test("tool enablement can check captured capabilities without changing the registration identity", () => {
@@ -69,6 +97,7 @@ test("the public core exports stay stable", async () => {
     "FILE_REWIND_COVERAGE",
     "FileRewind",
     "FileRewindConflictError",
+    "FrontendOperationError",
     "INSTRUCTION_FILES",
     "ImageProviderRegistry",
     "InputRegistry",
@@ -118,6 +147,8 @@ test("the public core exports stay stable", async () => {
     "artifactIdsIn",
     "askTitle",
     "authFile",
+    "bindLocalCommandContext",
+    "bindLocalConversation",
     "builtinWrittenPaths",
     "checkArgs",
     "checkpointOf",
@@ -127,6 +158,7 @@ test("the public core exports stay stable", async () => {
     "copyFileHistory",
     "createLocalAgentPort",
     "createToolSession",
+    "createUiFormBackend",
     "deepMerge",
     "defaultSections",
     "deferredToolsSection",
@@ -138,6 +170,7 @@ test("the public core exports stay stable", async () => {
     "fileHistoryDir",
     "findSession",
     "forkHistory",
+    "frontendIdentity",
     "fuzzyScore",
     "gitInfo",
     "hooksPathsIn",
@@ -145,6 +178,7 @@ test("the public core exports stay stable", async () => {
     "instructionsSection",
     "intermediate",
     "isCommandAliasName",
+    "isFrontendError",
     "isProcessAlive",
     "isSummaryMessage",
     "isWrapper",
