@@ -1,0 +1,524 @@
+import { type Ai, createAi, isNoModel, type ModelInfo, NO_MODEL, type ProviderConfig } from "@amira/ai"
+import type { AnyEvent, Extension, ReloadReport, Settings, SettingsLayers, ShellMode } from "@amira/api"
+import { DEFAULT_SHELL, DEFAULT_WEB_NATIVE_SEARCH } from "@amira/api"
+import {
+  Agent,
+  AgentTree,
+  amiraHome,
+  amiraPath,
+  type CompactionOptions,
+  commandAliasWarnings,
+  defaultSections,
+  EventBus,
+  ExtensionHost,
+  fileCompactionMemory,
+  InterceptorRegistry,
+  instructionsSection,
+  loadInstructions,
+  normalizeShimmer,
+  Permissions,
+  type ResolvedPermissions,
+  type SessionStore,
+  ToolRegistry,
+  TraceRecorder,
+  validateSettings,
+} from "@amira/core"
+import type { ActivePackages } from "@amira/packages"
+import { UsageError } from "./args.ts"
+import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
+import { userApprover, userAsker } from "./session/approvals.ts"
+import { createExtensionLoader, createReloadReplay } from "./session/extension-loading.ts"
+import {
+  compactionFromSettings,
+  contextFromSettings,
+  onlyProviderModel,
+  resolveModel,
+  retryFromSettings,
+  withPackageSkills,
+} from "./session/settings-adapters.ts"
+import { testAiOptions } from "./test-hooks.ts"
+import { USER_AGENT } from "./user-agent.ts"
+
+export type { ApproverOptions } from "./session/approvals.ts"
+export { approvalPreview, userApprover, userAsker } from "./session/approvals.ts"
+export {
+  contextFromSettings,
+  onlyProviderModel,
+  retryFromSettings,
+  toolsToDisable,
+} from "./session/settings-adapters.ts"
+
+export interface SessionOptions {
+  /**
+   * "provider/model". Unset: the first model the only configured provider lists, else no
+   * model (NO_MODEL) until one is picked, and `modelNotice` says why.
+   */
+  model?: string
+  /** Throw a UsageError instead of starting without a model (print mode cannot pick one). */
+  requireModel?: boolean
+  autoTitle?: boolean
+  cwd: string
+  extensions: string[]
+  /**
+   * Installed packages (D24, D60): loaded after the built-ins and before `extensions`. A
+   * function is asked again on each reload, so packages installed or removed since load then.
+   */
+  packages?: ActivePackages | (() => ActivePackages)
+  /** Server composition keeps package skills but never executes package/explicit extensions. */
+  executionOnly?: boolean
+  /** Local wrapper supplies theme loading; absent in the server graph. */
+  loadThemes?: (host: ExtensionHost, packages: ActivePackages | undefined, bus: EventBus) => void
+  noBuiltins: boolean
+  /** Tools hidden from the model. */
+  disabledTools?: string[]
+  /** Shell mode used to filter tools after their capabilities are registered. */
+  shell?: ShellMode
+  /** The model cannot ask a person; print mode and RPC without a UI use this. */
+  nonInteractive?: boolean
+  /** Names the user asked to disable and where they came from; ones no tool has are reported. */
+  requestedDisabled?: { names: string[]; from: string }
+  ai?: Ai
+  /** Cancels startup's awaited session acquisition. */
+  signal?: AbortSignal
+  /** Where the conversation is persisted; a stored one is resumed. Omit to keep nothing. */
+  store?: SessionStore
+  /** Compaction options; unset, they come from settings `compact`. */
+  compaction?: CompactionOptions
+  /** Where the model catalog is cached and fetched from; false leaves it out. Unused with `ai`. */
+  catalog?: CatalogCacheOptions | false
+  /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
+  onSubscriberError?: (error: unknown, event: AnyEvent) => void
+  /** Loads the bundled extensions; injectable for tests. */
+  builtins?: () => Promise<{ source: string; extension: Extension }[]>
+  /** Merged settings (D35): handed to extensions; agent options come from them too. */
+  settings?: Settings
+  /** Explicit settings values by source layer, handed to extensions with the merged settings. */
+  settingsLayers?: SettingsLayers
+  /** Re-reads settings for `/reload`, with their warnings; omitted by isolated session callers. */
+  reloadSettings?: () => { settings: Settings; layers: SettingsLayers; warnings?: string[] }
+  /** Pushes the reloaded settings to an attached frontend after themes and extensions settle. */
+  onSettingsReload?: (settings: Settings) => void
+  /** Providers from settings; there are no others. Unused when `ai` is given. */
+  providers?: ProviderConfig[]
+  /** Stored API keys by provider id (auth.json). Unused when `ai` is given. */
+  apiKeys?: Record<string, string>
+  /**
+   * Settings warnings, reported as extension.error events from "settings" among the startup
+   * events. When given, command aliases the loaded commands shadow are reported too.
+   */
+  warnings?: string[]
+  /** Delays before notices of a failed turn are sent again; for tests. Default 10, 30 and 90 s. */
+  noticeRetryMs?: number[]
+  /** The permission mode and rules (resolveConfig). Default: auto mode without rules. */
+  permissions?: ResolvedPermissions
+}
+
+export interface Session {
+  agent: Agent
+  host: ExtensionHost
+  /** One host recorder shared by resumed agents and their descendants; absent in lightweight fixtures. */
+  traceRecorder?: TraceRecorder
+  /** Extension events emitted while loading, before any frontend subscribed. */
+  startupEvents: AnyEvent[]
+  /** Why the session has no model yet (NO_MODEL) and what to do; for the UI to show. */
+  modelNotice?: string
+  /** Settles when a background catalog refresh is done (at once when none was due). */
+  catalogRefresh: Promise<void>
+  ai: Ai
+  /** Sub-agents and the budget they share with the top-level agent. */
+  tree: AgentTree
+  /**
+   * A new agent on this session's bus, registries and settings, for another stored session
+   * (rpc session.resume). It starts with `model`, by default the current model.
+   */
+  resume(
+    store: SessionStore,
+    model?: ModelInfo,
+    continueAfterAcquisition?: (construct: () => Agent) => Agent,
+    options?: { signal?: AbortSignal },
+  ): Agent | Promise<Agent>
+  /**
+   * Unloads every extension and loads them again (/reload), with the packages and their skill
+   * directories as they are installed now; failures arrive as extension.error. Says what changed.
+   * The extensions loaded again get the events that say where `agent` (default: the one this
+   * session started with) is, as they had them before: its session.start with the model and
+   * context as they are now, the last workspace.changed and budget.update. The command host's
+   * optional reconcileTools restores live choices before owned execution is enabled again.
+   */
+  reload(agent?: Agent, reconcileTools?: () => void): Promise<ReloadReport>
+}
+
+/**
+ * Wires the ai layer, core registries, extensions and the agent together.
+ * Extension failures are reported as extension.error events on the agent's bus.
+ */
+export async function createSession(opts: SessionOptions): Promise<Session> {
+  if (opts.store?.header.owned !== undefined)
+    throw new Error("An owned conversation cannot become a main session")
+  const readPackages = () => (typeof opts.packages === "function" ? opts.packages() : opts.packages)
+  let packages = readPackages()
+  const concurrency = normalizeConcurrencySettings(opts.settings)
+  const settings = withPackageSkills(concurrency.settings, packages)
+  const extensionSettings = (value: Settings): Settings => ({
+    ...value,
+    shell: opts.shell ?? value.shell ?? DEFAULT_SHELL,
+    ...(opts.autoTitle === false ? { sessions: { ...value.sessions, autoTitle: false } } : {}),
+  })
+  // AMIRA_TEST_MOCK (end-to-end tests only) adds a scripted "mock" provider and keeps the
+  // catalog download out of the test run.
+  const mock = testAiOptions()
+  const noCatalog = opts.ai || opts.catalog === false || mock.providers
+  const catalogOpts = noCatalog ? undefined : (opts.catalog ?? {})
+  const cached = catalogOpts ? await readCatalogCache(catalogOpts) : undefined
+  const retry = retryFromSettings(settings.retry)
+  const ai =
+    opts.ai ??
+    createAi({
+      userAgent: USER_AGENT,
+      providers: [...(opts.providers ?? []), ...(mock.providers ?? [])],
+      ...(mock.dialects ? { dialects: mock.dialects } : {}),
+      apiKeys: opts.apiKeys ?? {},
+      ...(cached?.catalog ? { catalog: cached.catalog } : {}),
+      ...(retry ? { retry } : {}),
+      // Hosted web search is per provider (compat.webSearch); this turns it off for all.
+      ...((settings.web?.nativeSearch ?? DEFAULT_WEB_NATIVE_SEARCH) === false ? { webSearch: false } : {}),
+      compactionMemory: fileCompactionMemory(amiraPath("cache", "native-compaction.json")),
+    })
+  // A settings choice whose provider was removed falls back like a stored session's model.
+  // Explicit flags/env still report a bad reference; never erase the saved setting.
+  const missingProvider =
+    opts.model === settings.model &&
+    opts.model !== undefined &&
+    !opts.settingsLayers?.model?.some((layer) => layer.scope === "flags") &&
+    !ai.providers().some((provider) => provider.id === opts.model!.split("/")[0])
+  const modelRef =
+    (missingProvider ? undefined : opts.model) ?? storedModel(ai, opts.store) ?? onlyProviderModel(ai)
+  const model = modelRef ? resolveModel(ai, modelRef) : NO_MODEL
+  const modelNotice = modelRef ? undefined : noModelNotice(ai)
+  if (modelNotice && opts.requireModel) throw new UsageError(noModelError(ai))
+  const compaction = opts.compaction ?? compactionFromSettings(ai, settings.compact)
+  const context = contextFromSettings(settings.context)
+  const bus = new EventBus(opts.onSubscriberError)
+  const traceRecorder = new TraceRecorder(bus)
+  const interceptors = new InterceptorRegistry({
+    onError: (point, source, error) =>
+      bus.emit("extension.error", { source, error: `${point}: ${error}` }, { sessionId: "host" }),
+  })
+  const tools = new ToolRegistry()
+  const tree = new AgentTree({
+    ai,
+    sections: (cwd) =>
+      defaultSections({
+        cwd,
+        nonInteractive: opts.nonInteractive,
+        project: instructionsSection(loadInstructions(cwd)),
+      }),
+    ...(settings.subagents?.maxDepth !== undefined ? { maxDepth: settings.subagents.maxDepth } : {}),
+    ...(settings.subagents?.maxConcurrent !== undefined
+      ? { maxConcurrent: settings.subagents.maxConcurrent }
+      : {}),
+    ...(settings.budget ? { budget: settings.budget } : {}),
+    ...(compaction ? { compaction } : {}),
+    ...(context ? { context } : {}),
+    ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
+  })
+  // Initializers may open conversations, but cannot execute before tool policy is finalized.
+  let conversationsReady = false
+  const host = new ExtensionHost({
+    bus,
+    interceptors,
+    tools,
+    ai,
+    conversations: {
+      ai,
+      tools,
+      tree,
+      agent: () => agent,
+      home: amiraHome(),
+      canExecute: () => conversationsReady,
+    },
+    settings: extensionSettings(settings),
+    settingsLayers: opts.settingsLayers,
+    reloadSettings: opts.reloadSettings
+      ? () => {
+          const loaded = opts.reloadSettings!()
+          const normalized = normalizeConcurrencySettings(loaded.settings)
+          opts.onSettingsReload?.(normalized.settings)
+          return {
+            ...loaded,
+            settings: extensionSettings(withPackageSkills(normalized.settings, packages)),
+            warnings: [...(loaded.warnings ?? []), ...normalized.warnings],
+          }
+        }
+      : undefined,
+    cwd: opts.cwd,
+  })
+  const startupEvents: AnyEvent[] = []
+  const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
+    types: ["extension.error", "extension.loaded", "extension.notice"],
+  })
+  if (missingProvider) {
+    bus.emit(
+      "extension.notice",
+      {
+        source: "settings",
+        level: "warning",
+        text: `settings model "${opts.model}" ignored: provider "${opts.model!.split("/")[0]}" is not configured; ${modelRef ? `using ${modelRef}` : "no model selected"}.`,
+      },
+      { sessionId: "host" },
+    )
+  }
+  for (const error of [...(opts.warnings ?? []), ...concurrency.warnings]) {
+    bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+  }
+
+  const reloadThemes = () => opts.loadThemes?.(host, packages, bus)
+  reloadThemes()
+
+  const loadExtensions = createExtensionLoader({
+    host,
+    bus,
+    noBuiltins: opts.noBuiltins,
+    builtins: opts.builtins ?? (async () => []),
+    executionOnly: opts.executionOnly,
+    getPackages: () => packages,
+    extensions: opts.extensions,
+    cwd: opts.cwd,
+  })
+  const untrusted = packages?.skipped.filter((s) => s.why === "untrusted").map((s) => s.name) ?? []
+  if (untrusted.length) {
+    const text = `Not loading this project's extension packages (${untrusted.join(", ")}): the project is not trusted. amira ext trust loads them from the next start.`
+    bus.emit("extension.notice", { source: "packages", text, level: "warning" }, { sessionId: "host" })
+  }
+  const approve = userApprover(host.ui, {
+    presenters: host.renderers,
+    tree,
+    notify: (text) =>
+      bus.emit("extension.notice", { source: "approval", text, level: "info" }, { sessionId: "host" }),
+  })
+  // One policy for every agent of this session and their sub-agents; its questions go to the user.
+  const resolved = opts.permissions
+  const permissions = new Permissions({
+    ...(resolved
+      ? {
+          mode: resolved.mode,
+          rules: resolved.rules,
+          warnings: resolved.warnings,
+          modeSource: resolved.modeSource,
+        }
+      : {}),
+    protect: { amiraHome: amiraHome() },
+    approver: approve,
+  })
+  const ask = userAsker(host.ui, tree)
+  const constructAgent = (picked: ModelInfo, store: SessionStore | undefined) => {
+    if (store) traceRecorder.register(store.id, store.file)
+    // A session resumed while no model is selected continues on the one it ran on.
+    const stored = isNoModel(picked) ? storedModel(ai, store) : undefined
+    const m = stored ? ai.model(stored) : picked
+    return new Agent({
+      tree,
+      approve,
+      permissions,
+      ask,
+      ai,
+      model: m,
+      providerSettings: settings.providers,
+      maxSteps: settings.agent?.maxSteps,
+      fastMode: settings.fastMode,
+      defaultThinking: settings.thinking === "default" ? undefined : settings.thinking,
+      thinking:
+        settings.thinking !== "default" &&
+        opts.settingsLayers?.thinking?.some((layer) => layer.scope === "flags")
+          ? settings.thinking
+          : undefined,
+      fileRewindSettings: settings.fileRewind,
+      cwd: opts.cwd,
+      sections: defaultSections({
+        cwd: opts.cwd,
+        nonInteractive: opts.nonInteractive,
+        project: instructionsSection(loadInstructions(opts.cwd)),
+      }),
+      bus,
+      interceptors,
+      tools,
+      backgroundJobs: host.backgroundJobs,
+      ...(store ? { session: store } : {}),
+      ...(compaction ? { compaction } : {}),
+      ...(context ? { context } : {}),
+      ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
+      ...(opts.noticeRetryMs ? { noticeRetryMs: opts.noticeRetryMs } : {}),
+    })
+  }
+  const newAgent = (
+    picked: ModelInfo,
+    store: SessionStore | undefined,
+    continueAfterAcquisition?: (construct: () => Agent) => Agent,
+    options?: { signal?: AbortSignal },
+  ) => {
+    if (store?.header.owned !== undefined)
+      throw new Error("An owned conversation cannot become a main session")
+    const construct = () => constructAgent(picked, store)
+    const acquired = () => {
+      options?.signal?.throwIfAborted()
+      return continueAfterAcquisition?.(construct) ?? construct()
+    }
+    return store ? store.withClaim(acquired, options) : acquired()
+  }
+  const agent = await newAgent(model, opts.store, undefined, { signal: opts.signal })
+  await loadExtensions()
+  const noticeThemeSettings = (value: Settings) => {
+    const warn = (text: string) =>
+      bus.emit("extension.notice", { source: "themes", text, level: "warning" }, { sessionId: "host" })
+    const themeName = value.tui?.theme
+    if (
+      themeName &&
+      !["auto", "dark", "light", "terminal"].includes(themeName) &&
+      !host.themes.get(themeName)
+    ) {
+      warn(`Theme "${themeName}" from settings tui.theme was not found; using the default theme.`)
+    }
+    normalizeShimmer(value.tui?.shimmer, (text) => warn(`Settings tui.shimmer: ${text}`))
+  }
+  if (!opts.executionOnly) noticeThemeSettings(settings)
+  const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
+  for (const name of requested) {
+    if (tools.has(name)) continue
+    const error = `${from}: no tool named "${name}"`
+    bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+  }
+  // Like the other settings warnings, only where the caller reports them (not in print mode).
+  if (opts.warnings) {
+    for (const error of commandAliasWarnings(settings.commandAliases, host.commands)) {
+      bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+    }
+  }
+  const initializeTools = (value: Settings, current = agent, reconcileTools?: () => void) => {
+    tools.setDisabled(opts.disabledTools ?? [])
+    tools.setPolicy({
+      shell: opts.shell ?? value.shell ?? DEFAULT_SHELL,
+      nonInteractive: opts.nonInteractive === true || current.nonInteractive,
+    })
+    // Live command-host choices take precedence; reconcile before any runtime can execute.
+    reconcileTools?.()
+    conversationsReady = true
+  }
+  initializeTools(settings)
+  await bus.flush()
+  stopCapture()
+
+  const reloadReplay = createReloadReplay(bus)
+
+  // A stale or missing catalog is refreshed in the background; startup never waits for it.
+  const catalogRefresh =
+    catalogOpts && cached?.stale
+      ? refreshCatalog(catalogOpts)
+          .then((catalog) => {
+            if (!catalog) return
+            ai.setCatalog?.(catalog)
+            // Only replace the model this session started with, not one chosen since.
+            if (modelRef && agent.model === model) agent.model = ai.model(modelRef)
+          })
+          .catch(() => {})
+      : Promise.resolve()
+  return {
+    agent,
+    host,
+    traceRecorder,
+    startupEvents,
+    ...(modelNotice ? { modelNotice } : {}),
+    catalogRefresh,
+    ai,
+    tree,
+    resume: (store, m, continueAfterAcquisition, options) =>
+      newAgent(m ?? agent.model, store, continueAfterAcquisition, options),
+    reload: async (current = agent, reconcileTools) => {
+      conversationsReady = false
+      const before = new Set(host.loaded)
+      const skillsBefore = new Set(host.skills.list().map((s) => s.name))
+      packages = readPackages()
+      const reloaded = opts.reloadSettings?.()
+      const normalized = normalizeConcurrencySettings(reloaded?.settings ?? opts.settings)
+      for (const error of [...(reloaded?.warnings ?? []), ...normalized.warnings]) {
+        bus.emit("extension.error", { source: "settings", error }, { sessionId: "host" })
+      }
+      host.setSettings(
+        extensionSettings(withPackageSkills(normalized.settings, packages)),
+        reloaded?.layers ?? opts.settingsLayers,
+      )
+      host.unloadAll()
+      await host.drain()
+      reloadThemes()
+      host.replayOnLoad(reloadReplay(current))
+      let failed: string[]
+      try {
+        failed = await loadExtensions()
+      } finally {
+        host.replayOnLoad(undefined)
+      }
+      if (!opts.executionOnly) noticeThemeSettings(normalized.settings)
+      initializeTools(normalized.settings, current, reconcileTools)
+      opts.onSettingsReload?.(normalized.settings)
+      const after = new Set(host.loaded)
+      const skillsAfter = new Set(host.skills.list().map((s) => s.name))
+      return {
+        loaded: [...after].filter((s) => !before.has(s)),
+        unloaded: [...before].filter((s) => !after.has(s)),
+        failed,
+        extensions: after.size,
+        skillsAdded: [...skillsAfter].filter((s) => !skillsBefore.has(s)).length,
+        skillsRemoved: [...skillsBefore].filter((s) => !skillsAfter.has(s)).length,
+      }
+    },
+  }
+}
+
+/** Direct callers may bypass the file loader; normalize only concurrency, preserving other settings. */
+function normalizeConcurrencySettings(settings: Settings = {}): { settings: Settings; warnings: string[] } {
+  const concurrency = validateSettings(
+    {
+      ...(settings.maxParallelTools !== undefined ? { maxParallelTools: settings.maxParallelTools } : {}),
+      ...(settings.subagents?.maxConcurrent !== undefined
+        ? { subagents: { maxConcurrent: settings.subagents.maxConcurrent } }
+        : {}),
+    },
+    "settings",
+  )
+  return {
+    settings: {
+      ...settings,
+      ...concurrency.settings,
+      ...(settings.subagents
+        ? { subagents: { ...settings.subagents, ...concurrency.settings.subagents } }
+        : {}),
+    },
+    warnings: concurrency.warnings,
+  }
+}
+
+/** The model a stored session last ran on, when a configured provider still has it. */
+function storedModel(ai: Ai, store: SessionStore | undefined): string | undefined {
+  const m = store?.model()
+  if (!m) return undefined
+  const ref = `${m.provider}/${m.model}`
+  try {
+    ai.model(ref)
+    return ref
+  } catch {
+    return undefined
+  }
+}
+
+/** What the UI says when a session starts without a model. */
+function noModelNotice(ai: Ai): string {
+  return ai.providers().length === 0
+    ? "No providers configured — add one with /provider add, then pick a model with /model."
+    : 'No model selected — pick one with /model, or set "model" in settings.json.'
+}
+
+/** The print-mode error for the same, which cannot be fixed from inside the run. */
+function noModelError(ai: Ai): string {
+  return ai.providers().length === 0
+    ? 'no providers configured; add one with "amira provider add", then pass -m provider/model'
+    : 'no model selected. Pass -m provider/model, set AMIRA_MODEL or set "model" in settings.json.'
+}
