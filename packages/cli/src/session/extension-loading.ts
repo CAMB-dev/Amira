@@ -116,10 +116,15 @@ export function createReloadReplay(bus: EventBus): (agent: Agent) => AnyEvent[] 
 function packageLabel(
   p: ActivePackages["packages"][number],
   file: string,
-): { source: string; name: string; hint: string } {
+): { source: string; name: string; hint: string; root: string } {
   const rel = path.relative(p.dir, file).split(path.sep).join("/")
   const source = p.manifest.extensions.length > 1 ? `${p.name}/${rel}` : p.name
-  return { source, name: p.name, hint: `${p.scope} package; amira ext disable ${p.name} turns it off` }
+  return {
+    source,
+    name: p.name,
+    hint: `${p.scope} package; amira ext disable ${p.name} turns it off`,
+    root: p.dir,
+  }
 }
 
 /** An extension file given with --extension: its path relative to the working directory, if inside it. */
