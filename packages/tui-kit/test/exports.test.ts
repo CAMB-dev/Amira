@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { Form, FormFieldView, FormOptions } from "../src/index.ts"
+import type { Form, FormFieldView, FormOptions, ProcessTerminal } from "../src/index.ts"
 
 test("the public theme exports are part of the stable package surface", async () => {
   expect(Object.keys(await import("../src/index.ts")).sort()).toEqual([
@@ -98,6 +98,17 @@ test("the public theme exports are part of the stable package surface", async ()
     "wrapText",
     "yellow",
   ])
+})
+
+test("ProcessTerminal exposes an explicit synchronous emergency stop without a new export", async () => {
+  const terminal = (await import("../src/index.ts")).ProcessTerminal
+  const emergencyStop: ProcessTerminal["emergencyStop"] = terminal.prototype.emergencyStop
+  expect({ method: typeof emergencyStop, parameters: emergencyStop.length }).toMatchInlineSnapshot(`
+    {
+      "method": "function",
+      "parameters": 0,
+    }
+  `)
 })
 
 test("the public form presentation contract is opt-in", () => {

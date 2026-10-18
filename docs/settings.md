@@ -174,6 +174,9 @@ Keys are not set here: they live in `keybindings.json` in the user directory. Se
 | `backgroundJobs.printWaitMs` | `number` | `30000` (30 s) | How long print mode waits for top-level background jobs started during the run before stopping them on exit. |  |
 | `commandAliases` | `Record<string, string>` | none | Slash command aliases: `{"ds": "model deepseek/deepseek-flash"}` makes `/ds` run `/model deepseek/deepseek-flash`, with anything typed after `/ds` appended. The value names a command, not another alias; commands and their own aliases win. |  |
 | `sessions.autoTitle` | `boolean` | `true` | Ask the model for a short session title in the background after the first turn (`compact.model` when set). `/rename` always wins. |  |
+| `updates.auto` | `boolean` | `true` | Check self-managed single-file installs in the background and install patch updates for the next start. Minor and major releases only show a notice. Package-manager and source installs never self-update. | Yes |
+| `updates.channel` | `"stable" \| "next"` | `"stable"` | Release channel for update checks and `amira update`: `stable` or release candidates on `next`. Next-channel builds default to `next`. `--channel` overrides it for one command. | Yes |
+| `updates.minimumVersion` | `string` | none | Minimum acceptable update or rollback target (SemVer), enforced under the update lock for rollback with no override. Never installs a release below this version; an older running version shows an update notice. Does not force a minor or major background update. | Yes |
 
 ## Providers and models
 

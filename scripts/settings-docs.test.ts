@@ -52,7 +52,8 @@ function sample(rows: Row[]): Record<string, unknown> {
       const next = at[name]
       at = (Array.isArray(next) ? next[0] : next) as Record<string, unknown>
     }
-    at[parts.at(-1)!.replace(/^<\w+>$/, "a")] = documentedNumber(row) ?? sampleValue(row.type)
+    at[parts.at(-1)!.replace(/^<\w+>$/, "a")] =
+      row.key === "updates.minimumVersion" ? "1.2.3" : (documentedNumber(row) ?? sampleValue(row.type))
   }
   return out
 }

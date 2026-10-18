@@ -195,6 +195,57 @@ describe("ProcessTerminal restores itself when the process goes away", () => {
     expect(codePages).toEqual({ output: 936, input: 950 })
   })
 
+  test("explicit emergency stop restores and prints once before detaching, with filtered isolated callbacks", () => {
+    const before = counts()
+    const oldExitHandlers = new Set(process.listeners("exit"))
+    term.start()
+    const onExit = process.listeners("exit").find((handler) => !oldExitHandlers.has(handler))!
+    term.setRawMode(true)
+    term.enableMode(modes.bracketedPaste)
+    term.enterAltScreen()
+    term.setOutputFilter((text) => text.replace("plain transcript", "filtered transcript"))
+    let asked = 0
+    term.onEmergencyExit(() => {
+      throw new Error("broken callback")
+    })
+    term.onEmergencyExit(() => {
+      asked++
+      expect(term.isRaw).toBe(false)
+      expect(counts()).toEqual(before.map((count) => count + 1))
+      codePages.output = 936
+      codePages.input = 950
+      return "plain transcript\r\n"
+    })
+    term.emergencyStop()
+    expect(readFileSync(file, "utf8")).toBe(
+      `${modes.altScreen.off}${modes.bracketedPaste.off}\x1b[0m\x1b[?25hfiltered transcript\r\n`,
+    )
+    expect(asked).toBe(1)
+    expect(counts()).toEqual(before)
+    expect(codePages).toEqual({ output: 936, input: 950 })
+    // An already-snapshotted exit listener must not print the same transcript again.
+    onExit(0)
+    term.emergencyStop()
+    expect(readFileSync(file, "utf8").split("filtered transcript")).toHaveLength(2)
+    expect(asked).toBe(1)
+  })
+
+  test("ordinary stop does not print emergency text, including a later lifecycle stop", () => {
+    const before = counts()
+    term.start()
+    let asked = 0
+    term.onEmergencyExit(() => {
+      asked++
+      return "emergency only"
+    })
+    term.stop()
+    term.emergencyStop()
+    expect(asked).toBe(0)
+    expect(readFileSync(file, "utf8")).toBe("")
+    expect(counts()).toEqual(before)
+    expect(codePages).toEqual({ output: 936, input: 950 })
+  })
+
   test("handlers are added by start and removed by stop, once", () => {
     const before = counts()
     term.start()

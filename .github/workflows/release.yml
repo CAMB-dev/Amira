@@ -123,7 +123,8 @@ jobs:
         run: |
           mkdir -p dist
           gh release download "$TAG" --dir dist --pattern '*.zip' --pattern '*.tar.gz' \
-            --pattern SHA256SUMS --pattern manifest.json --pattern manifest.json.sig
+            --pattern SHA256SUMS --pattern manifest.json --pattern manifest.json.sig \
+            --pattern install.sh --pattern install.ps1
       - name: Sign new manifests or verify immutable published manifests
         env:
           SIGNING_KEY: ${{ secrets.AMIRA_RELEASE_ED25519_KEY }}
@@ -135,6 +136,16 @@ jobs:
           if [[ -z "$SIGNING_KEY" && ( "$DRY_RUN" != true || "$PUBLISHED" == true ) ]]; then
             echo 'AMIRA_RELEASE_ED25519_KEY (Ed25519 PKCS8 PEM) is required.' >&2
             exit 1
+          fi
+          if [[ "$DRY_RUN" != true && -n "$SIGNING_KEY" ]]; then
+            bun -e '
+              import { createPublicKey } from "node:crypto"
+              import { releasePublicKey } from "./packages/cli/src/update/public-key.ts"
+              const publicPem = key => createPublicKey(key).export({ type: "spki", format: "pem" }).toString()
+              if (releasePublicKey && publicPem(releasePublicKey) !== publicPem(process.env.SIGNING_KEY)) {
+                throw new Error("Release signing secret does not match the compiled release public key")
+              }
+            '
           fi
           if [[ "$PUBLISHED" == true ]]; then
             bun scripts/sign-manifest.ts verify --key-env SIGNING_KEY
@@ -171,6 +182,9 @@ jobs:
             mkdir -p "${archive%.zip}"
             unzip -q "$archive" -d "${archive%.zip}"
           done
+      - name: Stage installers with the compiled release public key
+        if: needs.plan.outputs.published != 'true'
+        run: bun scripts/stage-installers.ts
       - name: Stage every platform package and main package before any publication
         run: bun scripts/npm-pack.ts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -182,6 +196,8 @@ jobs:
             dist/SHA256SUMS
             dist/manifest.json
             dist/manifest.json.sig
+            dist/install.sh
+            dist/install.ps1
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -343,6 +359,37 @@ jobs:
               verify_tag_commit(os.environ['GITHUB_REPOSITORY'], os.environ['TAG'], os.environ['SHA'])
               subprocess.run(args, check=True)
           PY
+
+  update-channel:
+    name: Publish the signed next-channel pointer
+    needs: [plan, publish]
+    if: needs.plan.outputs.dry-run != 'true' && needs.plan.outputs.channel == 'next'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release-update-channel-next
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-archives
+          path: dist
+      # Immutable Releases cannot host an editable rolling "next" release. Publish only
+      # signed metadata on a dedicated branch; archives always come from immutable v* tags.
+      - name: Atomically advance next metadata without modifying a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bun scripts/publish-update-channel.ts publish --repo "$GH_REPO" --dist dist
 
   npm:
     name: Publish platform packages first, main package last

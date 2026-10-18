@@ -231,6 +231,20 @@ export class ProcessTerminal extends BaseTerminal {
     }
   }
 
+  /** Restores a started terminal and emits emergency text synchronously before detaching handlers. */
+  emergencyStop(): void {
+    // Ordinary shutdown has already detached the emergency handler and must stay ordinary.
+    if (this.cleanup.length === 0) {
+      this.stop()
+      return
+    }
+    try {
+      this.restoreEmergency()
+    } finally {
+      for (const fn of this.cleanup.splice(0)) fn()
+    }
+  }
+
   protected applyRawMode(on: boolean): void {
     if (on) this.codePage.ensure()
     if (this.stdin.isTTY) this.stdin.setRawMode(on)
@@ -255,6 +269,25 @@ export class ProcessTerminal extends BaseTerminal {
     return () => this.lastWords.delete(fn)
   }
 
+  private restoreEmergency(): void {
+    const fd = (this.stdout as { fd?: number }).fd ?? 1
+    try {
+      this.codePage.ensure()
+      restoreWrites.get(this)?.((sequence) => writeSync(fd, this.outputFilter(sequence)))
+    } catch {}
+    this.setRawMode(false)
+    const words = [...this.lastWords]
+    this.lastWords.clear()
+    for (const fn of words) {
+      try {
+        const text = this.outputFilter(fn())
+        this.codePage.ensure()
+        writeSync(fd, text)
+      } catch {}
+    }
+    this.codePage.restore()
+  }
+
   /**
    * Restores the terminal when the process goes away without calling `stop()`: on exit, on an
    * uncaught exception (before the error is printed), and on SIGINT, SIGTERM, SIGHUP and SIGBREAK.
@@ -267,24 +300,7 @@ export class ProcessTerminal extends BaseTerminal {
    * Returns a function that removes every handler.
    */
   private restoreOnExit(): () => void {
-    const restoreNow = () => {
-      const fd = (this.stdout as { fd?: number }).fd ?? 1
-      try {
-        this.codePage.ensure()
-        restoreWrites.get(this)?.((sequence) => writeSync(fd, this.outputFilter(sequence)))
-      } catch {}
-      this.setRawMode(false)
-      const words = [...this.lastWords]
-      this.lastWords.clear()
-      for (const fn of words) {
-        try {
-          const text = this.outputFilter(fn())
-          this.codePage.ensure()
-          writeSync(fd, text)
-        } catch {}
-      }
-      this.codePage.restore()
-    }
+    const restoreNow = () => this.restoreEmergency()
     const onUncaught = () => {
       if (process.listenerCount("uncaughtException") > 0) return
       restoreNow()

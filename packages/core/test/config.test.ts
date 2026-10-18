@@ -58,6 +58,30 @@ test("agent.maxSteps accepts non-negative integers, including unlimited", () => 
   }
 })
 
+test("update settings accept channels and exact SemVer minimums", () => {
+  const updates = { auto: false, channel: "next" as const, minimumVersion: "1.2.3-rc.1+build.01" }
+  expect(validateSettings({ updates }, "settings.json")).toEqual({ settings: { updates }, warnings: [] })
+  for (const minimumVersion of ["1.2", "v1.2.3", "1.2.3-01", "1.2.3\n", "../1.2.3", 123]) {
+    expect(() => validateSettings({ updates: { minimumVersion } }, "s.json")).toThrow(
+      '"updates.minimumVersion"',
+    )
+  }
+  expect(() => validateSettings({ updates: { auto: "false" } }, "s.json")).toThrow('"updates.auto"')
+  expect(() => validateSettings({ updates: { channel: "nightly" } }, "s.json")).toThrow('"updates.channel"')
+})
+
+test("projects cannot override the user's update policy", () => {
+  const updates = { auto: false, channel: "stable" as const, minimumVersion: "1.2.3" }
+  put(userFile(), { updates })
+  put(projectFile(), { updates: { auto: true, channel: "next", minimumVersion: "0.1.0" } })
+  const loaded = loadSettings({ cwd, home })
+  expect(loaded.settings.updates).toEqual(updates)
+  expect(loaded.warnings).toHaveLength(3)
+  expect(
+    loaded.warnings.every((warning) => warning.includes("a project file cannot change how Amira updates")),
+  ).toBe(true)
+})
+
 test("terminal notifications accept auto/off independently of the bell", () => {
   for (const notify of ["auto", "off"] as const) {
     expect(validateSettings({ tui: { notify, bell: false } }, "settings.json")).toEqual({

@@ -303,6 +303,18 @@ const settings = object({
   }),
   agents: record(object({ model: modelRef })),
   sessions: object({ autoTitle: boolean }),
+  updates: object({
+    auto: boolean,
+    channel: oneOf("stable", "next"),
+    minimumVersion: expect("a SemVer version", (v) => {
+      if (typeof v !== "string") return false
+      const match =
+        /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+          v,
+        )
+      return !!match && match[0] === v && !match[1]?.split(".").some((part) => /^0\d+$/.test(part))
+    }),
+  }),
   subagents: object({
     maxDepth: integer(1),
     maxConcurrent: concurrency(DEFAULT_SUBAGENT_MAX_CONCURRENT),

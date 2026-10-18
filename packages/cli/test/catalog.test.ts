@@ -32,6 +32,25 @@ const offline = (async () => {
   throw new Error("offline")
 }) as unknown as typeof fetch
 
+test("AMIRA_OFFLINE prevents startup catalog network requests", async () => {
+  const previous = process.env.AMIRA_OFFLINE
+  const { file } = await tmpFile()
+  const calls = { n: 0 }
+  try {
+    for (const value of ["1", "true"]) {
+      process.env.AMIRA_OFFLINE = value
+      expect(await refreshCatalog({ file, fetch: serve(fixture, calls) })).toBeUndefined()
+    }
+    expect(calls.n).toBe(0)
+    process.env.AMIRA_OFFLINE = "0"
+    expect(await refreshCatalog({ file, fetch: serve(fixture, calls) })).toBeDefined()
+    expect(calls.n).toBe(1)
+  } finally {
+    if (previous === undefined) delete process.env.AMIRA_OFFLINE
+    else process.env.AMIRA_OFFLINE = previous
+  }
+})
+
 test("with no cache and no network there is simply no catalog", async () => {
   const { file } = await tmpFile()
   expect(await readCatalogCache({ file })).toEqual({ catalog: undefined, stale: true })

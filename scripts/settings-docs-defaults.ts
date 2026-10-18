@@ -11,6 +11,8 @@ export const settingsDefaults = {
   "backgroundJobs.maxLogBytes": d.DEFAULT_BACKGROUND_MAX_LOG_BYTES,
   "backgroundJobs.printWaitMs": d.DEFAULT_BACKGROUND_PRINT_WAIT_MS,
   "sessions.autoTitle": d.DEFAULT_AUTO_TITLE,
+  "updates.auto": d.DEFAULT_UPDATE_AUTO,
+  "updates.channel": d.DEFAULT_UPDATE_CHANNEL,
   "permissions.mode": d.DEFAULT_PERMISSION_MODE,
   "permissions.rules": d.DEFAULT_PERMISSION_RULES,
   "providers.<id>.compat.maxTokensField": d.DEFAULT_MAX_TOKENS_FIELD,
