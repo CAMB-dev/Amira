@@ -43,7 +43,12 @@ function oneLine(v: unknown): string {
  * what the call is about (a path, a command, a pattern, or else the first text), then the
  * other short ones labelled, e.g. `src/a.ts · limit=20`.
  */
-export function summarizeArgs(args: Record<string, unknown>, max = 80): string {
+export function summarizeArgs(
+  args: Record<string, unknown>,
+  max = 80,
+  separator = "·",
+  ellipsis = "…",
+): string {
   const scalars = Object.entries(args).filter(
     ([, v]) => typeof v === "string" || typeof v === "number" || typeof v === "boolean",
   )
@@ -53,9 +58,9 @@ export function summarizeArgs(args: Record<string, unknown>, max = 80): string {
   const parts: string[] = []
   if (lead !== -1) parts.push(oneLine(scalars[lead]![1]))
   for (const [i, [k, v]] of scalars.entries()) {
-    if (i !== lead) parts.push(`${k}=${clip(oneLine(v), MAX_LABELLED)}`)
+    if (i !== lead) parts.push(`${k}=${clip(oneLine(v), MAX_LABELLED, ellipsis)}`)
   }
-  return clip(parts.join(" · "), max)
+  return clip(parts.join(` ${separator} `), max, ellipsis)
 }
 
 export { formatDuration, formatElapsed, localClock }

@@ -2,9 +2,11 @@ import {
   ARTIFACT_HEADER,
   clipMiddle,
   DEFAULT_SHELL_OUTPUT_LINES,
+  OMITTED_NOTE,
   plural,
   previewNoteLine,
   type ToolApproval,
+  type ToolBodyOptions,
   type ToolCallView,
   type ToolDetailLevel,
   type ToolExploration,
@@ -13,6 +15,7 @@ import {
   type ToolRejection,
   type ToolResult,
   toolResultText,
+  UNSAVED_HEADER,
 } from "@amira/api"
 import {
   bold,
@@ -24,9 +27,9 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { renderToolLines, type ToolLayoutLine, terminalText } from "./diff-view.ts"
+import { renderToolLines, type ToolLayoutLine, terminalText, type ViewMarkers } from "./diff-view.ts"
 import { formatDuration, formatElapsed, stampRows, summarizeArgs, timestampRoom } from "./format.ts"
-import { glyphs } from "./glyphs.ts"
+import { asciiGlyphs, glyphs, viewSeparator } from "./glyphs.ts"
 import { CONTENT_INSET, MARKER_WIDTH, markerPrefix } from "./grid.ts"
 
 /** Where the TUI finds the presenter of a tool; the core's ToolRendererRegistry is one. */
@@ -74,6 +77,15 @@ export interface ToolViewOptions {
   onWrap?: (row: number, join: "" | " ") => void
   /** Host-only content columns, excluding only chrome this renderer added. */
   onRow?: (row: number, from: number) => void
+  /**
+   * Between the parts of a host-composed summary. Views working from an ASCII glyph set pass
+   * an ASCII one; other callers keep the middle dot these summaries have always used.
+   */
+  separator?: string
+  /** Ends a summary cut in its middle. Views pass their own marker so ASCII stays ASCII. */
+  ellipsis?: string
+  /** View decorations for delegated tool bodies (diff gaps and cuts); absent keeps the old ones. */
+  markers?: ViewMarkers
 }
 
 /** Most lines of a failure's body in `summary` detail: its start and its end. */
@@ -156,19 +168,54 @@ function jsonSummary(text: string): string | undefined {
   return plural(entries.length, "field")
 }
 
+/**
+ * A preview note as a view draws it. An ASCII view cannot show the note's typographic marks,
+ * so it gets the same information with ASCII ones; other views keep the API's text.
+ */
+function viewNoteLine(text: string): ToolLine | undefined {
+  if (!asciiGlyphs()) return previewNoteLine(text)
+  const sep = viewSeparator()
+  const saved = ARTIFACT_HEADER.exec(text)
+  if (saved)
+    return {
+      kind: "muted",
+      text: `... output saved as ${saved[1]} ${sep} ${saved[3]} lines ${sep} ${saved[2]} chars`,
+    }
+  const unsaved = UNSAVED_HEADER.exec(text)
+  if (unsaved)
+    return { kind: "muted", text: `... output too long (${unsaved[2]} lines); only a preview was kept` }
+  const cut = OMITTED_NOTE.exec(text)
+  if (cut) return { kind: "muted", text: `... ${cut[1]} lines omitted (${cut[3]}-${cut[4]})` }
+  return undefined
+}
+
+/** The generic body; an ASCII view draws its preview notes in ASCII. */
+function fallbackBody(call: ToolCallView, opts: ToolBodyOptions, markers?: ViewMarkers): ToolLine[] {
+  if (!markers || !asciiGlyphs()) return fallbackPresenter.body(call, opts)
+  if (opts.detail === "full" && !call.result.isError && jsonSummary(call.text))
+    return lines(call.text).map((text) => ({ kind: "code", text }))
+  if (!call.result.isError && opts.detail !== "full") return []
+  return lines(call.text)
+    .slice(1)
+    .map((text) => viewNoteLine(text) ?? { kind: "code", text })
+}
+
+/** The generic result, with `separator` for views that draw host-composed labels in ASCII. */
+function fallbackResult(call: ToolCallView, separator = "·"): string {
+  const json = !call.result.isError && jsonSummary(call.text)
+  if (json) return json
+  const all = lines(call.text)
+  if (!all.length) return "no output"
+  // A large output saved as an artifact: what the preview stands for, not its header.
+  const saved = ARTIFACT_HEADER.exec(all[0]!)
+  if (saved) return `${saved[3]} lines ${separator} saved as ${saved[1]}`
+  return all.length > 1 ? `${all[0]} (+${plural(all.length - 1, "line")})` : all[0]!
+}
+
 /** How a tool no presenter knows is shown: the arguments, the first line of the result and the rest. */
 export const fallbackPresenter: Required<Omit<ToolPresenter, "explore" | "verbs">> = {
   summary: (args) => summarizeArgs(args),
-  result: (call) => {
-    const json = !call.result.isError && jsonSummary(call.text)
-    if (json) return json
-    const all = lines(call.text)
-    if (!all.length) return "no output"
-    // A large output saved as an artifact: what the preview stands for, not its header.
-    const saved = ARTIFACT_HEADER.exec(all[0]!)
-    if (saved) return `${saved[3]} lines · saved as ${saved[1]}`
-    return all.length > 1 ? `${all[0]} (+${plural(all.length - 1, "line")})` : all[0]
-  },
+  result: (call) => fallbackResult(call),
   body: (call, { detail }) => {
     if (detail === "full" && !call.result.isError && jsonSummary(call.text))
       return lines(call.text).map((text) => ({ kind: "code", text }))
@@ -214,10 +261,18 @@ export function relativePaths(
   return out
 }
 
+/** The marker a view clips with: its own when it has one, else the configured one. */
+const cutMarker = (opts: Pick<ToolViewOptions, "markers">): string => opts.markers?.ellipsis ?? glyphs.more
+
 /** The head of a call after its name, on one line, paths under the working directory relative. */
-export function callSummary(presenter: ToolPresenter | undefined, args: Record<string, unknown>): string {
+export function callSummary(
+  presenter: ToolPresenter | undefined,
+  args: Record<string, unknown>,
+  separator = "·",
+  ellipsis = "…",
+): string {
   const s = attempt(presenter?.summary && (() => presenter.summary!(args)), () =>
-    fallbackPresenter.summary(args),
+    summarizeArgs(args, 80, separator, ellipsis),
   )
   return relativePaths(oneLine(s))
 }
@@ -256,7 +311,16 @@ function headLine(
   name: string,
   summary: string,
   width: number,
-  opts: { right?: string; muted?: boolean; verb?: string; nameStyle?: StyleFn; summaryStyle?: StyleFn } = {},
+  opts: {
+    right?: string
+    muted?: boolean
+    verb?: string
+    nameStyle?: StyleFn
+    summaryStyle?: StyleFn
+    ellipsis?: string
+    /** Ends the head when it is cut to the width. */
+    cut?: string
+  } = {},
 ): string {
   const verb = opts.verb ? oneLine(opts.verb) : ""
   const label = verb
@@ -266,12 +330,13 @@ function headLine(
   const reserved = right ? visibleWidth(right) + 2 : 0
   const fitsRight = right !== "" && width - reserved >= 12
   const room = (fitsRight ? width - reserved : width) - visibleWidth(`${markerPrefix(bullet)}${label} `)
-  const shown = summary && room >= 8 ? clipMiddle(summary, room) : summary
+  const shown = summary && room >= 8 ? clipMiddle(summary, room, opts.ellipsis) : summary
   const style = opts.muted ? theme.muted : (opts.summaryStyle ?? theme.text)
   const text = shown ? ` ${style(shown)}` : ""
   const left = `${markerPrefix(bullet)}${label}${text}`
-  if (!fitsRight) return truncateToWidth(left, width, glyphs.more)
-  const cut = truncateToWidth(left, width - reserved, glyphs.more)
+  const more = opts.cut ?? glyphs.more
+  if (!fitsRight) return truncateToWidth(left, width, more)
+  const cut = truncateToWidth(left, width - reserved, more)
   return `${cut}${" ".repeat(Math.max(2, width - visibleWidth(cut) - visibleWidth(right)))}${right}`
 }
 
@@ -308,9 +373,9 @@ function callView(call: FinishedCall): ToolCallView {
 }
 
 /** A presenter's result, or the generic one, keeping real line breaks. */
-function presentedResult(presenter: ToolPresenter | undefined, view: ToolCallView): string {
+function presentedResult(presenter: ToolPresenter | undefined, view: ToolCallView, separator = "·"): string {
   const result =
-    attempt(presenter?.result && (() => presenter.result!(view)), () => fallbackPresenter.result(view)) ?? ""
+    attempt(presenter?.result && (() => presenter.result!(view)), () => fallbackResult(view, separator)) ?? ""
   return stripAnsi(String(result)).split(/\r?\n/).map(oneLine).join("\n").trim()
 }
 
@@ -374,7 +439,7 @@ export function finishedToolLines(
   const outcome = outcomeOf(call)
   const mark = outcomeMark(outcome)
   const view = callView(call)
-  const summary = callSummary(presenter, call.args)
+  const summary = callSummary(presenter, call.args, opts.separator, opts.ellipsis)
   const ran = outcome === "done" || outcome === "failed"
   // Interrupted while it ran (not before it started): what it printed so far still shows.
   const cutShort = outcome === "interrupted" && call.rejected !== "aborted" && view.text !== ""
@@ -385,6 +450,8 @@ export function finishedToolLines(
       muted: !ran,
       verb: ran || cutShort ? presenter?.verbs?.past : undefined,
       summaryStyle: summaryStyle(theme, call.args),
+      ellipsis: opts.ellipsis,
+      cut: cutMarker(opts),
       ...(ran ? {} : { nameStyle: theme.muted }),
     }),
   ]
@@ -396,7 +463,8 @@ export function finishedToolLines(
   let saidResult = false
   if (outcome === "interrupted") {
     // What its presenter makes of it; without one, its output shows under it instead.
-    const said = cutShort && presenter?.result ? withoutMark(presentedResult(presenter, view), mark) : ""
+    const said =
+      cutShort && presenter?.result ? withoutMark(presentedResult(presenter, view, opts.separator), mark) : ""
     saidResult = said !== ""
     result = !said
       ? "interrupted"
@@ -404,7 +472,7 @@ export function finishedToolLines(
         ? said
         : `interrupted ${glyphs.separator} ${said}`
   } else if (!ran) result = lines(view.text).join("\n") || outcome
-  else result = presentedResult(presenter, view)
+  else result = presentedResult(presenter, view, opts.separator)
   const style = outcome === "done" ? theme.success : outcome === "failed" ? theme.error : theme.muted
   const approval =
     call.approval === "user"
@@ -432,11 +500,11 @@ export function finishedToolLines(
       cutShort && !saidResult
         ? output()
         : attempt(presenter?.body && (() => presenter.body!(view, bodyOpts)), () =>
-            fallbackPresenter.body(view, bodyOpts),
+            fallbackBody(view, bodyOpts, opts.markers),
           )
     // The presenter keeps a failure's lines to itself (it said why in the result, or not):
     // the output is the only way to see what went wrong.
-    if (failed && !body.length) body = cutShort ? output() : fallbackPresenter.body(view, bodyOpts)
+    if (failed && !body.length) body = cutShort ? output() : fallbackBody(view, bodyOpts, opts.markers)
     // A one-line output the result line already says (e.g. "Aborted by the user …") is not
     // said twice.
     body = body.flatMap(({ text, marker, description, ...line }) => {
@@ -494,7 +562,7 @@ export function finishedToolLines(
         truncateToWidth(
           `${prefix}${line.kind === "muted" ? theme.muted(line.text) : line.text}`,
           width,
-          glyphs.more,
+          cutMarker(opts),
         ),
       )
     }
@@ -511,8 +579,10 @@ export function finishedToolLines(
     "",
     onWrap,
     onRow,
+    opts.markers,
   )
-  for (const line of bodyRows) out.push(truncateToWidth(`${continuation}${line}`, width, glyphs.more))
+  const cut = opts.markers?.ellipsis ?? glyphs.more
+  for (const line of bodyRows) out.push(truncateToWidth(`${continuation}${line}`, width, cut))
   return stampRows(out, theme, width, opts.timestamp)
 }
 
@@ -529,9 +599,11 @@ export function runningToolLines(
   now: number,
   spinner: string,
   width: number,
-  opts: Pick<ToolViewOptions, "last" | "timestamp" | "onRow"> & { liveOutputLines?: number } = {},
+  opts: Pick<ToolViewOptions, "last" | "timestamp" | "onRow" | "separator" | "ellipsis" | "markers"> & {
+    liveOutputLines?: number
+  } = {},
 ): string[] {
-  const summary = callSummary(presenter, call.args)
+  const summary = callSummary(presenter, call.args, opts.separator, opts.ellipsis)
   const right = theme.muted(formatElapsed(now - call.startedAt))
   const head = headLine(
     theme,
@@ -543,6 +615,8 @@ export function runningToolLines(
       right,
       verb: presenter?.verbs?.running,
       summaryStyle: summaryStyle(theme, call.args),
+      ellipsis: opts.ellipsis,
+      cut: cutMarker(opts),
     },
   )
   const limit = Math.max(0, Math.min(RUNNING_LINES, opts.liveOutputLines ?? RUNNING_LINES))
@@ -561,7 +635,7 @@ export function runningToolLines(
     [
       head,
       ...live.map((l) =>
-        truncateToWidth(`${prefix}${theme.muted(terminalText(l.text))}`, width, glyphs.more),
+        truncateToWidth(`${prefix}${theme.muted(terminalText(l.text))}`, width, cutMarker(opts)),
       ),
     ],
     theme,
@@ -647,7 +721,7 @@ export function exploredLine(
   theme: Theme,
   explored: ToolExploration[],
   width: number,
-  opts: Pick<ToolViewOptions, "last" | "expanded"> = {},
+  opts: Pick<ToolViewOptions, "last" | "expanded" | "markers"> = {},
 ): string {
   const byVerb = new Map<string, number>()
   for (const e of explored) {
@@ -664,7 +738,8 @@ export function exploredLine(
     return theme.muted(`${label} ${plural(count, noun, many)}`)
   })
   const room = Math.max(0, width - visibleWidth(tail))
-  return truncateToWidth(truncateToWidth(lead + parts.join(s), room, glyphs.more) + tail, width, glyphs.more)
+  const more = cutMarker(opts)
+  return truncateToWidth(truncateToWidth(lead + parts.join(s), room, more) + tail, width, more)
 }
 
 /** Successful exploring calls in a row: one folded row, or each call with its full result and output. */

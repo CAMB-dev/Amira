@@ -113,9 +113,10 @@ export interface ToolLayoutLine extends ToolLine {
  * the right edge, with success/error signs; in a
  * removed line followed by the added line that replaced it, the words that changed are on a
  * stronger one; otherwise they are colored as text, the signs saying what they are (so they
- * read without colors too). A hunk gap shows as "⋯" in the number column. Other lines take
- * one row each, cut to the width, unless the presenter requests wrapping. Marked rows keep
- * their glyph separate from the text's color and hang descriptions under the label.
+ * read without colors too). A hunk gap shows as "⋯" in the number column unless a view passes
+ * its own decoration. Other lines take one row each, cut to the width, unless the presenter
+ * requests wrapping. Marked rows keep their glyph separate from the text's color and hang
+ * descriptions under the label.
  */
 export function renderToolLines(
   lines: ToolLayoutLine[],
@@ -124,7 +125,15 @@ export function renderToolLines(
   indent = "",
   onWrap?: (row: number, join: "" | " ") => void,
   onRow?: (row: number, from: number) => void,
+  view?: ViewMarkers,
 ): string[] {
+  // Views pass their own decorations; they can be wider than the legacy one-cell marker, and
+  // both the last kept wrap row and the gap must reserve their real display width. Callers
+  // that pass nothing keep the historical glyphs and one-cell reservation.
+  const marker = view?.ellipsis ?? glyphs.more
+  const reserve = view === undefined ? 1 : textWidth(view.ellipsis)
+  const gap = view?.gap ?? HUNK_GAP
+  const isView = view !== undefined
   const numbered = lines.filter((l) => l.lineNo !== undefined)
   const gutter = numbered.length ? Math.max(...numbered.map((l) => String(l.lineNo).length)) : 0
   const texts = lines.map((l) => cleanText(l.text))
@@ -142,7 +151,17 @@ export function renderToolLines(
     const text = texts[i]!
     const sign = SIGNS[l.kind]
     if (sign !== undefined) {
-      append(diffRows(l, text, sign, words.get(i) ?? [], { theme, width, indent, gutter }))
+      append(
+        diffRows(l, text, sign, words.get(i) ?? [], {
+          theme,
+          width,
+          indent,
+          gutter,
+          marker,
+          reserve,
+          view: isView,
+        }),
+      )
       return
     }
     if (l.wrap || l.marker || l.description !== undefined || l.hangingIndent || l.continuationMarker) {
@@ -155,24 +174,32 @@ export function renderToolLines(
     }
     if (l.kind === "diff-hunk" && (text === "⋮" || text.startsWith(HUNK_GAP))) {
       // The mark in the number column, what follows it (a function's name) lined up with the text.
-      const about = text.slice(HUNK_GAP.length).trim()
-      const mark = gutter ? `${" ".repeat(Math.max(0, gutter - 1))}${HUNK_GAP}` : HUNK_GAP
+      const about = text.startsWith(HUNK_GAP) ? text.slice(HUNK_GAP.length).trim() : ""
+      const mark = gutter ? `${" ".repeat(Math.max(0, gutter - textWidth(gap)))}${gap}` : gap
       const at = about ? `${mark}${" ".repeat(signed ? 3 : 1)}${about}` : mark
-      append([
-        `${indent}${theme.muted(truncateToWidth(at, Math.max(1, width - indent.length), glyphs.more))}`,
-      ])
+      append([`${indent}${theme.muted(truncateToWidth(at, Math.max(1, width - indent.length), marker))}`])
       return
     }
     // A file's header starts at the edge, above the numbers of its lines; other lines (a note
     // such as "… 12 more lines") line up with the text of the diff lines around them.
     const header = l.kind === "muted" && FILE_HEADER.test(text)
     const no = header ? "" : `${gutter ? `${" ".repeat(gutter)} ` : ""}${signed ? "  " : ""}`
-    const row = truncateToWidth(`${indent}${no}${text}`, width, glyphs.more)
+    const prefix = `${indent}${no}`
+    const row = truncateToWidth(`${prefix}${text}`, width, marker)
     const style = header ? (themeToken(theme, "path") ?? theme.muted) : styleOf(l.kind, theme)
-    append([`${indent}${theme.muted(no)}${style(row.slice(indent.length + no.length))}`])
+    // As in the signed-diff branch, a view's wider marker can start inside the gutter: keep
+    // the clipped row whole instead of restoring an untruncated prefix over it.
+    append([
+      isView && reserve > 1 && !row.startsWith(prefix)
+        ? theme.muted(row)
+        : `${indent}${theme.muted(no)}${style(row.slice(prefix.length))}`,
+    ])
   })
   // Narrower than the indent and the gutter: cut, as the terminal would otherwise wrap them.
-  return out.map((r) => (visibleWidth(r) > width ? truncateToWidth(r, Math.max(0, width)) : r))
+  // Views keep their marker whole when that cut reaches it.
+  return out.map((r) =>
+    visibleWidth(r) > width ? truncateToWidth(r, Math.max(0, width), isView && reserve > 1 ? marker : "") : r,
+  )
 }
 
 /** Wrapped presenter prose and choices, with descriptions and glyphs styled independently. */
@@ -244,6 +271,20 @@ interface Layout {
   width: number
   indent: string
   gutter: number
+  /** The marker for a line cut to the width; views pass their own three-cell marker. */
+  marker: string
+  /** Cells the marker takes on the last kept wrap row. */
+  reserve: number
+  /** Views clip rows themselves, so a clipped gutter must not overwrite their marker. */
+  view: boolean
+}
+
+/** Decorations a view draws instead of the transcript's historical ones. */
+export interface ViewMarkers {
+  /** Ends the last row kept when a line wraps past MAX_DIFF_LINE_ROWS. */
+  ellipsis: string
+  /** Stands in for the lines between two hunks. */
+  gap: string
 }
 
 /** A piece of a line's text, and whether it is a changed word. */
@@ -275,11 +316,15 @@ function diffRows(l: ToolLine, text: string, sign: string, words: Range[], at: L
   const room = width - visibleWidth(indent) - lead
   if (room < 4) {
     // Too narrow to wrap in: one row cut to the width, as other lines.
-    const row = truncateToWidth(`${indent}${no}${head}${text}`, width, glyphs.more)
+    const prefix = `${indent}${no}${head}`
+    const row = truncateToWidth(`${prefix}${text}`, width, at.marker)
+    // A view's wider marker can start inside the gutter: keep the clipped row whole rather
+    // than restoring an untruncated gutter over it. One-cell markers keep the old path.
+    if (at.view && at.reserve > 1 && !row.startsWith(prefix)) return [theme.muted(row)]
     const body = row.slice(indent.length + no.length)
     return [`${indent}${theme.muted(no)}${styleOf(l.kind, theme)(body)}`]
   }
-  const rows = wrapPieces(pieces(text, words), room)
+  const rows = wrapPieces(pieces(text, words), room, at.reserve, at.marker)
   const blankNo = " ".repeat(no.length)
   return rows.map((pieceRow, r) => {
     const gut = ((bg && themeToken(theme, "surfaceMuted")) || theme.muted)(r === 0 ? no : blankNo)
@@ -312,7 +357,7 @@ function pieces(text: string, words: Range[]): Piece[] {
  * a character: a wide one that does not fit goes to the next row. More than
  * MAX_DIFF_LINE_ROWS rows are cut, the last one ending in "…".
  */
-function wrapPieces(list: Piece[], room: number): Piece[][] {
+function wrapPieces(list: Piece[], room: number, reserve: number, more: string): Piece[][] {
   const rows: Piece[][] = [[]]
   let used = 0
   const put = (g: string, word: boolean) => {
@@ -334,10 +379,10 @@ function wrapPieces(list: Piece[], room: number): Piece[][] {
   }
   if (rows.length <= MAX_DIFF_LINE_ROWS) return rows
   const kept = rows.slice(0, MAX_DIFF_LINE_ROWS)
-  // The last row kept, cut to leave a cell for the ellipsis.
+  // The last row kept, cut to leave the marker's cells for it.
   const last = kept[kept.length - 1]!
   const cut: Piece[] = []
-  let left = room - 1
+  let left = room - reserve
   for (const p of last) {
     let text = ""
     for (const g of graphemes(p.text)) {
@@ -349,7 +394,7 @@ function wrapPieces(list: Piece[], room: number): Piece[][] {
     if (text) cut.push({ text, word: p.word })
     if (text.length < p.text.length) break
   }
-  cut.push({ text: glyphs.more, word: false })
+  cut.push({ text: more, word: false })
   kept[kept.length - 1] = cut
   return kept
 }

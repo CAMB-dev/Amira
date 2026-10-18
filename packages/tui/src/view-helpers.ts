@@ -1,5 +1,5 @@
 import { type ScrollView, type Theme, truncateToWidth } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { keyLabel } from "./keybindings.ts"
 
 /** Where a scrolled body is: "following" at its end, else "12–30 of 80". */
@@ -16,7 +16,7 @@ export function waitingLine(theme: Theme, title: string, width: number): string 
     truncateToWidth(
       `${glyphs.warning} Waiting for you: ${title} ${glyphs.separator} ${keyLabel({ name: "escape" })} to answer`,
       width,
-      glyphs.more,
+      viewEllipsis(),
     ),
   )
 }
