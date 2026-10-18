@@ -44,6 +44,11 @@ class ScopeAdmission {
     this.#closedParents.add(id)
   }
 
+  /** A new Agent for a durable session id (resume, rewind, reopened conversation) may spawn. */
+  reopenParent(id: string): void {
+    this.#closedParents.delete(id)
+  }
+
   release(): void {
     this.#released = true
   }
