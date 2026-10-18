@@ -1,8 +1,20 @@
-import { guardedFetch, NetError, parseHttpUrl, type Resolver, readCapped } from "@amira/api"
+import {
+  DEFAULT_WEB_FETCH_MAX_BINARY_BYTES,
+  guardedFetch,
+  NetError,
+  parseHttpUrl,
+  type Resolver,
+  readCapped,
+  type WebFetchDetails,
+} from "@amira/api"
+import { saveBinary, sniffBody } from "./binary.ts"
 import { htmlTitle, htmlToMarkdown } from "./html.ts"
 
 export interface FetchOptions {
   maxBytes: number
+  maxBinaryBytes?: number
+  outputDir?: string
+  sessionDir?: string
   timeoutMs: number
   allowPrivateNetwork: boolean
   fetch?: typeof fetch
@@ -21,6 +33,7 @@ export interface Page {
   text: string
   /** The body was longer than maxBytes and was cut. */
   bodyTruncated: boolean
+  saved?: WebFetchDetails["saved"]
 }
 
 /** A request failure the model should see as is. */
@@ -113,7 +126,7 @@ function toText(kind: Kind, body: string, base: string): string {
 
 /**
  * Fetches a URL, following redirects by hand so every hop is checked against the
- * private-network rule, and converts the body to text.
+ * private-network rule, and converts text or saves a binary body to the session's outputs.
  */
 export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSignal): Promise<Page> {
   const timeout = AbortSignal.timeout(opts.timeoutMs)
@@ -135,13 +148,44 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
       },
       all,
     )
-    const res = got.response
+    let res = got.response
     url = got.url
     const contentType = res.headers.get("content-type") ?? ""
-    const declared = headerKind(contentType)
-    if (res.ok && (declared === "pdf" || declared === "binary")) {
-      await res.body?.cancel().catch(() => {})
-      throw unreadable(declared, url, contentType)
+    let kind = headerKind(contentType)
+    if (res.ok && !kind) {
+      const sniffed = await sniffBody(res, all, opts.maxBytes)
+      res = sniffed.response
+      kind = kindOf(contentType, sniffed.head)
+    }
+    if (res.ok && (kind === "pdf" || kind === "binary")) {
+      if (!opts.outputDir || !opts.sessionDir) {
+        void res.body?.cancel().catch(() => {})
+        throw new FetchError(
+          `${unreadable(kind, url, contentType).message}; no session output directory is available to save it`,
+        )
+      }
+      const type =
+        kind === "pdf"
+          ? "application/pdf"
+          : contentType.split(";")[0]?.trim().toLowerCase() || "application/octet-stream"
+      const saved = await saveBinary(
+        res,
+        url,
+        type,
+        opts.outputDir,
+        opts.sessionDir,
+        opts.maxBinaryBytes ?? DEFAULT_WEB_FETCH_MAX_BINARY_BYTES,
+        all,
+      )
+      return {
+        url: start.href,
+        finalUrl: url.href,
+        status: res.status,
+        contentType: type,
+        text: "",
+        bodyTruncated: false,
+        saved,
+      }
     }
     const { bytes, truncated } = await readCapped(res, opts.maxBytes)
     if (!res.ok) {
@@ -150,8 +194,7 @@ export async function fetchPage(raw: string, opts: FetchOptions, signal: AbortSi
         `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""} from ${url.href}${snippet ? `: ${snippet.slice(0, 300)}` : ""}`,
       )
     }
-    const kind = kindOf(contentType, bytes)
-    if (kind === "pdf" || kind === "binary") throw unreadable(kind, url, contentType)
+    kind ??= kindOf(contentType, bytes)
     const charset = charsetOf(contentType) ?? (kind === "html" ? sniffCharset(bytes) : undefined)
     const body = decode(bytes, charset)
     const title = kind === "html" ? htmlTitle(body) : undefined
@@ -235,6 +278,16 @@ function promptHits(text: string, prompt: string, from: number, to: number): str
 
 /** One window of a page, with a header and a marker saying how to read on. */
 export function renderPage(page: Page, offset: number, maxChars: number, prompt?: string): string {
+  if (page.saved) {
+    const saved = page.saved
+    return [
+      `Saved: ${saved.path}`,
+      `Content-Type: ${saved.contentType}`,
+      `Size: ${saved.bytes} bytes`,
+      `Final URL: ${page.finalUrl}`,
+      "Content was not extracted. Read this untrusted file with other tools, e.g. a PDF text extractor via the shell.",
+    ].join("\n")
+  }
   const total = page.text.length
   const from = Math.min(Math.max(0, offset), total)
   const to = Math.min(total, from + maxChars)

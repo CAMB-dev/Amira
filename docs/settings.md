@@ -299,7 +299,8 @@ Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tool
 | `web.search.tavily.searchDepth` | `"basic" \| "advanced"` | `"basic"` | Tavily search depth: `"basic"` or `"advanced"`. |  |
 | `web.search.searxng.url` | `string` | required for this backend | A SearXNG instance with the JSON format enabled. | Yes |
 | `web.fetch.maxChars` | `number` | `20000` | Characters of converted text returned per call, when the call does not say. |  |
-| `web.fetch.maxBytes` | `number` | `5242880` (5 MiB) | Largest response body read, in bytes; longer bodies are cut. |  |
+| `web.fetch.maxBytes` | `number` | `5242880` (5 MiB) | Largest text response body read, in bytes; longer bodies are cut. |  |
+| `web.fetch.maxBinaryBytes` | `number` | `52428800` (50 MiB) | Largest PDF or binary download saved in the session's outputs directory. Larger downloads fail and partial files are deleted. No-session hosts cannot save binaries. These files are not text artifacts: use other tools to read them; artifact quota and `/prune` do not manage them. |  |
 | `web.fetch.timeoutMs` | `number` | `30000` | Request timeout in milliseconds. |  |
 | `web.fetch.allowPrivateNetwork` | `boolean` | `false` | Allow localhost and private-network addresses. | Yes |
 

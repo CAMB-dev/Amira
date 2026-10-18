@@ -51,6 +51,9 @@ export const webFetchPresenter: ToolPresenter<{ url: string }, WebFetchDetails> 
     if (!d) return undefined
     const moved = d.finalUrl !== d.url ? `→ ${d.finalUrl} · ` : ""
     const status = d.status >= 200 && d.status < 300 ? "" : ` · HTTP ${d.status}`
+    if (d.saved) {
+      return `${moved}saved ${d.saved.name} (${d.saved.contentType}, ${d.saved.bytes} bytes)${status}`
+    }
     return `${moved}${size(d.length)}${status}`
   },
   body: (call, { detail }) => (detail === "full" && !call.result.isError ? textLines(call.text) : []),

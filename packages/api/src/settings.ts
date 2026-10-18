@@ -350,8 +350,10 @@ export interface WebSettings {
   fetch?: {
     /** Characters of converted text returned per call. See DEFAULT_WEB_FETCH_MAX_CHARS. */
     maxChars?: number
-    /** Largest response body read. See DEFAULT_WEB_FETCH_MAX_BYTES. */
+    /** Largest text response body read. See DEFAULT_WEB_FETCH_MAX_BYTES. */
     maxBytes?: number
+    /** Largest binary download saved. See DEFAULT_WEB_FETCH_MAX_BINARY_BYTES. */
+    maxBinaryBytes?: number
     /** See DEFAULT_WEB_FETCH_TIMEOUT_MS. */
     timeoutMs?: number
     /** Allow localhost and private-network addresses. See DEFAULT_WEB_FETCH_ALLOW_PRIVATE_NETWORK. */

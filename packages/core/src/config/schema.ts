@@ -296,6 +296,7 @@ const settings = object({
     fetch: object({
       maxChars: integer(1),
       maxBytes: integer(1),
+      maxBinaryBytes: integer(1),
       timeoutMs: integer(1),
       allowPrivateNetwork: boolean,
     }),

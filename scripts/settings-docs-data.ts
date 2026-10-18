@@ -780,9 +780,15 @@ export const annotations: Record<string, Annotation> = {
   },
   "web.fetch.maxBytes": {
     default: documentedDefault("web.fetch.maxBytes"),
-    en: "Largest response body read, in bytes; longer bodies are cut.",
-    zh: "读取的响应体上限（字节），超出部分被截断。",
-    ja: "読み取るレスポンス本文の最大バイト数です。超過した部分は切り捨てます。",
+    en: "Largest text response body read, in bytes; longer bodies are cut.",
+    zh: "读取的文本响应体上限（字节），超出部分被截断。",
+    ja: "読み取るテキストレスポンス本文の最大バイト数です。超過した部分は切り捨てます。",
+  },
+  "web.fetch.maxBinaryBytes": {
+    default: documentedDefault("web.fetch.maxBinaryBytes"),
+    en: "Largest PDF or binary download saved in the session's outputs directory. Larger downloads fail and partial files are deleted. No-session hosts cannot save binaries. These files are not text artifacts: use other tools to read them; artifact quota and `/prune` do not manage them.",
+    zh: "保存到会话输出目录的 PDF 或二进制下载上限。超限时下载失败并删除未完成的文件。没有会话目录的宿主无法保存二进制文件。这些文件不是文本工件：请用其他工具读取；工件配额和 `/prune` 不管理这些文件。",
+    ja: "セッションの出力ディレクトリに保存する PDF またはバイナリの最大サイズです。超過した場合は失敗し、未完成のファイルを削除します。セッションディレクトリのないホストでは保存できません。テキストのアーティファクトではないため、他のツールで読み取ってください。アーティファクトの容量制限と `/prune` の対象外です。",
   },
   "web.fetch.timeoutMs": {
     default: documentedDefault("web.fetch.timeoutMs"),

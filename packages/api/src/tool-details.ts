@@ -126,6 +126,8 @@ export interface WebFetchDetails {
   url: string
   finalUrl: string
   status: number
-  /** Characters of the page's text. */
+  /** Characters of the page's text; zero for a saved binary. */
   length: number
+  /** A binary response saved without including its content in context. */
+  saved?: { path: string; name: string; contentType: string; bytes: number }
 }

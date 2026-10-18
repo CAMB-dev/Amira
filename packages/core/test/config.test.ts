@@ -331,6 +331,12 @@ test("web settings are checked", () => {
     '"web.search.backend" must be one of',
   )
   expect(() => validateSettings({ web: { fetch: { maxChars: 0 } } }, "f")).toThrow("web.fetch.maxChars")
+  expect(() => validateSettings({ web: { fetch: { maxBinaryBytes: 1024 } } }, "f")).not.toThrow()
+  for (const maxBinaryBytes of [0, -1, 1.5, "1024"]) {
+    expect(() => validateSettings({ web: { fetch: { maxBinaryBytes } } }, "f")).toThrow(
+      "web.fetch.maxBinaryBytes",
+    )
+  }
 })
 
 test("hosted web search settings: per provider and model, and a switch for all", () => {
