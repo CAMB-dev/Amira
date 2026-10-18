@@ -3,7 +3,7 @@ import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
 import { keyLabel } from "../keys.ts"
 import { truncateToWidth, visibleWidth } from "../width.ts"
 import type { FormStatusTone } from "./form.ts"
-import { type FormFieldState, formButton, formToneStyle } from "./form-field.ts"
+import { type FormFieldState, formActionStopHint, formButton, formToneStyle } from "./form-field.ts"
 import { wrapFormHint } from "./form-hint.ts"
 import type { FormHit } from "./form-mouse.ts"
 
@@ -23,6 +23,8 @@ interface FooterState {
   submitLabel?: string
   notice: string[]
   hintInset: number
+  card?: boolean
+  preview?: boolean
 }
 
 /** The fixed action strip; all targets use the same rows as their displayed buttons. */
@@ -71,9 +73,13 @@ export function renderFormFooter(
   for (const f of state.actions) {
     const action = f.action
     if (action?.running || action?.text) {
-      const text = action.running
-        ? `${chrome.more} ${action.text ?? "working"} ${separator(ctx)} Esc stops it`
-        : action.text!
+      const stop = formActionStopHint(f.def, state.focus === f.def.id)
+      const progress = truncateToWidth(
+        `${chrome.more} ${action.text ?? "working"}`,
+        Math.max(0, width - visibleWidth(stop) - visibleWidth(separator(ctx)) - 2),
+        chrome.more,
+      )
+      const text = action.running ? `${progress} ${separator(ctx)} ${stop}` : action.text!
       out.push(formToneStyle(theme, action.tone)(truncateToWidth(text, width, chrome.more)))
     }
   }
@@ -102,10 +108,18 @@ export function renderFormFooter(
     row += `${mark} ${text}  `
   }
   out.push(truncateToWidth(row.trimEnd(), width))
-  const hint = formHint(ctx, state.focus, state.field)
   const hintWidth = Math.max(0, width - state.hintInset)
+  const sep = separator(ctx)
+  const shortcuts = `^S save${state.actions.some((f) => f.def.shortcut === "ctrl+t") ? ` ${sep} ^T test` : ""}${state.preview ? ` ${sep} ^P preview` : ""} ${sep} Esc back`
+  const hint = state.card
+    ? ([
+        `${chrome.arrowUp}${chrome.arrowDown}/Tab move ${sep} ${chrome.arrowLeft}${chrome.arrowRight} adjust ${sep} Enter edit ${sep} ${shortcuts}`,
+        `${chrome.arrowUp}${chrome.arrowDown}/Tab ${sep} ${chrome.arrowLeft}${chrome.arrowRight} ${sep} Enter ${sep} ${shortcuts}`,
+        shortcuts,
+      ].find((variant) => visibleWidth(variant) <= hintWidth) ?? shortcuts)
+    : formHint(ctx, state.focus, state.field)
   const hintRow = (line: string) => " ".repeat(state.hintInset) + theme.muted(line)
-  if (state.field?.def.type === "multiselect" && width >= 40 && ctx.rows >= 10) {
+  if (!state.card && state.field?.def.type === "multiselect" && width >= 40 && ctx.rows >= 10) {
     for (const line of wrapFormHint(hint, hintWidth, ` ${separator(ctx)} `)) out.push(hintRow(line))
   } else out.push(hintRow(truncateToWidth(hint, hintWidth, chrome.more)))
   return out

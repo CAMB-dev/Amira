@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test"
 import {
   type FormSpec,
-  isFieldVisible,
   type ProviderAdmin,
   type ProviderDraft,
   type ProviderFormInitial,
@@ -71,11 +70,14 @@ function setup(
   const view = new FormView(backend, { requestRender: () => renders++, onClose: () => {} })
   const screen = () => view.render(120, { ...plain, rows: 100 }).join("\n")
   const focus = (id: string) => {
-    const ids = spec.fields.filter((f) => isFieldVisible(spec, f, view.form.values)).map((f) => f.id)
     if (view.form.focused !== id) {
-      const steps = ids.length + (spec.sections?.length ?? 0) + 2
-      for (let i = 0; i < steps; i++) view.handleInput(key("tab", { shift: true }))
-      for (let i = 0; i < steps && view.form.focused !== id; i++) view.handleInput(key("tab"))
+      for (let i = 0; i < 100 && view.form.focused !== "vendor"; i++)
+        view.handleInput(key("tab", { shift: true }))
+      for (let i = 0; i < 100 && view.form.focused !== id; i++) {
+        if (["id", "dialect", "baseUrl"].includes(id) && view.form.focused.startsWith("\0summary:"))
+          view.handleInput(key("enter"))
+        view.handleInput(key("tab"))
+      }
     }
     expect(view.form.focused).toBe(id)
   }
@@ -487,8 +489,6 @@ test("a failed automatic fetch appears once inline; custom models and manual ref
     await waitFor(() => form.screen().includes("models listed"), "manual retry")
     expect(form.calls).toHaveLength(2)
     expect(form.view.form.values.models).toEqual(["custom-model"])
-    form.focus("testConsent")
-    form.view.handleInput(key("space"))
     form.view.handleInput(key("s", { ctrl: true }))
     await waitFor(() => form.saved() !== undefined, "tested save")
     expect(form.saved()).toMatchObject({ models: ["custom-model"] })
@@ -538,8 +538,6 @@ test("provider form clears the failed-save summary after correcting Id and fetch
     expect(form.screen()).not.toContain("use lower-case letters")
     form.focus("models")
     form.view.handleInput(key("space"))
-    form.focus("testConsent")
-    form.view.handleInput(key("space"))
     form.view.handleInput(key("s", { ctrl: true }))
     await waitFor(() => form.saved() !== undefined, "tested corrected save")
     expect(form.saved()).toMatchObject({ id: "ui-walk-demo", models: ["served-model"] })
@@ -549,106 +547,89 @@ test("provider form clears the failed-save summary after correcting Id and fetch
 })
 
 for (const hosted of [false, true]) {
-  test.each([false, true])(
-    `Save awaits the running paid manual test without another request (hosted: ${hosted}, passes: %s)`,
-    async (ok) => {
-      const pending = Promise.withResolvers<ProviderTestResult>()
-      const signals: Array<AbortSignal | undefined> = []
-      const form = setup({
-        hosted,
-        initial: { models: ["paid-model"] },
-        admin: {
-          describeModels: (_draft, ids) =>
-            ids.map((id) => ({ id, inCatalog: true, cost: { input: 1, output: 2 } })),
-          test: async (_draft, _model, signal) => {
-            signals.push(signal)
-            return pending.promise
-          },
-        },
-      })
-      try {
-        await waitFor(() => form.screen().includes("models listed"), "automatic model list")
-        form.focus("testConsent")
-        form.view.handleInput(key("space"))
-        form.focus("testConnection")
-        form.view.handleInput(key("enter"))
-        await waitFor(() => signals.length === 1, "manual paid connection test")
-        form.view.handleInput(key("s", { ctrl: true }))
-        await tick()
-        expect(signals).toHaveLength(1)
-        expect(form.saved()).toBeUndefined()
-        expect(form.view.closed).toBe(false)
-        expect(signals[0]?.aborted).toBe(false)
-        // Repeated Save must also keep waiting for the same billed request.
-        form.view.handleInput(key("s", { ctrl: true }))
-        await tick()
-        expect(signals).toHaveLength(1)
-        pending.resolve({ ok, latencyMs: 1, message: ok ? "OK" : "Unavailable" })
-        if (!ok) {
-          await waitFor(() => form.screen().includes("Connection test failed"), "failed shared test")
-          expect(form.saved()).toBeUndefined()
-          expect(form.view.closed).toBe(false)
-          form.focus("saveAnyway")
-          form.view.handleInput(key("space"))
-          form.view.handleInput(key("s", { ctrl: true }))
-        }
-        await waitFor(() => form.view.closed, "saved after the shared test result")
-        expect(form.saved()).toMatchObject({ models: ["paid-model"] })
-        expect(signals).toHaveLength(1)
-      } finally {
-        pending.resolve({ ok: false, latencyMs: 0, message: "Stopped" })
-        await form.close()
-      }
-    },
-  )
-
-  test(`Escape on the running manual test cancels the waiting Save (hosted: ${hosted})`, async () => {
-    const pending: ReturnType<typeof Promise.withResolvers<ProviderTestResult>>[] = []
-    const signals: Array<AbortSignal | undefined> = []
+  test(`Save writes directly without a connection test (hosted: ${hosted})`, async () => {
+    let tests = 0
     const form = setup({
       hosted,
       initial: { models: ["paid-model"] },
       admin: {
-        describeModels: (_draft, ids) =>
-          ids.map((id) => ({ id, inCatalog: true, cost: { input: 1, output: 2 } })),
-        test: async (_draft, _model, signal) => {
-          const next = Promise.withResolvers<ProviderTestResult>()
-          signals.push(signal)
-          pending.push(next)
-          return next.promise
+        test: async () => {
+          tests++
+          return { ok: false, latencyMs: 1, message: "Failed" }
         },
       },
     })
     try {
       await waitFor(() => form.screen().includes("models listed"), "automatic model list")
-      form.focus("testConsent")
-      form.view.handleInput(key("space"))
+      expect(form.screen()).not.toContain("potentially billed")
+      expect(form.screen()).not.toContain("Save anyway")
+      form.view.handleInput(key("s", { ctrl: true }))
+      await waitFor(() => form.view.closed, "direct save")
+      expect(form.saved()).toMatchObject({ models: ["paid-model"] })
+      expect(tests).toBe(0)
+    } finally {
+      await form.close()
+    }
+  })
+
+  test.each(["button", "shortcut"])(
+    `only Test/Ctrl+T run the tiny request; failure never blocks Save (hosted: ${hosted}, %s)`,
+    async (method) => {
+      let tests = 0
+      const form = setup({
+        hosted,
+        initial: { models: ["paid-model"] },
+        admin: {
+          test: async () => {
+            tests++
+            return { ok: false, latencyMs: 1, message: "Failed" }
+          },
+        },
+      })
+      try {
+        await waitFor(() => form.screen().includes("models listed"), "automatic model list")
+        if (method === "button") {
+          form.focus("testConnection")
+          form.view.handleInput(key("enter"))
+        } else form.view.handleInput(key("t", { ctrl: true }))
+        await waitFor(() => form.screen().includes("Connection test failed"), "explicit test result")
+        expect(tests).toBe(1)
+        expect(form.saved()).toBeUndefined()
+        form.view.handleInput(key("s", { ctrl: true }))
+        await waitFor(() => form.view.closed, "save after failed test")
+        expect(tests).toBe(1)
+        expect(form.saved()).toMatchObject({ models: ["paid-model"] })
+      } finally {
+        await form.close()
+      }
+    },
+  )
+
+  test(`Save does not wait for a running explicit test (hosted: ${hosted})`, async () => {
+    const pending = Promise.withResolvers<ProviderTestResult>()
+    const signals: Array<AbortSignal | undefined> = []
+    const form = setup({
+      hosted,
+      initial: { models: ["paid-model"] },
+      admin: {
+        test: async (_draft, _model, signal) => {
+          signals.push(signal)
+          return pending.promise
+        },
+      },
+    })
+    try {
+      await waitFor(() => form.screen().includes("models listed"), "automatic model list")
       form.focus("testConnection")
       form.view.handleInput(key("enter"))
-      await waitFor(() => pending.length === 1, "manual paid connection test")
+      await waitFor(() => signals.length === 1, "explicit request")
       form.view.handleInput(key("s", { ctrl: true }))
-      await tick()
-      expect(pending).toHaveLength(1)
-      form.view.handleInput(key("escape"))
-      await tick()
-      expect(signals[0]?.aborted).toBe(true)
-      expect(form.view.form.confirmingCancel).toBe(false)
-      expect(form.view.closed).toBe(false)
-      pending[0]!.resolve({ ok: true, latencyMs: 1, message: "Late success" })
-      await tick()
-      expect(form.saved()).toBeUndefined()
-      expect(form.view.closed).toBe(false)
-      expect(pending).toHaveLength(1)
-      // Only an explicit new Save may retry and eventually close the form.
-      form.view.handleInput(key("s", { ctrl: true }))
-      await waitFor(() => pending.length === 2, "new connection test after cancellation")
-      expect(form.saved()).toBeUndefined()
-      pending[1]!.resolve({ ok: true, latencyMs: 1, message: "OK" })
-      await waitFor(() => form.view.closed, "saved after the new test")
+      await waitFor(() => form.view.closed, "direct save while testing")
       expect(form.saved()).toMatchObject({ models: ["paid-model"] })
-      expect(pending).toHaveLength(2)
+      expect(signals).toHaveLength(1)
+      expect(signals[0]?.aborted).toBe(true)
     } finally {
-      for (const p of pending) p.resolve({ ok: false, latencyMs: 0, message: "Stopped" })
+      pending.resolve({ ok: false, latencyMs: 0, message: "Stopped" })
       await form.close()
     }
   })
@@ -659,13 +640,13 @@ test("provider card keeps its live settings preview full-width and masks the key
   try {
     form.focus("apiKey")
     form.type("card-preview-secret")
-    form.screen()
-    form.focus("preview")
-    const start = stripAnsi(form.view.render(80, { ...plain, rows: 24 }).join("\n"))
-    expect(start).toContain("Preview")
+    const start = stripAnsi(form.screen())
+    expect(start).toContain("▸ Preview settings.json")
+    expect(start).not.toContain("new key")
     expect(start).not.toContain("card-preview-secret")
-    form.view.handleInput(key("end"))
-    const screen = stripAnsi(form.view.render(80, { ...plain, rows: 24 }).join("\n"))
+    form.view.handleInput(key("p", { ctrl: true }))
+    const screen = stripAnsi(form.screen())
+    expect(form.view.form.focused).toBe("apiKey")
     expect(screen).toContain("new key")
     expect(screen).not.toContain("card-preview-secret")
     expect(screen).toContain("[ Test ]")

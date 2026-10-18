@@ -127,11 +127,7 @@ async function setup(
       const respond = (value: unknown) => {
         if (value === undefined) ext.ui.cancel(e.data.requestId)
         else {
-          // Native client fixtures explicitly consent to the Save-time probe.
-          const problem = ext.ui.respond(
-            e.data.requestId,
-            e.data.kind === "form" ? { testConsent: true, ...(value as object) } : value,
-          )
+          const problem = ext.ui.respond(e.data.requestId, value)
           if (problem) throw new Error(problem)
         }
       }
@@ -509,7 +505,7 @@ test("management Edit and Set key reuse existing forms and masked input", async 
     })
     if (action === "Edit") {
       expect(session.asked[2]).toMatchObject({ kind: "form", title: "Edit provider · deepseek" })
-      expect(session.calls).toEqual(["test deepseek-chat", "save deepseek"])
+      expect(session.calls).toEqual(["save deepseek"])
       expect(session.drafts[0]).toMatchObject({
         id: "deepseek",
         models: ["deepseek-chat"],
@@ -732,11 +728,9 @@ test("Edit-form connection tests replace the management result only for the save
           return request.title.startsWith("Manage") ? "Test connection" : request.options[0]
         }
         if (request.kind === "form")
-          return session.ui
-            .runFormAction(request.requestId, "testConnection", { ...changed, testConsent: true })
-            .then((result) => {
-              action = result
-            })
+          return session.ui.runFormAction(request.requestId, "testConnection", changed).then((result) => {
+            action = result
+          })
         return request.kind === "confirm" ? true : undefined
       },
       {
@@ -753,9 +747,8 @@ test("Edit-form connection tests replace the management result only for the save
     await session.run("/provider edit deepseek")
     expect(action).toEqual({
       message:
-        "Connection test failed. Fix the protocol, base URL, key or model and retry, or select Save anyway.",
+        "Connection test failed. Fix the protocol, base URL, key or model and retry, or save without testing.",
       tone: "error",
-      values: { saveAnyway: false },
     })
     expect(session.drafts).toEqual([])
     await session.run("/provider")
@@ -778,12 +771,10 @@ test.each(["", "   "])(
           return request.options[0]
         }
         if (request.kind === "form")
-          return session.ui
-            .runFormAction(request.requestId, "testConnection", { apiKey, testConsent: true })
-            .then((result) => {
-              action = result
-              return { apiKey }
-            })
+          return session.ui.runFormAction(request.requestId, "testConnection", { apiKey }).then((result) => {
+            action = result
+            return { apiKey }
+          })
         return request.kind === "confirm" ? true : undefined
       },
       {
@@ -966,7 +957,7 @@ test("step by step, fetching models is offered first and the connection test def
   )
   expect(titles.find((t) => t.startsWith("Fetch models?"))).toContain("[Yes|No]")
   expect(titles.find((t) => t.startsWith("Test connection?"))).toContain("[No|Yes]")
-  expect(calls).toEqual(["list https://api.deepseek.com key=typed", "test deepseek-chat", "save ds-test"])
+  expect(calls).toEqual(["list https://api.deepseek.com key=typed", "save ds-test"])
   expect(drafts[0]).toMatchObject({ id: "ds-test", keySource: "auth", models: ["deepseek-chat"] })
   const secret = asked.find((a) => a.kind === "input" && a.secret)
   expect(secret).toBeDefined()

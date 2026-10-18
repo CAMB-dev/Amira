@@ -356,10 +356,11 @@ for (const keySource of ["auth", "env"] as const) {
         value = request.initial
       } else if (request.title.startsWith("Fetch models?")) value = "No"
       else if (request.title.includes(" · Models")) {
-        expect(request.options.some((option: string) => option.startsWith("[x] claude-test"))).toBe(true)
-        value = "Done"
-      } else if (request.title.includes(": set these now?")) value = "No"
-      else if (request.title.includes(" · Allow a potentially billed connection test")) value = "Yes"
+        const picked = request.options.some((option: string) => option.startsWith("[x] claude-test"))
+        if (!picked) expect(request.options.some((option: string) => option.startsWith("[x]"))).toBe(false)
+        value = picked ? "Done" : "Add values…"
+      } else if (request.title.startsWith("Models: values to add")) value = "claude-test"
+      else if (request.title.includes(": set these now?")) value = "No"
       else if (request.title.startsWith("Test connection?")) value = "No"
       else {
         expect(request.options).toEqual(["Save", "Cancel"])
@@ -385,10 +386,10 @@ for (const keySource of ["auth", "env"] as const) {
       models: ["claude-test"],
       ...(keySource === "auth" ? { apiKey: "TYPED_PRIVATE_KEY" } : { apiKeyEnv: "ANTHROPIC_API_KEY" }),
     })
-    expect(tested).toHaveLength(1)
+    expect(tested).toHaveLength(0)
     expect(
       requests.some((request) => request.title.includes(" · Allow a potentially billed connection test")),
-    ).toBe(true)
+    ).toBe(false)
     expect(requests.some((request) => request.title.includes(" · Allow unencrypted HTTP"))).toBe(false)
     expect(requests.some((request) => request.title.includes(" · Save anyway"))).toBe(false)
     expect(JSON.stringify(rpc.out)).not.toContain("TYPED_PRIVATE_KEY")
