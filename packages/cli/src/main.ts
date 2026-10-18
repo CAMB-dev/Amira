@@ -3,6 +3,7 @@ import type { AnyEvent, TuiSettings } from "@amira/api"
 import { DEFAULT_TUI_MODE } from "@amira/api"
 import { type Agent, amiraPath, createLocalAgentPort, listSessions, SessionStore } from "@amira/core"
 import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
+import { ProcessTerminal } from "@amira/tui-kit"
 import { consoleCodePage } from "@amira/tui-kit/console-code-page"
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
 import { resolveConfig } from "./config.ts"
@@ -19,8 +20,22 @@ import { selfCheck } from "./self-check.ts"
 import { closeTrace } from "./session/trace-shutdown.ts"
 import { createSession } from "./session.ts"
 import { runSessionsCommand } from "./sessions-command.ts"
+import { createSignalLifecycle } from "./signal-lifecycle.ts"
 import { askProjectTrust, planPackages } from "./trust.ts"
+import { printUpdateNotice, startBackgroundUpdate } from "./update-background.ts"
+import { runUpdateCommand } from "./update-command.ts"
 import { versionLine } from "./version.ts"
+
+let stopUpdates = async () => {}
+let signalLifecycle: ReturnType<typeof createSignalLifecycle> | undefined
+
+async function exitProcess(code: number): Promise<void> {
+  if (signalLifecycle) await signalLifecycle.exit(code)
+  else {
+    await stopUpdates()
+    process.exit(code)
+  }
+}
 
 async function main(argv: string[]): Promise<number> {
   try {
@@ -59,6 +74,8 @@ async function run(argv: string[]): Promise<number> {
       handleSigint: true,
     })
   }
+  const fromUpdate = await runUpdateCommand(argv, io)
+  if (fromUpdate !== undefined) return fromUpdate
   const fromPackage = await runPackageCommand(argv, io)
   if (fromPackage !== undefined) return fromPackage
   const args = parseCliArgs(argv)
@@ -78,6 +95,30 @@ async function run(argv: string[]): Promise<number> {
     throw new UsageError("--shell powershell is only available on Windows")
   }
   const config = resolveConfig(args)
+  let terminal: ProcessTerminal | undefined
+  // Own terminating signals before background work or terminal setup can install exit fallbacks.
+  if (!args.rpc) {
+    signalLifecycle = createSignalLifecycle({
+      stopUpdates: () => stopUpdates(),
+      restoreTerminal: async () => {
+        if (!terminal) return
+        terminal.emergencyStop()
+        await new Promise<void>((resolve) => process.stdout.write("", () => resolve()))
+      },
+    })
+  }
+  // Every session holds its loaded version. RPC has no checks or human notice surface.
+  // Update networking is never awaited by startup or shutdown.
+  const updates = await startBackgroundUpdate(config.settings, {
+    checks: !args.rpc,
+    onStop: (stop) => {
+      stopUpdates = stop
+    },
+  })
+  if (updates) stopUpdates = updates.stop
+  if (updates?.notice && printUpdateNotice({ ...args, stderrTTY: !!process.stderr.isTTY })) {
+    process.stderr.write(`amira: ${updates.notice}\n`)
+  }
   // The interactive UI covers stderr, so there the warnings are shown as startup events.
   if (args.print) for (const w of config.warnings) process.stderr.write(`amira: warning: ${w}\n`)
   // Unset, the session picks the only provider's first model, or starts without one.
@@ -176,6 +217,7 @@ async function run(argv: string[]): Promise<number> {
     onSubscriberError,
   })
   const { agent, host, startupEvents, catalogRefresh, ai, modelNotice } = session
+  const notice = [updates?.notice, modelNotice].filter(Boolean).join(" ")
   agentRef = agent
   const stopConsoleTrace = consoleCodePage.onChange(({ kind, codePage }) => {
     const current = agentRef ?? agent
@@ -210,6 +252,7 @@ async function run(argv: string[]): Promise<number> {
   const forceExit = (code: number) => {
     if (forceExiting) return
     forceExiting = true
+    const stoppedUpdates = stopUpdates().catch(() => {})
     const last = agentRef ?? agent
     // Give aborted tools a moment to finish after session.end, then drain their queued events.
     const disposing = last.dispose("exit").catch(() => {})
@@ -218,9 +261,10 @@ async function run(argv: string[]): Promise<number> {
         await commands.flushChoices()
         await closeTrace(last.bus, session.traceRecorder, 125)
       })
-      .finally(() => {
+      .finally(async () => {
+        await stoppedUpdates
         host.unloadAll()
-        process.exit(code)
+        await exitProcess(code)
       })
   }
   try {
@@ -231,25 +275,29 @@ async function run(argv: string[]): Promise<number> {
       )
     }
     if (!interactive) {
-      return await runPrint(agent, args.prompt ?? "", args.json, {
-        pending: startupEvents,
-        onReady,
-        forceExit: () => forceExit(130),
-        ui: host.ui,
-        commands,
-        markdownRenderers: host.markdown,
-        backgroundJobs: host.backgroundJobs,
-        ...(config.settings.backgroundJobs?.printWaitMs !== undefined
-          ? { backgroundJobTimeoutMs: config.settings.backgroundJobs.printWaitMs }
-          : {}),
-        ...(args.jsonOut ? { jsonOut: args.jsonOut } : {}),
-        ...(args.jsonCoalesce ? { jsonCoalesce: true } : {}),
-      })
+      const print = () =>
+        runPrint(agent, args.prompt ?? "", args.json, {
+          pending: startupEvents,
+          onReady,
+          forceExit: () => forceExit(130),
+          ui: host.ui,
+          commands,
+          markdownRenderers: host.markdown,
+          backgroundJobs: host.backgroundJobs,
+          ...(config.settings.backgroundJobs?.printWaitMs !== undefined
+            ? { backgroundJobTimeoutMs: config.settings.backgroundJobs.printWaitMs }
+            : {}),
+          ...(args.jsonOut ? { jsonOut: args.jsonOut } : {}),
+          ...(args.jsonCoalesce ? { jsonCoalesce: true } : {}),
+        })
+      return await (signalLifecycle ? signalLifecycle.delegateSigint(print) : print())
     }
+    terminal = new ProcessTerminal()
     const running = () => session.tree.children.length
     const frontend = createLocalAgentPort({ agent, commands })
     const code = await runInteractive({
       frontend,
+      terminal,
       bindTerminal: (terminal) => host.bindTerminal(terminal),
       agent,
       status: host.status,
@@ -271,7 +319,7 @@ async function run(argv: string[]): Promise<number> {
       markdownRenderers: host.markdown,
       startupEvents,
       onReady,
-      ...(modelNotice ? { notice: modelNotice } : {}),
+      ...(notice ? { notice } : {}),
       history: PromptHistory.forProject(args.cwd),
       ...(args.prompt ? { initialPrompt: args.prompt } : {}),
       ...(pickInUi ? { resumePicker: true } : {}),
@@ -302,10 +350,8 @@ async function run(argv: string[]): Promise<number> {
   }
 }
 
-main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write(`amira: ${err instanceof Error ? err.message : String(err)}\n`)
-    process.exit(1)
-  },
-)
+main(process.argv.slice(2)).then(exitProcess, async (err) => {
+  await stopUpdates()
+  process.stderr.write(`amira: ${err instanceof Error ? err.message : String(err)}\n`)
+  await exitProcess(1)
+})

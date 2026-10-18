@@ -58,6 +58,7 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
       "backgroundJobs",
       "commandAliases",
       "sessions",
+      "updates",
     ],
   },
   {
@@ -155,6 +156,27 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
 ]
 
 export const annotations: Record<string, Annotation> = {
+  "updates.auto": {
+    default: documentedDefault("updates.auto"),
+    en: "Check self-managed single-file installs in the background and install patch updates for the next start. Minor and major releases only show a notice. Package-manager and source installs never self-update.",
+    zh: "在后台检查自管单文件安装，并安装补丁更新，在下次启动时生效。次版本和主版本仅显示提示。包管理器和源码安装不会自行更新。",
+    ja: "自己管理の単一実行ファイル版をバックグラウンドで確認し、パッチ更新を次回起動用にインストールします。マイナー・メジャー更新は通知のみです。パッケージマネージャー版とソース版は自己更新しません。",
+    userOnly: true,
+  },
+  "updates.channel": {
+    default: documentedDefault("updates.channel"),
+    en: "Release channel for update checks and `amira update`: `stable` or release candidates on `next`. Next-channel builds default to `next`. `--channel` overrides it for one command.",
+    zh: "更新检查和 `amira update` 使用的发布渠道：`stable` 稳定版或 `next` 候选发布版。next 渠道构建默认使用 `next`。`--channel` 可为单次命令覆盖此设置。",
+    ja: "更新確認と `amira update` のリリースチャネル。`stable` は安定版、`next` はリリース候補版です。next ビルドの既定は `next` です。`--channel` でコマンド単位で上書きできます。",
+    userOnly: true,
+  },
+  "updates.minimumVersion": {
+    default: none,
+    en: "Minimum acceptable update or rollback target (SemVer), enforced under the update lock for rollback with no override. Never installs a release below this version; an older running version shows an update notice. Does not force a minor or major background update.",
+    zh: "允许更新或回退的最低目标版本（SemVer）。回退在更新锁内检查此限制，不能绕过。不会安装低于此版本的发布；运行版本过旧时显示更新提示。不会强制在后台安装次版本或主版本更新。",
+    ja: "更新またはロールバックを許可する最低バージョン（SemVer）。ロールバックは更新ロック内でこの制限を確認し、回避できません。これを下回るリリースはインストールしません。実行中のバージョンが古い場合は通知します。マイナー・メジャー更新を強制的にバックグラウンドで適用することはありません。",
+    userOnly: true,
+  },
   model: {
     default: none,
     en: 'Default model as `"provider/model"`. Without it, Amira uses the resumed session\'s model, or the first model of the only provider. `--model` and `AMIRA_MODEL` override it for one run; interactive `/model` changes save the model and thinking choice (see [Saving model and thinking choices](#saving-model-and-thinking-choices)).',

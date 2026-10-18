@@ -75,6 +75,22 @@ test("monitor jobs add an optional kind to the public job contract", () => {
   `)
 })
 
+test("self-update settings are additive without a version bump", async () => {
+  const settings: Pick<Settings, "updates"> = {
+    updates: { auto: false, channel: "next", minimumVersion: "1.2.3" },
+  }
+  expect(settings).toMatchInlineSnapshot(`
+    {
+      "updates": {
+        "auto": false,
+        "channel": "next",
+        "minimumVersion": "1.2.3",
+      },
+    }
+  `)
+  expect((await import("../src/index.ts")).API_VERSION).toBe("0.1.62")
+})
+
 test("the public agent settings allow an unlimited model-call limit", () => {
   const settings: Pick<Settings, "agent"> = { agent: { maxSteps: 0 } }
   expect(settings).toMatchInlineSnapshot(`
@@ -245,6 +261,8 @@ test("the public API exports stay stable", async () => {
     "DEFAULT_TUI_THEME_VARIANT",
     "DEFAULT_TUI_TITLE",
     "DEFAULT_TUI_TOKEN_SPEED",
+    "DEFAULT_UPDATE_AUTO",
+    "DEFAULT_UPDATE_CHANNEL",
     "DEFAULT_WEB_FETCH_ALLOW_PRIVATE_NETWORK",
     "DEFAULT_WEB_FETCH_MAX_BINARY_BYTES",
     "DEFAULT_WEB_FETCH_MAX_BYTES",

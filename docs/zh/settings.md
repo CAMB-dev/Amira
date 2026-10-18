@@ -174,6 +174,9 @@ Amira 启动时从 JSON 文件读取设置。所有键都是可选的，没写�
 | `backgroundJobs.printWaitMs` | `number` | `30000` (30 s) | print 模式等待本次运行启动的顶层后台任务的时长，超时后退出时停止它们。 |  |
 | `commandAliases` | `Record<string, string>` | 无 | 斜杠命令别名：`{"ds": "model deepseek/deepseek-flash"}` 让 `/ds` 执行 `/model deepseek/deepseek-flash`，`/ds` 后面输入的内容会追加在末尾。值必须是命令而不是另一个别名；与命令或命令自带的别名重名时，以命令为准。 |  |
 | `sessions.autoTitle` | `boolean` | `true` | 第一个轮次结束后，在后台请模型为会话起一个简短标题（设置了 `compact.model` 时用它）。`/rename` 设置的名称始终优先。 |  |
+| `updates.auto` | `boolean` | `true` | 在后台检查自管单文件安装，并安装补丁更新，在下次启动时生效。次版本和主版本仅显示提示。包管理器和源码安装不会自行更新。 | 是 |
+| `updates.channel` | `"stable" \| "next"` | `"stable"` | 更新检查和 `amira update` 使用的发布渠道：`stable` 稳定版或 `next` 候选发布版。next 渠道构建默认使用 `next`。`--channel` 可为单次命令覆盖此设置。 | 是 |
+| `updates.minimumVersion` | `string` | 无 | 允许更新或回退的最低目标版本（SemVer）。回退在更新锁内检查此限制，不能绕过。不会安装低于此版本的发布；运行版本过旧时显示更新提示。不会强制在后台安装次版本或主版本更新。 | 是 |
 
 ## Provider 与模型
 

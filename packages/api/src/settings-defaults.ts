@@ -15,6 +15,8 @@ export const DEFAULT_BACKGROUND_BUFFER_CHARS = 1_000_000
 export const DEFAULT_BACKGROUND_MAX_LOG_BYTES = 50 * 1024 * 1024
 export const DEFAULT_BACKGROUND_PRINT_WAIT_MS = 30_000
 export const DEFAULT_AUTO_TITLE = true
+export const DEFAULT_UPDATE_AUTO = true
+export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const DEFAULT_PERMISSION_MODE = "auto"
 export const DEFAULT_PERMISSION_RULES = Object.freeze([])
 

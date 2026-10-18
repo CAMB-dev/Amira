@@ -16,7 +16,7 @@ pnpm add -g amira
 bun add -g amira
 ```
 
-Or download an archive from [GitHub Releases](https://github.com/CAMB-dev/Amira/releases). See [installation and verification](docs/install.md) for supported platforms, checksums, signed manifests and upgrade commands.
+Or use the single-file installer from [GitHub Releases](https://github.com/CAMB-dev/Amira/releases). See [installation and verification](docs/install.md) for install scripts, supported platforms, signed manifests, `amira update`, rollback and offline switches. Only installer-managed single-file installs self-update; package-manager installs use their own upgrade command.
 
 ### Install from source
 

@@ -16,7 +16,7 @@ pnpm add -g amira
 bun add -g amira
 ```
 
-または、[GitHub Releases](https://github.com/CAMB-dev/Amira/releases) からアーカイブをダウンロードしてください。対応プラットフォーム、チェックサム、署名付きマニフェスト、更新コマンドについては、[インストールと検証](docs/ja/install.md)を参照してください。
+または、[GitHub Releases](https://github.com/CAMB-dev/Amira/releases) の単一実行ファイル用インストーラーを使ってください。スクリプト、対応プラットフォーム、署名付きマニフェスト、`amira update`、ロールバック、オフライン設定については、[インストールと検証](docs/ja/install.md)を参照してください。自己更新するのはインストーラー管理の単一実行ファイル版だけです。パッケージマネージャー版は対応する更新コマンドを使います。
 
 ### ソースからのインストール
 

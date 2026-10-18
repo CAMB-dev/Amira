@@ -108,6 +108,8 @@ export interface Settings {
   context?: ContextSettings
   /** Generate a short name in the background after the first turn. See DEFAULT_AUTO_TITLE. */
   sessions?: { autoTitle?: boolean }
+  /** Self-managed single-file updates; honoured in the user settings only. */
+  updates?: { auto?: boolean; channel?: "stable" | "next"; minimumVersion?: string }
   /**
    * Retrying failed model requests (D52): retries after the first try, backoff, Retry-After and
    * content/idle timeouts in milliseconds.

@@ -51,6 +51,8 @@ export async function readCatalogCache(opts: CatalogCacheOptions = {}): Promise<
  * undefined when offline or the download is unusable; never rejects.
  */
 export async function refreshCatalog(opts: CatalogCacheOptions = {}): Promise<ModelCatalog | undefined> {
+  const offline = process.env.AMIRA_OFFLINE
+  if (offline && offline !== "0" && offline.toLowerCase() !== "false") return undefined
   const file = opts.file ?? amiraPath("cache", "models.json")
   const url = opts.url ?? MODELS_URL
   try {

@@ -16,7 +16,7 @@ pnpm add -g amira
 bun add -g amira
 ```
 
-也可以从 [GitHub Releases](https://github.com/CAMB-dev/Amira/releases) 下载压缩包。支持的平台、校验值、签名 manifest 和升级命令见[安装与验证](docs/zh/install.md)。
+也可以使用 [GitHub Releases](https://github.com/CAMB-dev/Amira/releases) 中的单文件安装脚本。安装脚本、支持的平台、签名 manifest、`amira update`、回退和离线开关见[安装与验证](docs/zh/install.md)。只有安装脚本管理的单文件安装会自行更新；包管理器安装使用对应的升级命令。
 
 ### 从源码安装
 

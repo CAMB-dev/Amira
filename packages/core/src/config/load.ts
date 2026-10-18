@@ -69,6 +69,13 @@ export function loadSettings(src: SettingsSources): LoadedSettings {
       warnings.push(...dropProviderEndpoints(v.settings, file, userFile as string))
       warnings.push(...dropWebEndpoints(v.settings, file, userFile as string))
       warnings.push(...dropPackageSettings(v.settings, file, userFile as string))
+      for (const key of ["auto", "channel", "minimumVersion"] as const) {
+        if (v.settings.updates?.[key] === undefined) continue
+        delete v.settings.updates[key]
+        warnings.push(
+          `${file}: "updates.${key}" is ignored; a project file cannot change how Amira updates. Set it in ${userFile} instead`,
+        )
+      }
     }
     if (v.settings.permissions) {
       permissions.push({
