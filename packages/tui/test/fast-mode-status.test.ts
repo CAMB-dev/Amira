@@ -44,12 +44,14 @@ test.each([
       const supported = s.agent.model
       s.agent.model = { ...supported, fast: false }
       s.terminal.send("c")
-      await waitFor(() => !marker.test(s.live()), "unsupported model marker omitted")
+      await waitFor(() => /fast n\/a/.test(s.live()), "unsupported model shows the request as n/a")
       expect(s.agent.fastMode).toBe(true)
       s.agent.model = { ...supported, dialect: "mock" }
       s.terminal.send("d")
-      await Bun.sleep(40)
-      expect(marker.test(s.live())).toBe(false)
+      await waitFor(() => /fast n\/a/.test(s.live()), "unsupported dialect shows n/a")
+      s.agent.fastMode = false
+      s.terminal.send("e")
+      await waitFor(() => !marker.test(s.live()), "no marker when fast mode is off")
     } finally {
       s.terminal.send("\x03\x03")
       expect(await s.exited).toBe(0)

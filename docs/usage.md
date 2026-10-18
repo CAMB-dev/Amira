@@ -16,7 +16,7 @@ Responses and Anthropic adaptive mode send the level unchanged. Anthropic budget
 
 ## Fast mode
 
-`/fast` toggles the requested fast-mode preference. `/fast on` and `/fast off` set it explicitly; `/fast status` reports the request, whether it applies to the current model/provider, and the last reply's actual service tier or Claude speed (for example, `priority`, `default`, `fast` or `standard`). Status does not change the preference. Unsupported models keep the request for a supported one and show the reason it is not applied.
+`/fast` toggles the requested fast-mode preference. `/fast on` and `/fast off` set it explicitly; `/fast status` reports the request, whether it applies to the current model/provider, and the last reply's actual service tier or Claude speed (for example, `priority`, `default`, `fast` or `standard`). Status does not change the preference. Unsupported models keep the request for a supported one and show the reason it is not applied. The status bar shows `fast` while fast mode applies, and a muted `fast n/a` while it is requested but the current model does not support it.
 
 Fast mode requests faster serving, not a different model or thinking effort. Presets depend on the endpoint and model:
 

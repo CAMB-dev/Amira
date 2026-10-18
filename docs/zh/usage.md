@@ -16,7 +16,7 @@ Responses 和 Anthropic 自适应模式原样发送档位。Anthropic 预算模�
 
 ## 快速模式
 
-`/fast` 切换请求的快速模式偏好；`/fast on` 和 `/fast off` 明确开启或关闭。`/fast status` 显示请求、当前模型/provider 是否应用，以及上次回复的实际服务档位或 Claude 速度（例如 `priority`、`default`、`fast` 或 `standard`），不会更改偏好。不支持的模型会保留请求，供之后切换到支持的模型使用，并显示未应用的原因。
+`/fast` 切换请求的快速模式偏好；`/fast on` 和 `/fast off` 明确开启或关闭。`/fast status` 显示请求、当前模型/provider 是否应用，以及上次回复的实际服务档位或 Claude 速度（例如 `priority`、`default`、`fast` 或 `standard`），不会更改偏好。不支持的模型会保留请求，供之后切换到支持的模型使用，并显示未应用的原因。状态栏在快速模式生效时显示 `fast`；已请求但当前模型不支持时显示灰色的 `fast n/a`。
 
 快速模式请求更快的服务，不改变模型或思考强度。预设取决于端点和模型：
 
