@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { EventBus } from "../src/event-bus.ts"
@@ -73,5 +73,28 @@ test("a package's entries share its modules within one load, also on reload", as
     host.unloadAll()
     delete g.__reloadSharedEvaluations
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("reloading through a linked directory forgets the real-path modules too", async () => {
+  // macOS temp directories sit behind /var -> /private/var; the module cache keys real paths.
+  const base = mkdtempSync(join(tmpdir(), "amira-reload-link-"))
+  const realDir = join(base, "real")
+  const linked = join(base, "linked")
+  const tools = new ToolRegistry()
+  const host = new ExtensionHost({ bus: new EventBus(), interceptors: new InterceptorRegistry(), tools })
+  try {
+    mkdirSync(join(realDir, "src"), { recursive: true })
+    symlinkSync(realDir, linked, process.platform === "win32" ? "junction" : "dir")
+    const entry = join(linked, "src", "index.ts")
+    writeVersion(realDir, "old", "OLD_KIND")
+    expect(await host.loadFile(entry, { source: "linked", name: "linked", root: linked })).toBe(true)
+    host.unload("linked")
+    writeVersion(realDir, "new", "NEW_KIND")
+    expect(await host.loadFile(entry, { source: "linked", name: "linked", root: linked })).toBe(true)
+    expect(tools.getRegistration("reload_probe")?.tool.description).toBe("new")
+  } finally {
+    host.unloadAll()
+    rmSync(base, { recursive: true, force: true })
   }
 })

@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs"
 import path from "node:path"
 
 /**
@@ -24,10 +25,23 @@ function caseKey(file: string): string {
   return process.platform === "win32" ? file.toLowerCase() : file
 }
 
-/** Drops every cached module under `root`, so the next import evaluates those files again. */
+/**
+ * Drops every cached module under `root`, so the next import evaluates those files again.
+ * Cache keys are real paths (macOS temp directories sit behind a /var symlink), so both sides
+ * are compared resolved.
+ */
 export function forgetModulesUnder(root: string): void {
-  const prefix = caseKey(path.resolve(root)) + path.sep
+  const prefixes = [path.resolve(root), real(root)].map((dir) => caseKey(dir) + path.sep)
   for (const key of Object.keys(require.cache)) {
-    if (caseKey(path.resolve(key)).startsWith(prefix)) delete require.cache[key]
+    const file = caseKey(path.resolve(key))
+    if (prefixes.some((prefix) => file.startsWith(prefix))) delete require.cache[key]
+  }
+}
+
+function real(file: string): string {
+  try {
+    return realpathSync.native(file)
+  } catch {
+    return path.resolve(file)
   }
 }
