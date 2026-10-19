@@ -77,6 +77,8 @@ export interface RemoteHello {
   limits: RemotePeerLimits
   capabilities: string[]
   resume?: { daemonEpoch: string; after: number; controllerToken: string }
+  /** Request a reset when this attachment has no retained local snapshot. */
+  snapshot?: boolean
 }
 export interface RemoteWelcome {
   v: 1
@@ -87,6 +89,7 @@ export interface RemoteWelcome {
   workspace: string
   sessionGeneration: number
   controllerGeneration: number
+  controllerToken?: string
   limits: RemotePeerLimits
   capabilities: string[]
 }
@@ -95,6 +98,8 @@ export interface RemoteRequest {
   kind: "request"
   channel: RemoteChannel
   id: string
+  /** Retried mutations retain the epoch in which they were first submitted. */
+  daemonEpoch?: string
   controllerGeneration: number
   sessionGeneration: number
   op: RemoteOperation
@@ -119,14 +124,32 @@ export interface RemoteChunk {
   data: string
 }
 
+export interface RemoteCancel {
+  v: 1
+  kind: "cancel"
+  channel: RemoteChannel
+  id: string
+  controllerGeneration?: number
+  sessionGeneration?: number
+}
+export interface RemoteReset {
+  v: 1
+  kind: "reset"
+  daemonEpoch: string
+  seq: number
+  reason: "fresh" | "epoch_changed" | "cursor_expired" | "future_cursor" | "capture_failed"
+  snapshot: RemoteJson
+}
+
 export type RemoteMessage =
   | RemoteHello
   | RemoteWelcome
   | { v: 1; kind: "reject"; error: RemoteFault }
   | RemoteRequest
   | RemoteResponse
-  | { v: 1; kind: "cancel"; channel: RemoteChannel; id: string }
-  | { v: 1; kind: "event"; daemonEpoch: string; seq: number; payload: RemoteJson }
+  | RemoteCancel
+  | RemoteReset
+  | { v: 1; kind: "event"; daemonEpoch: string; seq: number; replay?: boolean; payload: RemoteJson }
   | { v: 1; kind: "model.event"; callId: string; seq: number; event: RemoteJson }
   | { v: 1; kind: "ack"; channel: RemoteChannel; id: string; seq: number }
   | { v: 1; kind: "ping" | "pong"; id: string }

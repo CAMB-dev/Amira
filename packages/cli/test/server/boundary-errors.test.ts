@@ -7,6 +7,7 @@ import { createAi, createMockDialect } from "@amira/ai"
 import type { ExtensionAPI } from "@amira/api"
 import type { FrontendUpdate } from "@amira/core"
 import { encodeRemoteMessage, RemoteDecoder } from "../../src/remote/codec.ts"
+import type { JournalEvent } from "../../src/server/journal.ts"
 import { createWorkspaceRuntime, type ServerEvent } from "../../src/server/runtime.ts"
 
 const secret = "SENTINEL_PROVIDER_SECRET"
@@ -29,6 +30,12 @@ test("local projector errors get fixed public messages in subscriptions and wire
   const off = attachment.subscribe((update) => {
     updates.push(update)
   })
+  const journalEvents: JournalEvent[] = []
+  const cut = runtime.journal.open(
+    { daemonEpoch: runtime.journal.daemonEpoch, after: runtime.journal.watermark },
+    () => runtime.workspaceSnapshot(),
+    (event) => journalEvents.push(event),
+  )
   const model = ai.model.bind(ai)
   ai.model = (ref) => ({
     ...model(ref),
@@ -45,6 +52,8 @@ test("local projector errors get fixed public messages in subscriptions and wire
       error: { code: "invalid_snapshot", message: "Workspace display state is unavailable." },
     })
     expect(JSON.stringify(updates)).not.toContain(secret)
+    expect(JSON.stringify(journalEvents)).not.toContain(secret)
+    expect(journalEvents.some((event) => (event.payload as { kind?: string }).kind === "error")).toBe(true)
     if (!error) throw new Error("Expected a projection error update")
     const frames = [
       ...encodeRemoteMessage({ v: 1, kind: "event", daemonEpoch: "epoch-1", seq: 1, payload: error }),
@@ -54,6 +63,7 @@ test("local projector errors get fixed public messages in subscriptions and wire
     expect(frames.flatMap((frame) => decoder.push(frame))).toMatchObject([{ kind: "event", payload: error }])
     decoder.finish()
   } finally {
+    cut.close()
     off()
     await runtime.stop()
     rmSync(cwd, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })

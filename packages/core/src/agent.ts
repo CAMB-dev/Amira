@@ -45,6 +45,7 @@ import { History } from "./agent/history.ts"
 import { SessionHold } from "./agent/hold.ts"
 import { modelRef } from "./agent/messages.ts"
 import { reportedSpeed, Thinking } from "./agent/model-call.ts"
+import { registerHeldInput } from "./agent/notice-input.ts"
 import { NoticeInbox } from "./agent/notices.ts"
 import { OwnedToolRunner } from "./agent/owned-tool.ts"
 import {
@@ -286,6 +287,7 @@ export class Agent {
         prompt: (message, options) => this.prompt(message, options),
         emit: (turn, type, data) => this.#emit(turn, type, data),
       })
+      registerHeldInput(this, this.#hold, this.#inbox, () => this.#turnState.steering)
       this.#endTurn = opts.endTurn
 
       const { history, tokens, restoredTools } = restoreHistory(opts, this.#loadedTools)

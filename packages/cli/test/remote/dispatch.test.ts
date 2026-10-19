@@ -145,7 +145,7 @@ test("a mismatched response operation cannot settle a correlated operation", asy
   try {
     await io.server.write(wire(welcome))
     await client.ready
-    const result = client.request("state.read", {}).catch((error) => error)
+    const result = client.request("state.read", {}, { operationId: "r1" }).catch((error) => error)
     await io.server.write(
       wire({
         v: 1,
@@ -170,7 +170,7 @@ test("a malformed result for the correct operation cannot settle a correlated op
   try {
     await io.server.write(wire(welcome))
     await client.ready
-    const result = client.request("state.read", {}).catch((error) => error)
+    const result = client.request("state.read", {}, { operationId: "r1" }).catch((error) => error)
     await io.server.write(
       wire({
         v: 1,
@@ -195,7 +195,7 @@ test("a mismatched response channel cannot settle a correlated operation", async
   try {
     await io.server.write(wire(welcome))
     await client.ready
-    const result = client.request("state.read", {}).catch((error) => error)
+    const result = client.request("state.read", {}, { operationId: "r1" }).catch((error) => error)
     await io.server.write(
       wire({ v: 1, kind: "response", channel: "model", id: "r1", op: "state.read", ok: true, result: state }),
     )
@@ -203,5 +203,27 @@ test("a mismatched response channel cannot settle a correlated operation", async
     await client.closed
   } finally {
     client.close()
+  }
+})
+
+test("completed inbound request identities cannot be reused to change cancellation context", async () => {
+  let calls = 0
+  const { io, server } = await rawServer(async () => {
+    calls++
+    return state
+  })
+  const output = io.client.input[Symbol.asyncIterator]()
+  try {
+    await output.next() // welcome
+    io.injectServer(wire(request("completed-id")))
+    await output.next() // completed response
+    io.injectServer(wire({ ...request("completed-id"), op: "turn.abort" }))
+    await server.closed
+    expect(calls).toBe(1)
+    await expect(server.request("state.read", {})).rejects.toMatchObject({ code: "invalid_frame" })
+  } finally {
+    server.close()
+    io.client.close()
+    await output.return?.()
   }
 })

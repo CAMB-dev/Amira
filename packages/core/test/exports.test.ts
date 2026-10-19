@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import {
   type ArtifactStoreOptions,
+  EventBus,
   type FormEditor,
   type LocalConversationBinding,
   type SessionEntry,
@@ -426,4 +427,19 @@ test("the public core exports stay stable", async () => {
     "windowGuessNotice",
     "writtenPaths",
   ])
+})
+
+test("EventBus host capture is additive without changing extension event types", () => {
+  const bus = new EventBus()
+  const release = bus.capture(
+    () => {},
+    () => {},
+  )
+  expect({ capture: typeof bus.capture, release: typeof release }).toMatchInlineSnapshot(`
+    {
+      "capture": "function",
+      "release": "function",
+    }
+  `)
+  release()
 })

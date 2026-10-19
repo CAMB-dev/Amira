@@ -138,7 +138,10 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
       a.thinking.set(level, a.model)
     },
     setFastMode: (enabled) => {
-      ctx.agent().fastMode = enabled
+      const a = ctx.agent()
+      if (a.fastMode === enabled) return
+      a.fastMode = enabled
+      a.bus.emit("ui.render", {}, { sessionId: a.sessionId })
     },
     compact: (instructions) => {
       ctx.idle("compact")

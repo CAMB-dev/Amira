@@ -76,7 +76,7 @@ describe("remote codecs", () => {
     }
     decoder.finish()
     expect(result).toEqual(frames)
-    expect(remoteSchema().oneOf).toHaveLength(12)
+    expect(remoteSchema().oneOf).toHaveLength(13)
   })
 
   test("strict shapes, finite JSON and generation/ID validation", () => {

@@ -99,3 +99,52 @@ test("type filters and unsubscribe", async () => {
   await bus.flush()
   expect(seen).toEqual(["turn.end"])
 })
+
+test("host capture precedes lossy queues and does not capture subscriber-local loss markers", async () => {
+  const bus = new EventBus()
+  const captured: AnyEvent[] = []
+  const delivered: AnyEvent[] = []
+  const off = bus.capture(
+    (event) => captured.push(structuredClone(event)),
+    () => {},
+  )
+  bus.subscribe((event) => void delivered.push(event), { maxQueue: 1 })
+  for (let i = 0; i < 20; i++) bus.emit("message.delta", { kind: "text", text: `${i}` }, meta)
+  expect(captured).toHaveLength(20)
+  expect(delivered).toHaveLength(0)
+  off()
+  bus.emit("turn.end", { reason: "done", steps: 1 }, meta)
+  await bus.flush()
+  expect(captured).toHaveLength(20)
+  expect(captured.some((event) => event.type === "events.lost")).toBe(false)
+  expect(delivered.some((event) => event.type === "events.lost")).toBe(true)
+})
+
+test("capture failure explicitly notifies its host without breaking subscribers or other captures", async () => {
+  const bus = new EventBus()
+  const failures: unknown[] = []
+  let captures = 0
+  let deliveries = 0
+  bus.capture(
+    () => {
+      throw new Error("projection failed")
+    },
+    (error) => {
+      failures.push(error)
+    },
+  )
+  bus.capture(
+    () => {
+      captures++
+    },
+    () => {},
+  )
+  bus.subscribe(() => {
+    deliveries++
+  })
+  bus.emit("turn.end", { reason: "done", steps: 1 }, meta)
+  expect(failures).toHaveLength(1)
+  expect(captures).toBe(1)
+  await bus.flush()
+  expect(deliveries).toBe(1)
+})

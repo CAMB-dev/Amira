@@ -3,6 +3,7 @@ import { REMOTE_LIMITS, type RemoteFrame, type RemoteJson, type RemoteOperation 
 import { publicUpdateError } from "./remote/public-errors.ts"
 import {
   array,
+  bool,
   constrain,
   exclusive,
   id,
@@ -21,10 +22,27 @@ import { coreEvent } from "./remote/schema/events.ts"
 import { uiRequest } from "./remote/schema/forms.ts"
 import { serverEffect, snapshot, update } from "./remote/schema/frontend.ts"
 import { copyRemoteJson } from "./remote/schema/json.ts"
-import { streamEvent } from "./remote/schema/messages.ts"
+import { streamEvent, userMessage } from "./remote/schema/messages.ts"
 import { operationSchemas } from "./remote/schema/operations.ts"
+import {
+  backgroundJob,
+  holdState,
+  inputQueue,
+  noticeInbox,
+  noticeRetry,
+  ownerState,
+  workspaceSemantic,
+  workspaceSnapshot,
+} from "./remote/schema/workspace.ts"
 
 export { assertRemoteJson, copyRemoteJson } from "./remote/schema/json.ts"
+export {
+  backgroundJob,
+  type RemoteJobInfo,
+  type RemoteOwnerState,
+  type RemoteWorkspaceSnapshot,
+  workspaceSnapshot,
+} from "./remote/schema/workspace.ts"
 
 const channel = values("control", "model", "files")
 const strings = constrain(array(constrain(text, { maxLength: 128 })), { maxItems: 128 })
@@ -46,6 +64,18 @@ const eventPayload = union(
   update,
   object({ kind: values("effect"), effect: serverEffect }),
   object({ kind: values("startup"), events: array(coreEvent) }),
+  object({ kind: values("jobs"), jobs: array(backgroundJob) }),
+  object({ kind: values("semantic"), semantic: workspaceSemantic }),
+  object({ kind: values("inputQueue"), sessionId: text, sessionGeneration: integer, inputQueue }),
+  object({ kind: values("noticeInbox"), sessionId: text, sessionGeneration: integer, noticeInbox }),
+  object({ kind: values("noticeRetry"), sessionId: text, sessionGeneration: integer, noticeRetry }),
+  object({
+    kind: values("steering"),
+    sessionId: text,
+    sessionGeneration: integer,
+    steering: array(userMessage),
+  }),
+  object({ kind: values("hold"), sessionId: text, sessionGeneration: integer, hold: holdState }),
 )
 
 /** Wire schemas are independent of the legacy unversioned RPC schema. Every payload is discriminated. */
@@ -57,6 +87,7 @@ export const REMOTE_FRAME_SCHEMAS = {
     limits,
     capabilities: strings,
     "resume?": object({ daemonEpoch: id, after: integer, controllerToken: id }),
+    "snapshot?": bool,
   }),
   welcome: base("welcome", {
     release,
@@ -65,6 +96,7 @@ export const REMOTE_FRAME_SCHEMAS = {
     workspace: constrain(text, { minLength: 1, maxLength: 4096 }),
     sessionGeneration: integer,
     controllerGeneration: integer,
+    "controllerToken?": id,
     limits,
     capabilities: strings,
   }),
@@ -73,6 +105,7 @@ export const REMOTE_FRAME_SCHEMAS = {
     v: values(1),
     kind: values("request"),
     ...reply,
+    "daemonEpoch?": id,
     controllerGeneration: integer,
     sessionGeneration: integer,
   }),
@@ -90,8 +123,14 @@ export const REMOTE_FRAME_SCHEMAS = {
       ok: values(false),
     }),
   ),
-  cancel: base("cancel", reply),
-  event: base("event", { daemonEpoch: id, seq: integer, payload: eventPayload }),
+  cancel: base("cancel", { ...reply, "controllerGeneration?": integer, "sessionGeneration?": integer }),
+  reset: base("reset", {
+    daemonEpoch: id,
+    seq: integer,
+    reason: values("fresh", "epoch_changed", "cursor_expired", "future_cursor", "capture_failed"),
+    snapshot: workspaceSnapshot,
+  }),
+  event: base("event", { daemonEpoch: id, seq: integer, "replay?": bool, payload: eventPayload }),
   "model.event": base("model.event", { callId: id, seq: integer, event: streamEvent }),
   ack: base("ack", { ...reply, seq: integer }),
   ping: base("ping", { id }),
@@ -133,7 +172,22 @@ export function validateRemoteParams(operation: string, value: unknown): void {
 export function validateRemoteResult(operation: string, value: unknown): void {
   validate(value, operationSchema(operation).result, "operation result")
 }
-const dtoSchemas = { snapshot, update, coreEvent, uiRequest, effect: serverEffect, startup: array(coreEvent) }
+const dtoSchemas = {
+  snapshot,
+  workspaceSnapshot,
+  workspaceSemantic,
+  inputQueue,
+  noticeInbox,
+  noticeRetry,
+  holdState,
+  ownerState,
+  backgroundJob,
+  update,
+  coreEvent,
+  uiRequest,
+  effect: serverEffect,
+  startup: array(coreEvent),
+}
 export function validateRemoteDto(kind: keyof typeof dtoSchemas, value: unknown): void {
   validate(value, dtoSchemas[kind], kind)
 }
