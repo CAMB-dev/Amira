@@ -264,7 +264,12 @@ for (const runtime of runtimes) {
       const fixture = await launcherFixture()
       const platform = npmTargets.find((item) => item.os === process.platform && item.cpu === process.arch)
       expect(platform).toBeDefined()
-      const missing = await run([runtime.executable, fixture.launcher])
+      // Missing means absent locally, even now that the platform package is published on npm.
+      const missing = await run([
+        runtime.executable,
+        ...(runtime.name === "Bun" ? ["--no-install"] : []),
+        fixture.launcher,
+      ])
       expect(missing.code).toBe(1)
       expect(missing.stderr).toContain(platform!.name)
       expect(missing.stderr).toContain("optional dependencies")

@@ -57,6 +57,45 @@ test("policy-bearing session header types remain exported with an explicit forma
   `)
 })
 
+test("owned lifecycle headers and lease-held lifecycle writes remain explicit host-library contracts", () => {
+  const header: SessionHeader = {
+    type: "session-lifecycle",
+    v: 3,
+    id: "s_owned",
+    cwd: "/workspace",
+    parent: null,
+    createdAt: "2026-10-19T00:00:00.000Z",
+    owned: {
+      v: 3,
+      owner: "project",
+      spec: {
+        key: "design",
+        name: "Design",
+        cwd: "/workspace",
+        model: "mock/test",
+        systemPrompt: "",
+        callableTools: [],
+      },
+      runtimeTools: [],
+    },
+  }
+  expect({
+    type: header.type,
+    version: header.v,
+    ownedVersion: header.owned?.v,
+    lifecycleWrite: typeof SessionStore.prototype.withOwnedLifecycleWrite,
+    lifecycleOpen: typeof SessionStore.openOwnedLifecycle,
+  }).toMatchInlineSnapshot(`
+    {
+      "lifecycleOpen": "function",
+      "lifecycleWrite": "function",
+      "ownedVersion": 3,
+      "type": "session-lifecycle",
+      "version": 3,
+    }
+  `)
+})
+
 test("form editor identity and resumed revision remain host-library exports", () => {
   const editor: FormEditor = { editor: "editor-1", revision: 7 }
   expect(editor).toMatchInlineSnapshot(`

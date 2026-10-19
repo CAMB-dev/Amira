@@ -38,8 +38,26 @@ export function usageReceiptDestination(store: SessionStore): ReceiptDestination
 
 function fileKey(store: SessionStore): string {
   const file = process.platform === "win32" ? store.file.toLowerCase() : store.file
+  let header = store.header
+  if (header.owned) {
+    // Lifecycle publication changes only these discriminators, not receipt ownership.
+    // Use the original managed-session policy version so legacy destination hashes
+    // remain valid; ordinary sessions keep their exact historical header keys.
+    const v =
+      header.writeRoots !== undefined ||
+      header.owned.spec.writeRoots !== undefined ||
+      header.owned.spec.descendants === "inherit"
+        ? 2
+        : 1
+    header = {
+      ...header,
+      type: v === 2 ? "session-policy" : "session",
+      v,
+      owned: { ...header.owned, v },
+    }
+  }
   return createHash("sha256")
-    .update(JSON.stringify([file, store.header]))
+    .update(JSON.stringify([file, header]))
     .digest("hex")
 }
 function destination(store: SessionStore | undefined, agent?: Agent, create = true): Destination | undefined {

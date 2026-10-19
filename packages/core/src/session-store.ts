@@ -12,8 +12,8 @@ import {
   writeFileSync,
 } from "node:fs"
 import path from "node:path"
-import type { Message, ModelRef, Signature, ToolResultMessage, Usage } from "@amira/ai"
-import type { CompactionInfo, CompactionReason } from "@amira/api"
+import type { Message, ModelRef, ToolResultMessage, Usage } from "@amira/ai"
+import type { CompactionInfo } from "@amira/api"
 import * as accounting from "./accounting-receipts.ts"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
@@ -24,6 +24,7 @@ import {
   tryFileLock,
   withTransientFileLock,
 } from "./file-lock.ts"
+import { writeOwnedFile } from "./owned-conversations-lifecycle.ts"
 import type { OwnedSessionIdentity } from "./owned-session.ts"
 import { intersectWriteRoots } from "./permissions/write-roots.ts"
 import {
@@ -32,6 +33,7 @@ import {
   withSessionClaim,
 } from "./session-acquisition.ts"
 import type { RestoredSession, SessionEntry, SessionEntryData } from "./session-entry.ts"
+import { checkpointIn, compactionInfo, ENTRY_TYPES, isEntry, parseLine } from "./session-entry-read.ts"
 import { isSessionHeader, type SessionHeader } from "./session-header.ts"
 import { canonicalSessionFile } from "./session-path.ts"
 import { sessionsDir } from "./session-project.ts"
@@ -107,6 +109,7 @@ export class SessionStore {
   readonly #tipBefore = new Map<string, string | null>()
   #leaf: string | null = null
   #written: boolean
+  #historical = false
   /** The file ends in a torn line; the next write starts on a fresh line. */
   #needsNewline = false
   #pending: string[] = []
@@ -141,8 +144,13 @@ export class SessionStore {
       owned.spec.writeRoots = intersectWriteRoots(undefined, opts.owned.spec.writeRoots) as string[]
     }
     const header: SessionHeader = {
-      type: opts.owned?.v === 2 || opts.writeRoots !== undefined ? "session-policy" : "session",
-      v: opts.owned?.v === 2 || opts.writeRoots !== undefined ? 2 : 1,
+      type:
+        owned?.v === 3
+          ? "session-lifecycle"
+          : owned?.v === 2 || opts.writeRoots !== undefined
+            ? "session-policy"
+            : "session",
+      v: owned?.v === 3 ? 3 : owned?.v === 2 || opts.writeRoots !== undefined ? 2 : 1,
       ...(opts.writeRoots !== undefined
         ? { writeRoots: intersectWriteRoots(undefined, opts.writeRoots) }
         : {}),
@@ -159,6 +167,14 @@ export class SessionStore {
   /** Reads a session file. Lines that do not parse, such as a torn last line, are skipped. */
   static open(file: string, options?: { historical?: boolean }): SessionStore {
     return SessionStore.#read(file, options)
+  }
+
+  /** Lifecycle-only owned lease acquisition; never constructs executable authority. */
+  static openOwnedLifecycle(file: string): SessionStore {
+    const store = SessionStore.#read(file, { historical: true })
+    if (!store.header.owned) throw new Error("owned lifecycle claim requires an owned session")
+    store.#historical = true
+    return store
   }
 
   static #read(file: string, options?: { historical?: boolean }): SessionStore {
@@ -255,6 +271,49 @@ export class SessionStore {
     sessionLocks.delete(key)
   }
 
+  /** Publish lifecycle metadata and fence legacy hosts without giving up the session lease. */
+  withOwnedLifecycleWrite(publish: () => void): void {
+    const held = sessionLocks.get(sessionFileKey(this.file))
+    if (
+      !this.header.owned ||
+      !this.#written ||
+      !held?.owners.has(this) ||
+      held.owners.size !== 1 ||
+      sessionFileKey(canonicalSessionFile(this.file)) !== sessionFileKey(this.file)
+    )
+      throw new Error("owned lifecycle mutation requires its session lease")
+    // Archiving must still work after the executable cwd/write roots have disappeared.
+    this.#refresh(false, true)
+    publish()
+    if (this.header.owned.v === 3) return
+    const bytes = readFileSync(this.file)
+    const newline = bytes.indexOf(10)
+    const header: SessionHeader = {
+      ...this.header,
+      type: "session-lifecycle",
+      v: 3,
+      owned: { ...this.header.owned, v: 3 },
+    }
+    if (!isSessionHeader(header, { historical: true })) throw new Error("invalid owned lifecycle header")
+    // Preserve every entry byte, including torn lines; migration must not repair history.
+    const body = newline < 0 ? Buffer.alloc(0) : bytes.subarray(newline + 1)
+    const upgraded = Buffer.concat([Buffer.from(`${JSON.stringify(header)}\n`), body])
+    try {
+      writeOwnedFile(this.file, upgraded)
+    } finally {
+      // Rename may have committed even if the following directory sync failed. Keep this
+      // sole writer compatible with its own exact replacement so archive can be retried.
+      if (readFileSync(this.file).equals(upgraded)) {
+        const fresh = SessionStore.#read(this.file, { historical: true })
+        Object.assign(this.header, header)
+        this.#size = fresh.#size
+        this.#generation = fresh.#generation
+        this.#tail = fresh.#tail
+        this.#needsNewline = fresh.#needsNewline
+      }
+    }
+  }
+
   /** Backwards-compatible display entry point; all appends use the same authority. */
   appendDisplay(data: Extract<SessionEntryData, { type: "display" }>): string {
     return this.append(data)
@@ -341,12 +400,12 @@ export class SessionStore {
   }
 
   /** Revalidate under the lease. Contextual appends may validate, but never merge history. */
-  #refresh(merge = true): void {
+  #refresh(merge = true, historical = this.#historical): void {
     if (!this.#written) {
       if (existsSync(this.file)) throw new SessionConflictError(this.file)
       return
     }
-    const fresh = SessionStore.#read(this.file)
+    const fresh = SessionStore.#read(this.file, { historical })
     if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
       throw new Error("session file belongs to a different session")
     }
@@ -431,7 +490,7 @@ export class SessionStore {
       lockFile,
       () => {
         if (metadata && this.#written && this.#changed()) {
-          const fresh = SessionStore.#read(this.file)
+          const fresh = SessionStore.#read(this.file, { historical: this.#historical })
           if (JSON.stringify(fresh.header) !== JSON.stringify(this.header)) {
             throw new Error("session file belongs to a different session")
           }
@@ -814,81 +873,4 @@ function sizeOf(file: string): number | undefined {
   } catch {
     return undefined
   }
-}
-
-function parseLine(line: string): unknown {
-  if (!line.trim()) return undefined
-  try {
-    return JSON.parse(line)
-  } catch {
-    return undefined
-  }
-}
-
-const REASONS = new Set<unknown>(["threshold", "manual", "overflow"] satisfies CompactionReason[])
-
-/** What a compaction entry says about why it happened; undefined for entries without it. */
-function compactionInfo(e: Partial<CompactionInfo>): CompactionInfo | undefined {
-  if (!REASONS.has(e.reason)) return undefined
-  const count = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : undefined)
-  const out: CompactionInfo = { reason: e.reason as CompactionReason }
-  const before = count(e.tokensBefore)
-  const after = count(e.tokensAfter)
-  const window = count(e.contextWindow)
-  if (before !== undefined) out.tokensBefore = before
-  if (after !== undefined) out.tokensAfter = after
-  if (window) out.contextWindow = window
-  const m = e.model as Partial<ModelRef> | undefined
-  if (typeof m?.provider === "string" && typeof m.model === "string") {
-    out.model = { provider: m.provider, model: m.model }
-  }
-  const n = e.native as Partial<ModelRef> | undefined
-  if (typeof n?.provider === "string" && typeof n.model === "string") {
-    out.native = { provider: n.provider, model: n.model }
-  }
-  if (e.layout === "tail" || e.layout === "recent-user") out.layout = e.layout
-  if (typeof e.fallback === "string" && e.fallback) out.fallback = e.fallback
-  return out
-}
-
-/** A stored checkpoint, if it is one (a damaged or foreign entry may hold anything). */
-function checkpointIn(v: unknown): Signature | undefined {
-  const s = v as Partial<Signature> | undefined
-  const str = (x: unknown) => typeof x === "string" && x.length > 0
-  if (s?.kind !== "checkpoint" || !str(s.dialect) || !str(s.value)) return undefined
-  if (!str(s.provider) || !str(s.host) || !str(s.model)) return undefined
-  return {
-    dialect: s.dialect!,
-    value: s.value!,
-    kind: "checkpoint",
-    provider: s.provider!,
-    host: s.host!,
-    model: s.model!,
-  }
-}
-
-const ENTRY_TYPES = new Set<unknown>([
-  "file_mutation",
-  "file_mutation_end",
-  "file_restore",
-  "file_restore_started",
-  "file_restore_progress",
-  "file_restore_end",
-  "file_prune",
-  "title",
-  "side_usage",
-  "display",
-  "message",
-  "model_change",
-  "compaction",
-  "checkout",
-  "subagent",
-  "tools_loaded",
-  "custom",
-  "context",
-])
-
-function isEntry(v: unknown): v is SessionEntry {
-  const e = v as { id?: unknown; type?: unknown } | undefined
-  return typeof e?.id === "string" && ENTRY_TYPES.has(e.type)
 }

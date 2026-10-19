@@ -455,7 +455,10 @@ test("while tools run the activity line names them and keeps its spinner and tim
     )
   }
   terminal.send("go\r")
-  await waitFor(() => activity("2 tools running", false).test(live()), "two tools")
+  await waitFor(
+    () => !!release.slowa && !!release.slowb && activity("2 tools running", false).test(live()),
+    "two tools",
+  )
   // The rows keep their own spinners.
   expect(live()).toMatch(new RegExp(`^${SPINNER} slowa +${ELAPSED} {2}${TIMESTAMP}$`, "m"))
   release.slowb!()
@@ -877,7 +880,9 @@ test("running tools show as lines with their arguments and are replaced by the r
   )
   terminal.send("go\r")
   await waitFor(
-    () => new RegExp(`^${SPINNER} slow bun test --watch +${ELAPSED} {2}${TIMESTAMP}$`, "m").test(live()),
+    () =>
+      typeof release === "function" &&
+      new RegExp(`^${SPINNER} slow bun test --watch +${ELAPSED} {2}${TIMESTAMP}$`, "m").test(live()),
     "running line",
   )
   release()

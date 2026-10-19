@@ -68,7 +68,7 @@ export interface OwnedConversationSnapshot {
   key: string
   name: string
   cwd: string
-  /** Reserved for durable archive support; currently always false. */
+  /** True after durable archival; an incomplete archive rejects read() instead. */
   archived: boolean
   history: readonly Message[]
   usage: ConversationUsageSnapshot
@@ -93,6 +93,17 @@ export interface OwnedConversations {
    * lag another writer and is then incomplete). Only genuinely missing records return undefined.
    */
   read(ref: OwnedConversationRef): Promise<OwnedConversationSnapshot | undefined>
+  /**
+   * Fences admission, cancels and drains owned work, invalidates handles/groups, then durably
+   * acknowledges archival. Idempotent; conflicts with foreign writers. Failed/interrupted
+   * archives remain fenced: retry archive before unarchive. History and accounting are retained.
+   */
+  archive(ref: OwnedConversationRef): Promise<void>
+  /**
+   * Restores permission to open an archived conversation, without executing or replaying work.
+   * Idempotent; old handles/groups stay invalid. Open explicitly to obtain a new handle.
+   */
+  unarchive(ref: OwnedConversationRef): Promise<void>
 }
 
 export interface OwnedConversation {

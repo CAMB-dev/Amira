@@ -5,10 +5,12 @@ import type {
   ConversationRuntime,
   ConversationSpec,
   OwnedConversation,
+  OwnedConversationRef,
   OwnedConversationSnapshot,
   OwnedConversations,
   SpawnGroupOptions,
 } from "@amira/api"
+import { drainOwnedBackgroundJobs, hasOwnedBackgroundJobs } from "./agent/background-jobs.ts"
 import { drainOwnedTools, runOwnedTool } from "./agent/owned-tool.ts"
 import { Agent } from "./agent.ts"
 import { checkAskAnswers } from "./ask-answers.ts"
@@ -24,10 +26,12 @@ import {
   ownedId,
   publishOwned,
   readOwned,
+  readOwnedLifecycle,
   readOwnedRef,
   readOwnedStore,
   type SavedConversation,
   validateSpec,
+  writeOwnedLifecycle,
 } from "./owned-conversations-storage.ts"
 import { conversationUsage } from "./owned-conversations-usage.ts"
 import {
@@ -65,6 +69,8 @@ export class OwnedConversationManager {
   #owners = new Map<string, { released: boolean; cleanup: (() => void)[] }>()
   #closed = false
   #openings = new ConversationOpenings()
+  #changes = new Map<string, { owner: string; archive: boolean; done: Promise<void> }>()
+  #claims = new Map<string, { owner: string; id: string; lease: Awaited<ReturnType<typeof claimOwned>> }>()
 
   constructor(options: OwnedConversationManagerOptions) {
     this.#opts = options
@@ -119,6 +125,9 @@ export class OwnedConversationManager {
         check()
         const saved = readOwnedRef(this.#home, owner, ref)
         if (!saved) return undefined
+        const lifecycle = readOwnedLifecycle(this.#home, saved)
+        if (lifecycle === "archiving")
+          throw new Error("owned conversation archive is incomplete; retry archive")
         const file = path.join(ownedDirectory(this.#home, owner), `${saved.id}.jsonl`)
         const active = this.#handles.get(file)?.handle
         if (active && !active.isReleased()) return active.snapshot()
@@ -132,14 +141,91 @@ export class OwnedConversationManager {
           key: saved.spec.key,
           name: saved.spec.name,
           cwd: saved.spec.cwd,
-          archived: false,
+          archived: lifecycle === "archived",
           history: structuredClone(
             store.branch().flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
           ),
           usage,
         })
       },
+      archive: async (ref) => {
+        check()
+        return this.#change(owner, ref, true, check)
+      },
+      unarchive: async (ref) => {
+        check()
+        return this.#change(owner, ref, false, check)
+      },
     }
+  }
+
+  #change(owner: string, ref: OwnedConversationRef, archive: boolean, check: () => void): Promise<void> {
+    // Validate before fencing, including foreign-owner denial. A pending first open may not
+    // have published its identity yet; its validated reference still identifies the opening.
+    const saved = readOwnedRef(this.#home, owner, ref)
+    const id = "id" in ref ? ref.id : ownedId(owner, ref.key)
+    const file = path.join(ownedDirectory(this.#home, owner), `${id}.jsonl`)
+    const previous = this.#changes.get(file)
+    if (!archive && (previous?.archive || (saved && readOwnedLifecycle(this.#home, saved) === "archiving")))
+      throw new Error("owned conversation archive is incomplete; retry archive")
+    // Retain the live writer and publish before any cancellation callback or release wait.
+    // The synchronous fence closes admission only; cancellation starts after this commit.
+    if (archive && saved)
+      this.#handles
+        .get(file)
+        ?.handle.prepareArchive(() => writeOwnedLifecycle(this.#home, saved, "archiving"))
+    const done = (async () => {
+      // Yield only after the map below has closed admission, then drain any in-flight open.
+      await previous?.done.catch(() => {})
+      check()
+      await this.#openings.stop(owner, id)
+      check()
+      const saved = readOwnedRef(this.#home, owner, ref)
+      if (!saved) throw new Error("owned conversation not found for this owner")
+      let active = this.#handles.get(file)?.handle
+      if (active && archive) {
+        active.prepareArchive(() => writeOwnedLifecycle(this.#home, saved, "archiving"))
+        await active.archive(() => writeOwnedLifecycle(this.#home, saved, "archived"))
+        return
+      }
+      if (active?.isReleasing()) {
+        await active.release()
+        active = this.#handles.get(file)?.handle
+      }
+      if (active) {
+        if (readOwnedLifecycle(this.#home, saved) === "archiving")
+          throw new Error("owned conversation archive is incomplete; retry archive")
+        return // Already active. Unarchive never replaces a live incarnation.
+      }
+      const lease =
+        this.#claims.get(file)?.lease ?? (await claimOwned(this.#home, saved, false, { historical: true }))
+      if (archive) this.#claims.set(file, { owner, id, lease })
+      try {
+        check()
+        const state = readOwnedLifecycle(this.#home, saved)
+        if (archive) {
+          if (state !== "archived" || hasOwnedBackgroundJobs(lease.store.file)) {
+            writeOwnedLifecycle(this.#home, saved, "archiving")
+            await drainOwnedBackgroundJobs(lease.store.file, id)
+            writeOwnedLifecycle(this.#home, saved, "archived")
+          }
+        } else {
+          if (state === "archiving")
+            throw new Error("owned conversation archive is incomplete; retry archive")
+          if (state === "archived") writeOwnedLifecycle(this.#home, saved, "active")
+        }
+      } catch (error) {
+        if (!archive) lease.release()
+        throw error
+      }
+      lease.release()
+      this.#claims.delete(file)
+    })().finally(() => {
+      if (this.#changes.get(file)?.done === done) this.#changes.delete(file)
+    })
+    this.#changes.set(file, { owner, archive, done })
+    if (archive) this.#handles.get(file)?.handle.waitForArchive(done)
+    return done
   }
 
   async #open(
@@ -148,8 +234,11 @@ export class OwnedConversationManager {
     create = false,
   ): Promise<OwnedConversation> {
     const { owner, id, spec } = saved
-    validateRuntime(saved, runtime)
     const file = path.join(ownedDirectory(this.#home, owner), `${id}.jsonl`)
+    if (this.#changes.has(file)) throw new Error("owned conversation archive/unarchive is in progress")
+    if (!create && readOwnedLifecycle(this.#home, saved) !== "active")
+      throw new Error("owned conversation is archived or its archive is incomplete")
+    validateRuntime(saved, runtime)
     const existing = this.#handles.get(file)
     if (existing) {
       if (existing.handle.isReleased())
@@ -158,12 +247,13 @@ export class OwnedConversationManager {
     }
     const main = this.#opts.agent()
     const model = this.#opts.ai.model(spec.model)
-    const opening = this.#openings.begin(owner)
+    const opening = this.#openings.begin(owner, id)
     try {
       const lease = await claimOwned(this.#home, saved, create, { signal: opening.signal })
       let tree: AgentTree | undefined
       try {
         opening.signal.throwIfAborted()
+        if (this.#changes.has(file)) throw new Error("owned conversation archive/unarchive is in progress")
         if (create) {
           lease.store.appendDisplay({ type: "display", text: `Conversation: ${spec.name}`, level: "info" })
           publishOwned(this.#home, saved)
@@ -211,7 +301,7 @@ export class OwnedConversationManager {
           agent,
           () => {
             lease.release()
-            this.#handles.delete(file)
+            if (this.#handles.get(file)?.handle === handle) this.#handles.delete(file)
           },
           initialState,
           this.#opts.canExecute ?? (() => true),
@@ -245,12 +335,38 @@ export class OwnedConversationManager {
       this.#owners.delete(owner)
     }
     const pending = this.#openings.stop(owner)
+    // Revoke ordinary handles synchronously; archival already fenced the remaining ones.
+    const releasing = [...this.#handles]
+      .filter(([file, entry]) => entry.owner === owner && !this.#changes.has(file))
+      .map(([, entry]) => entry.handle.release())
     await Promise.all([
       pending,
-      ...[...this.#handles.values()]
-        .filter((entry) => entry.owner === owner)
-        .map((entry) => entry.handle.release()),
+      ...releasing,
+      Promise.allSettled(
+        [...this.#changes.values()].filter((entry) => entry.owner === owner).map((entry) => entry.done),
+      ).then(async () => {
+        await Promise.all(
+          [...this.#handles.values()]
+            .filter((entry) => entry.owner === owner)
+            .map((entry) => entry.handle.release()),
+        )
+        await this.#releaseClaims(owner)
+      }),
     ])
+  }
+
+  async #releaseClaims(owner?: string): Promise<void> {
+    await Promise.all(
+      [...this.#claims]
+        .filter(([file, entry]) => (owner === undefined || entry.owner === owner) && !this.#changes.has(file))
+        .map(async ([file, entry]) => {
+          await drainOwnedBackgroundJobs(entry.lease.store.file, entry.id)
+          // A new owner may have taken over this claim while shutdown was awaiting I/O.
+          if (this.#claims.get(file) !== entry || this.#changes.has(file)) return
+          entry.lease.release()
+          this.#claims.delete(file)
+        }),
+    )
   }
 
   async drain(): Promise<void> {
@@ -258,6 +374,7 @@ export class OwnedConversationManager {
     await this.#openings.stop()
     await Promise.all([...this.#owners.keys()].map((owner) => this.releaseOwner(owner)))
     await Promise.all([...this.#handles.values()].map((entry) => entry.handle.release()))
+    await this.#releaseClaims()
   }
 }
 
@@ -359,6 +476,10 @@ class Handle implements OwnedConversation {
   #abort: AbortController | undefined
   #trace: TraceRecorder
   #released = false
+  #archiving = false
+  #archivePrepared = false
+  #finalized = false
+  #archiveWait: Promise<void> | undefined
   #release: Promise<void> | undefined
   #onRelease: () => void
 
@@ -406,8 +527,59 @@ class Handle implements OwnedConversation {
     return this.#released
   }
 
+  isReleasing(): boolean {
+    return !!this.#release
+  }
+
   #check(): void {
     if (this.#released) throw new Error("owned conversation has been released")
+    if (this.#archiving) throw new Error("owned conversation archive is incomplete; retry archive")
+  }
+
+  /** Close retained groups as well as direct calls before cancellation can yield. */
+  fence(): void {
+    if (this.#archiving) return
+    this.#archiving = true
+    scopeAdmission(this.#agent.tree!).fence()
+  }
+
+  prepareArchive(persist: () => void): void {
+    this.fence()
+    if (this.#archivePrepared) return
+    persist()
+    this.#archivePrepared = true
+  }
+
+  waitForArchive(done: Promise<void>): void {
+    this.#archiveWait = done
+    const clear = () => {
+      if (this.#archiveWait === done) this.#archiveWait = undefined
+    }
+    void done.then(clear, clear)
+  }
+
+  async archive(publish: () => void): Promise<void> {
+    if (this.#finalized) return
+    if (!this.#archivePrepared)
+      throw new Error("owned conversation archive fence is not durable; retry archive")
+    scopeAdmission(this.#agent.tree!).cancel()
+    this.#abort?.abort(new Error("owned conversation archived"))
+    await this.#release
+    await this.#agent.dispose()
+    await this.#running?.catch(() => {})
+    await scopeAdmission(this.#agent.tree!).drain()
+    await drainOwnedBackgroundJobs(this.#agent.session!.file, this.id)
+    this.events.close()
+    await this.#agent.bus.flush()
+    await this.#trace.close()
+    // Keep the writer lease on any drain/publication failure. A retry must finish this
+    // incarnation's drain, not certify archival while its tools could still be running.
+    this.#released = true
+    releaseConversationIncarnation(this)
+    this.#agent.tree?.releaseScope()
+    publish()
+    this.#onRelease()
+    this.#finalized = true
   }
 
   history(): readonly Message[] {
@@ -612,6 +784,7 @@ class Handle implements OwnedConversation {
       await this.#running?.catch(() => {})
       await this.#agent.currentTurn?.catch(() => {})
       await this.#agent.tree?.waitForChildren()
+      await scopeAdmission(this.#agent.tree!).drain()
       this.#state = "stopped"
     })().finally(() => {
       resumeAdmission()
@@ -622,6 +795,9 @@ class Handle implements OwnedConversation {
 
   release(): Promise<void> {
     if (this.#release) return this.#release
+    if (this.#finalized) return Promise.resolve()
+    if (this.#archiveWait) return this.#archiveWait
+    if (this.#archiving) return this.archive(() => {})
     this.#released = true
     releaseConversationIncarnation(this)
     scopeAdmission(this.#agent.tree!).suspend()
@@ -630,6 +806,7 @@ class Handle implements OwnedConversation {
       try {
         await this.#agent.dispose()
         await this.#running?.catch(() => {})
+        await scopeAdmission(this.#agent.tree!).drain()
       } finally {
         this.#agent.tree?.releaseScope()
         this.events.close()
@@ -637,7 +814,9 @@ class Handle implements OwnedConversation {
           await this.#agent.bus.flush()
           await this.#trace.close()
         } finally {
-          this.#onRelease()
+          // Archive can take over while this drain is awaiting disposal/trace I/O.
+          // Its durable fence and final publication must retain the same writer lease.
+          if (!this.#archiving) this.#onRelease()
         }
       }
     })()

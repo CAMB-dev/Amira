@@ -27,6 +27,7 @@ function persistedSession(root: string) {
 
 function toolSession(artifacts: ArtifactStore, session?: SessionStore) {
   return setupToolSession({
+    assertActive: () => {},
     sessionId: artifacts.sessionId,
     tools: new ToolRegistry(),
     loadedTools: new Set(),
@@ -63,7 +64,7 @@ test("a persisted tool session exposes the exact artifact directory", () => {
 
   expect(artifacts.writableDir).toBe(dir)
   expect(tools.outputDir).toBe(dir)
-  expect(tools.outputs).toBe(artifacts)
+  expect(tools.outputs?.limits).toBe(artifacts.limits)
   expect(tools.outputDir).not.toBe(tools.dir)
   expect(existsSync(dir)).toBe(false)
 })
@@ -77,7 +78,7 @@ test("a no-file tool session does not expose its writable artifact directory", (
   expect(artifacts.writableDir).toBe(dir)
   expect(tools.outputDir).toBeUndefined()
   expect("outputDir" in tools).toBe(false)
-  expect(tools.outputs).toBe(artifacts)
+  expect(tools.outputs?.limits).toBe(artifacts.limits)
   expect(existsSync(dir)).toBe(false)
 })
 
@@ -103,7 +104,7 @@ for (const persisted of [false, true]) {
       expect(artifacts.writableDir).toBeUndefined()
       expect(tools.outputDir).toBeUndefined()
       expect("outputDir" in tools).toBe(false)
-      expect(tools.outputs).toBe(artifacts)
+      expect(tools.outputs?.limits).toBe(artifacts.limits)
       if (saved) expect(tools.outputs?.find(saved.id)).toEqual(saved)
       await expect(tools.outputs!.save({ text: "not allowed", tool: "fixture" })).rejects.toThrow(
         "Private sessions cannot save output files",

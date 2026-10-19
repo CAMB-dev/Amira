@@ -461,8 +461,8 @@ export default defineExtension((api) => {
 
 `api.conversations?: OwnedConversations` 是可选宿主能力，使用前必须检测。不能用临时子 agent 替代它，却声称历史已保存。与 `/btw` 风格的子 agent 不同，owned conversation 有稳定的 owner/key 身份、独立保存的会话和单写者租约。它属于扩展，不属于当前主会话；主会话的 `/clear`、`/resume`、rewind 和 fork 不会停止它或改变其绑定。关闭视图只隐藏内容。TUI 可将焦点切换到此会话，使用同一原生对话记录和输入框，主会话仍在后台继续运行。
 
-- `openOrCreate(spec, runtime): Promise<OwnedConversation>` 打开所属扩展已保存的 key，或创建新会话。`open(id, runtime)` 只能打开该扩展拥有的会话。另一个宿主或进程持有租约时会得到明确的 **in use** 错误。同一扩展实例重复打开会返回现有句柄。
-- `read(ref: OwnedConversationRef): Promise<OwnedConversationSnapshot | undefined>` 按 owner 范围内的 `{ id }` 或 `{ key }` 读取，不打开可执行句柄。本管理器有活跃句柄时使用其权威实时状态，否则读取经过校验的持久化证据；其他进程持有写入租约时，持久化快照可能滞后，并标记为不完整。只有记录确实不存在时才返回 `undefined`；无效或属于其他 owner 的身份会抛出错误。读取不要求已配置的模型、运行时工具或仍存在的 cwd，不构造 agent、查找模型、重新绑定运行时、取得写入租约、改变焦点、修复目录或请求 provider。
+- `openOrCreate(spec, runtime): Promise<OwnedConversation>` 打开所属扩展已保存的 key，或创建新会话。`open(id, runtime)` 只能打开该扩展拥有的会话。另一个宿主或进程持有租约时会得到明确的 **in use** 错误。同一扩展实例重复打开会返回现有句柄。两种方法都会拒绝已归档或归档未完成的会话。
+- `read(ref: OwnedConversationRef): Promise<OwnedConversationSnapshot | undefined>` 按 owner 范围内的 `{ id }` 或 `{ key }` 读取，不打开可执行句柄。本管理器有活跃句柄时使用其权威实时状态，否则读取经过校验的持久化证据；其他进程持有写入租约时，持久化快照可能滞后，并标记为不完整。只有记录确实不存在时才返回 `undefined`；无效或属于其他 owner 的身份会抛出错误。读取不要求已配置的模型、运行时工具或仍存在的 cwd，不构造 agent、查找模型、重新绑定运行时、取得写入租约、改变焦点、修复目录或请求 provider。已完成归档仍可读取，返回 `archived: true`；归档未完成时拒绝读取，不返回已完成归档的快照。
 - `ConversationSpec` 包含 `key`、`name`、绝对路径 `cwd`、可选的 `model`（`provider/model`）、`systemPrompt`、必填的 `callableTools: string[]`，以及可选的 `writeRoots: string[]` 和 `descendants: "research" | "inherit"`。宿主保存此规格；重新打开不能悄悄修改它或扩大工具权限。此类历史独立于普通主会话的列表、resume 和 fork 路径。
 - `ConversationRuntime` 包含必填的 `askUser(questions, { sessionId, signal }): Promise<AskAnswer[] | undefined>` 和可选的 `extraTools: ToolDefinition[]`。每次重新打开都要绑定回调与执行函数；它们不序列化。缺少必要工具时拒绝运行。提问直接进入此回调，绝不交给主会话模型回答。回调必须展示真实的人类选择、响应取消，并在返回前保存需要的决策证据。返回 `undefined` 表示取消。
 - 创建和重新打开不会发送模型请求、重放未完成轮次、重启子任务或恢复旧问题。扩展初始化期间仍可打开会话，但 owned `send()`、`runTool()`、`complete()` 和 `createGroup()` 会拒绝，直到初始化完成。请在初始化完成后的命令或 `session.start` 处理函数中启动工作；不要在初始化函数内等待就绪，否则会导致启动死锁。只有显式的 `OwnedConversation.send(text, { images?: ImageBlock[], display?: MessageDisplay, signal? })` 才启动一轮，仅发送图片时文本可为空；在该轮结束时完成，重叠的 send/tool/complete 操作会被拒绝。仍使用配置的 AI/provider，遵守宿主限制。
@@ -479,7 +479,10 @@ export default defineExtension((api) => {
 - `budget.update`、相关完成事件和 `events.lost` 只用于使账目缓存失效，随后调用 `usage()`；不要把共享累计预算载荷当作 owner 账本。先订阅再读取快照，在 release 前及等待工作结束后刷新，release 或重启后通过 `read()` 核对。项目/阶段归属及停止策略由扩展负责；按已报告费用停止可能因在途工作而超支，不保证最大发票金额，也不隔离宿主共享预算。
 - 句柄提供 `id`、`key`、`name`、`cwd`、绑定的 `data: SessionData`、`history()`（当前完整分支的不可变快照，包含已被压缩替代的消息）、`status()`（state 和 busy）及 `events: AsyncIterable<AnyEvent>`。`OwnedConversation.events` 包含此会话及普通后代的事件，携带各自的 sessionId，不进入主对话总线。临时后代保留私有总线；扩展必须改用它们的 `ChildSession.events`。先订阅，再读取历史和状态快照。事件不重放；用 history 恢复保存的消息，按 session/turn/tool-call id 关联工具行。
 - 绑定的 `SessionData.append(key, data): void` 不提供持久写入确认。磁盘故障通过 `extension.error` 异步报告；`append()` 返回不代表已持久提交。如果决策证据要求持久提交，必须先提交到扩展自行控制的存储，再回答 `askUser` 问题。
-- `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。此 API 不提供 archive/unarchive 或删除；`release()` 不会归档会话，卸载或移除包后历史仍保留。`OwnedConversationSnapshot.archived` 目前始终为 `false`。
+- `stop(reason?): Promise<void>` 中止工作、待回答问题和后代，但保留历史；之后可显式 send 继续。`release(): Promise<void>` 停止并等待清理，释放租约，使句柄失效，但不删除历史；重复调用安全。所属扩展卸载、禁用和宿主退出由宿主管理清理，不会中止主会话或其子 agent。`release()` 不会归档会话。不提供删除 API；卸载或移除包后历史仍保留。
+- `archive(ref: OwnedConversationRef): Promise<void>` 限于所属 owner，重复调用安全。生命周期状态独立于不可变的 `ConversationSpec` 持久化，使用旧读取器会拒绝的版本化元数据。归档与写入租约争用及进行中的打开操作串行协调：先设置准入围栏，再取消并等待同一 owner 的运行时工作、待回答问题、后代、工具和 `complete` 请求实际结束，使保留的句柄/group 失效，最后才确认已持久归档。其他进程持有写入租约时返回明确冲突，不会直接修改其活跃会话。旧句柄的 `send`、`runTool`、`complete`、`createGroup` 及保留 group 的新任务准入均被拒绝。失效句柄原本有焦点时，焦点返回主会话。
+- 崩溃或等待结束/持久化失败可能留下未完成归档，不能视为已完成。重启后仍保持保守拒绝状态：执行、`read` 和 `unarchive` 均拒绝。重试 `archive(ref)` 以完成等待和持久归档。已知限制：如果归档过程中主机被强制终止（例如 SIGKILL），POSIX 上脱离主机存活的后台任务不会跨重启跟踪，重试归档不会停止它们。在途账目可在归档期间结算；最终历史和用量仍可通过无需运行时的 `read()` 读取。
+- `unarchive(ref: OwnedConversationRef): Promise<void>` 恢复已完成归档的权限；已处于活动状态的会话保持不变。它只改变生命周期权限。它不打开句柄、启动轮次、重放待处理工作或问题、恢复后代，也不恢复先前的启动批准。需重新打开并绑定新的运行时，再明确批准/启动新工作。由扩展决定取消归档哪些会话；归档不改写策略、移动文件或删除历史。
 
 公共快照类型如下：
 

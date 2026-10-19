@@ -1,33 +1,36 @@
-import { createHash, randomUUID } from "node:crypto"
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { createHash } from "node:crypto"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import type { ConversationSpec, OwnedConversationRef } from "@amira/api"
+import {
+  isOwnedLifecycleState,
+  type OwnedLifecycleState,
+  writeOwnedFile,
+} from "./owned-conversations-lifecycle.ts"
 import { validateStoredWriteRoots, validateWriteRoots } from "./permissions/write-roots.ts"
+import { canonicalSessionFile } from "./session-path.ts"
 import { SessionInUseError, SessionStore } from "./session-store.ts"
 
+export type { OwnedLifecycleState } from "./owned-conversations-lifecycle.ts"
+
 export interface SavedConversation {
-  v: 1 | 2
+  v: 1 | 2 | 3
   owner: string
   id: string
   spec: ConversationSpec & { model: string }
   runtimeTools: string[]
+  /** Required for v3, forbidden on legacy records; never part of immutable policy. */
+  lifecycle?: OwnedLifecycleState
 }
 
 // SessionStore deliberately allows cooperating views in one process. Owned runtimes do not:
 // their model contexts are independent writers, even when two hosts share a process.
-const writers = new Set<string>()
+const writers = new Map<string, SessionStore>()
+
+function writerKey(file: string): string {
+  const resolved = canonicalSessionFile(file)
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved
+}
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex")
@@ -128,18 +131,22 @@ export function readOwned(
       throw new Error("invalid owned conversation session file")
     const identity = SessionStore.open(sessionFile, options).header.owned
     if (!identity) throw new Error("invalid conversation ownership record")
+    if (identity.v === 3) throw new Error("owned conversation lifecycle metadata is missing")
     saved = { ...identity, id }
   }
   if (
-    (saved.v !== 1 && saved.v !== 2) ||
+    (saved.v !== 1 && saved.v !== 2 && saved.v !== 3) ||
     saved.owner !== owner ||
     saved.id !== id ||
     ownedId(owner, saved.spec?.key) !== id
   ) {
     throw new Error("invalid conversation ownership record")
   }
-  if (Object.keys(saved).some((key) => !["v", "owner", "id", "spec", "runtimeTools"].includes(key)))
+  const fields = ["v", "owner", "id", "spec", "runtimeTools", ...(saved.v === 3 ? ["lifecycle"] : [])]
+  if (Object.keys(saved).some((key) => !fields.includes(key)))
     throw new Error("unknown persisted conversation policy")
+  if (saved.v === 3 && !isOwnedLifecycleState(saved.lifecycle))
+    throw new Error("invalid owned conversation lifecycle")
   const spec = validateSpec(saved.spec, options)
   if (saved.v === 1 && (spec.writeRoots !== undefined || spec.descendants === "inherit"))
     throw new Error("conversation policy requires metadata version 2")
@@ -205,7 +212,7 @@ export function readOwnedStore(home: string, saved: SavedConversation): SessionS
     store.header.cwd !== saved.spec.cwd ||
     !identity ||
     identity.owner !== saved.owner ||
-    identity.v !== saved.v ||
+    (identity.v !== saved.v && !(saved.v === 3 && identity.v !== 3)) ||
     JSON.stringify(validateSpec(identity.spec, { historical: true })) !==
       JSON.stringify(validateSpec(saved.spec, { historical: true })) ||
     JSON.stringify(identity.runtimeTools) !== JSON.stringify(saved.runtimeTools)
@@ -216,19 +223,42 @@ export function readOwnedStore(home: string, saved: SavedConversation): SessionS
 
 export function publishOwned(home: string, saved: SavedConversation): void {
   const file = path.join(ownedDirectory(home, saved.owner), `${saved.id}.spec.json`)
-  const temporary = `${file}.${randomUUID()}.tmp`
-  try {
-    const fd = openSync(temporary, "wx")
-    try {
-      writeFileSync(fd, JSON.stringify(saved))
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    renameSync(temporary, file)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
+  writeOwnedFile(file, JSON.stringify(saved))
+}
+
+function currentOwned(home: string, saved: SavedConversation): SavedConversation {
+  const current = readOwned(home, saved.owner, saved.id, { historical: true })
+  if (
+    JSON.stringify(current.spec) !== JSON.stringify(validateSpec(saved.spec, { historical: true })) ||
+    JSON.stringify(current.runtimeTools) !== JSON.stringify(saved.runtimeTools)
+  )
+    throw new Error("conversation lifecycle identity does not match its spec")
+  return current
+}
+
+/** Read fresh lifecycle authority without claiming, repairing or validating executable roots. */
+export function readOwnedLifecycle(home: string, saved: SavedConversation): OwnedLifecycleState {
+  const current = currentOwned(home, saved)
+  readOwnedStore(home, current)
+  return current.v === 3 ? current.lifecycle! : "active"
+}
+
+/** Caller retains its owned lease across admission fencing, drain and final publication. */
+export function writeOwnedLifecycle(
+  home: string,
+  saved: SavedConversation,
+  state: OwnedLifecycleState,
+): void {
+  if (!isOwnedLifecycleState(state)) throw new Error("invalid owned conversation lifecycle")
+  const file = path.join(ownedDirectory(home, saved.owner), `${saved.id}.jsonl`)
+  const store = writers.get(writerKey(file))
+  if (!store) throw new Error("owned lifecycle mutation requires its session lease")
+  store.withOwnedLifecycleWrite(() => {
+    const current = currentOwned(home, saved)
+    readOwnedStore(home, current)
+    // Publish v3 first: legacy owned readers reject even if header migration is interrupted.
+    publishOwned(home, { ...current, v: 3, lifecycle: state })
+  })
 }
 
 /** The existing session lease is the cross-process authority; no parallel registry lease. */
@@ -236,21 +266,26 @@ export async function claimOwned(
   home: string,
   saved: SavedConversation,
   create: boolean,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; historical?: boolean },
 ): Promise<{ store: SessionStore; release: () => void }> {
   const { owner, id, spec } = saved
+  if (create && options?.historical) throw new Error("historical claims cannot create conversations")
   const cwd = spec.cwd
   const dir = ownedDirectory(home, owner)
-  mkdirSync(dir, { recursive: true })
+  if (create) mkdirSync(dir, { recursive: true })
   const file = path.join(dir, `${id}.jsonl`)
   if (existsSync(file) && (lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile()))
     throw new Error("invalid owned conversation session file")
   const identity = { v: saved.v, owner, spec, runtimeTools: saved.runtimeTools }
-  const store = create ? SessionStore.create({ id, cwd, dir, owned: identity }) : SessionStore.open(file)
-  const key = process.platform === "win32" ? store.file.toLowerCase() : store.file
+  const store = create
+    ? SessionStore.create({ id, cwd, dir, owned: identity })
+    : options?.historical
+      ? SessionStore.openOwnedLifecycle(file)
+      : SessionStore.open(file)
+  const key = writerKey(store.file)
   if (writers.has(key)) throw new Error("owned conversation is in use by another host")
   // Reserve before acquisition yields: even two pending hosts must not construct writers.
-  writers.add(key)
+  writers.set(key, store)
   try {
     await store.withClaim(() => {
       const stored = store.header.owned
@@ -259,12 +294,16 @@ export async function claimOwned(
         store.header.cwd !== cwd ||
         !stored ||
         stored.owner !== owner ||
-        stored.v !== saved.v ||
-        JSON.stringify(validateSpec(stored.spec)) !== JSON.stringify(validateSpec(spec)) ||
+        (stored.v !== saved.v && !(saved.v === 3 && stored.v !== 3)) ||
+        JSON.stringify(validateSpec(stored.spec, options)) !== JSON.stringify(validateSpec(spec, options)) ||
         JSON.stringify(stored.runtimeTools) !== JSON.stringify(saved.runtimeTools)
       )
         throw new Error("conversation store identity does not match its spec")
-      // withClaim releases its temporary ref; retain one for the owned runtime's lifetime.
+      if (!options?.historical) {
+        const state = create ? (saved.v === 3 ? saved.lifecycle : "active") : readOwnedLifecycle(home, saved)
+        if (state !== "active") throw new Error("owned conversation is archived or archiving")
+      }
+      // withClaim releases its temporary ref; retain one across the runtime or lifecycle drain.
       store.claim()
     }, options)
   } catch (error) {

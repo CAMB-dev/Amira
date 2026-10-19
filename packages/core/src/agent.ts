@@ -33,6 +33,7 @@ import {
   pruneArtifacts,
   summarizeArtifactUsage,
 } from "./agent/artifact-usage.ts"
+import { scopedBackgroundJobs } from "./agent/background-jobs.ts"
 import type { Compactor } from "./agent/compactor.ts"
 import {
   buildContext,
@@ -56,6 +57,7 @@ import {
   restoreHistory,
   setupContext,
   setupToolSession,
+  toolSessionScope,
 } from "./agent/setup.ts"
 import { checkRestoredTools, setupToolRunner } from "./agent/tool-setup.ts"
 import { TurnRunner, type TurnState } from "./agent/turn-runner.ts"
@@ -228,11 +230,15 @@ export class Agent {
       const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
       this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
       this.tree = opts.tree
-      this.backgroundJobs = opts.backgroundJobs?.forSession({
-        sessionId: this.sessionId,
-        depth: this.depth,
-        ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
-      })
+      this.backgroundJobs = scopedBackgroundJobs(
+        opts.backgroundJobs?.forSession({
+          sessionId: this.sessionId,
+          depth: this.depth,
+          ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
+        }),
+        this,
+        () => this.#disposed,
+      )
       this.#approvals = new ApprovalGate({
         sessionId: this.sessionId,
         depth: this.depth,
@@ -360,14 +366,7 @@ export class Agent {
         depth: this.depth,
         maxDepth: () => tree?.maxDepth ?? 0,
         model: () => this.model,
-        spawning: tree
-          ? {
-              restricted: tree.restricted,
-              spawn: (o) => tree.spawn(this, o),
-              createGroup: (o) => tree.createGroup(this, o),
-              groups: () => tree.groups(),
-            }
-          : undefined,
+        ...toolSessionScope(tree, this, () => this.#disposed),
         expectNotice:
           this.depth === 0 || this.#onIdleNotice ? () => this.#inbox.target().expect() : undefined,
       })
