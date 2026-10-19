@@ -45,3 +45,9 @@ function real(file: string): string {
     return path.resolve(file)
   }
 }
+
+/** Drops one cached module under both its given and its real path (macOS /var -> /private/var). */
+export function forgetModule(file: string): void {
+  delete require.cache[file]
+  delete require.cache[real(file)]
+}
