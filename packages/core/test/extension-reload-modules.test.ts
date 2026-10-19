@@ -98,3 +98,37 @@ test("reloading through a linked directory forgets the real-path modules too", a
     rmSync(base, { recursive: true, force: true })
   }
 })
+
+test("reloading a single extension file through a linked directory runs the edited code", async () => {
+  const base = mkdtempSync(join(tmpdir(), "amira-reload-file-link-"))
+  const realDir = join(base, "real")
+  const linked = join(base, "linked")
+  const tools = new ToolRegistry()
+  const host = new ExtensionHost({ bus: new EventBus(), interceptors: new InterceptorRegistry(), tools })
+  try {
+    mkdirSync(join(realDir, "src"), { recursive: true })
+    symlinkSync(realDir, linked, process.platform === "win32" ? "junction" : "dir")
+    const entry = join(linked, "src", "index.ts")
+    writeVersion(realDir, "old", "OLD_KIND")
+    expect(await host.loadFile(entry, { source: "file" })).toBe(true)
+    host.unloadAll()
+    writeVersion(realDir, "new", "NEW_KIND")
+    // No package root: only the entry is forgotten, so keep the imported module name stable.
+    writeFileSync(join(realDir, "src", "view.ts"), 'export const OLD_KIND = "new"\n')
+    writeFileSync(
+      entry,
+      [
+        'import { OLD_KIND } from "./view.ts"',
+        "export default (api) => {",
+        '  api.registerTool({ name: "reload_probe", description: "entry-" + OLD_KIND,',
+        '    parameters: { type: "object" }, execute: async () => ({ content: [] }) })',
+        "}",
+      ].join("\n"),
+    )
+    expect(await host.loadFile(entry, { source: "file" })).toBe(true)
+    expect(tools.getRegistration("reload_probe")?.tool.description).toStartWith("entry-")
+  } finally {
+    host.unloadAll()
+    rmSync(base, { recursive: true, force: true })
+  }
+})
