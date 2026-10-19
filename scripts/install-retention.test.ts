@@ -28,6 +28,7 @@ async function cleanup(
   unknownLiveness = false,
   beforeWait?: () => Promise<void>,
   shell = process.platform === "win32" ? "powershell" : "sh",
+  processProbe?: { kill: string; ps: string },
 ) {
   const windows = shell === "powershell"
   const name = windows ? "install.ps1" : "install.sh"
@@ -51,13 +52,14 @@ async function cleanup(
   } else {
     const valid = source.match(/valid_version\(\) \{[\s\S]*?\n\}/)![0]
     body = source.slice(source.indexOf("# Session leases share"), source.indexOf("printf 'Installed Amira"))
-    const liveness = unknownLiveness
-      ? "kill() { return 1; }; ps() { echo 'permission denied' >&2; return 1; }\n"
-      : ""
+    const probe =
+      processProbe ??
+      (unknownLiveness ? { kill: "return 1", ps: "echo 'permission denied' >&2; return 1" } : undefined)
+    const probes = probe ? `kill() { ${probe.kill}; }\nps() { ${probe.ps}; }\n` : ""
     let gate = source.match(/take_retention_gate\(\) \{[\s\S]*?\n\}/)![0]
     if (beforeWait) gate = gate.replace("  attempts=0", '  printf ready > "$root/gate-ready"\n  attempts=0')
     const release = source.match(/release_retention_gate\(\) \{[\s\S]*?\n\}/)![0]
-    body = `#!/bin/sh\nset -eu\nroot=$AMIRA_RETENTION_ROOT\nversion=1.2.4\nstaging=$root/staging\nretention_lock=$root/retention.lock\nretention_owned=false\nmkdir -p "$staging"\n${valid}\n${gate}\n${release}\ntrap release_retention_gate EXIT\ntake_retention_gate\n${liveness}${body}`
+    body = `#!/bin/sh\nset -eu\nroot=$AMIRA_RETENTION_ROOT\nversion=1.2.4\nstaging=$root/staging\nretention_lock=$root/retention.lock\nretention_owned=false\nmkdir -p "$staging"\n${valid}\n${gate}\n${release}\ntrap release_retention_gate EXIT\ntake_retention_gate\n${probes}${body}`
   }
   expect(body.length).toBeGreaterThan(500)
   const script = path.join(root, windows ? "cleanup.ps1" : "cleanup.sh")
@@ -83,7 +85,7 @@ test("installer retains additional live versions, then prunes them after leases 
   const leases = [await createVersionLease(root, "1.2.0"), await createVersionLease(root, "1.2.1")]
   expect(await cleanup(root)).toHaveLength(5)
   await Promise.all(leases.map((lease) => lease.release()))
-  expect(await cleanup(root)).toEqual(["1.2.2", "1.2.3", "1.2.4"])
+  expect((await cleanup(root)).sort()).toEqual(["1.2.2", "1.2.3", "1.2.4"])
 }, 30_000)
 
 test("installer retires only proven dead local owners", async () => {
@@ -132,6 +134,39 @@ test.each([...(process.platform === "win32" ? ["powershell"] : []), ...(Bun.whic
     } finally {
       if (!released) lock.release()
     }
+  },
+  30_000,
+)
+
+test.skipIf(!Bun.which("sh")).each([
+  { name: "live kill probe", kill: "return 0", ps: "return 2", held: true },
+  { name: "BSD empty successful ps", kill: "return 1", ps: "return 0", held: false },
+  { name: "GNU empty no-match ps", kill: "return 1", ps: "return 1", held: false },
+  { name: "visible PID", kill: "return 1", ps: "echo 123; return 0", held: true },
+  { name: "PID despite failed ps", kill: "return 1", ps: "echo 123; return 1", held: true },
+  {
+    name: "permission error",
+    kill: "return 1",
+    ps: "echo 'permission denied' >&2; return 1",
+    held: true,
+  },
+  {
+    name: "invalid PID error",
+    kill: "return 1",
+    ps: "echo 'invalid process id' >&2; return 1",
+    held: true,
+  },
+  { name: "unexpected empty failure", kill: "return 1", ps: "return 2", held: true },
+  { name: "unavailable probe", kill: "return 1", ps: "return 127", held: true },
+])(
+  "POSIX installer requires proof of death: $name",
+  async ({ kill, ps, held }) => {
+    const root = await fixture()
+    await createVersionLease(root, "1.2.0")
+    const directory = path.join(root, "leases", "1.2.0")
+    const versions = await cleanup(root, false, undefined, "sh", { kill, ps })
+    expect(versions.includes("1.2.0")).toBe(held)
+    expect(await readdir(directory)).toHaveLength(held ? 1 : 0)
   },
   30_000,
 )
