@@ -16,6 +16,11 @@ import {
 import { matches, id as operationId } from "./schema/base.ts"
 import { RemoteWriter } from "./writer.ts"
 
+function operationChannel(op: RemoteOperation): RemoteChannel {
+  if (op === "model.open" || op === "model.stream" || op === "model.compact") return "model"
+  return /^(?:files|images|artifacts|uploads)\./.test(op) ? "files" : "control"
+}
+
 export interface RemoteIO {
   input: AsyncIterable<Uint8Array>
   /** Resolves only after the sink accepts the bytes; must honor backpressure. */
@@ -147,9 +152,7 @@ export class RemoteConnection {
       while (this.usedIds.has(id))
     }
     this.usedIds.add(id)
-    const channel =
-      options.channel ??
-      (op === "model.open" || op === "model.stream" || op === "model.compact" ? "model" : "control")
+    const channel = options.channel ?? operationChannel(op)
     return new Promise((resolve, reject) => {
       let sent = false
       const cancel: RemoteCancel = { v: 1, kind: "cancel", channel, id }
@@ -328,9 +331,7 @@ export class RemoteConnection {
       throw new RemoteError("limit_exceeded", "Remote request identity capacity exhausted")
     if (this.active.size >= REMOTE_LIMITS.pendingRequests)
       throw new RemoteError("limit_exceeded", "Too many incoming remote requests")
-    const isModel =
-      request.op === "model.open" || request.op === "model.stream" || request.op === "model.compact"
-    if (request.channel !== (isModel ? "model" : "control"))
+    if (request.channel !== operationChannel(request.op))
       throw new RemoteError("invalid_frame", "Operation channel mismatch")
     this.inboundIds.add(request.id)
     const controller = new AbortController()

@@ -3,9 +3,17 @@ import type { ReasoningEffort, SessionControl } from "@amira/api"
 import type { FrontendExecuteOptions } from "@amira/core"
 import { FrontendOperationError } from "@amira/core"
 import { frontendJson } from "../../../core/src/frontend/json.ts"
+import { agentScopeRoot } from "../../../core/src/frontend/scope-root.ts"
+import { agentSessionOwner } from "../../../core/src/session-routing.ts"
+import type { ServerUploadSendOperations } from "../remote/schema/upload-send.ts"
 import { validateRemoteParams, validateRemoteResult } from "../remote-schema.ts"
 import type { Session } from "../session-factory.ts"
+import { createServerConversations, type ServerConversationOperations } from "./conversations.ts"
+import { createServerFileOperations, type ServerFileOperations } from "./files.ts"
+import { createServerJobs, type ServerJobOperations } from "./jobs.ts"
 import { createServerUiOperations, type ServerUiOperations } from "./ui.ts"
+import { createUploadSender } from "./upload-send.ts"
+import { createServerUploadOperations, type ServerUploadOperations } from "./uploads.ts"
 
 type StoredSession = NonNullable<ReturnType<NonNullable<SessionControl["readSession"]>>>
 export type ServerSessionHistory = Omit<StoredSession, "subagentMessages">
@@ -15,7 +23,13 @@ export type ServerModel = Pick<ModelInfo, "provider" | "id" | "contextWindow" | 
 }
 
 /** Host-only DTO operations. Never return Ai.providers(), executable controls or view definitions. */
-export interface ServerOperations extends ServerUiOperations {
+export interface ServerOperations
+  extends ServerUiOperations,
+    ServerJobOperations,
+    ServerConversationOperations,
+    ServerFileOperations,
+    ServerUploadOperations,
+    ServerUploadSendOperations {
   "sessions.list": {
     params: { offset?: number; limit?: number }
     result: { sessions: ReturnType<SessionControl["sessions"]>; nextOffset?: number }
@@ -40,8 +54,77 @@ export function createServerOperations(deps: {
   control: SessionControl
   session: Session
   generation: () => number
+  historyCut: Parameters<typeof createServerConversations>[0]["historyCut"]
+  onFocus?: Parameters<typeof createServerConversations>[0]["onFocus"]
+  send?: Parameters<typeof createUploadSender>[0]["send"]
 }) {
   const ack = () => ({ sessionGeneration: deps.generation() })
+  const conversations = createServerConversations(deps)
+  const uploads = createServerUploadOperations({ generation: deps.generation })
+  const uploadSender = createUploadSender({ uploads, send: deps.send })
+  const uploadHandlers = Object.fromEntries(
+    Object.entries(uploads.handlers).map(([key, handler]) => [
+      key,
+      (params: never, signal?: AbortSignal) => handler(params, { signal }),
+    ]),
+  ) as {
+    [K in keyof ServerUploadOperations]: (
+      params: ServerUploadOperations[K]["params"],
+      signal?: AbortSignal,
+    ) => Promise<ServerUploadOperations[K]["result"]>
+  }
+  const scopedAgent = (scope?: string) => {
+    const root = agentSessionOwner(deps.control.info().id)
+    if (root?.bus !== deps.session.agent.bus) return undefined
+    if (scope === undefined) return root
+    if (conversations.ownedScope(scope)) return agentSessionOwner(scope)
+    if (!deps.control.subagents().some((child) => child.id === scope)) return undefined
+    const child = agentSessionOwner(scope)
+    return child?.bus === root.bus ? child : undefined
+  }
+  const files = createServerFileOperations({
+    generation: deps.generation,
+    resolveScope: (scope) => {
+      const agent = scopedAgent(scope)
+      if (agent) return { cwd: agent.cwd, root: agentScopeRoot(agent) }
+      const owned = scope ? conversations.ownedScope(scope) : undefined
+      return owned ? { cwd: owned.cwd } : undefined
+    },
+    resolveArtifact: (id, scope) => scopedAgent(scope)?.artifacts.resolveOwned(id),
+  })
+  files.establishScope(deps.session.agent.cwd, undefined, agentScopeRoot(deps.session.agent))
+  const { dispose: _disposeFiles, establishScope: _establishScope, ...fileOperations } = files
+  const fileHandlers = Object.fromEntries(
+    Object.entries(fileOperations).map(([key, handler]) => [
+      key,
+      (params: never, signal?: AbortSignal) => handler(params, { signal }),
+    ]),
+  ) as {
+    [K in keyof ServerFileOperations]: (
+      params: ServerFileOperations[K]["params"],
+      signal?: AbortSignal,
+    ) => Promise<ServerFileOperations[K]["result"]>
+  }
+  const jobs = createServerJobs({
+    generation: deps.generation,
+    jobs: (scope) => {
+      const native = scope.conversationId && conversations.ownedScope(scope.conversationId)
+      if (native) return agentSessionOwner(native.id)?.backgroundJobs
+      const root = agentSessionOwner(deps.control.info().id)
+      // A durable id alone cannot authorize a different workspace's live agent.
+      return root?.bus === deps.session.agent.bus ? root.backgroundJobs : undefined
+    },
+    visible: (job, scope) => {
+      const native = scope.conversationId && conversations.ownedScope(scope.conversationId)
+      if (native) return !job.owner || !!agentSessionOwner(native.id)?.tree?.subagent(job.owner)
+      const children = deps.control.subagents()
+      const known = (id: string) =>
+        children.some((child) => child.id === id) || !!conversations.ownedScope(id)
+      if (scope.conversationId !== undefined)
+        return known(scope.conversationId) && job.owner === scope.conversationId
+      return !job.owner || known(job.owner)
+    },
+  })
   const handlers: {
     [K in keyof ServerOperations]: (
       params: ServerOperations[K]["params"],
@@ -49,6 +132,11 @@ export function createServerOperations(deps: {
     ) => ServerOperations[K]["result"] | Promise<ServerOperations[K]["result"]>
   } = {
     ...createServerUiOperations(deps.session.host.ui),
+    ...jobs.handlers,
+    ...conversations.handlers,
+    ...fileHandlers,
+    ...uploadHandlers,
+    "uploads.send": (params, signal) => uploadSender(params, { signal }),
     "sessions.list": ({ offset = 0, limit = 50 }) => {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100)
         throw new Error("Session page requires a nonnegative offset and a limit from 1 to 100")
@@ -94,7 +182,7 @@ export function createServerOperations(deps: {
       budget: deps.session.tree.budget,
     }),
   }
-  return async <K extends keyof ServerOperations>(
+  const execute = async <K extends keyof ServerOperations>(
     operation: K,
     params: ServerOperations[K]["params"],
     options?: FrontendExecuteOptions,
@@ -105,9 +193,14 @@ export function createServerOperations(deps: {
     if (!Object.hasOwn(handlers, operation))
       throw new FrontendOperationError("unsupported_operation", "Unknown server operation")
     validateRemoteParams(operation, params)
+    const generation = deps.generation()
     const result = frontendJson(await handlers[operation](params, options?.signal))
     validateRemoteResult(operation, result)
+    // Fence slow reads/waits after a switch, not merely their initial submission.
+    if (generation !== deps.generation())
+      throw new FrontendOperationError("stale_session", "The active session changed")
     // Copy rather than returning live history references.
     return result as ServerOperations[K]["result"]
   }
+  return Object.assign(execute, { jobs, conversations, files, uploads })
 }

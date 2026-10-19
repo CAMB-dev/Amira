@@ -32,6 +32,7 @@ import {
   sessionClaimAcquired,
   withSessionClaim,
 } from "./session-acquisition.ts"
+import { registerSessionBranchReader } from "./session-branch-reader.ts"
 import type { RestoredSession, SessionEntry, SessionEntryData } from "./session-entry.ts"
 import { checkpointIn, compactionInfo, ENTRY_TYPES, isEntry, parseLine } from "./session-entry-read.ts"
 import { isSessionHeader, type SessionHeader } from "./session-header.ts"
@@ -126,6 +127,11 @@ export class SessionStore {
     this.file = canonicalSessionFile(file)
     this.header = header
     this.#written = written
+    registerSessionBranchReader(this, {
+      leaf: () => this.#leaf,
+      entry: (id) => this.#byId.get(id),
+      previous: (id) => this.#tipBefore.get(id),
+    })
   }
 
   static create(opts: {

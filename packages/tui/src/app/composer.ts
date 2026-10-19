@@ -28,6 +28,8 @@ export interface ComposerDeps {
   history: PromptHistory
   commands?: Pick<CommandHost, "complete" | "list" | "completeSkill" | "skills" | "inputLine">
   files?: FileSource
+  localCwd?: string
+  readWorkspaceImage?: (cwd: string, path: string, signal: AbortSignal) => Promise<EditorImage>
   commandsEnabled?: () => boolean
   /** Returns the current agent itself: clipboard results also check its identity. */
   agent: () => Pick<Agent, "cwd">
@@ -67,8 +69,19 @@ export function createComposer(deps: ComposerDeps): Composer {
   const { editor, keys, history, commands, env, terminal, showNote, redraw } = deps
   const clipboardAbort = new AbortController()
   let clipboardRead: AbortController | undefined
+  let workspaceRead: AbortController | undefined
+  let workspaceRevision = 0
+  const localCwd = () => deps.localCwd ?? deps.agent().cwd
+
+  // Focus changes and draft resets may restore the same agent/text/caret later.
+  function cancelWorkspaceImage() {
+    workspaceRevision++
+    workspaceRead?.abort()
+    workspaceRead = undefined
+  }
 
   function cancelClipboard() {
+    cancelWorkspaceImage()
     if (clipboardRead) deps.clearNote?.("Reading clipboard…")
     clipboardRead?.abort()
     clipboardRead = undefined
@@ -88,7 +101,7 @@ export function createComposer(deps: ComposerDeps): Composer {
   }
 
   function pasteText(text: string) {
-    const paths = pastedImagePaths(text, deps.agent().cwd)
+    const paths = pastedImagePaths(text, localCwd())
     let images: EditorImage[] | undefined
     try {
       images = paths?.map(readImage)
@@ -113,8 +126,8 @@ export function createComposer(deps: ComposerDeps): Composer {
     signal.addEventListener("abort", cancelNote, { once: true })
     try {
       const result = await (deps.clipboard
-        ? deps.clipboard(deps.agent().cwd, signal)
-        : readClipboard({ cwd: deps.agent().cwd, env: { ...process.env, ...env }, signal }))
+        ? deps.clipboard(localCwd(), signal)
+        : readClipboard({ cwd: localCwd(), env: { ...process.env, ...env }, signal }))
       if (signal.aborted || deps.agent() !== session) return
       if (result.type === "image") attachImages([result.image])
       else if (result.type === "text") pasteText(result.text)
@@ -189,7 +202,7 @@ export function createComposer(deps: ComposerDeps): Composer {
       showNote("Remove image attachments before using the external text editor.")
       return
     }
-    const command = externalEditor(env, deps.agent().cwd)
+    const command = externalEditor(env, localCwd())
     const file = join(tmpdir(), `amira-message-${process.pid}-${Date.now()}.md`)
     try {
       writeFileSync(file, editor.getText())
@@ -203,7 +216,7 @@ export function createComposer(deps: ComposerDeps): Composer {
       const resume = terminal.suspend?.()
       try {
         result = spawnSync(`${command} "${file}"`, {
-          cwd: deps.agent().cwd,
+          cwd: localCwd(),
           stdio: "inherit",
           shell: true,
           env: { ...process.env, ...env },
@@ -239,12 +252,49 @@ export function createComposer(deps: ComposerDeps): Composer {
     if (!action) return false
     if (action.type === "replace") editor.setText(action.text)
     else if (action.type === "run") {
+      cancelWorkspaceImage()
       history.add([action.line])
       historyNav.reset()
       editor.clear()
       deps.runPopup(action.line)
     }
     return true
+  }
+
+  async function readWorkspaceImage(path: string, replace: number) {
+    cancelWorkspaceImage()
+    const read = new AbortController()
+    workspaceRead = read
+    const revision = workspaceRevision
+    const signal = AbortSignal.any([clipboardAbort.signal, read.signal])
+    const session = deps.agent()
+    // Content revisions also fence edits/undo and resets made outside the composer.
+    const version = editor.version
+    const before = editor.textBeforeCaret()
+    const current = () =>
+      !signal.aborted &&
+      workspaceRead === read &&
+      workspaceRevision === revision &&
+      deps.agent() === session &&
+      editor.version === version &&
+      editor.textBeforeCaret() === before
+    try {
+      const image = await deps.readWorkspaceImage!(session.cwd, path, signal)
+      if (!current()) return
+      if (imageBytes([...editor.getParts(), { image }]) > MAX_IMAGE_BYTES) attachImages([image])
+      else {
+        editor.replaceBeforeCaret(replace, "")
+        attachImages([image])
+      }
+      redraw()
+    } catch (err) {
+      if (current()) {
+        showNote(err instanceof Error ? err.message : String(err))
+        redraw()
+      }
+    } finally {
+      if (workspaceRead === read) workspaceRead = undefined
+    }
   }
 
   /** Applies what the file picker did with a key; false when it left the key to the editor. */
@@ -257,6 +307,10 @@ export function createComposer(deps: ComposerDeps): Composer {
         .trim()
         .replace(/^"(.*)"$/, "$1")
       if (!path.endsWith("/") && imageMimeType(path)) {
+        if (deps.readWorkspaceImage) {
+          void readWorkspaceImage(path, action.replace)
+          return true
+        }
         try {
           const image = readImage(join(deps.agent().cwd, path))
           if (imageBytes([...editor.getParts(), { image }]) > MAX_IMAGE_BYTES)
@@ -284,13 +338,17 @@ export function createComposer(deps: ComposerDeps): Composer {
     },
     cancelClipboard,
     abortClipboard() {
+      cancelWorkspaceImage()
       clipboardAbort.abort()
     },
     dispose() {
+      cancelWorkspaceImage()
+      clipboardAbort.abort()
       filePicker.dispose()
       ownFiles?.dispose()
     },
     resetHistory() {
+      cancelWorkspaceImage()
       historyNav.reset()
     },
     syncCompletions,

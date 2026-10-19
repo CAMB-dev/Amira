@@ -12,6 +12,7 @@ import {
   union,
   enumeration as values,
 } from "./base.ts"
+import { fileOperationSchemas, uploadOperationSchemas } from "./files.ts"
 import { formDraft, formEvaluation, formMutation, formValues, uiAck, uiAnswer } from "./forms.ts"
 import {
   acknowledgement,
@@ -26,6 +27,8 @@ import {
 } from "./frontend.ts"
 import { compactResult, modelRequest, reasoning, userMessage } from "./messages.ts"
 import { modelOpen } from "./model-wire.ts"
+import { serverTaskSchemas } from "./server-tasks.ts"
+import { uploadSendSchema } from "./upload-send.ts"
 
 const empty = object({})
 const command = object({
@@ -40,6 +43,10 @@ const draft = object(formDraft)
 
 /** Every operation has its own closed input and output DTO. No method-name-to-arbitrary-JSON fallback. */
 export const operationSchemas = {
+  ...serverTaskSchemas,
+  ...fileOperationSchemas,
+  ...uploadOperationSchemas,
+  "uploads.send": uploadSendSchema,
   "state.read": { params: empty, result: frontendState },
   "transcript.read": { params: empty, result: transcript },
   "turn.prompt": {

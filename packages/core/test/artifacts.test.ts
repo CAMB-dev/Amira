@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
@@ -183,6 +184,87 @@ test("a child's store finds its parent's artifacts; where artifacts live", async
   expect(parent.find(b.id)).toBeUndefined()
   expect(artifactDir(path.join(root, "s_x.jsonl"), "s_x")).toBe(path.join(root, "s_x.assets", "outputs"))
   expect(artifactDir(undefined, "s_y")).toBe(path.join(os.tmpdir(), "amira", "outputs", "s_y"))
+})
+
+test("owned resolution rejects oversized metadata before parsing, including a resumed store", async () => {
+  const storageRoot = await tempDir()
+  const dir = path.join(storageRoot, "s.assets", "outputs")
+  const store = new ArtifactStore({ dir, storageRoot, sessionId: "s" })
+  const saved = await store.save({ text: "x", tool: "test" })
+  await writeFile(
+    path.join(dir, `${saved.id}.json`),
+    JSON.stringify({ ...saved, tool: "x".repeat(9 * 1024 * 1024) }),
+  )
+  const resumed = new ArtifactStore({ dir, storageRoot, sessionId: "s" })
+  await expect(resumed.resolveOwned(saved.id)).rejects.toThrow("metadata")
+  await expect(store.resolveOwned(saved.id)).rejects.toThrow("metadata")
+})
+
+test("owned resolution rejects directory metadata without trying to parse it", async () => {
+  const storageRoot = await tempDir()
+  const dir = path.join(storageRoot, "s.assets", "outputs")
+  const id = "a_1234567890"
+  await mkdir(path.join(dir, `${id}.json`), { recursive: true })
+  const store = new ArtifactStore({ dir, storageRoot, sessionId: "s" })
+  await expect(store.resolveOwned(id)).rejects.toThrow("metadata")
+})
+
+test.skipIf(process.platform === "win32")(
+  "owned resolution rejects FIFO metadata without blocking",
+  async () => {
+    const storageRoot = await tempDir()
+    const dir = path.join(storageRoot, "s.assets", "outputs")
+    const id = "a_1234567890"
+    await mkdir(dir, { recursive: true })
+    const fifo = path.join(dir, `${id}.json`)
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0)
+    const store = new ArtifactStore({ dir, storageRoot, sessionId: "s" })
+    await expect(store.resolveOwned(id)).rejects.toThrow("metadata")
+  },
+)
+
+test("owned resolution rejects a directory alias installed between metadata inspection and open", async () => {
+  const root = await tempDir()
+  const child = Bun.spawn(
+    [process.execPath, path.join(import.meta.dir, "artifact-metadata-race-worker.ts"), root],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  )
+  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+  expect(stderr).toBe("")
+  expect(code).toBe(0)
+})
+
+for (const level of ["assets", "outputs"]) {
+  test(`owned resolution rejects a same-storage-root cross-session ${level} alias`, async () => {
+    const storageRoot = await tempDir()
+    const other = path.join(storageRoot, "other.assets", "outputs")
+    const parent = new ArtifactStore({ dir: other, storageRoot, sessionId: "other" })
+    const saved = await parent.save({ text: "private", tool: "test" })
+    const dir = path.join(storageRoot, "s.assets", "outputs")
+    if (level === "outputs") await mkdir(path.dirname(dir))
+    await symlink(
+      level === "assets" ? path.dirname(other) : other,
+      level === "assets" ? path.dirname(dir) : dir,
+      process.platform === "win32" ? "junction" : "dir",
+    )
+    const store = new ArtifactStore({ dir, storageRoot, sessionId: "s" })
+    await expect(store.resolveOwned(saved.id)).rejects.toThrow("alias")
+  })
+}
+
+test("owned resolution preserves inherited artifacts for lazy, resumed and private child stores", async () => {
+  const storageRoot = await realpath(await tempDir())
+  const parentDir = path.join(storageRoot, "parent.assets", "outputs")
+  const original = new ArtifactStore({ dir: parentDir, storageRoot, sessionId: "parent" })
+  const saved = await original.save({ text: "inherited", tool: "test" })
+  const parent = new ArtifactStore({ dir: parentDir, storageRoot, sessionId: "parent" })
+  for (const readOnly of [false, true]) {
+    const dir = path.join(storageRoot, `child-${readOnly}.assets`, "outputs")
+    const child = new ArtifactStore({ dir, storageRoot, sessionId: "child", parent, readOnly })
+    expect(await child.resolveOwned(saved.id)).toEqual({ path: saved.path, root: parentDir })
+    await mkdir(dir, { recursive: true })
+    expect(await child.resolveOwned(saved.id)).toEqual({ path: saved.path, root: parentDir })
+  }
 })
 
 test("references are found on every branch of a session file and in its sub-agents' files", async () => {

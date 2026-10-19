@@ -1,5 +1,5 @@
 import type { AnyEvent } from "@amira/api"
-import type { Agent, AgentPort, CommandHost } from "@amira/core"
+import type { Agent, AgentPort, CommandHost, EventBus } from "@amira/core"
 import {
   type HeldInput,
   type HoldState,
@@ -35,6 +35,7 @@ export function createWorkspaceCapture(deps: {
   startupEvents: readonly ServerEvent[]
   eventDto: (event: AnyEvent) => ServerEvent
   pending: () => readonly ServerUiRequest[]
+  extraOwners?: () => readonly Agent[]
 }) {
   const journal = new ReplayJournal()
   const activity = new FrontendProjection()
@@ -42,9 +43,11 @@ export function createWorkspaceCapture(deps: {
     root: () => deps.commands.agent,
     host: deps.session.host,
     pending: deps.pending,
+    extraOwners: deps.extraOwners,
   })
   let project = localSnapshotProjector(deps.commands.agent)
   let closed = false
+  const nativeChecks = new Set<() => void>()
   let scheduled = false
   const scope = (sessionId: string) => ({
     sessionId,
@@ -97,7 +100,12 @@ export function createWorkspaceCapture(deps: {
   }
   const publishSteering = (sessionId: string) => {
     const owner = agentSessionOwner(sessionId)
-    if (owner && owner.bus !== deps.session.agent.bus) return
+    if (
+      owner &&
+      owner.bus !== deps.session.agent.bus &&
+      !deps.extraOwners?.().some((extra) => extra.bus === owner.bus)
+    )
+      return
     journal.append({
       kind: "steering",
       ...scope(sessionId),
@@ -108,7 +116,7 @@ export function createWorkspaceCapture(deps: {
     activity.fail()
     journal.invalidate()
   }
-  const offBus = deps.session.agent.bus.capture((event) => {
+  const captureEvent = (event: AnyEvent) => {
     const dto = deps.eventDto(event)
     if (dto.type === "extension.error" && dto.data.source === "remote:protocol") fail()
     // These describe pending runtime state, not in-flight display content. In particular,
@@ -129,7 +137,8 @@ export function createWorkspaceCapture(deps: {
       event.type !== "tool.execute.update"
     )
       scheduleState()
-  }, fail)
+  }
+  const offBus = deps.session.agent.bus.capture(captureEvent, fail)
   const offPort = deps.port.subscribe((update) => {
     try {
       const dto = copyRemoteJson(update)
@@ -222,7 +231,58 @@ export function createWorkspaceCapture(deps: {
   })
   return {
     journal,
+    /** Native conversations have their own bus; retain capture across frontend detach. */
+    watch(
+      bus: EventBus,
+      initial: () => { events: readonly AnyEvent[]; sourceSeq: number },
+      current: () => boolean,
+    ): () => void {
+      let sourceSeq = Number.MAX_SAFE_INTEGER
+      const captureNative = (event: AnyEvent) => {
+        // A capture installed reentrantly may see the event already included in the seed.
+        if (event.seq <= sourceSeq) return
+        sourceSeq = event.seq
+        captureEvent(event)
+      }
+      const check = () => {
+        if (current()) initial()
+      }
+      const offs = [
+        bus.capture(captureNative, fail),
+        subscribeHeldInputs(bus, publishInputQueue, fail),
+        subscribeHolds(bus, publishHold, fail),
+        subscribeNoticeInputs(bus, publishNotices, fail),
+        subscribeNoticeRetries(bus, publishRetry, fail),
+      ]
+      try {
+        // Subscribe and seed at one synchronous cut. Initial events initialize state only;
+        // they are not replayed as new journal events or executable frontend effects.
+        const snapshot = initial()
+        sourceSeq = snapshot.sourceSeq
+        for (const event of snapshot.events) activity.capture(event)
+        nativeChecks.add(check)
+      } catch (error) {
+        for (const off of offs) off()
+        throw error
+      }
+      return () => {
+        nativeChecks.delete(check)
+        for (const off of offs) off()
+      }
+    },
+    conversationCut<T>(includes: (sessionId: string) => boolean, read: () => T) {
+      const seq = journal.watermark
+      const history = read()
+      const projected = activity.inFlightSnapshot()
+      const value = frontendJson({
+        watermark: { daemonEpoch: journal.daemonEpoch, seq },
+        activity: { events: projected.events.filter((event) => includes(event.sessionId)) },
+      })
+      if (seq !== journal.watermark) throw new Error("Reentrant conversation cut requires recovery")
+      return { history, cut: value as unknown as import("./conversations.ts").ServerConversationCut }
+    },
     snapshot(): RemoteJson {
+      for (const check of nativeChecks) check()
       const state = pending.read()
       for (const [id, owner] of Object.entries(state.owners))
         activity.reconcileNoticeRetry(id, owner.noticeRetry ?? undefined)
@@ -240,6 +300,7 @@ export function createWorkspaceCapture(deps: {
     },
     close() {
       closed = true
+      nativeChecks.clear()
       offBus()
       offPort()
       offJobs()

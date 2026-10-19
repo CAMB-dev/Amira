@@ -11,7 +11,7 @@ import {
   type ThemeRegistry,
   type UiRequests,
 } from "@amira/core"
-import type { InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
+import type { EditorImage, InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
 import type { ViewSource } from "../extension-view.ts"
 import type { FileSource } from "../file-index.ts"
 import type { ClipboardContent } from "../image-input.ts"
@@ -82,6 +82,12 @@ export interface InteractiveOptions {
   history?: PromptHistory
   /** The files the @ picker offers. Default: the working directory's, from git or a walk. */
   files?: FileSource
+  /** Host-owned sources for focused conversation working directories; never walk them locally. */
+  filesForCwd?: (cwd: string) => FileSource
+  /** Local clipboard/editor cwd, independent of a remote workspace or focused conversation. */
+  localCwd?: string
+  /** Explicit workspace image read. A remote frontend must supply this instead of local IO. */
+  readWorkspaceImage?: (cwd: string, path: string, signal: AbortSignal) => Promise<EditorImage>
   /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
   keybindings?: Keybindings
   /** The `tui` settings: bell, title, progress indicator, reflow, what Enter does while working. */

@@ -1,6 +1,7 @@
 import type { OwnedConversation } from "@amira/api"
 import type { Agent } from "./agent.ts"
 import type { EventBus } from "./event-bus.ts"
+import { registerAgentScopeRoot } from "./frontend/scope-root.ts"
 import type { AgentTree } from "./subagents.ts"
 
 const agents = new Map<string, WeakRef<Agent>>()
@@ -8,6 +9,7 @@ const busAgents = new WeakMap<EventBus, WeakRef<Agent>>()
 
 /** Host authority exists before any frontend or native conversation focus attaches. */
 export function registerAgentSession(agent: Agent): void {
+  registerAgentScopeRoot(agent)
   const reference = new WeakRef(agent)
   agents.set(agent.sessionId, reference)
   if (!busAgents.get(agent.bus)?.deref()) busAgents.set(agent.bus, reference)
