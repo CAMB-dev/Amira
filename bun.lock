@@ -105,7 +105,7 @@
     },
     "packages/cli": {
       "name": "amira",
-      "version": "0.1.0",
+      "version": "0.0.1",
       "bin": {
         "amira": "./src/main.ts",
       },
