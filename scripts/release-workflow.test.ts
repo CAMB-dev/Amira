@@ -46,7 +46,10 @@ test("release workflow parses as YAML and every action uses an immutable SHA", (
 })
 
 test("canonical tag and matching source version are prerequisites for every release", () => {
-  expect(script("plan")).toContain('test "$GITHUB_REF_TYPE" = tag')
+  expect(script("plan")).toContain('if [[ "$GITHUB_REF_TYPE" == tag ]]; then')
+  // Branches are only accepted for a dry run of main, which never publishes.
+  expect(script("plan")).toContain('elif [[ "$DRY_RUN" == true && "$GITHUB_REF_NAME" == main ]]; then')
+  expect(script("plan")).toContain("only a dry run may use the main branch")
   expect(script("plan")).toContain('bun scripts/version-sync.ts check "$TAG"')
   expect(script("plan")).toContain("CHANNEL=next")
   expect(workflow.jobs.check!.needs).toBe("plan")
