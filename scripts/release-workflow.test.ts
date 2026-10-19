@@ -124,6 +124,11 @@ test("manual dry runs validate all npm publications without credentials or write
   expect(script("npm-dry-run")).toContain("for directory in dist/npm/amira-* dist/npm/amira")
   expect(script("npm-dry-run")).toContain("--dry-run --provenance --access public")
   expect(script("npm-dry-run")).toContain("--ignore-scripts --offline")
+  // The pinned npm goes into a job-private prefix; runners may not allow writes to the system one.
+  for (const job of ["npm-dry-run", "npm"]) {
+    expect(script(job)).toContain('npm install --global --prefix "$RUNNER_TEMP/npm" npm@11.6.2')
+    expect(script(job)).not.toContain("npm install --global npm@")
+  }
   expect(JSON.stringify(job)).not.toContain("secrets.")
 })
 

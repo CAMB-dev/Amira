@@ -288,7 +288,11 @@ jobs:
           name: release-npm
           path: dist/npm
       - name: Install the same npm used for publication
-        run: npm install --global npm@11.6.2 --registry=https://registry.npmjs.org
+        # Runner images may not let the job write to the system npm prefix; use a private one.
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/npm" npm@11.6.2 --registry=https://registry.npmjs.org
+          echo "$RUNNER_TEMP/npm/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/npm/bin/npm" --version
       - name: Dry-run every platform package, then the main package (no credentials)
         env:
           CHANNEL: ${{ needs.plan.outputs.channel }}
@@ -413,7 +417,11 @@ jobs:
           name: release-npm
           path: dist/npm
       - name: Install npm with trusted publishing support
-        run: npm install --global npm@11.6.2 --registry=https://registry.npmjs.org
+        # Runner images may not let the job write to the system npm prefix; use a private one.
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/npm" npm@11.6.2 --registry=https://registry.npmjs.org
+          echo "$RUNNER_TEMP/npm/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/npm/bin/npm" --version
       - name: Publish missing immutable versions using OIDC or an explicit token fallback
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
