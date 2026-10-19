@@ -3,7 +3,7 @@ import type { AgentOptions } from "./agent/types.ts"
 
 /** Durable marker: generic root acquisition and forks must not discard the owner's policy. */
 export interface OwnedSessionIdentity {
-  v: 1 | 2
+  v: 1 | 2 | 3
   owner: string
   spec: ConversationSpec & { model: string }
   runtimeTools: string[]

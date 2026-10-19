@@ -17,6 +17,7 @@ import {
   type JobRegistry,
   type StartJobOptions,
 } from "@amira/proc"
+import { registerJobRootReader } from "./agent/background-jobs.ts"
 
 interface Scope {
   readonly sessionId: string
@@ -41,6 +42,9 @@ export class SessionBackgroundJobHost implements BackgroundJobHost {
   constructor(registry: JobRegistry) {
     this.#registry = registry
     registry.subscribe((change) => this.#changed(change))
+    registerJobRootReader(this, (root) =>
+      registry.running().filter((job) => this.#roots.get(job.id) === root),
+    )
   }
 
   get maxRunning(): number {

@@ -800,6 +800,8 @@ test("owned conversation types are public and the extension capability remains o
       throw new Error("fixture does not execute")
     },
     read: async (_ref) => undefined,
+    archive: async (_ref) => {},
+    unarchive: async (_ref) => {},
   }
   const present: Pick<ExtensionAPI, "conversations"> = { conversations: capabilities }
   expect(absent.conversations).toBeUndefined()
@@ -836,8 +838,16 @@ test("owned conversation types are public and the extension capability remains o
       ],
     }
   `)
-  expect({ spec, state }).toMatchInlineSnapshot(`
+  expect({
+    spec,
+    state,
+    lifecycle: [typeof capabilities.archive, typeof capabilities.unarchive],
+  }).toMatchInlineSnapshot(`
     {
+      "lifecycle": [
+        "function",
+        "function",
+      ],
       "spec": {
         "callableTools": [
           "read",

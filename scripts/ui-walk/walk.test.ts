@@ -63,6 +63,20 @@ test.skipIf(ptyUnavailable())(
     const names = [`e2e-${randomUUID()}`, `e2e-${randomUUID()}`]
     const roots: string[] = []
     const cached: SessionAddress[] = []
+    const stop = async (name: string) => {
+      const deadline = performance.now() + 5000
+      for (;;) {
+        try {
+          await request(name, { command: "stop" })
+          return
+        } catch (error) {
+          // Windows may retain a directory handle briefly after the process tree exits.
+          if (performance.now() >= deadline || !/Cleanup failed.*(?:EBUSY|EACCES|EPERM)/s.test(String(error)))
+            throw error
+          await Bun.sleep(10)
+        }
+      }
+    }
     try {
       const results = await Promise.allSettled(
         names.map(async (name) => {
@@ -150,14 +164,14 @@ test.skipIf(ptyUnavailable())(
       }
       expect(status.cols).toBe(60)
       expect(status.rows).toBe(24)
-      await request(names[0]!, { command: "stop" })
+      await stop(names[0]!)
       // Stopping one tree must not stop its neighbor.
       const neighbor = (await (await request(names[1]!, { command: "status" })).json()) as {
         exitCode: number | null
       }
       expect(neighbor.exitCode).toBeNull()
     } finally {
-      await Promise.all(names.map((name) => request(name, { command: "stop" }).catch(() => undefined)))
+      await Promise.all(names.map((name) => stop(name).catch(() => undefined)))
       await Promise.all(cached.map(stopCached))
       await waitForSpawnCondition(
         "UI walk roots removed",

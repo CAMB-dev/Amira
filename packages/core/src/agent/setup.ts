@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { Ai, AssistantMessage, Message, ModelInfo, ToolSpec, Usage } from "@amira/ai"
 import type { AskQuestion, OutputStore, ToolDefinition, ToolSession } from "@amira/api"
+import type { Agent } from "../agent.ts"
 import { ArtifactStore, artifactDir } from "../artifacts.ts"
 import { type CompactionOptions, contextTokens } from "../compaction.ts"
 import type { ContextOptions, ContextView } from "../context.ts"
@@ -12,7 +13,9 @@ import { FILE_REWIND_COVERAGE, type FileRewind } from "../file-rewind.ts"
 import type { InterceptorRegistry } from "../interceptors.ts"
 import type { SessionStore } from "../session-store.ts"
 import { bindGroupSignal } from "../subagents/child.ts"
+import { scopeAdmission } from "../subagents/lifecycle.ts"
 import type { PauseGate } from "../subagents/pause.ts"
+import type { AgentTree } from "../subagents.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
 import type { ApprovalGate } from "./approvals.ts"
 import { Compactor } from "./compactor.ts"
@@ -176,7 +179,28 @@ export function setupContext(deps: ContextSetup, tokens: number | undefined) {
   return { contextManager, compactor }
 }
 
+/** Retained tool capabilities share their agent incarnation's admission fence. */
+export function toolSessionScope(tree: AgentTree | undefined, agent: Agent, disposed: () => boolean) {
+  return {
+    scope: tree ? scopeAdmission(tree) : undefined,
+    assertActive: () => {
+      if (disposed()) throw new Error("the tool session has been released")
+      if (tree) scopeAdmission(tree).checkExecution()
+    },
+    spawning: tree
+      ? {
+          restricted: tree.restricted,
+          spawn: (o: Parameters<AgentTree["spawn"]>[1]) => tree.spawn(agent, o),
+          createGroup: (o: Parameters<AgentTree["createGroup"]>[1]) => tree.createGroup(agent, o),
+          groups: () => tree.groups(),
+        }
+      : undefined,
+  }
+}
+
 interface ToolSessionSetup {
+  scope?: ReturnType<typeof scopeAdmission>
+  assertActive: () => void
   sessionId: string
   tools: ToolRegistry
   loadedTools: Set<string>
@@ -192,18 +216,36 @@ interface ToolSessionSetup {
   expectNotice: ToolSession["expectNotice"]
 }
 
+const toolSessionLifetimes = new WeakMap<ToolSession, ToolSessionSetup>()
+
 /** Base tool capabilities keep model/depth and notice targeting live. */
 export function setupToolSession(deps: ToolSessionSetup): ToolSession {
   const deferred = createToolSession(deps.sessionId, deps.tools, deps.loadedTools, deps.allowsTool)
-  return {
+  const session: ToolSession = {
     ...deferred,
     ...(deps.session ? { dir: deps.session.file.replace(/\.jsonl$/, "") } : {}),
     ...(deps.session && deps.artifacts.writableDir ? { outputDir: deps.artifacts.writableDir } : {}),
-    data: deps.history.data,
-    outputs: deps.artifacts,
+    data: {
+      read: (key) => deps.history.data.read(key),
+      append: (key, value) => {
+        deps.assertActive()
+        deps.history.data.append(key, value)
+      },
+    },
+    outputs: {
+      limits: deps.artifacts.limits,
+      find: (id) => deps.artifacts.find(id),
+      save: async (options) => {
+        deps.assertActive()
+        return deps.scope
+          ? deps.scope.track(() => deps.artifacts.save(options))
+          : deps.artifacts.save(options)
+      },
+    },
     contextHas: deps.contextHas,
     // Recorded in the session, so resuming it offers the same tools again.
     loadTools: (names) => {
+      deps.assertActive()
       const added = deferred.loadTools(names)
       if (added.length) deps.history.store({ type: "tools_loaded", names: added })
       return added
@@ -217,8 +259,18 @@ export function setupToolSession(deps: ToolSessionSetup): ToolSession {
     },
     ...deps.spawning,
     // Persistent sub-agents are woken by their owner; one-turn children cannot be woken.
-    ...(deps.expectNotice ? { expectNotice: deps.expectNotice } : {}),
+    ...(deps.expectNotice
+      ? {
+          expectNotice: () => {
+            // Main's notice target deliberately survives session switches; owned scopes do not.
+            if (deps.depth > 0 || deps.session?.header.owned) deps.assertActive()
+            return deps.expectNotice!()
+          },
+        }
+      : {}),
   }
+  toolSessionLifetimes.set(session, deps)
+  return session
 }
 
 /** Per-call descriptors retain the base getters and attribute spawned work to its tool call. */
@@ -234,8 +286,15 @@ export function callToolSession(
     ...(approvals.hasAsker
       ? {
           askUser: {
-            value: (questions: AskQuestion[], signal?: AbortSignal) =>
-              approvals.askFromTool(turn, toolCallId, questions, signal),
+            value: async (questions: AskQuestion[], signal?: AbortSignal) => {
+              const lifetime = toolSessionLifetimes.get(base)
+              lifetime?.assertActive()
+              const signals = [turn.signal]
+              if (signal) signals.push(signal)
+              if (lifetime?.scope) signals.push(lifetime.scope.signal)
+              const ask = () => approvals.askFromTool(turn, toolCallId, questions, AbortSignal.any(signals))
+              return lifetime?.scope ? lifetime.scope.track(ask) : ask()
+            },
             enumerable: true,
           },
         }
