@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { rename, rm, writeFile } from "node:fs/promises"
+import { constants, existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { lstat, open, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
@@ -21,6 +21,7 @@ import { sessionOutputDir } from "@amira/api/internal/session-output-dir"
 export { DEFAULT_ARTIFACT_QUOTA_MB } from "@amira/api"
 
 const ID = /^a_[0-9a-f]{6,32}$/
+const MAX_METADATA_BYTES = 64 * 1024
 
 /** A saved output, as its metadata file holds it; `pruned` once /prune deleted its text. */
 export type StoredArtifact = ArtifactInfo
@@ -193,6 +194,78 @@ export class ArtifactStore implements OutputStore {
     if (known) return known
     const inherited = this.#parent?.find(id)
     return inherited ? { ...inherited } : undefined
+  }
+
+  async #readOwnedMeta(dir: string, id: string): Promise<StoredArtifact | undefined> {
+    const file = path.join(dir, `${id}.json`)
+    const initial = await lstat(file)
+    if (!initial.isFile() || initial.size > MAX_METADATA_BYTES)
+      throw new Error("artifact metadata must be a regular file of at most 64 KiB")
+    const handle = await open(
+      file,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    )
+    try {
+      const info = await handle.stat()
+      if (
+        !info.isFile() ||
+        info.size > MAX_METADATA_BYTES ||
+        info.ino !== initial.ino ||
+        info.dev !== initial.dev ||
+        info.size !== initial.size
+      )
+        throw new Error("artifact metadata changed during authorization")
+      const bytes = Buffer.alloc(info.size + 1)
+      let length = 0
+      while (length < bytes.length) {
+        const read = await handle.read(bytes, length, bytes.length - length, length)
+        if (!read.bytesRead) break
+        length += read.bytesRead
+      }
+      const after = await lstat(file)
+      if (
+        length !== info.size ||
+        !after.isFile() ||
+        after.ino !== info.ino ||
+        after.dev !== info.dev ||
+        after.size !== info.size ||
+        (await realpath(dir)) !== dir
+      )
+        throw new Error("artifact metadata changed during read")
+      try {
+        const raw = JSON.parse(bytes.subarray(0, length).toString("utf8")) as StoredArtifact
+        if (raw?.id !== id || typeof raw.chars !== "number") return undefined
+        return { ...raw, path: path.join(dir, `${id}.txt`) }
+      } catch {
+        return undefined
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /** Host-only bounded-read authority; unlike find(), never follows an output-directory alias. */
+  async resolveOwned(id: string): Promise<{ path: string; root: string } | undefined> {
+    if (!ID.test(id)) return undefined
+    if (!this.#readOnly) {
+      try {
+        const root = path.resolve(this.#storageRoot)
+        const relative = path.relative(root, path.resolve(this.dir))
+        if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+          throw new Error("artifact directory escapes session storage")
+        let pinned = await realpath(root)
+        for (const part of relative.split(path.sep).filter(Boolean)) {
+          pinned = path.join(pinned, part)
+          if ((await lstat(pinned)).isSymbolicLink()) throw new Error("artifact directory is an alias")
+        }
+        const info = await this.#readOwnedMeta(pinned, id)
+        if (info && !info.pruned) return { path: path.join(pinned, `${id}.txt`), root: pinned }
+      } catch (error) {
+        // A lazy fork directory or absent metadata must not hide an inherited output.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      }
+    }
+    return this.#parent instanceof ArtifactStore ? this.#parent.resolveOwned(id) : undefined
   }
 
   /**

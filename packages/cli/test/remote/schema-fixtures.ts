@@ -11,6 +11,8 @@ import type {
 import type { FrontendOperations, FrontendSnapshot, FrontendState, FrontendTranscript } from "@amira/core"
 import type { RemoteJson, RemoteOperation } from "../../src/remote/protocol.ts"
 import type { ServerOperations } from "../../src/server/operations.ts"
+import { fileFixtures } from "./schema-file-fixtures.ts"
+import { taskFixtures } from "./schema-task-fixtures.ts"
 
 export const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } satisfies Usage
 export const caps = {
@@ -101,6 +103,8 @@ type OperationFixtures = {
 
 /** Deliberate valid and invalid payloads per operation, not a permissive empty-object smoke. */
 export const operationFixtures = {
+  ...taskFixtures,
+  ...fileFixtures,
   "state.read": {
     params: {},
     result: state,

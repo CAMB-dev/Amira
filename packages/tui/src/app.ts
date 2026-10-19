@@ -163,6 +163,7 @@ async function runFullscreen(
     opts.files,
     () => focus.conversation?.cwd ?? agent.cwd,
     () => !!focus.conversation,
+    opts.filesForCwd,
   )
   const composer = createComposer({
     editor,
@@ -175,6 +176,8 @@ async function runFullscreen(
     env,
     terminal,
     clipboard: opts.clipboard,
+    localCwd: opts.localCwd,
+    readWorkspaceImage: opts.readWorkspaceImage,
     showNote,
     clearNote: hint.clear,
     requestRender: () => view.requestRender(),

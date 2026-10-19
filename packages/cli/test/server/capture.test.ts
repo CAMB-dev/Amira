@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent, BackgroundJobChange, BackgroundJobInfo } from "@amira/api"
-import { createLocalAgentPort } from "@amira/core"
+import { createLocalAgentPort, SessionBackgroundJobHost } from "@amira/core"
 import { frontendJson } from "../../../core/src/frontend/json.ts"
 import { createCommandHost } from "../../src/control.ts"
 import { type RemoteWorkspaceSnapshot, validateRemoteDto } from "../../src/remote-schema.ts"
@@ -39,7 +39,9 @@ async function fixture(
   let jobs: BackgroundJobInfo[] = []
   let changed!: (change: BackgroundJobChange) => void
   let subscribed = false
-  const list = spyOn(session.host.backgroundJobs, "list").mockImplementation(() => jobs)
+  const jobHost = session.host.backgroundJobs
+  if (!(jobHost instanceof SessionBackgroundJobHost)) throw new Error("Missing scoped job host")
+  const list = spyOn(jobHost, "listIn").mockImplementation(() => jobs)
   const subscribe = spyOn(session.host.backgroundJobs, "subscribe").mockImplementation((listener) => {
     changed = listener
     subscribed = true

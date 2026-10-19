@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, userMessage } from "@amira/ai"
 import type { BackgroundJobInfo, ChildSession, ExtensionAPI, PendingNotice } from "@amira/api"
-import { type Agent, SessionStore } from "@amira/core"
+import { type Agent, SessionBackgroundJobHost, SessionStore } from "@amira/core"
 import { heldInputSnapshot } from "../../../core/src/agent/held-input.ts"
 import * as noticeInput from "../../../core/src/agent/notice-input.ts"
 import { Child } from "../../../core/src/subagents/child.ts"
@@ -140,6 +140,9 @@ async function fixture() {
   // No job.start or subprocess API is called. RESET must consult the actual host list,
   // even if a change never produced a jobs journal event.
   const list = spyOn(session.host.backgroundJobs, "list").mockImplementation(() => jobs)
+  const jobHost = session.host.backgroundJobs
+  if (!(jobHost instanceof SessionBackgroundJobHost)) throw new Error("Missing scoped job host")
+  const scopedList = spyOn(jobHost, "listIn").mockImplementation(() => jobs)
   const gates: (() => void)[] = []
   return {
     session,
@@ -202,6 +205,7 @@ async function fixture() {
       for (const release of gates) release()
       session.host.ui.cancelAll()
       list.mockRestore()
+      scopedList.mockRestore()
       await local.detach()
       await runtime.stop()
       restoreSession()

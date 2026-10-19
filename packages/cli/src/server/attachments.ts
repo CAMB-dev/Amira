@@ -59,9 +59,9 @@ class WorkspaceAttachments {
     accepted: RemoteJson,
     id: string,
     operationKey?: string,
+    abort = new AbortController(),
   ): Promise<RemoteJson> {
     const admitted = accepted as unknown as Pick<RemoteRequest, "op" | "params" | "sessionGeneration">
-    const abort = new AbortController()
     if (operationKey)
       this.#operations.set(operationKey, { abort, sessionGeneration: admitted.sessionGeneration })
     try {
@@ -94,6 +94,7 @@ class WorkspaceAttachments {
     // The connection bounds inbound identities. Completed observations keep their admitted
     // context too: a lost response may be cancelled after selection has moved on.
     const observations = new Map<string, { sessionGeneration: number; read: boolean }>()
+    const reads = new Map<string, AbortController>()
     const queue: { message: Delivery; bytes: number }[] = []
     // The immutable cut is separately bounded by journal retention/snapshot limits. Stream it
     // after welcome instead of filling the live queue while ready is still unresolved.
@@ -176,6 +177,10 @@ class WorkspaceAttachments {
               "replay",
               "controller",
               "mutation.ledger",
+              "files",
+              "images",
+              "jobs",
+              "conversations",
               ...(this.runtime.modelProxy ? ["model.proxy"] : []),
             ],
           }
@@ -203,24 +208,39 @@ class WorkspaceAttachments {
         const id = request.id
         const operationKey = key(id)
         const run = (accepted: RemoteJson) => this.#execute(frontend, accepted, id, operationKey)
-        const read = [
-          "state.read",
-          "transcript.read",
-          "sessions.list",
-          "sessions.read",
-          "models.list",
-          "status.read",
-          "session.planRewind",
-        ].includes(request.op)
+        const read =
+          /^(?:files|images|artifacts)\./.test(request.op) ||
+          (request.op.startsWith("uploads.") && request.op !== "uploads.send") ||
+          [
+            "state.read",
+            "transcript.read",
+            "sessions.list",
+            "sessions.read",
+            "models.list",
+            "status.read",
+            "jobs.list",
+            "jobs.output",
+            "jobs.wait",
+            "conversations.list",
+            "conversations.history",
+            "session.planRewind",
+          ].includes(request.op)
         if (read && request.sessionGeneration !== frontend.identity?.sessionGeneration)
           throw new RemoteReplyError("stale_session", "The active session changed")
         observations.set(id, { sessionGeneration: request.sessionGeneration, read })
-        const result = read ? this.#execute(frontend, payload, id) : this.#ledger.run(scope, id, payload, run)
-        return this.#observers.wait(result, transportSignal)
+        if (read) {
+          const abort = new AbortController()
+          reads.set(id, abort)
+          return this.#execute(frontend, payload, id, undefined, abort).finally(() => reads.delete(id))
+        }
+        return this.#observers.wait(this.#ledger.run(scope, id, payload, run), transportSignal)
       },
       onCancel: (id, frame) => {
         current()
-        if (frame.channel !== "control" || frame.controllerGeneration !== lease!.controllerGeneration)
+        if (
+          (frame.channel !== "control" && frame.channel !== "files") ||
+          frame.controllerGeneration !== lease!.controllerGeneration
+        )
           throw new RemoteError("invalid_frame", "Stale cancellation authority")
         const observation = observations.get(id)
         const operation = observation?.read ? undefined : this.#operations.get(key(id))
@@ -232,6 +252,7 @@ class WorkspaceAttachments {
         )
           throw new RemoteError("invalid_frame", "Stale cancellation authority")
         operation?.abort.abort()
+        reads.get(id)?.abort()
       },
       onMessage: (message) => {
         current()
@@ -272,6 +293,8 @@ class WorkspaceAttachments {
       queue.length = 0
       replay.length = 0
       observations.clear()
+      for (const abort of reads.values()) abort.abort()
+      reads.clear()
       unsubscribe?.()
       this.runtime.signal.removeEventListener("abort", stop)
       if (lease) this.#controller.detach(lease.clientId, lease.controllerGeneration)

@@ -1,16 +1,22 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import {
+  ArtifactStore,
   type ArtifactStoreOptions,
   EventBus,
   type FormEditor,
+  type ListFiles,
+  type ListOptions,
   type LocalConversationBinding,
+  listProjectFiles,
+  MAX_FILES,
   type SessionEntry,
   type SessionEntryData,
   type SessionHeader,
   SessionStore,
   type SpawnedSubagent,
   type SubagentEntry,
+  streamProjectFiles,
   ToolRegistry,
 } from "../src/index.ts"
 import { usageReceiptDestination } from "../src/owned-conversations-receipts.ts"
@@ -292,6 +298,21 @@ test("artifact stores require an independent trusted storage root", () => {
   `)
 })
 
+test("project file listing functions and options are host-library exports", () => {
+  const options: ListOptions = { limit: MAX_FILES, timeoutMs: 15_000 }
+  const list: ListFiles = (cwd, emit, signal) => streamProjectFiles(cwd, emit, { ...options, signal })
+  expect({ options, list: typeof list, collect: typeof listProjectFiles }).toMatchInlineSnapshot(`
+    {
+      "collect": "function",
+      "list": "function",
+      "options": {
+        "limit": 250000,
+        "timeoutMs": 15000,
+      },
+    }
+  `)
+})
+
 test("the public core exports stay stable", async () => {
   const actual = Object.keys(await import("../src/index.ts")).sort()
   expect(actual).toEqual([
@@ -322,6 +343,7 @@ test("the public core exports stay stable", async () => {
     "InterceptorRegistry",
     "KEEP_USER_TOKENS",
     "LockBusyError",
+    "MAX_FILES",
     "MODE_SUMMARY",
     "MarkdownRendererRegistry",
     "NON_INTERACTIVE_LINE",
@@ -401,6 +423,7 @@ test("the public core exports stay stable", async () => {
     "isSummaryMessage",
     "isWrapper",
     "lastSealedIndex",
+    "listProjectFiles",
     "listSessions",
     "listSubagents",
     "loadAuth",
@@ -444,6 +467,7 @@ test("the public core exports stay stable", async () => {
     "settingsFiles",
     "splitHistory",
     "storedHistory",
+    "streamProjectFiles",
     "stricterMode",
     "strictest",
     "subagentMessages",
@@ -481,4 +505,10 @@ test("EventBus host capture is additive without changing extension event types",
     }
   `)
   release()
+})
+
+test("ArtifactStore exports host-only pinned read authority without changing OutputStore", () => {
+  const resolveOwned: (id: string) => Promise<{ path: string; root: string } | undefined> =
+    ArtifactStore.prototype.resolveOwned
+  expect({ resolveOwned: typeof resolveOwned }).toEqual({ resolveOwned: "function" })
 })

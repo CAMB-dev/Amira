@@ -17,9 +17,15 @@ export function createPendingStateReader(deps: {
   root: () => Agent
   host: Session["host"]
   pending: () => readonly ServerUiRequest[]
+  extraOwners?: () => readonly Agent[]
 }) {
   const bus = deps.root().bus
-  const liveOwners = () => noticeInputAgents(bus)
+  const liveOwners = () => [
+    ...new Set([
+      ...noticeInputAgents(bus),
+      ...(deps.extraOwners?.() ?? []).flatMap((owner) => noticeInputAgents(owner.bus)),
+    ]),
+  ]
 
   function jobs(agents = liveOwners()): RemoteJobInfo[] {
     const root = deps.root()
@@ -30,14 +36,18 @@ export function createPendingStateReader(deps: {
         if (seen.has(id)) return false
         seen.add(id)
         // The public tree retains finished children too, but excludes private-bus children.
-        const parent = root.tree?.subagent(id)?.info.parentSessionId
+        const parent = [root, ...(deps.extraOwners?.() ?? [])]
+          .map((owner) => owner.tree?.subagent(id)?.info.parentSessionId)
+          .find(Boolean)
         if (!parent) return false
         id = parent
       }
       return true
     }
-    return deps.host.backgroundJobs
-      .list()
+    const scoped = [root, ...(deps.extraOwners?.() ?? [])].flatMap(
+      (owner) => owner.backgroundJobs?.list() ?? [],
+    )
+    return [...new Map(scoped.map((job) => [job.id, job])).values()]
       .filter((job) => !job.owner || publicOwner(job.owner))
       .map((job) => {
         const { meta: _meta, error: _error, logPath: _path, logError: _logError, ...publicJob } = job

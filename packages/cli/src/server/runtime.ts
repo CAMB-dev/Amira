@@ -1,5 +1,5 @@
 import type { Ai } from "@amira/ai"
-import type { AnyEvent, EventMap } from "@amira/api"
+import type { AnyEvent, EventMap, OwnedConversation } from "@amira/api"
 import {
   type AgentPort,
   bindLocalCommandContext,
@@ -11,6 +11,9 @@ import {
   type FrontendUpdate,
 } from "@amira/core"
 import { freezeSnapshot, frontendJson } from "../../../core/src/frontend/json.ts"
+import { nativeConversationActivity } from "../../../core/src/frontend/native-conversations.ts"
+import { agentScopeRoot } from "../../../core/src/frontend/scope-root.ts"
+import { agentSessionOwner } from "../../../core/src/session-routing.ts"
 import { createCommandHost } from "../control.ts"
 import type { RemoteJson } from "../remote/protocol.ts"
 import type { ProxyAi } from "../remote/proxy-ai.ts"
@@ -24,6 +27,7 @@ import {
 import { createSession, type SessionOptions } from "../session-factory.ts"
 import { createWorkspaceCapture } from "./capture.ts"
 import type { ReplayJournal } from "./journal.ts"
+import { validateMessageImages } from "./message-images.ts"
 import { createServerOperations, type ServerOperations } from "./operations.ts"
 import { serverBuiltins } from "./profile.ts"
 
@@ -148,11 +152,31 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
     announce: (agent, reason) => agent.start(reason),
   })
   const port = createLocalAgentPort({ agent: session.agent, commands })
+  const bindings = new Map<string, { conversation: OwnedConversation; incarnation: string; unbind(): void }>()
+  let frontendEffect: ((effect: ServerEffect) => void) | undefined
   const request = createServerOperations({
     control: commands.control,
     session,
     generation: () => port.identity!.sessionGeneration,
+    historyCut: (ref, read) => capture.conversationCut((id) => request.conversations.includes(ref, id), read),
+    send: (operation, params, options) => execute(operation, params, options),
+    onFocus: (ref) =>
+      frontendEffect?.(
+        ref
+          ? ref.incarnation
+            ? { kind: "focus", conversationId: ref.conversationId, incarnation: ref.incarnation }
+            : { kind: "view", view: "subagent", id: ref.conversationId }
+          : { kind: "unfocus" },
+      ),
   })
+  const clearBindings = () => {
+    for (const binding of bindings.values()) binding.unbind()
+    bindings.clear()
+    request.conversations.clear()
+    request.files.dispose()
+    request.uploads.dispose()
+  }
+  const offResources = commands.onSwitch(clearBindings)
   let active: WorkspaceAttachment | undefined
   let stopping: Promise<void> | undefined
   const lifetime = new AbortController()
@@ -166,6 +190,11 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
     startupEvents,
     eventDto,
     pending: () => freezeSnapshot(session.host.ui.pending.map(requestDto)),
+    extraOwners: () =>
+      [...bindings.keys()].flatMap((id) => {
+        const owner = request.conversations.ownedScope(id) && agentSessionOwner(id)
+        return owner ? [owner] : []
+      }),
   })
   session.agent.start("startup")
   await session.agent.bus.flush()
@@ -175,6 +204,11 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
     options?: FrontendExecuteOptions,
   ): Promise<FrontendOperations[K]["result"]> => {
     validateRemoteParams(operation, params)
+    if (
+      (operation === "turn.prompt" || operation === "turn.steer" || operation === "conversation.send") &&
+      "message" in params
+    )
+      validateMessageImages(params.message)
     const result = frontendJson(await port.execute(operation, params, options))
     validateRemoteResult(operation, result)
     return result as unknown as FrontendOperations[K]["result"]
@@ -200,7 +234,6 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
       if (active) throw new FrontendOperationError("agent_busy", "A workspace frontend is already attached")
       let detached = false
       const subscriptions = new Set<() => void>()
-      const bindings = new Set<() => void>()
       const connected = () => {
         if (detached || lifetime.signal.aborted)
           throw new FrontendOperationError("disconnected", "This frontend is detached")
@@ -209,6 +242,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
         validateRemoteDto("effect", value)
         if (!detached) options.onEffect?.(value)
       }
+      frontendEffect = effect
       const attachment: WorkspaceAttachment = {
         get identity() {
           return port.identity
@@ -288,11 +322,43 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
               return true
             },
             focusConversation: (conversation) => {
-              if (detached) return false
-              const binding = bindLocalConversation(port, conversation)
-              bindings.add(binding)
-              effect({ kind: "focus", conversationId: conversation.id, incarnation: binding.incarnation })
-              return true
+              if (detached || (!bindings.has(conversation.id) && bindings.size >= 128)) return false
+              const owner = agentSessionOwner(conversation.id)
+              if (!owner) return false
+              request.files.establishScope(conversation.cwd, conversation.id, agentScopeRoot(owner))
+              const previous = bindings.get(conversation.id)
+              if (
+                previous?.conversation === conversation &&
+                request.conversations.ownedScope(conversation.id) === conversation
+              ) {
+                effect({ kind: "focus", conversationId: conversation.id, incarnation: previous.incarnation })
+                return true
+              }
+              previous?.unbind()
+              bindings.delete(conversation.id)
+              const offCapture = capture.watch(
+                owner.bus,
+                () => nativeConversationActivity(conversation),
+                () => request.conversations.ownedScope(conversation.id) === conversation,
+              )
+              try {
+                const ownedBinding = request.conversations.bind(conversation)
+                const binding = bindLocalConversation(port, conversation)
+                bindings.set(conversation.id, {
+                  conversation,
+                  incarnation: binding.incarnation,
+                  unbind() {
+                    offCapture()
+                    binding()
+                    ownedBinding()
+                  },
+                })
+                effect({ kind: "focus", conversationId: conversation.id, incarnation: binding.incarnation })
+                return true
+              } catch (error) {
+                offCapture()
+                throw error
+              }
             },
             unfocusConversation: () => {
               effect({ kind: "unfocus" })
@@ -314,9 +380,10 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
           detached = true
           for (const off of subscriptions) off()
           subscriptions.clear()
-          for (const unbind of bindings) unbind()
-          bindings.clear()
-          if (active === attachment) active = undefined
+          if (active === attachment) {
+            frontendEffect = undefined
+            active = undefined
+          }
         },
       }
       active = attachment
@@ -327,6 +394,8 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
         stopping = (async () => {
           lifetime.abort()
           capture.close()
+          offResources()
+          clearBindings()
           await active?.detach()
           session.host.ui.cancelAll()
           commands.agent.abort()
