@@ -365,6 +365,18 @@ test("status parsing helpers stay out of the public API", async () => {
   expect(typeof api.extensionStatusNotice).toBe("function")
 })
 
+test("session output path validation stays internal without a version bump", async () => {
+  const api = await import("../src/index.ts")
+  const internal = await import("@amira/api/internal/session-output-dir")
+  expect(Object.keys(internal).sort()).toMatchInlineSnapshot(`
+    [
+      "sessionOutputDir",
+    ]
+  `)
+  expect("sessionOutputDir" in api).toBe(false)
+  expect(api.API_VERSION).toBe("0.1.63")
+})
+
 test("only the named transcript renderer is public, not its internal helpers", async () => {
   const api = await import("../src/index.ts")
   const internal = await import("@amira/api/internal/subagent-transcript")

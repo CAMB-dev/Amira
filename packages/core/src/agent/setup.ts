@@ -1,4 +1,5 @@
 // Synchronous session composition; lifecycle ownership and public dispatch stay with Agent.
+import { tmpdir } from "node:os"
 import path from "node:path"
 import type { Ai, AssistantMessage, Message, ModelInfo, ToolSpec, Usage } from "@amira/ai"
 import type { AskQuestion, OutputStore, ToolDefinition, ToolSession } from "@amira/api"
@@ -96,11 +97,13 @@ export function createSessionArtifacts(
     (forkedFrom && source.session
       ? new ArtifactStore({
           dir: artifactDir(path.join(path.dirname(source.session.file), `${forkedFrom}.jsonl`), forkedFrom),
+          storageRoot: path.dirname(source.session.file),
           sessionId: forkedFrom,
         })
       : undefined)
   return new ArtifactStore({
     dir: artifactDir(source.session?.file, sessionId),
+    storageRoot: source.session ? path.dirname(source.session.file) : tmpdir(),
     sessionId,
     ...(source.outputsReadOnly ? { readOnly: true } : {}),
     limits: {

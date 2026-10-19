@@ -344,6 +344,7 @@ test("parent artifact usage groups sub-agent stores and prunes their inactive an
   const session = SessionStore.create({ cwd: dir, dir })
   const parentStore = new ArtifactStore({
     dir: artifactDir(session.file, session.id),
+    storageRoot: path.dirname(session.file),
     sessionId: session.id,
   })
   const parentActive = await parentStore.save({ text: "parent active", tool: "test" })
@@ -364,7 +365,11 @@ test("parent artifact usage groups sub-agent stores and prunes their inactive an
     parent: session.id,
     dir: path.join(dir, "subagents"),
   })
-  const childStore = new ArtifactStore({ dir: artifactDir(child.file, child.id), sessionId: child.id })
+  const childStore = new ArtifactStore({
+    dir: artifactDir(child.file, child.id),
+    storageRoot: path.dirname(child.file),
+    sessionId: child.id,
+  })
   const childActive = await childStore.save({ text: "child active", tool: "test" })
   const childUnused = await childStore.save({ text: "child unused", tool: "test" })
   child.appendMessage({
