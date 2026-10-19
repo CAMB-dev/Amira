@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       dry-run:
-        description: Validate and stage only; select an existing release tag, never a branch
+        description: Validate and stage only; run on an existing release tag, or on main for a dry run
         type: boolean
         default: true
         required: true
@@ -45,8 +45,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
         run: |
-          test "$GITHUB_REF_TYPE" = tag || { echo 'Select an existing release tag, not a branch.' >&2; exit 1; }
-          TAG="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            TAG="$GITHUB_REF_NAME"
+          elif [[ "$DRY_RUN" == true && "$GITHUB_REF_NAME" == main ]]; then
+            # A dry run of main stages the CLI's current version without needing a release tag.
+            TAG="v$(bun -e 'console.log(require("./packages/cli/package.json").version)')"
+          else
+            echo 'Select an existing release tag; only a dry run may use the main branch.' >&2
+            exit 1
+          fi
           VERSION=$(bun scripts/version-sync.ts check "$TAG")
           CHANNEL=stable
           if [[ "$VERSION" == *-rc.* ]]; then CHANNEL=next; fi
