@@ -175,9 +175,11 @@ version_in_use() {
     case "$owner_pid" in ''|*[!0-9]*|0*) return 0 ;; esac
     if kill -0 "$owner_pid" 2>/dev/null; then return 0; fi
     # kill cannot distinguish ESRCH from EPERM. Only an empty, error-free ps lookup
-    # proves absence; permission errors and an unavailable ps retain the version.
+    # proves absence. BSD ps can succeed with no match; GNU ps returns 1 instead.
     command -v ps >/dev/null 2>&1 || return 0
-    if ps -p "$owner_pid" -o pid= > "$staging/lease-pid" 2> "$staging/lease-pid-error"; then return 0; fi
+    ps_status=0
+    ps -p "$owner_pid" -o pid= > "$staging/lease-pid" 2> "$staging/lease-pid-error" || ps_status=$?
+    case "$ps_status" in 0|1) ;; *) return 0 ;; esac
     [ ! -s "$staging/lease-pid" ] && [ ! -s "$staging/lease-pid-error" ] || return 0
     rm -f "$lease_file" || return 0
   done

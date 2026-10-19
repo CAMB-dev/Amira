@@ -176,11 +176,11 @@ test("live leases are additional to three retained versions and disappear after 
   expect(await readdir(path.join(f.root, "versions"))).toHaveLength(5)
   await Promise.all(leases.map((lease) => lease.release()))
   await cleanupInstall(f.root, f.bin, f.record)
-  expect(await readdir(path.join(f.root, "versions"))).toEqual(["1.2.2", "1.2.3", "1.2.4"])
+  expect((await readdir(path.join(f.root, "versions"))).sort()).toEqual(["1.2.2", "1.2.3", "1.2.4"])
 })
 
 test("dead local leases are pruned but unknown liveness, foreign owners and malformed leases are retained", async () => {
-  for (const kind of ["dead", "unknown", "foreign", "malformed"] as const) {
+  for (const kind of ["alive", "dead", "unknown", "foreign", "malformed"] as const) {
     const f = await fixture()
     await createVersionLease(f.root, "1.2.0", { host: kind === "foreign" ? "foreign-host" : hostname() })
     if (kind === "malformed") {
@@ -188,7 +188,10 @@ test("dead local leases are pruned but unknown liveness, foreign owners and malf
       await writeFile(path.join(directory, (await readdir(directory))[0]!), "unrecognized lease")
     }
     await cleanupInstall(f.root, f.bin, f.record, [], {
-      liveness: () => (kind === "unknown" ? "unknown" : "dead"),
+      liveness: (pid) => {
+        expect(pid).toBe(process.pid)
+        return kind === "unknown" || kind === "alive" ? kind : "dead"
+      },
     })
     expect((await readdir(path.join(f.root, "versions"))).includes("1.2.0")).toBe(kind !== "dead")
   }
@@ -247,7 +250,7 @@ test("leases pin the loaded version even when automatic updates, networking and 
   expect(await readFile(path.join(f.root, "versions", "1.2.0", "amira.exe"), "utf8")).toBe("1.2.0")
   await startup.stop()
   await current.cleanup()
-  expect(await readdir(path.join(f.root, "versions"))).toEqual(["1.2.2", "1.2.3", "1.2.4"])
+  expect((await readdir(path.join(f.root, "versions"))).sort()).toEqual(["1.2.2", "1.2.3", "1.2.4"])
   await current.stop()
 })
 
