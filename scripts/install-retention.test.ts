@@ -88,11 +88,18 @@ test("installer retains additional live versions, then prunes them after leases 
   expect((await cleanup(root)).sort()).toEqual(["1.2.2", "1.2.3", "1.2.4"])
 }, 30_000)
 
+/** The PID of a process that has already exited; macOS rejects out-of-range PIDs with an error. */
+async function exitedPid(): Promise<number> {
+  const child = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" })
+  await child.exited
+  return child.pid
+}
+
 test("installer retires only proven dead local owners", async () => {
   for (const kind of ["dead", "foreign", "malformed", "unknown"] as const) {
     const root = await fixture()
     await createVersionLease(root, "1.2.0", {
-      pid: 2_147_483_647,
+      pid: await exitedPid(),
       ...(kind === "foreign" ? { host: "foreign-host" } : {}),
     })
     if (kind === "malformed") {
