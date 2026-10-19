@@ -19,9 +19,14 @@ export function unregisterAgentSession(agent: Agent): void {
   if (busAgents.get(agent.bus)?.deref() === agent) busAgents.delete(agent.bus)
 }
 
+/** Current owning incarnation for host notification fencing; a durable id is not ownership. */
+export function agentSessionOwner(sessionId: string): Agent | undefined {
+  return agents.get(sessionId)?.deref()
+}
+
 /** Whether `agent` still holds its session id, rather than a newer Agent for the same session. */
 export function holdsAgentSession(agent: Agent): boolean {
-  return agents.get(agent.sessionId)?.deref() === agent
+  return agentSessionOwner(agent.sessionId) === agent
 }
 
 /** A successfully selected root, not a merely constructed candidate, owns host-default requests. */

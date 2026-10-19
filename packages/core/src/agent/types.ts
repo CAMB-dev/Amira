@@ -1,5 +1,5 @@
 // Owns Agent contracts, shared turn types, errors and notice-retry defaults.
-import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort, UserMessage } from "@amira/ai"
+import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort } from "@amira/ai"
 import type {
   ApprovalRequest,
   AskOutcome,
@@ -22,6 +22,7 @@ import type { PromptSection } from "../prompt.ts"
 import type { SessionStore } from "../session-store.ts"
 import type { AgentTree } from "../subagents.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
+import type { HeldInput } from "./held-input.ts"
 
 /** State that belongs to one turn, so late callbacks never leak into the next turn. */
 export interface Turn {
@@ -33,8 +34,8 @@ export interface Turn {
 
 /** The turn that starts once a manual compaction ends, from what was sent meanwhile. */
 export interface AfterCompaction {
-  /** In the order they were sent; `steered` ones came through steer(). */
-  messages: { message: UserMessage; steered: boolean }[]
+  /** Admission records in order; kind distinguishes held prompts from steering. */
+  messages: HeldInput[]
   /** When the first held prompt was sent. */
   sentAt?: number
   /** The id a prompt() call asked for. */

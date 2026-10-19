@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto"
 import { validateRemoteParams } from "../remote-schema.ts"
 import { RemoteDecoder } from "./codec.ts"
 import { RemoteError, RemoteReplyError } from "./errors.ts"
 import {
   REMOTE_LIMITS,
+  type RemoteCancel,
   type RemoteChannel,
   type RemoteHello,
   type RemoteJson,
@@ -11,6 +13,7 @@ import {
   type RemoteRequest,
   type RemoteWelcome,
 } from "./protocol.ts"
+import { matches, id as operationId } from "./schema/base.ts"
 import { RemoteWriter } from "./writer.ts"
 
 export interface RemoteIO {
@@ -21,6 +24,10 @@ export interface RemoteIO {
   close(): void
 }
 export interface RemoteRequestOptions {
+  /** Stable across reconnect retries, but never reusable within one connection. */
+  operationId?: string
+  /** Preserve this alongside operationId when retrying an uncertain mutation. */
+  daemonEpoch?: string
   channel?: RemoteChannel
   sessionGeneration?: number
   controllerGeneration?: number
@@ -34,6 +41,8 @@ export interface RemoteConnectionOptions {
         accept(hello: RemoteHello): RemoteWelcome | Promise<RemoteWelcome>
       }
   handle?(request: RemoteRequest, signal: AbortSignal): Promise<RemoteJson>
+  /** Explicit peer cancellation only, including operations retained across connections. */
+  onCancel?(id: string, frame: RemoteCancel): void
   onMessage?(message: Exclude<RemoteMessage, RemoteHello | RemoteWelcome | RemoteRequest>): void
   handshakeTimeoutMs?: number
 }
@@ -54,6 +63,8 @@ const rejectionMessages: Record<string, string> = {
   unsupported_operation: "The server does not support this attachment",
   operation_failed: "Remote attachment rejected",
 }
+
+const REQUEST_ID_LIMIT = 65_536
 
 interface Pending {
   channel: RemoteChannel
@@ -76,6 +87,9 @@ export class RemoteConnection {
   private pending = new Map<string, Pending>()
   private active = new Map<string, { channel: RemoteChannel; controller: AbortController }>()
   private nextId = 0
+  private idPrefix = randomUUID()
+  private usedIds = new Set<string>()
+  private inboundIds = new Set<string>()
   private failure?: unknown
   private timer: ReturnType<typeof setTimeout>
 
@@ -120,18 +134,30 @@ export class RemoteConnection {
     } catch (error) {
       return Promise.reject(error)
     }
-    const id = `r${++this.nextId}`
+    if (this.usedIds.size >= REQUEST_ID_LIMIT)
+      return Promise.reject(new RemoteError("limit_exceeded", "Remote request identity capacity exhausted"))
+    let id = options.operationId
+    if (id !== undefined) {
+      if (!matches(id, operationId))
+        return Promise.reject(new RemoteError("invalid_frame", "Invalid remote operation ID"))
+      if (this.usedIds.has(id))
+        return Promise.reject(new RemoteError("invalid_frame", "Duplicate remote operation ID"))
+    } else {
+      do id = `${this.idPrefix}:r${++this.nextId}`
+      while (this.usedIds.has(id))
+    }
+    this.usedIds.add(id)
     const channel =
       options.channel ??
       (op.startsWith("model.") && (op === "model.stream" || op === "model.compact") ? "model" : "control")
     return new Promise((resolve, reject) => {
       let sent = false
+      const cancel: RemoteCancel = { v: 1, kind: "cancel", channel, id }
       const abort = () => {
         if (!this.pending.delete(id)) return
         options.signal?.removeEventListener("abort", abort)
         reject(new RemoteError("cancelled", "Remote request cancelled"))
-        if (sent)
-          void this.writer.send({ v: 1, kind: "cancel", channel, id }).catch((error) => this.close(error))
+        if (sent) void this.writer.send(cancel).catch((error) => this.close(error))
       }
       this.pending.set(id, {
         channel,
@@ -144,6 +170,8 @@ export class RemoteConnection {
       void this.ready
         .then(async (welcome) => {
           if (!this.pending.has(id)) return
+          cancel.sessionGeneration = options.sessionGeneration ?? welcome.sessionGeneration
+          cancel.controllerGeneration = options.controllerGeneration ?? welcome.controllerGeneration
           await this.writer.send({
             v: 1,
             kind: "request",
@@ -151,12 +179,13 @@ export class RemoteConnection {
             id,
             op,
             params,
-            sessionGeneration: options.sessionGeneration ?? welcome.sessionGeneration,
-            controllerGeneration: options.controllerGeneration ?? welcome.controllerGeneration,
+            daemonEpoch: options.daemonEpoch ?? welcome.daemonEpoch,
+            sessionGeneration: cancel.sessionGeneration,
+            controllerGeneration: cancel.controllerGeneration,
           })
           sent = true
           // A cancel must not overtake the request's final chunk. Local cancellation is immediate.
-          if (options.signal?.aborted) await this.writer.send({ v: 1, kind: "cancel", channel, id })
+          if (options.signal?.aborted) await this.writer.send(cancel)
         })
         .catch((error) => {
           const pending = this.pending.get(id)
@@ -186,6 +215,7 @@ export class RemoteConnection {
     this.pending.clear()
     for (const active of this.active.values()) active.controller.abort()
     this.active.clear()
+    this.inboundIds.clear()
     try {
       this.decoder.finish()
     } catch {
@@ -280,6 +310,7 @@ export class RemoteConnection {
         const active = this.active.get(message.id)
         if (active && active.channel !== message.channel)
           throw new RemoteError("invalid_frame", "Cancel channel mismatch")
+        this.options.onCancel?.(message.id, message)
         active?.controller.abort()
         return
       }
@@ -292,12 +323,15 @@ export class RemoteConnection {
   }
 
   private dispatch(request: RemoteRequest): void {
-    if (this.active.has(request.id)) throw new RemoteError("invalid_frame", "Duplicate in-flight request ID")
+    if (this.inboundIds.has(request.id)) throw new RemoteError("invalid_frame", "Duplicate remote request ID")
+    if (this.inboundIds.size >= REQUEST_ID_LIMIT)
+      throw new RemoteError("limit_exceeded", "Remote request identity capacity exhausted")
     if (this.active.size >= REMOTE_LIMITS.pendingRequests)
       throw new RemoteError("limit_exceeded", "Too many incoming remote requests")
     const isModel = request.op === "model.stream" || request.op === "model.compact"
     if (request.channel !== (isModel ? "model" : "control"))
       throw new RemoteError("invalid_frame", "Operation channel mismatch")
+    this.inboundIds.add(request.id)
     const controller = new AbortController()
     this.active.set(request.id, { channel: request.channel, controller })
     const run = async () => {

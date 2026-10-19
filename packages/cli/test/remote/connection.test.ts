@@ -22,6 +22,176 @@ function pair(handle?: RemoteConnectionOptions["handle"], clientHandle?: RemoteC
 }
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+test("stable operation IDs are validated, reserved for the connection lifetime, and avoid generated IDs", async () => {
+  const ids: string[] = []
+  const { client, server } = pair(async (request) => {
+    ids.push(request.id)
+    return state
+  })
+  try {
+    for (const operationId of ["", "with spaces", "x".repeat(129)])
+      await expect(client.request("state.read", {}, { operationId })).rejects.toMatchObject({
+        code: "invalid_frame",
+      })
+    expect(await client.request("state.read", {}, { operationId: "r1" })).toEqual(state)
+    await expect(client.request("state.read", {}, { operationId: "r1" })).rejects.toMatchObject({
+      code: "invalid_frame",
+    })
+    expect(await client.request("state.read", {})).toEqual(state)
+    expect(ids).toEqual(["r1", expect.stringMatching(/^[a-f0-9-]+:r1$/)])
+    await expect(client.request("state.read", {}, { operationId: ids[1] })).rejects.toMatchObject({
+      code: "invalid_frame",
+    })
+  } finally {
+    client.close()
+    server.close()
+  }
+})
+
+test("a stable operation ID can be retried on a new connection, but not while already pending", async () => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const ids: string[] = []
+    const { client, server } = pair(async (request) => {
+      ids.push(request.id)
+      await gate
+      return state
+    })
+    try {
+      const first = client.request("state.read", {}, { operationId: "stable-operation-1" })
+      await expect(
+        client.request("state.read", {}, { operationId: "stable-operation-1" }),
+      ).rejects.toMatchObject({ code: "invalid_frame" })
+      release()
+      expect(await first).toEqual(state)
+      expect(ids).toEqual(["stable-operation-1"])
+    } finally {
+      release()
+      client.close()
+      server.close()
+    }
+  }
+})
+
+test("only explicit cancels invoke onCancel, including IDs retained from a previous attachment", async () => {
+  const io = loopback()
+  const frames: RemoteMessage[] = []
+  const decoder = new RemoteDecoder()
+  const cancelled: string[] = []
+  let started!: () => void
+  const start = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  let received!: () => void
+  let observed = new Promise<void>((resolve) => {
+    received = resolve
+  })
+  const server = new RemoteConnection(io.server, {
+    handshake: { role: "server", accept: () => welcome },
+    onCancel(id) {
+      cancelled.push(id)
+      received()
+    },
+    async handle(_request, signal) {
+      started()
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
+      return state
+    },
+  })
+  const client = new RemoteConnection(
+    {
+      ...io.client,
+      async write(bytes) {
+        frames.push(...decoder.push(bytes))
+        await io.client.write(bytes)
+      },
+    },
+    { handshake: { role: "client", hello } },
+  )
+  try {
+    const controller = new AbortController()
+    const result = client
+      .request(
+        "state.read",
+        {},
+        {
+          operationId: "stable-1",
+          controllerGeneration: 4,
+          sessionGeneration: 5,
+          signal: controller.signal,
+        },
+      )
+      .catch((error) => error)
+    await start
+    controller.abort()
+    expect(await result).toMatchObject({ code: "cancelled" })
+    await observed
+    expect(frames.find((frame) => frame.kind === "cancel")).toEqual({
+      v: 1,
+      kind: "cancel",
+      channel: "control",
+      id: "stable-1",
+      controllerGeneration: 4,
+      sessionGeneration: 5,
+    })
+    await expect(client.request("state.read", {}, { operationId: "stable-1" })).rejects.toMatchObject({
+      code: "invalid_frame",
+    })
+    observed = new Promise<void>((resolve) => {
+      received = resolve
+    })
+    await client.send({ v: 1, kind: "cancel", channel: "control", id: "retained-operation" })
+    await observed
+    expect(cancelled).toEqual(["stable-1", "retained-operation"])
+    client.close()
+    await server.closed
+    expect(cancelled).toEqual(["stable-1", "retained-operation"])
+  } finally {
+    client.close()
+    server.close()
+  }
+})
+
+test("closing an attachment still aborts handler signals without invoking onCancel", async () => {
+  const io = loopback()
+  let started!: () => void
+  const start = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  let signal!: AbortSignal
+  const cancelled: string[] = []
+  const server = new RemoteConnection(io.server, {
+    handshake: { role: "server", accept: () => welcome },
+    onCancel(id) {
+      cancelled.push(id)
+    },
+    async handle(_request, connectionSignal) {
+      signal = connectionSignal
+      started()
+      await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))
+      return state
+    },
+  })
+  const client = new RemoteConnection(io.client, { handshake: { role: "client", hello } })
+  try {
+    const result = client
+      .request("state.read", {}, { operationId: "retained-operation" })
+      .catch((error) => error)
+    await start
+    client.close()
+    await server.closed
+    expect(await result).toMatchObject({ code: "disconnected" })
+    expect(signal.aborted).toBe(true)
+    expect(cancelled).toEqual([])
+  } finally {
+    client.close()
+    server.close()
+  }
+})
+
 test("simultaneous bidirectional model/control requests correlate out of order without blocking the reader", async () => {
   let release!: () => void
   const held = new Promise<void>((resolve) => {

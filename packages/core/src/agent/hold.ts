@@ -1,5 +1,7 @@
 // Owns between-turn work and the prompts/steers queued behind it.
 import type { UserMessage } from "@amira/ai"
+import { freezeSnapshot } from "../frontend/json.ts"
+import { addHeldInput, clearHeldInput, type HeldInput, publishHoldState } from "./held-input.ts"
 import type { NoticeInbox } from "./notices.ts"
 import type { TurnState } from "./turn-runner.ts"
 import {
@@ -42,18 +44,25 @@ export class SessionHold {
     return this.#next?.prompted ?? false
   }
 
+  /** Reset state is sampled from the actual execution queue, preserving admission identities. */
+  recoveryState(): readonly HeldInput[] {
+    return freezeSnapshot(structuredClone(this.#next?.messages ?? []))
+  }
+
   async run<T>(what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.#deps.state.abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
     this.#deps.state.abort = abort
     this.#what = what
     this.#id = `hold_${crypto.randomUUID()}`
+    publishHoldState(this)
     try {
       return await work(abort.signal)
     } finally {
       this.#deps.state.abort = undefined
       this.#what = undefined
       this.#id = undefined
+      publishHoldState(this)
       const noticed = this.#deps.inbox.takeNoticedDuringHold()
       // Held input starts one turn; notices join it, or wake their own turn unless aborted.
       this.#start(abort.signal.aborted, what)
@@ -62,14 +71,19 @@ export class SessionHold {
   }
 
   steer(message: UserMessage): void {
-    this.#enqueue(message, true)
-    this.#deps.emit(undefined, "turn.steer", { message, state: "queued" })
+    const next = this.#enqueue(message, true)
+    const owned = next.messages[next.messages.length - 1]!.message
+    addHeldInput(this, { message: owned, kind: "steer", holdId: this.#id! })
+    this.#deps.emit(undefined, "turn.steer", { message: owned, state: "queued" })
   }
 
-  prompt(message: UserMessage, turnId?: string): Promise<TurnResult> {
+  prompt(message: UserMessage, turnId = newTurnId()): Promise<TurnResult> {
     const next = this.#enqueue(message, false, turnId)
     next.prompted = true
-    return new Promise((resolve, reject) => next.waiters.push({ resolve, reject }))
+    return new Promise((resolve, reject) => {
+      next.waiters.push({ resolve, reject })
+      addHeldInput(this, { message, kind: "prompt", holdId: this.#id!, turnId })
+    })
   }
 
   /** Disposal drops held input just as aborting the work does, without dropping notices. */
@@ -78,9 +92,16 @@ export class SessionHold {
   }
 
   #enqueue(message: UserMessage, steered: boolean, turnId?: string): AfterCompaction {
+    const owned = structuredClone(message)
     this.#next ??= { messages: [], prompted: false, waiters: [], sentAt: Date.now() }
     const next = this.#next
-    next.messages.push({ message, steered })
+    next.messages.push({
+      id: `input_${crypto.randomUUID()}`,
+      holdId: this.#id!,
+      kind: steered ? "steer" : "prompt",
+      message: owned,
+      ...(turnId === undefined ? {} : { turnId }),
+    })
     if (turnId !== undefined) next.turnId = turnId
     return next
   }
@@ -89,6 +110,7 @@ export class SessionHold {
     const next = this.#next
     this.#next = undefined
     if (!next) return
+    clearHeldInput(this)
     if (aborted) {
       for (const { message } of next.messages)
         this.#deps.emit(undefined, "turn.steer", { message, state: "dropped" })
@@ -97,8 +119,8 @@ export class SessionHold {
       return
     }
     const turnId = next.turnId ?? newTurnId()
-    for (const { message, steered } of next.messages) {
-      if (steered)
+    for (const { message, kind } of next.messages) {
+      if (kind === "steer")
         this.#deps.emit(undefined, "turn.steer", { message, state: "promoted", nextTurnId: turnId })
     }
     const [only, ...more] = next.messages

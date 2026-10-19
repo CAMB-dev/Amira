@@ -38,6 +38,7 @@ interface Sub {
 export class EventBus {
   #seq = 0
   #subs = new Set<Sub>()
+  #captures = new Map<(event: AnyEvent) => void, (error: unknown) => void>()
   #onError: (err: unknown, event: AnyEvent) => void
 
   /** onError receives subscriber failures. The default ignores them: the core never prints. */
@@ -59,8 +60,28 @@ export class EventBus {
     return () => this.#subs.delete(sub)
   }
 
+  /** Host-only synchronous capture, before lossy subscriber queues. Copy retained data here.
+   * Capture must never perform IO; failure must explicitly degrade the host's projection.
+   * Subscriber-local events.lost markers are deliberately not captured.
+   */
+  capture(fn: (event: AnyEvent) => void, onFailure: (error: unknown) => void): () => void {
+    this.#captures.set(fn, onFailure)
+    return () => void this.#captures.delete(fn)
+  }
+
   emit<K extends keyof EventMap>(type: K, data: EventMap[K], meta: EmitMeta): EventEnvelope<K> {
     const ev: EventEnvelope<K> = { seq: ++this.#seq, ts: Date.now(), ...meta, type, data }
+    for (const [capture, onFailure] of this.#captures) {
+      try {
+        capture(ev as AnyEvent)
+      } catch (error) {
+        try {
+          onFailure(error)
+        } catch {
+          // Capture health is host-owned, never allowed to break agent execution.
+        }
+      }
+    }
     for (const sub of this.#subs) {
       if (sub.types && !sub.types.has(type)) continue
       let keep = true

@@ -12,6 +12,7 @@ import {
 } from "@amira/core"
 import { freezeSnapshot, frontendJson } from "../../../core/src/frontend/json.ts"
 import { createCommandHost } from "../control.ts"
+import type { RemoteJson } from "../remote/protocol.ts"
 import { publicUpdateError } from "../remote/public-errors.ts"
 import {
   copyRemoteJson,
@@ -20,6 +21,8 @@ import {
   validateRemoteResult,
 } from "../remote-schema.ts"
 import { createSession, type SessionOptions } from "../session-factory.ts"
+import { createWorkspaceCapture } from "./capture.ts"
+import type { ReplayJournal } from "./journal.ts"
 import { createServerOperations, type ServerOperations } from "./operations.ts"
 import { serverBuiltins } from "./profile.ts"
 
@@ -105,6 +108,10 @@ export interface WorkspaceAttachment extends AgentPort {
 }
 
 export interface WorkspaceRuntime {
+  /** Host-only replay authority; transport subscribers must use bounded queues. */
+  readonly journal: ReplayJournal
+  readonly signal: AbortSignal
+  workspaceSnapshot(): RemoteJson
   attach(options?: { onEffect?: (effect: ServerEffect) => void }): WorkspaceAttachment
   /** Explicit owner shutdown, never called by attachment EOF/detach. */
   stop(): Promise<void>
@@ -119,7 +126,7 @@ export type WorkspaceRuntimeOptions = Omit<
   noBuiltins?: boolean
 }
 
-/** One workspace/session authority, independent of any connection's lifetime. B07 adds replay/fencing. */
+/** One workspace/session authority, independent of any connection's lifetime. */
 export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Promise<WorkspaceRuntime> {
   const session = await createSession({
     ...opts,
@@ -137,8 +144,6 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
     aliases: opts.settings?.commandAliases,
     announce: (agent, reason) => agent.start(reason),
   })
-  session.agent.start("startup")
-  await session.agent.bus.flush()
   const port = createLocalAgentPort({ agent: session.agent, commands })
   const request = createServerOperations({
     control: commands.control,
@@ -151,6 +156,16 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
   const inflight = new Set<Promise<unknown>>()
   const startupEvents = freezeSnapshot(session.startupEvents.map(eventDto))
   validateRemoteDto("startup", startupEvents)
+  const capture = createWorkspaceCapture({
+    session,
+    commands,
+    port,
+    startupEvents,
+    eventDto,
+    pending: () => freezeSnapshot(session.host.ui.pending.map(requestDto)),
+  })
+  session.agent.start("startup")
+  await session.agent.bus.flush()
   const execute = async <K extends keyof FrontendOperations>(
     operation: K,
     params: FrontendOperations[K]["params"],
@@ -173,6 +188,9 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
   }
 
   return {
+    journal: capture.journal,
+    signal: lifetime.signal,
+    workspaceSnapshot: () => capture.snapshot(),
     attach(options = {}) {
       if (lifetime.signal.aborted) throw new FrontendOperationError("disconnected", "The runtime is stopped")
       if (active) throw new FrontendOperationError("agent_busy", "A workspace frontend is already attached")
@@ -304,6 +322,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
       if (!stopping)
         stopping = (async () => {
           lifetime.abort()
+          capture.close()
           await active?.detach()
           session.host.ui.cancelAll()
           commands.agent.abort()
