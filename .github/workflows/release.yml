@@ -99,7 +99,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core fonts-noto-cjk
       - run: bun install --frozen-lockfile
-      - run: bun run check
+      # Same runner as CI: static checks once, failed test files retried once, so a single
+      # flaky test cannot fail a release that CI already passed on the same commit.
+      - name: Run checks and tests
+        timeout-minutes: 20
+        run: bun run architecture:check && bun run typecheck && bun run lint && bun scripts/ci-test.ts
 
   build:
     name: Build or recover immutable release artifacts

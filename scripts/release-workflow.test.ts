@@ -58,7 +58,10 @@ test("canonical tag and matching source version are prerequisites for every rele
     "windows-latest",
     "macos-latest",
   ])
-  expect(script("check")).toContain("bun run check")
+  // Release checks use CI's runner, which retries a failed test file once.
+  expect(script("check")).toContain(
+    "bun run architecture:check && bun run typecheck && bun run lint && bun scripts/ci-test.ts",
+  )
   expect(workflow.jobs.check!.steps[0]!.with!["fetch-depth"]).toBe(0)
   expect(workflow.jobs.build!.needs).toEqual(["plan", "check"])
   expect(script("build")).toContain('bun run build:all --version "$VERSION" --channel "$CHANNEL"')
