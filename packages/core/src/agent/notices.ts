@@ -44,6 +44,8 @@ export class NoticeInbox {
   #retries = 0
   /** A notice arrived during a manual compaction: it is sent once that ends. */
   #noticedDuringCompaction = false
+  /** Terminal proxy loss leaves notices queued until an explicit new turn. */
+  #suspended = false
 
   constructor(deps: NoticeInboxDeps) {
     this.#deps = deps
@@ -120,7 +122,7 @@ export class NoticeInbox {
       // A manual compaction (or other held work) runs: it is sent once that ends.
       if (wake) this.#noticedDuringCompaction = true
       this.#deps.emit(undefined, "turn.steer", { message, state: "queued" })
-    } else if (!wake) {
+    } else if (!wake || this.#suspended) {
       // It waits for the next turn, which the user's next message starts.
       this.#deps.emit(undefined, "turn.steer", { message, state: "queued" })
     } else if (this.#deps.onIdleNotice) this.#deps.onIdleNotice()
@@ -129,13 +131,29 @@ export class NoticeInbox {
 
   /** Returns the turn directly, including its rejection, for an owner that decides when to wake. */
   wake(): Promise<TurnResult> | undefined {
-    if (this.#deps.disposed() || this.#deps.busy() || this.#deps.holding() || !this.#notices.length)
+    if (
+      this.#suspended ||
+      this.#deps.disposed() ||
+      this.#deps.busy() ||
+      this.#deps.holding() ||
+      !this.#notices.length
+    )
       return undefined
     return this.#deps.prompt(joinMessages(this.take()))
   }
 
   get retry(): { attempt: number; at: number } | undefined {
     return this.#retry && { attempt: this.#retry.attempt, at: this.#retry.at }
+  }
+
+  suspend(): void {
+    this.#suspended = true
+    this.cancelRetry()
+  }
+
+  /** Called by a new turn, never by notice delivery. */
+  resume(): void {
+    this.#suspended = false
   }
 
   cancelRetry(): void {
@@ -151,7 +169,7 @@ export class NoticeInbox {
    * wait for the user's next message.
    */
   scheduleRetry(error: string | undefined): void {
-    if (this.#deps.disposed()) return
+    if (this.#suspended || this.#deps.disposed()) return
     this.cancelRetry()
     const delays = this.#deps.retryMs
     if (this.#retries >= delays.length) return
@@ -198,7 +216,7 @@ export class NoticeInbox {
 
   /** Starts a turn with the waiting notices. */
   wakeQuietly(): void {
-    if (this.#deps.disposed() || this.#deps.busy() || !this.#notices.length) return
+    if (this.#suspended || this.#deps.disposed() || this.#deps.busy() || !this.#notices.length) return
     this.#deps.prompt(joinMessages(this.take())).catch(() => {})
   }
 

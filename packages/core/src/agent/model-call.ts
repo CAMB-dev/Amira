@@ -13,6 +13,7 @@ import type {
 import { hasFastMode } from "@amira/ai"
 import type { EventMap } from "@amira/api"
 import { markAccountingIncomplete, usageSnapshot } from "../accounting-receipts.ts"
+import { latchTransportFailure } from "./transport-failure.ts"
 import type { AgentOptions } from "./types.ts"
 
 /** Live and restored status interpret the reported field for this model's fast option. */
@@ -256,6 +257,7 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
           else {
             error = ev.error.message
             modelError = ev.error
+            latchTransportFailure(options.signal, ev.error)
           }
           break
       }

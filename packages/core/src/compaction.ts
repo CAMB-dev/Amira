@@ -3,6 +3,7 @@ import {
   type AssistantMessage,
   type CompactionLayout,
   type Message,
+  type ModelError,
   type ModelInfo,
   type ModelRef,
   messageCitations,
@@ -17,6 +18,7 @@ import {
   markAccountingIncomplete,
   retainAccountingReceipts,
 } from "./accounting-receipts.ts"
+import { isTerminalProxyFailure } from "./agent/transport-failure.ts"
 import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
 
 export interface CompactionOptions {
@@ -263,6 +265,7 @@ export async function summarize(
   const request = `${current}Summarize this transcript:\n\n<transcript>\n${renderTranscript(messages)}\n</transcript>${extra}`
   let text = ""
   let failure: string | undefined
+  let modelError: ModelError | undefined
   let usage: Usage | undefined
   let usageIncomplete = false
   const count = (u: Usage | undefined) => {
@@ -313,6 +316,7 @@ export async function summarize(
       if (ev.type === "error") {
         observe(ev.message.usage)
         failure ??= ev.error.message
+        modelError ??= ev.error
       }
       if (ev.type === "done") {
         text = ev.message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
@@ -322,9 +326,18 @@ export async function summarize(
   } catch (err) {
     if (err instanceof SummaryError) throw err
     // The interrupted stream may hide more usage; retain the known subtotal without certifying it.
-    throw new SummaryError(err instanceof Error ? err.message : String(err), usage, true)
+    throw new SummaryError(
+      isTerminalProxyFailure(modelError)
+        ? modelError.message
+        : err instanceof Error
+          ? err.message
+          : String(err),
+      usage,
+      true,
+      modelError,
+    )
   }
-  if (failure !== undefined) throw new SummaryError(failure, usage, usageIncomplete)
+  if (failure !== undefined) throw new SummaryError(failure, usage, usageIncomplete, modelError)
   if (!text.trim()) throw new SummaryError("the model returned an empty summary", usage, usageIncomplete)
   if (usage && usageIncomplete) markAccountingIncomplete(usage)
   return {
@@ -340,6 +353,7 @@ export class SummaryError extends Error {
     message: string,
     readonly usage?: Usage,
     readonly usageIncomplete?: boolean,
+    readonly failure?: ModelError,
   ) {
     super(message)
     if (usage && usageIncomplete) markAccountingIncomplete(usage)

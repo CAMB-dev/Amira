@@ -5,6 +5,7 @@ import {
   emptyUsage,
   isNoModel,
   type Message,
+  type ModelError,
   type ModelInfo,
   type ModelRef,
   type Signature,
@@ -37,6 +38,7 @@ import type { ContextManager } from "./context-manager.ts"
 import type { History } from "./history.ts"
 import { modelRef } from "./messages.ts"
 import { compactionFallback } from "./model-call.ts"
+import { isTerminalProxyFailure, latchTransportFailure, transportFailure } from "./transport-failure.ts"
 import type { Emit, Turn } from "./types.ts"
 
 interface CompactorDeps {
@@ -75,6 +77,11 @@ export class Compactor {
 
   constructor(deps: CompactorDeps) {
     this.#deps = deps
+  }
+
+  /** A terminal proxy failure ends this operation; draining descendants also close model admission. */
+  failure(signal: AbortSignal): ModelError | undefined {
+    return this.#deps.execution.modelFailure ?? transportFailure(signal)
   }
 
   modelChanged(): void {
@@ -231,6 +238,8 @@ export class Compactor {
         // with the hosted search, which the dialect adds beside them as in every request.
         if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
         if (signal.aborted || this.#deps.budgetExceeded()) throw new Error("aborted")
+        const failure = this.failure(signal)
+        if (failure) throw new SummaryError(failure.message, undefined, undefined, failure)
         writer = this.#deps.model()
         requested = true
         const r = await this.#deps.ai.compact(
@@ -251,13 +260,19 @@ export class Compactor {
           checkpoint = r.checkpoint
           compacted = input
           checkpointTokens = r.usage.output
-        } else fallback = compactionFallback(r, (notice) => this.#deps.emit(turn, "extension.notice", notice))
+        } else {
+          if (isTerminalProxyFailure(r.failure))
+            throw new SummaryError(r.error, undefined, undefined, r.failure)
+          fallback = compactionFallback(r, (notice) => this.#deps.emit(turn, "extension.notice", notice))
+        }
       }
       writer = this.#deps.options.model ?? this.#deps.model()
       if (summary === undefined) {
         try {
           if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
           if (signal.aborted || this.#deps.budgetExceeded()) throw new Error("aborted")
+          const failure = this.failure(signal)
+          if (failure) throw new SummaryError(failure.message, undefined, undefined, failure)
           if (!supplied) requested = true
           const written = supplied
             ? { summary: supplied }
@@ -372,6 +387,7 @@ export class Compactor {
       })
       return true
     } catch (err) {
+      if (err instanceof SummaryError) latchTransportFailure(signal, err.failure)
       if (usageIncomplete) markAccountingIncomplete(usage)
       if (counted && !recorded) this.#recordCompactionUsage(usage, modelRef(writer), false)
       this.#deps.emit(turn, "compact.failed", {
@@ -425,6 +441,8 @@ export class Compactor {
    * uses it again). Resolves an error message when that was not possible.
    */
   async fillSummaries(turn: Turn | undefined, signal: AbortSignal): Promise<string | undefined> {
+    const failure = this.failure(signal)
+    if (failure) return failure.message
     // Without a model nothing can be read or written; the request fails on its own terms.
     if (isNoModel(this.#deps.model())) return undefined
     for (let i = 0; i < this.#deps.history.messages.length; i++) {
@@ -441,6 +459,8 @@ export class Compactor {
       try {
         if (this.#deps.execution.paused) await this.#deps.execution.wait(signal)
         if (signal.aborted || this.#deps.budgetExceeded()) return undefined
+        const failure = this.failure(signal)
+        if (failure) return failure.message
         written = await summarize(
           this.#deps.ai,
           writer,
@@ -448,7 +468,10 @@ export class Compactor {
           signal,
         )
       } catch (err) {
-        if (err instanceof SummaryError) this.#recordCompactionUsage(err.usage, modelRef(writer), false)
+        if (err instanceof SummaryError) {
+          this.#recordCompactionUsage(err.usage, modelRef(writer), false)
+          latchTransportFailure(signal, err.failure)
+        }
         if (signal.aborted || this.#deps.budgetExceeded()) return undefined
         const why = err instanceof Error ? err.message : String(err)
         return `${target} cannot read the server-side compaction made by ${cp.provider} for ${cp.model}, and writing a text summary for it failed: ${why}`

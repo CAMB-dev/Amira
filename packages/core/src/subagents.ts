@@ -52,6 +52,7 @@ import {
   resultReminder,
   returnResultTool,
 } from "./subagents/structured-result.ts"
+import { abortNetworkDrain, drainNetworkChildren } from "./subagents/transport-drain.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 import { toolTraits } from "./tool-traits.ts"
 
@@ -681,6 +682,7 @@ export class AgentTree {
   abortChild(child: Child, reason: string): void {
     if (!this.#live.has(child.id) || child.abortReason) return
     child.abortReason = reason
+    abortNetworkDrain(this, child, reason)
     scopeAdmission(this).closeParent(child.id)
     if (child.started) {
       child.agent.abort()
@@ -798,6 +800,8 @@ export class AgentTree {
         }
         status = r.reason
         error = r.error
+        if (r.failure?.kind === "network" || child.agent.execution.modelFailure)
+          await drainNetworkChildren(this, child, this.#live.values(), error)
         // A one-shot child whose last reply came in as it was aborted (say, the reply that
         // spent the budget) still finished its task; a persistent one, or one that owed a
         // result it never handed back, was cut short.

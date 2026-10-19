@@ -239,6 +239,8 @@ test("accounting helpers are available only on the declared internal subpaths", 
   ])
   const internal = await import("@amira/ai-shared/accounting")
   expect(Object.keys(internal).sort()).toEqual([
+    "decodeUsageReceipt",
+    "encodeUsageReceipt",
     "hasUnpricedUsage",
     "isUsageAggregate",
     "knownUsageCost",
@@ -249,6 +251,8 @@ test("accounting helpers are available only on the declared internal subpaths", 
   expect(internal.knownUsageCost).toBe(knownUsageCost)
   expect(internal.transferUsageAccounting).toBe(transferUsageAccounting)
   expect(Object.keys(await import("@amira/ai/accounting")).sort()).toEqual([
+    "decodeUsageReceipt",
+    "encodeUsageReceipt",
     "hasUnpricedUsage",
     "isUsageAggregate",
     "knownUsageCost",

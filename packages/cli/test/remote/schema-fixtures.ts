@@ -305,6 +305,19 @@ export const operationFixtures = {
     invalidParams: [{ requestId: "q1", revision: "1" }],
     invalidResults: [{ status: "settled", message: 1 }],
   },
+  "model.open": {
+    params: {
+      callId: "call-1",
+      revision: "binding-1",
+      operation: "stream",
+      request: { value: modelParams.request, usage: [] },
+      resume: false,
+      after: 0,
+    },
+    result: { accepted: true },
+    invalidParams: [{ callId: "call-1" }],
+    invalidResults: [{ accepted: false }],
+  },
   "model.stream": {
     params: modelParams,
     result: { accepted: true },

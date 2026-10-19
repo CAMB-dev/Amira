@@ -176,6 +176,7 @@ export const compactResult = union(
   object({
     ok: values(false),
     error: text,
+    "failure?": modelError,
     usage,
     "usageIncomplete?": bool,
     tried,

@@ -149,7 +149,7 @@ export class RemoteConnection {
     this.usedIds.add(id)
     const channel =
       options.channel ??
-      (op.startsWith("model.") && (op === "model.stream" || op === "model.compact") ? "model" : "control")
+      (op === "model.open" || op === "model.stream" || op === "model.compact" ? "model" : "control")
     return new Promise((resolve, reject) => {
       let sent = false
       const cancel: RemoteCancel = { v: 1, kind: "cancel", channel, id }
@@ -328,7 +328,8 @@ export class RemoteConnection {
       throw new RemoteError("limit_exceeded", "Remote request identity capacity exhausted")
     if (this.active.size >= REMOTE_LIMITS.pendingRequests)
       throw new RemoteError("limit_exceeded", "Too many incoming remote requests")
-    const isModel = request.op === "model.stream" || request.op === "model.compact"
+    const isModel =
+      request.op === "model.open" || request.op === "model.stream" || request.op === "model.compact"
     if (request.channel !== (isModel ? "model" : "control"))
       throw new RemoteError("invalid_frame", "Operation channel mismatch")
     this.inboundIds.add(request.id)

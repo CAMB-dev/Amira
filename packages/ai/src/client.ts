@@ -5,6 +5,7 @@ import type { Dialect, DialectCompactOutcome, DialectContext } from "./dialect.t
 import { BUILTIN_DIALECTS } from "./dialects/index.ts"
 import { modelErrorKind } from "./errors.ts"
 import { fastOption, fastVendor, withFastFallback } from "./fast-mode.ts"
+import { resolveEndpointHeaders } from "./local-credentials.ts"
 import {
   type CompactAttempt,
   CompactionFailures,
@@ -16,6 +17,7 @@ import {
 } from "./native-compaction.ts"
 import type { ProbeEndpoint } from "./probe.ts"
 import { isNoModel, type ProviderConfig, resolveModelInfo } from "./providers.ts"
+import { requestBoundaryFetch } from "./request-boundary.ts"
 import { type RetryOptions, sleep, withRetry } from "./retry.ts"
 import { hasNativeWebSearch } from "./server-tools.ts"
 import {
@@ -57,10 +59,6 @@ export interface AiOptions {
 }
 
 type CredentialSource = "explicit" | "env" | "stored" | "none"
-
-// Probes create another Ai from providerEndpoint; its headers are already resolved, and
-// an environment value may itself contain literal ${...} that must not be expanded again.
-const resolvedHeaderSets = new WeakSet<Record<string, string>>()
 
 export interface Ai {
   /** Resolves "provider/model" (the model id may itself contain slashes). */
@@ -148,7 +146,7 @@ export function createAi(opts: AiOptions = {}): Ai {
     return {
       baseUrl: p.baseUrl,
       ...(apiKey ? { apiKey } : {}),
-      ...(p.headers ? { headers: headersFromEnv(p.headers, env) } : {}),
+      ...(p.headers ? { headers: resolveEndpointHeaders(p.headers, env) } : {}),
     }
   }
   const hasKey = (p: ProviderConfig) =>
@@ -176,7 +174,7 @@ export function createAi(opts: AiOptions = {}): Ai {
     return {
       endpoint,
       signal,
-      fetch: doFetch,
+      fetch: requestBoundaryFetch(doFetch),
       ...(opts.userAgent !== undefined ? { userAgent: opts.userAgent } : {}),
       ...(p.compat ? { compat: p.compat } : {}),
     }
@@ -498,24 +496,6 @@ export function createAi(opts: AiOptions = {}): Ai {
     },
     removeProvider: (id) => void providers.delete(id),
   }
-}
-
-function headersFromEnv(
-  headers: Record<string, string>,
-  env: Record<string, string | undefined>,
-): Record<string, string> {
-  if (resolvedHeaderSets.has(headers)) return headers
-  const resolved = Object.fromEntries(
-    Object.entries(headers).map(([name, value]) => [
-      name,
-      value.replace(
-        /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
-        (_match, variable: string, fallback?: string) => env[variable] || fallback || "",
-      ),
-    ]),
-  )
-  resolvedHeaderSets.add(resolved)
-  return resolved
 }
 
 function keyFromEnv(p: ProviderConfig, env: Record<string, string | undefined>): string | undefined {

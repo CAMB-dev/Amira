@@ -1,16 +1,18 @@
 import type { UsageCounts } from "./index.ts"
 
-interface UsageAccounting {
+export interface UsageReceipt {
   readonly aggregate: boolean
-  readonly knownCost: number | undefined
+  readonly knownCost?: number
   readonly hasReportedCost: boolean
-  readonly knownSearchCost: number | undefined
+  readonly knownSearchCost?: number
   readonly unpricedSearchRequests: number
   readonly unpricedTokens: number
   readonly unknownContributions: number
   readonly unpricedContributions: number
   readonly unreportedContributions: number
 }
+
+type UsageAccounting = UsageReceipt
 
 interface StoredAccounting extends UsageAccounting {
   readonly visibleCost: number | undefined
@@ -108,6 +110,48 @@ function retain(usage: UsageCounts, state: UsageAccounting): void {
 
 function subtotal(a: number | undefined, b: number | undefined): number | undefined {
   return a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0)
+}
+
+/** Host-only wire sidecar. Public Usage values remain ordinary JSON objects. */
+export function encodeUsageReceipt(usage: UsageCounts): UsageReceipt {
+  const state = readAccounting(usage)
+  return {
+    aggregate: state.aggregate,
+    ...(state.knownCost !== undefined ? { knownCost: state.knownCost } : {}),
+    hasReportedCost: state.hasReportedCost,
+    ...(state.knownSearchCost !== undefined ? { knownSearchCost: state.knownSearchCost } : {}),
+    unpricedSearchRequests: state.unpricedSearchRequests,
+    unpricedTokens: state.unpricedTokens,
+    unknownContributions: state.unknownContributions,
+    unpricedContributions: state.unpricedContributions,
+    unreportedContributions: state.unreportedContributions,
+  }
+}
+
+/** Strictly restore private accounting after decoding the corresponding visible Usage. */
+export function decodeUsageReceipt(usage: UsageCounts, value: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid usage receipt")
+  const record = value as Record<string, unknown>
+  const booleans = ["aggregate", "hasReportedCost"]
+  const optional = ["knownCost", "knownSearchCost"]
+  const numbers = [
+    "unpricedSearchRequests",
+    "unpricedTokens",
+    "unknownContributions",
+    "unpricedContributions",
+    "unreportedContributions",
+  ]
+  if (
+    Object.keys(record).some((key) => ![...booleans, ...optional, ...numbers].includes(key)) ||
+    booleans.some((key) => typeof record[key] !== "boolean") ||
+    numbers.some((key) => typeof record[key] !== "number" || !Number.isFinite(record[key])) ||
+    optional.some(
+      (key) =>
+        record[key] !== undefined && (typeof record[key] !== "number" || !Number.isFinite(record[key])),
+    )
+  )
+    throw new Error("Invalid usage receipt")
+  retain(usage, record as unknown as UsageReceipt)
 }
 
 /** Internal to addUsage: retain known subtotals independently of displayed prices. */

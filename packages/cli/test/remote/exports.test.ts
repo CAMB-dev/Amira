@@ -4,9 +4,25 @@ import type { FrontendOperations } from "@amira/core"
 import * as codec from "../../src/remote/codec.ts"
 import * as connection from "../../src/remote/connection.ts"
 import * as errors from "../../src/remote/errors.ts"
+import * as broker from "../../src/remote/model-broker.ts"
+import * as modelCodec from "../../src/remote/model-codec.ts"
+import * as numericForms from "../../src/remote/model-numeric-forms.ts"
+import * as observableStrings from "../../src/remote/model-observable-strings.ts"
+import * as outboundFilter from "../../src/remote/model-outbound-filter.ts"
+import * as modelPeer from "../../src/remote/model-peer.ts"
+import * as redaction from "../../src/remote/model-redaction.ts"
+import * as retention from "../../src/remote/model-retention.ts"
+import * as modelSchema from "../../src/remote/model-schema.ts"
+import * as stringHistory from "../../src/remote/model-string-history.ts"
+import * as stringMasks from "../../src/remote/model-string-masks.ts"
 import * as protocol from "../../src/remote/protocol.ts"
+import * as bindings from "../../src/remote/provider-bindings.ts"
+import * as proxy from "../../src/remote/proxy-ai.ts"
+import * as gate from "../../src/remote/proxy-gate.ts"
 import * as replay from "../../src/remote/replay.ts"
 import * as workspaceSchema from "../../src/remote/schema/workspace.ts"
+import * as secretPatterns from "../../src/remote/secret-patterns.ts"
+import * as secretVariants from "../../src/remote/secret-variants.ts"
 import * as writer from "../../src/remote/writer.ts"
 import * as schema from "../../src/remote-schema.ts"
 import * as attachments from "../../src/server/attachments.ts"
@@ -53,6 +69,38 @@ test("remote host modules keep an explicit export surface independent of legacy 
     "prepareRemoteMessage",
     "serializeRemoteMessage",
   ])
+  expect(Object.keys(proxy).sort()).toEqual(["ProxyAi", "createProxyAi"])
+  expect(Object.keys(gate).sort()).toEqual(["PROXY_RECONNECT_TIMEOUT_MS", "ProxyGate", "proxyFailure"])
+  expect(Object.keys(modelPeer)).toEqual(["ModelBrokerPeer"])
+  expect(Object.keys(retention)).toEqual(["ModelRetention"])
+  expect(Object.keys(broker)).toEqual(["createModelBroker"])
+  expect(Object.keys(bindings).sort()).toEqual([
+    "ModelBindingError",
+    "ProviderBindings",
+    "createProviderBindings",
+  ])
+  expect(Object.keys(modelCodec).sort()).toEqual([
+    "ModelOutboundError",
+    "assertModelOutbound",
+    "copyModelInfo",
+    "decodeCompactReceipt",
+    "decodeCompactResult",
+    "decodeModelEvent",
+    "decodeModelRequest",
+    "encodeCompactReceipt",
+    "encodeCompactResult",
+    "encodeModelEvent",
+    "encodeModelRequest",
+  ])
+  expect(Object.keys(modelSchema).sort()).toEqual(["modelValueSchema", "validateModelValue"])
+  expect(Object.keys(outboundFilter)).toEqual(["ModelOutboundFilter"])
+  expect(Object.keys(observableStrings)).toEqual(["modelStringViews"])
+  expect(Object.keys(numericForms)).toEqual(["modelNumericForms"])
+  expect(Object.keys(stringHistory)).toEqual(["ModelStringHistory"])
+  expect(Object.keys(stringMasks).sort()).toEqual(["maskModelFragments", "redactModelValue"])
+  expect(Object.keys(secretVariants)).toEqual(["secretVariants"])
+  expect(Object.keys(secretPatterns)).toEqual(["secretPatterns"])
+  expect(Object.keys(redaction).sort()).toEqual(["ModelStreamRedactor", "redactModelValue"])
   expect(Object.keys(connection)).toEqual(["RemoteConnection"])
   expect(Object.keys(errors).sort()).toEqual(["RemoteError", "RemoteReplyError"])
   expect(Object.keys(writer)).toEqual(["RemoteWriter"])

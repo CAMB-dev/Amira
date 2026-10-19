@@ -5,6 +5,7 @@ import type { HeldInput, HoldState } from "../../../core/src/agent/held-input.ts
 import type { NoticeInputSnapshot } from "../../../core/src/agent/notice-input.ts"
 import type { NoticeRetry } from "../../../core/src/agent/notice-retry.ts"
 import type {
+  ModelFramePayload,
   RemoteFrame,
   RemoteOperation,
   RemoteRequest,
@@ -97,8 +98,12 @@ type EventFrame = Omit<Extract<RemoteFrame, { kind: "event" }>, "payload"> & {
     | { kind: "hold"; hold: HoldState; sessionId: string; sessionGeneration: number }
 }
 type ModelEvent = Omit<Extract<RemoteFrame, { kind: "model.event" }>, "event"> & { event: StreamEvent }
+type ModelFrame = Omit<Extract<RemoteFrame, { kind: "model.frame" }>, "payload"> & {
+  payload: ModelFramePayload
+}
 type Frames =
-  | Exclude<RemoteFrame, { kind: "request" | "response" | "event" | "model.event" | "reset" }>
+  | ModelFrame
+  | Exclude<RemoteFrame, { kind: "request" | "response" | "event" | "model.event" | "model.frame" | "reset" }>
   | ResetFrame
   | Requests
   | Responses

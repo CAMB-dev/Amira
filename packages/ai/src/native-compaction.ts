@@ -1,5 +1,5 @@
 import type { CompactionLayout } from "./dialect.ts"
-import type { Signature, Usage } from "./types.ts"
+import type { ModelError, Signature, Usage } from "./types.ts"
 
 /**
  * Ways of server-side compaction found not to work, by endpoint key ("provider host model")
@@ -62,6 +62,8 @@ export type CompactResult =
   | {
       ok: false
       error: string
+      /** Structured failure, including terminal proxy transport errors that must not fall back. */
+      failure?: ModelError
       usage: Usage
       usageIncomplete?: boolean
       tried: CompactAttempt[]

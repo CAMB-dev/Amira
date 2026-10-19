@@ -1,8 +1,15 @@
 import type { Ai } from "@amira/ai"
+import type { ProxyAi } from "./remote/proxy-ai.ts"
 import { version } from "./version.ts"
 
-/** Host launch seam: AI routing is explicit; proxy/remote-key selection arrives in B08. */
-export async function createServerRuntime(options: { cwd: string; ai: Ai }) {
+export type ServerAiRoute = { mode: "proxy"; ai: ProxyAi } | { mode: "remote-key"; ai: Ai }
+
+/** Explicit routing only. A missing local broker never selects remote credentials. */
+export async function createServerRuntime(
+  options: { cwd: string } & ({ ai: Ai } | { route: ServerAiRoute }),
+) {
+  const ai = "route" in options ? options.route.ai : options.ai
+  const modelProxy = "route" in options && options.route.mode === "proxy" ? options.route.ai : undefined
   const [
     { amiraHome, SessionStore },
     { parseCliArgs },
@@ -28,7 +35,8 @@ export async function createServerRuntime(options: { cwd: string; ai: Ai }) {
   const plan = await planPackages({ cwd: options.cwd, home, settings })
   return createWorkspaceRuntime({
     cwd: options.cwd,
-    ai: options.ai,
+    ai,
+    modelProxy,
     model: settings.model,
     settings,
     settingsLayers: config.settingsLayers,

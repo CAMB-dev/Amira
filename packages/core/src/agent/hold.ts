@@ -3,6 +3,7 @@ import type { UserMessage } from "@amira/ai"
 import { freezeSnapshot } from "../frontend/json.ts"
 import { addHeldInput, clearHeldInput, type HeldInput, publishHoldState } from "./held-input.ts"
 import type { NoticeInbox } from "./notices.ts"
+import { transportFailure } from "./transport-failure.ts"
 import type { TurnState } from "./turn-runner.ts"
 import {
   type AfterCompaction,
@@ -64,6 +65,7 @@ export class SessionHold {
       this.#id = undefined
       publishHoldState(this)
       const noticed = this.#deps.inbox.takeNoticedDuringHold()
+      if (transportFailure(abort.signal)) this.#deps.inbox.suspend()
       // Held input starts one turn; notices join it, or wake their own turn unless aborted.
       this.#start(abort.signal.aborted, what)
       if (noticed && !abort.signal.aborted) this.#deps.inbox.wakeQuietly()
