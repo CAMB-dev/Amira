@@ -1,3 +1,21 @@
+import type { CompactReceipt, CompactResult, ModelRequest, StreamEvent, Usage } from "@amira/ai"
+import type { ModelWireValue } from "./model-codec.ts"
+
+export type ModelOpenParams = {
+  callId: string
+  revision: string
+  operation: "stream" | "compact"
+  request: ModelWireValue<ModelRequest>
+  resume: boolean
+  after: number
+}
+export type ModelFramePayload =
+  | { kind: "stream"; data: ModelWireValue<StreamEvent> }
+  | { kind: "compact"; data: ModelWireValue<CompactResult> }
+  | { kind: "progress" }
+  | { kind: "receipt"; data: ModelWireValue<Omit<CompactReceipt, "usage"> & { usage?: Usage }> }
+  | { kind: "failure"; code: string }
+
 export const REMOTE_PROTOCOL_VERSION = 1
 
 export type RemoteJson = null | boolean | number | string | RemoteJson[] | { [key: string]: RemoteJson }
@@ -48,6 +66,7 @@ export const REMOTE_OPERATIONS = [
   "form.cancel",
   "model.stream",
   "model.compact",
+  "model.open",
 ] as const
 export type RemoteOperation = (typeof REMOTE_OPERATIONS)[number]
 
@@ -151,11 +170,21 @@ export type RemoteMessage =
   | RemoteReset
   | { v: 1; kind: "event"; daemonEpoch: string; seq: number; replay?: boolean; payload: RemoteJson }
   | { v: 1; kind: "model.event"; callId: string; seq: number; event: RemoteJson }
+  | {
+      v: 1
+      kind: "model.frame"
+      daemonEpoch: string
+      controllerGeneration: number
+      sessionGeneration: number
+      callId: string
+      seq: number
+      payload: RemoteJson
+    }
   | { v: 1; kind: "ack"; channel: RemoteChannel; id: string; seq: number }
   | { v: 1; kind: "ping" | "pong"; id: string }
 export type RemoteFrame = RemoteMessage | RemoteChunk
 
 export function remoteChannel(frame: RemoteFrame): RemoteChannel {
   if ("channel" in frame) return frame.channel
-  return frame.kind === "model.event" ? "model" : "control"
+  return frame.kind === "model.event" || frame.kind === "model.frame" ? "model" : "control"
 }

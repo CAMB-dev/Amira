@@ -1,6 +1,7 @@
 import type { CompactResult, ModelRequest } from "@amira/ai"
 import type { UiAnswer } from "@amira/api"
 import type { FrontendOperations } from "@amira/core"
+import type { ModelWireValue } from "../../src/remote/model-codec.ts"
 import type { RemoteOperation } from "../../src/remote/protocol.ts"
 import type { operationSchemas } from "../../src/remote/schema/operations.ts"
 import type { ServerOperations } from "../../src/server/operations.ts"
@@ -13,6 +14,17 @@ export type WireOperations = Omit<FrontendOperations & ServerOperations, "ui.res
       value: UiAnswer[Exclude<keyof UiAnswer, "form">] | null
     }
     result: ServerOperations["ui.respond"]["result"]
+  }
+  "model.open": {
+    params: {
+      callId: string
+      revision: string
+      operation: "stream" | "compact"
+      request: ModelWireValue<ModelRequest>
+      resume: boolean
+      after: number
+    }
+    result: { accepted: true }
   }
   "model.stream": { params: { request: ModelRequest }; result: { accepted: true } }
   "model.compact": { params: { request: ModelRequest }; result: CompactResult }

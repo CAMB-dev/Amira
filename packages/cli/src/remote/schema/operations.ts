@@ -25,6 +25,7 @@ import {
   transcript,
 } from "./frontend.ts"
 import { compactResult, modelRequest, reasoning, userMessage } from "./messages.ts"
+import { modelOpen } from "./model-wire.ts"
 
 const empty = object({})
 const command = object({
@@ -107,6 +108,7 @@ export const operationSchemas = {
     params: object({ requestId: text, "editor?": text, "revision?": integer }),
     result: uiAck,
   },
+  "model.open": { params: modelOpen, result: object({ accepted: values(true) }) },
   "model.stream": { params: object({ request: modelRequest }), result: object({ accepted: values(true) }) },
   "model.compact": { params: object({ request: modelRequest }), result: compactResult },
 } satisfies Record<

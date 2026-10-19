@@ -104,6 +104,7 @@ export class TurnRunner {
     const user = typeof input === "string" ? userMessage(input) : input
     // Whatever starts now takes the held notices along: no retry is needed any more.
     this.#deps.inbox.cancelRetry()
+    this.#deps.inbox.resume()
     if (user.display?.origin) turn.unanswered = true
 
     let steps = 0
@@ -124,6 +125,11 @@ export class TurnRunner {
       while (true) {
         if (abort.signal.aborted || this.#deps.budgetExceeded()) {
           result = { reason: "aborted", steps }
+          break
+        }
+        const terminal = this.#terminalFailure(turn, steps)
+        if (terminal) {
+          result = terminal
           break
         }
         if (this.#deps.maxSteps > 0 && steps >= this.#deps.maxSteps) {
@@ -153,6 +159,11 @@ export class TurnRunner {
           result = { reason: "aborted", steps }
           break
         }
+        const compactFailure = this.#terminalFailure(turn, steps)
+        if (compactFailure) {
+          result = compactFailure
+          break
+        }
         steps++
         this.#injectSteering(turn)
         const reply = await this.#callModel(turn)
@@ -163,6 +174,11 @@ export class TurnRunner {
           (reply.kind === "error" && this.#deps.budgetExceeded())
         ) {
           result = { reason: "aborted", steps }
+          break
+        }
+        const modelFailure = this.#terminalFailure(turn, steps)
+        if (modelFailure) {
+          result = modelFailure
           break
         }
         if (reply.kind === "error") {
@@ -176,6 +192,11 @@ export class TurnRunner {
             overflowRetried = true
             this.#deps.compactor.noteWindowGuess(turn, true)
             overflowCompacted = await this.#deps.compactor.compact("overflow", abort.signal, turn)
+            const failure = this.#terminalFailure(turn, steps)
+            if (failure && !abort.signal.aborted) {
+              result = failure
+              break
+            }
             if (overflowCompacted === true) continue
           }
           const failure = reply.model
@@ -212,6 +233,11 @@ export class TurnRunner {
         if (this.#deps.execution.paused) await this.#deps.execution.wait(abort.signal)
         if (abort.signal.aborted || this.#deps.budgetExceeded()) {
           result = { reason: "aborted", steps }
+          break
+        }
+        const toolFailure = this.#terminalFailure(turn, steps)
+        if (toolFailure) {
+          result = toolFailure
           break
         }
         if (this.#deps.endTurn()) {
@@ -253,7 +279,8 @@ export class TurnRunner {
       })
       this.#deps.setStatus(turn, "idle")
       // A success resets the notice retries; after an interrupt the user decides when to go on.
-      if (result.reason !== "error") this.#deps.inbox.resetRetries()
+      if (result.reason === "error" && this.#deps.compactor.failure(turn.signal)) this.#deps.inbox.suspend()
+      else if (result.reason !== "error") this.#deps.inbox.resetRetries()
       else if (!this.#deps.disposed() && (turn.unanswered || this.#deps.inbox.waiting))
         this.#deps.inbox.scheduleRetry(result.error)
       if (nextTurnId && !this.#deps.disposed()) {
@@ -261,6 +288,17 @@ export class TurnRunner {
       }
     }
     return result
+  }
+
+  #terminalFailure(turn: Turn, steps: number): TurnResult | undefined {
+    const error = this.#deps.compactor.failure(turn.signal)
+    if (!error) return undefined
+    return {
+      reason: "error",
+      steps,
+      error: error.message,
+      failure: describeModelError(error, { provider: this.#deps.model().provider }),
+    }
   }
 
   #injectSteering(turn: Turn) {
@@ -282,6 +320,8 @@ export class TurnRunner {
     if (turn.signal.aborted || this.#deps.budgetExceeded()) return { kind: "aborted" }
     const unreadable = await this.#deps.compactor.fillSummaries(turn, turn.signal)
     if (turn.signal.aborted || this.#deps.budgetExceeded()) return { kind: "aborted" }
+    const failure = this.#deps.compactor.failure(turn.signal)
+    if (failure) return { kind: "error", error: failure.message, model: failure }
     if (unreadable) return { kind: "error", error: unreadable }
     let ctx = await this.#deps.buildContext(turn.signal)
     for (let rebuilds = 0; ; rebuilds++) {
@@ -298,6 +338,8 @@ export class TurnRunner {
     }
     this.#deps.checkRestoredTools()
     if (turn.signal.aborted || this.#deps.budgetExceeded()) return { kind: "aborted" }
+    const admissionFailure = this.#deps.compactor.failure(turn.signal)
+    if (admissionFailure) return { kind: "error", error: admissionFailure.message, model: admissionFailure }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
     const requestModelRef = modelRef(this.#deps.model())

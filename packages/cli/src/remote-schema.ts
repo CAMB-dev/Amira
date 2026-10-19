@@ -23,6 +23,7 @@ import { uiRequest } from "./remote/schema/forms.ts"
 import { serverEffect, snapshot, update } from "./remote/schema/frontend.ts"
 import { copyRemoteJson } from "./remote/schema/json.ts"
 import { streamEvent, userMessage } from "./remote/schema/messages.ts"
+import { modelFramePayload } from "./remote/schema/model-wire.ts"
 import { operationSchemas } from "./remote/schema/operations.ts"
 import {
   backgroundJob,
@@ -132,6 +133,14 @@ export const REMOTE_FRAME_SCHEMAS = {
   }),
   event: base("event", { daemonEpoch: id, seq: integer, "replay?": bool, payload: eventPayload }),
   "model.event": base("model.event", { callId: id, seq: integer, event: streamEvent }),
+  "model.frame": base("model.frame", {
+    daemonEpoch: id,
+    controllerGeneration: integer,
+    sessionGeneration: integer,
+    callId: id,
+    seq: integer,
+    payload: modelFramePayload,
+  }),
   ack: base("ack", { ...reply, seq: integer }),
   ping: base("ping", { id }),
   pong: base("pong", { id }),

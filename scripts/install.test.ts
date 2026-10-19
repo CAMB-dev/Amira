@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync } from "node:crypto"
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { SPAWN_TEST_TIMEOUT_MS } from "./spawn-test.ts"
 import { stageInstallers } from "./stage-installers.ts"
 
 const temporary: string[] = []
@@ -174,6 +175,7 @@ for (const failure of [undefined, "sha", "size", "version", "lock"] as const) {
         await server.stop(true)
       }
     },
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }
 
@@ -304,5 +306,6 @@ for (const failure of [
         await server.stop(true)
       }
     },
+    SPAWN_TEST_TIMEOUT_MS,
   )
 }

@@ -197,6 +197,7 @@ test("parallel tool calls reach the transcript in call order, whichever finishes
   )
   await Bun.sleep(30)
   expect(screen.scrollback.join("\n")).not.toContain("fast result")
+  await waitFor(() => typeof release === "function", "slow tool execution started")
   release()
   await shows("done")
   await idle()
@@ -461,6 +462,10 @@ test("while tools run the activity line names them and keeps its spinner and tim
   )
   // The rows keep their own spinners.
   expect(live()).toMatch(new RegExp(`^${SPINNER} slowa +${ELAPSED} {2}${TIMESTAMP}$`, "m"))
+  await waitFor(
+    () => typeof release.slowa === "function" && typeof release.slowb === "function",
+    "both tool executions started",
+  )
   release.slowb!()
   await waitFor(() => activity("1 tool running", false).test(live()), "one tool left")
   release.slowa!()
@@ -885,6 +890,7 @@ test("running tools show as lines with their arguments and are replaced by the r
       new RegExp(`^${SPINNER} slow bun test --watch +${ELAPSED} {2}${TIMESTAMP}$`, "m").test(live()),
     "running line",
   )
+  await waitFor(() => typeof release === "function", "tool execution started")
   release()
   await shows("└ slow bun test --watch  ✓ passed")
   await idle()

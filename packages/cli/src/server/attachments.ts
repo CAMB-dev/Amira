@@ -172,7 +172,12 @@ class WorkspaceAttachments {
             controllerToken: lease.controllerToken,
             sessionGeneration: attachment.identity!.sessionGeneration,
             limits: REMOTE_PEER_LIMITS,
-            capabilities: ["replay", "controller", "mutation.ledger"],
+            capabilities: [
+              "replay",
+              "controller",
+              "mutation.ledger",
+              ...(this.runtime.modelProxy ? ["model.proxy"] : []),
+            ],
           }
         },
       },
@@ -181,7 +186,7 @@ class WorkspaceAttachments {
         if (request.controllerGeneration !== lease!.controllerGeneration)
           throw new RemoteReplyError("stale_controller", "Stale controller generation")
         if (!attachment) throw new RemoteError("disconnected", "No workspace frontend")
-        if (request.op === "model.stream" || request.op === "model.compact")
+        if (request.op === "model.open" || request.op === "model.stream" || request.op === "model.compact")
           throw new RemoteError("unsupported_operation", "Model routing is not configured")
         if (request.daemonEpoch !== this.runtime.journal.daemonEpoch)
           throw new RemoteReplyError("outcome_unknown", "The operation belongs to another daemon epoch")
@@ -230,6 +235,10 @@ class WorkspaceAttachments {
       },
       onMessage: (message) => {
         current()
+        if (message.kind === "model.frame") {
+          this.runtime.modelProxy?.receive(connection, message)
+          return
+        }
         if (message.kind === "pong" && message.id === "heartbeat") lastPong = Date.now()
         if (message.kind !== "ack") return
         if (
@@ -243,8 +252,10 @@ class WorkspaceAttachments {
       },
     })
     void connection.ready
-      .then(() => {
-        if (ended || !this.#heartbeatMs) return
+      .then((welcome) => {
+        if (ended) return
+        this.runtime.modelProxy?.attach(connection, welcome, () => attachment!.identity!.sessionGeneration)
+        if (!this.#heartbeatMs) return
         lastPong = Date.now()
         heartbeat = setInterval(() => {
           if (Date.now() - lastPong > this.#heartbeatMs * 3) connection.close()

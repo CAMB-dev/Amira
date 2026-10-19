@@ -44,6 +44,10 @@ export const googleGemini: Dialect = {
   stream(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
     const { apiKey, baseUrl } = ctx.endpoint
     const model = req.model.id.replace(/^models\//, "")
+    // Model resource segments are data, not URL syntax (including encoded dot segments).
+    if (model.split("/").some((part) => !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(part))) {
+      throw new Error("Invalid Gemini model resource")
+    }
     const body = geminiBody(req)
     const config = body.generationConfig as { thinkingConfig?: { includeThoughts?: boolean } } | undefined
     return postStream({

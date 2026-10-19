@@ -61,6 +61,16 @@ const frames: RemoteMessage[] = [
   { v: 1, kind: "cancel", channel: "model", id: "call-1" },
   event("😀世界"),
   { v: 1, kind: "model.event", callId: "call-1", seq: 1, event: { type: "text.delta", text: "hi" } },
+  {
+    v: 1,
+    kind: "model.frame",
+    daemonEpoch: "epoch-1",
+    controllerGeneration: 1,
+    sessionGeneration: 1,
+    callId: "call-1",
+    seq: 1,
+    payload: { kind: "stream", data: { value: { type: "text.delta", text: "hi" }, usage: [] } },
+  },
   { v: 1, kind: "ack", channel: "model", id: "call-1", seq: 3 },
   { v: 1, kind: "ping", id: "p1" },
   { v: 1, kind: "pong", id: "p1" },
@@ -76,7 +86,7 @@ describe("remote codecs", () => {
     }
     decoder.finish()
     expect(result).toEqual(frames)
-    expect(remoteSchema().oneOf).toHaveLength(13)
+    expect(remoteSchema().oneOf).toHaveLength(14)
   })
 
   test("strict shapes, finite JSON and generation/ID validation", () => {

@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./accounting": "./src/accounting.ts"
+    "./accounting": "./src/accounting.ts",
+    "./local": "./src/local.ts"
   },
   "dependencies": {
     "@amira/ai-shared": "workspace:*"

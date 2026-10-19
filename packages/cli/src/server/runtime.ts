@@ -13,6 +13,7 @@ import {
 import { freezeSnapshot, frontendJson } from "../../../core/src/frontend/json.ts"
 import { createCommandHost } from "../control.ts"
 import type { RemoteJson } from "../remote/protocol.ts"
+import type { ProxyAi } from "../remote/proxy-ai.ts"
 import { publicUpdateError } from "../remote/public-errors.ts"
 import {
   copyRemoteJson,
@@ -108,6 +109,7 @@ export interface WorkspaceAttachment extends AgentPort {
 }
 
 export interface WorkspaceRuntime {
+  readonly modelProxy?: Pick<ProxyAi, "attach" | "receive" | "close">
   /** Host-only replay authority; transport subscribers must use bounded queues. */
   readonly journal: ReplayJournal
   readonly signal: AbortSignal
@@ -122,6 +124,7 @@ export type WorkspaceRuntimeOptions = Omit<
   "ai" | "executionOnly" | "loadThemes" | "noBuiltins" | "extensions"
 > & {
   ai: Ai
+  modelProxy?: Pick<ProxyAi, "attach" | "receive" | "close">
   extensions?: string[]
   noBuiltins?: boolean
 }
@@ -188,6 +191,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
   }
 
   return {
+    modelProxy: opts.modelProxy,
     journal: capture.journal,
     signal: lifetime.signal,
     workspaceSnapshot: () => capture.snapshot(),
@@ -326,6 +330,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
           await active?.detach()
           session.host.ui.cancelAll()
           commands.agent.abort()
+          opts.modelProxy?.close()
           // Selection commit detaches its cancellation listener; drain before disposing the winner.
           await Promise.allSettled([...inflight])
           await port.detach()
