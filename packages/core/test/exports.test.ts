@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import {
+  type ArtifactStoreOptions,
   type FormEditor,
   type LocalConversationBinding,
   type SessionEntry,
@@ -232,6 +233,21 @@ test("historical session inspection is an explicit structural-only open option",
   expect(options).toMatchInlineSnapshot(`
     {
       "historical": true,
+    }
+  `)
+})
+
+test("artifact stores require an independent trusted storage root", () => {
+  const options: ArtifactStoreOptions = {
+    dir: "/sessions/s.assets/outputs",
+    storageRoot: "/sessions",
+    sessionId: "s",
+  }
+  expect(options).toMatchInlineSnapshot(`
+    {
+      "dir": "/sessions/s.assets/outputs",
+      "sessionId": "s",
+      "storageRoot": "/sessions",
     }
   `)
 })

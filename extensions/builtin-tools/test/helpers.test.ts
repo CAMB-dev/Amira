@@ -1,8 +1,9 @@
 import { afterAll, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve, sep } from "node:path"
+import { ArtifactStore } from "../../../packages/core/src/artifacts.ts"
 import { isBinary, walkFiles } from "../src/files.ts"
 import { displayPath, fileKey, OUTSIDE_WORKING_DIRECTORY, resolvePath } from "../src/paths.ts"
 import { keepOutput, TempOutputStore } from "../src/truncate.ts"
@@ -173,6 +174,41 @@ test("truncates without a file when the output directory is unwritable", async (
   expect(r.text.split("\n")[1]).toBe("line 0")
   expect(r.text).toEndWith("line 1999")
 })
+
+for (const level of ["assets", "outputs"]) {
+  test(`keepOutput rejects an ${level} directory alias outside session storage`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "amira-keep-alias-"))
+    dirs.push(root)
+    const storageRoot = join(root, "sessions")
+    const outside = join(root, "sessions-outside")
+    const assets = join(storageRoot, "session.assets")
+    const outputs = join(assets, "outputs")
+    await mkdir(storageRoot)
+    await mkdir(outside)
+    if (level === "outputs") await mkdir(assets)
+    await symlink(outside, level === "assets" ? assets : outputs, isWindows ? "junction" : "dir")
+    const store = new ArtifactStore({
+      dir: outputs,
+      storageRoot,
+      sessionId: "session",
+      limits: { saveAbove: 100, previewChars: 100 },
+    })
+    expect(store.used).toBe(0)
+    const full = Array.from({ length: 2000 }, (_, i) => `line ${i}`).join("\n")
+    const r = await keepOutput(ctx, { text: full, tool: "t", store })
+    expect(r).not.toHaveProperty("artifact")
+    expect(r.text).toStartWith("[Output too long: ")
+    expect(r.text).toContain("escapes session storage")
+    expect(r.text).toContain("could not be saved")
+    expect(r.text).not.toContain("saved as artifact")
+    expect(r.text).not.toMatch(/\ba_[0-9a-f]+\b/)
+    expect(r.text.split("\n")[1]).toBe("line 0")
+    expect(r.text).toEndWith("line 1999")
+    expect(r.text.length).toBeLessThan(full.length)
+    expect(await readdir(outside)).toEqual([])
+    expect(store.used).toBe(0)
+  })
+}
 
 test("deletes saved outputs older than a day the first time it saves", async () => {
   const out = await mkdtemp(join(tmpdir(), "amira-sweep-"))

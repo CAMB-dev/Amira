@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { mkdir, rename, rm, writeFile } from "node:fs/promises"
+import { rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
@@ -15,6 +15,7 @@ import {
   type OutputStore,
   type SaveOutputOptions,
 } from "@amira/api"
+import { sessionOutputDir } from "@amira/api/internal/session-output-dir"
 
 /** Megabytes of artifacts a session keeps by default (settings context.outputs.quotaMB). */
 export { DEFAULT_ARTIFACT_QUOTA_MB } from "@amira/api"
@@ -27,6 +28,8 @@ export type StoredArtifact = ArtifactInfo
 export interface ArtifactStoreOptions {
   /** Where the artifacts go: `<session>.assets/outputs` beside a session file (artifactDir). */
   dir: string
+  /** Trusted session-storage root, independent of any .assets or outputs directory alias. */
+  storageRoot: string
   sessionId: string
   limits?: Partial<OutputLimits>
   /** Most bytes of artifact text the session keeps. */
@@ -61,6 +64,7 @@ export class ArtifactStore implements OutputStore {
   readonly sessionId: string
   readonly limits: OutputLimits
   readonly quotaBytes: number
+  readonly #storageRoot: string
   readonly #parent: OutputStore | undefined
   readonly #readOnly: boolean
   readonly #known = new Map<string, StoredArtifact>()
@@ -69,6 +73,7 @@ export class ArtifactStore implements OutputStore {
 
   constructor(opts: ArtifactStoreOptions) {
     this.dir = opts.dir
+    this.#storageRoot = opts.storageRoot
     this.sessionId = opts.sessionId
     this.limits = {
       saveAbove: opts.limits?.saveAbove ?? DEFAULT_SAVE_ABOVE,
@@ -150,8 +155,9 @@ export class ArtifactStore implements OutputStore {
         `this session's artifacts reached their ${mb} MB quota (context.outputs.quotaMB); /prune frees space`,
       )
     }
+    const dir = await sessionOutputDir(this.dir, this.#storageRoot)
     const id = `a_${randomBytes(5).toString("hex")}`
-    const file = path.join(this.dir, `${id}.txt`)
+    const file = path.join(dir, `${id}.txt`)
     const info: StoredArtifact = {
       id,
       path: file,
@@ -168,10 +174,9 @@ export class ArtifactStore implements OutputStore {
     // The text first, under a temporary name: an artifact is only ever found complete.
     const tmp = `${file}.tmp`
     try {
-      await mkdir(this.dir, { recursive: true })
       await writeFile(tmp, text)
       await rename(tmp, file)
-      await writeFile(path.join(this.dir, `${id}.json`), JSON.stringify(info))
+      await writeFile(path.join(dir, `${id}.json`), JSON.stringify(info))
     } catch (err) {
       await rm(tmp, { force: true }).catch(() => {})
       await rm(file, { force: true }).catch(() => {})
@@ -198,13 +203,15 @@ export class ArtifactStore implements OutputStore {
     this.#scan()
     let removed = 0
     let bytes = 0
+    let dir: string | undefined
     for (const id of ids) {
       const info = this.#known.get(id)
       if (!info || info.pruned) continue
+      dir ??= await sessionOutputDir(this.dir, this.#storageRoot)
       // Marked first: if deleting fails, it reads as pruned rather than lost.
       const marked: StoredArtifact = { ...info, pruned: new Date().toISOString() }
-      await writeFile(path.join(this.dir, `${id}.json`), JSON.stringify(marked))
-      await rm(path.join(this.dir, `${id}.txt`), { force: true })
+      await writeFile(path.join(dir, `${id}.json`), JSON.stringify(marked))
+      await rm(path.join(dir, `${id}.txt`), { force: true })
       this.#known.set(id, marked)
       this.#used -= info.bytes
       bytes += info.bytes

@@ -73,6 +73,10 @@ const internalApiSubpathConsumers = new Map<string, ReadonlySet<string>>([
     ]),
   ],
   [
+    "@amira/api/internal/session-output-dir",
+    new Set(["packages/core/src/artifacts.ts", "extensions/web/src/binary.ts"]),
+  ],
+  [
     "@amira/api/internal/subagent-transcript",
     new Set(["extensions/agent/src/agents-command.ts", "extensions/agent/src/subagent-view.ts"]),
   ],

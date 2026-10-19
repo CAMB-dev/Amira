@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto"
-import { lstat, mkdir, open, realpath, rm } from "node:fs/promises"
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { open, rm } from "node:fs/promises"
+import { basename, dirname, extname, join } from "node:path"
 import { Readable, Transform } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import type { WebFetchDetails } from "@amira/api"
+import { sessionOutputDir } from "@amira/api/internal/session-output-dir"
 
 const EXTENSIONS: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -69,40 +70,6 @@ function replayBody(
   })
 }
 
-function inside(root: string, path: string): boolean {
-  const rel = relative(root, path)
-  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
-}
-
-/** Validate each ancestor before creating children, and write through the pinned real path. */
-async function sessionOutputDir(dir: string, sessionDir: string): Promise<string> {
-  // ToolSession.dir is beside the session file; unlike outputDir, it does not go through .assets.
-  const root = resolve(dirname(sessionDir))
-  const target = resolve(dir)
-  const escaped = () => new Error("output directory escapes session storage")
-  if (!inside(root, target)) throw escaped()
-  const trusted = await realpath(root)
-  let pinned = trusted
-  for (const part of relative(root, target).split(sep).filter(Boolean)) {
-    const next = join(pinned, part)
-    try {
-      // lstat distinguishes an absent component from a dangling symlink/junction.
-      await lstat(next)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
-      try {
-        // Never recursively create through an ancestor that has not been validated.
-        await mkdir(next)
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err
-      }
-    }
-    pinned = await realpath(next)
-    if (!inside(trusted, pinned)) throw escaped()
-  }
-  return pinned
-}
-
 /** Stream to the session's outputs directory, removing incomplete files on every failure. */
 export async function saveBinary(
   res: Response,
@@ -119,7 +86,7 @@ export async function saveBinary(
   let created = false
   try {
     signal.throwIfAborted()
-    path = join(await sessionOutputDir(dir, sessionDir), name)
+    path = join(await sessionOutputDir(dir, dirname(sessionDir)), name)
     signal.throwIfAborted()
     const file = await open(path, "wx", 0o600)
     created = true

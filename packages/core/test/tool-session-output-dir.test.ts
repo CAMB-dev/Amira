@@ -58,7 +58,7 @@ test("a persisted tool session exposes the exact artifact directory", () => {
   const root = tempDir()
   const session = persistedSession(root)
   const dir = artifactDir(session.file, session.id)
-  const artifacts = new ArtifactStore({ dir, sessionId: session.id })
+  const artifacts = new ArtifactStore({ dir, storageRoot: path.dirname(session.file), sessionId: session.id })
   const tools = toolSession(artifacts, session)
 
   expect(artifacts.writableDir).toBe(dir)
@@ -69,8 +69,9 @@ test("a persisted tool session exposes the exact artifact directory", () => {
 })
 
 test("a no-file tool session does not expose its writable artifact directory", () => {
-  const dir = path.join(tempDir(), "outputs")
-  const artifacts = new ArtifactStore({ dir, sessionId: "no-file" })
+  const root = tempDir()
+  const dir = path.join(root, "outputs")
+  const artifacts = new ArtifactStore({ dir, storageRoot: root, sessionId: "no-file" })
   const tools = toolSession(artifacts)
 
   expect(artifacts.writableDir).toBe(dir)
@@ -86,12 +87,13 @@ for (const persisted of [false, true]) {
       const root = tempDir()
       const session = persisted ? persistedSession(root) : undefined
       const parent = inherited
-        ? new ArtifactStore({ dir: path.join(root, "parent"), sessionId: "parent" })
+        ? new ArtifactStore({ dir: path.join(root, "parent"), storageRoot: root, sessionId: "parent" })
         : undefined
       const saved = await parent?.save({ text: "inherited output", tool: "fixture" })
       const dir = path.join(root, "private", "outputs")
       const artifacts = new ArtifactStore({
         dir,
+        storageRoot: root,
         sessionId: session?.id ?? "private",
         readOnly: true,
         ...(parent ? { parent } : {}),
@@ -114,9 +116,14 @@ for (const persisted of [false, true]) {
 test("a writable child exposes its own artifact directory, not its parent's", () => {
   const root = tempDir()
   const session = persistedSession(root)
-  const parent = new ArtifactStore({ dir: path.join(root, "parent"), sessionId: "parent" })
+  const parent = new ArtifactStore({ dir: path.join(root, "parent"), storageRoot: root, sessionId: "parent" })
   const dir = artifactDir(session.file, session.id)
-  const artifacts = new ArtifactStore({ dir, sessionId: session.id, parent })
+  const artifacts = new ArtifactStore({
+    dir,
+    storageRoot: path.dirname(session.file),
+    sessionId: session.id,
+    parent,
+  })
   const tools = toolSession(artifacts, session)
 
   expect(tools.outputDir).toBe(dir)

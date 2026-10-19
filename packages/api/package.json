@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./internal/extension-status": "./src/internal/extension-status.ts",
+    "./internal/session-output-dir": "./src/internal/session-output-dir.ts",
     "./internal/subagent-transcript": "./src/internal/subagent-transcript.ts"
   },
   "dependencies": {

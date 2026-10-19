@@ -1,4 +1,5 @@
 // Owns artifact discovery, reference classification, usage aggregation and pruning.
+import { dirname } from "node:path"
 import type { Message } from "@amira/ai"
 import type { ArtifactGroupUsage, ArtifactInfo } from "@amira/api"
 import {
@@ -89,6 +90,7 @@ export function discoverArtifactGroups(session: ArtifactSession): ManagedArtifac
   for (const child of files) {
     const store = new ArtifactStore({
       dir: artifactDir(child.file, child.id),
+      storageRoot: dirname(child.file),
       sessionId: child.id,
       limits: session.artifacts.limits,
       quotaBytes: session.artifacts.quotaBytes,
