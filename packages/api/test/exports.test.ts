@@ -91,6 +91,31 @@ test("self-update settings are additive without a version bump", async () => {
   expect((await import("../src/index.ts")).API_VERSION).toBe("0.1.64")
 })
 
+test("remote timeout settings and defaults are additive without a version bump", async () => {
+  const api = await import("../src/index.ts")
+  const settings: Pick<Settings, "remote"> = {
+    remote: { idleTimeoutMs: 0, proxyReconnectTimeoutMs: 60_000 },
+  }
+  expect({
+    settings,
+    idleTimeoutMs: api.DEFAULT_REMOTE_IDLE_TIMEOUT_MS,
+    proxyReconnectTimeoutMs: api.DEFAULT_REMOTE_PROXY_RECONNECT_TIMEOUT_MS,
+    version: api.API_VERSION,
+  }).toMatchInlineSnapshot(`
+    {
+      "idleTimeoutMs": 1800000,
+      "proxyReconnectTimeoutMs": 600000,
+      "settings": {
+        "remote": {
+          "idleTimeoutMs": 0,
+          "proxyReconnectTimeoutMs": 60000,
+        },
+      },
+      "version": "0.1.64",
+    }
+  `)
+})
+
 test("the public agent settings allow an unlimited model-call limit", () => {
   const settings: Pick<Settings, "agent"> = { agent: { maxSteps: 0 } }
   expect(settings).toMatchInlineSnapshot(`
@@ -233,6 +258,8 @@ test("the public API exports stay stable", async () => {
     "DEFAULT_PERMISSION_MODE",
     "DEFAULT_PERMISSION_RULES",
     "DEFAULT_PREVIEW_CHARS",
+    "DEFAULT_REMOTE_IDLE_TIMEOUT_MS",
+    "DEFAULT_REMOTE_PROXY_RECONNECT_TIMEOUT_MS",
     "DEFAULT_RETRY_ATTEMPTS",
     "DEFAULT_RETRY_BASE_DELAY_MS",
     "DEFAULT_RETRY_MAX_DELAY_MS",

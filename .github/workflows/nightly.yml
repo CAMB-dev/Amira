@@ -129,6 +129,25 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: bun run build:all --version "$VERSION" --channel next
+      - name: Build and sign separate Linux server artifacts (CI only)
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          BUILD_ID: ${{ needs.plan.outputs.sha }}
+          SIGNING_KEY: ${{ secrets.AMIRA_RELEASE_ED25519_KEY }}
+        run: |
+          test -n "$SIGNING_KEY" || { echo 'AMIRA_RELEASE_ED25519_KEY is required for server artifacts.' >&2; exit 1; }
+          bun -e '
+            import { createPublicKey } from "node:crypto"
+            import { releasePublicKey } from "./packages/cli/src/update/public-key.ts"
+            const publicPem = key => createPublicKey(key).export({ type: "spki", format: "pem" }).toString()
+            if (releasePublicKey && publicPem(releasePublicKey) !== publicPem(process.env.SIGNING_KEY)) {
+              throw new Error("Release signing secret does not match the compiled release public key")
+            }
+          '
+          bun scripts/build-server.ts --all --version "$VERSION" --channel next --build-id "$BUILD_ID"
+          bun scripts/server-manifest.ts generate
+          bun scripts/server-manifest.ts sign --key-env SIGNING_KEY > "$RUNNER_TEMP/server-public.pem"
+          bun scripts/server-manifest.ts verify --public-key "$RUNNER_TEMP/server-public.pem"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-archives
@@ -136,6 +155,10 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/amira-server-bun-linux-*
+            dist/SERVER_SHA256SUMS
+            dist/server-manifest.json
+            dist/server-manifest.json.sig
           if-no-files-found: error
           compression-level: 0
           retention-days: 2
@@ -195,6 +218,38 @@ jobs:
             "$exe" --version
             "$exe" --self-check
           done
+      - name: Verify and smoke the Linux x64 baseline server (no Bun installation)
+        if: runner.os == 'Linux'
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib, json
+          from pathlib import Path
+          manifest = json.loads(Path("dist/server-manifest.json").read_text())
+          assert manifest["product"] == "amira-server"
+          for artifact in manifest["artifacts"]:
+              file = Path("dist") / artifact["file"]
+              data = file.read_bytes()
+              assert len(data) == artifact["size"], file
+              assert hashlib.sha256(data).hexdigest() == artifact["sha256"], file
+          PYCODE
+          mkdir -p "$RUNNER_TEMP/server-smoke/home" "$RUNNER_TEMP/server-smoke/remote-home" "$RUNNER_TEMP/server-smoke/workspace"
+          export HOME="$RUNNER_TEMP/server-smoke/home" USERPROFILE="$RUNNER_TEMP/server-smoke/home"
+          export AMIRA_HOME="$RUNNER_TEMP/server-smoke/home/amira"
+          export XDG_CONFIG_HOME="$HOME/config" XDG_CACHE_HOME="$HOME/cache" XDG_DATA_HOME="$HOME/data" XDG_STATE_HOME="$HOME/state" XDG_RUNTIME_DIR="$HOME/runtime"
+          chmod 755 dist/amira-server-bun-linux-x64-baseline
+          python3 - <<'PYCODE'
+          import json, subprocess
+          from pathlib import Path
+          manifest = json.loads(Path("dist/server-manifest.json").read_text())
+          for flag in ["--version-json", "--self-check"]:
+              result = json.loads(subprocess.check_output(["./dist/amira-server-bun-linux-x64-baseline", flag], text=True))
+              for key in ["product", "version", "channel", "buildId"]:
+                  assert result[key] == manifest[key], key
+              assert result["target"] == "bun-linux-x64-baseline"
+              if flag == "--self-check":
+                  assert result["ok"] and result["worker"] == "worker" and result["stdoutWorker"], result
+          PYCODE
+          echo 'Server Linux x64 baseline native smoke passed. Server Linux ARM64 execution unverified: no native runner.' >> "$GITHUB_STEP_SUMMARY"
       - name: Record targets without a native smoke runner
         if: runner.os == 'macOS'
         run: |
@@ -224,7 +279,7 @@ jobs:
           SHA: ${{ needs.plan.outputs.sha }}
           PREVIOUS: ${{ needs.plan.outputs.previous }}
         run: |
-          (cd dist && sha256sum --check SHA256SUMS)
+          (cd dist && sha256sum --check SHA256SUMS && sha256sum --check SERVER_SHA256SUMS)
           {
             printf 'Automated nightly from `%s` (channel `next`).\n\n' "$SHA"
             printf '## Commits since the previous nightly\n\n'
@@ -249,7 +304,9 @@ jobs:
           # gh refuses an existing release; uploads never use --clobber.
           gh release create "$TAG" --target "$SHA" --draft --prerelease --latest=false \
             --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
-          gh release upload "$TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS
+          gh release upload "$TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS \
+            dist/amira-server-bun-linux-* dist/SERVER_SHA256SUMS \
+            dist/server-manifest.json dist/server-manifest.json.sig
           # This is the only edit, while still a draft. Never edit a published release.
           gh release edit "$TAG" --draft=false
       - name: Keep the newest 14 nightly prereleases (never stable releases)

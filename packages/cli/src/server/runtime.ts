@@ -25,6 +25,7 @@ import {
   validateRemoteResult,
 } from "../remote-schema.ts"
 import { createSession, type SessionOptions } from "../session-factory.ts"
+import { ownerHasWork, trackRuntimeAi } from "./activity.ts"
 import { createWorkspaceCapture } from "./capture.ts"
 import type { ReplayJournal } from "./journal.ts"
 import { validateMessageImages } from "./message-images.ts"
@@ -118,6 +119,10 @@ export interface WorkspaceRuntime {
   readonly journal: ReplayJournal
   readonly signal: AbortSignal
   workspaceSnapshot(): RemoteJson
+  /** True only with no controller, pending work, dialogs, jobs or model side calls. */
+  quiescent(): boolean
+  /** Includes short model/operation activity between daemon clock samples. */
+  readonly activityVersion: number
   attach(options?: { onEffect?: (effect: ServerEffect) => void }): WorkspaceAttachment
   /** Explicit owner shutdown, never called by attachment EOF/detach. */
   stop(): Promise<void>
@@ -135,8 +140,11 @@ export type WorkspaceRuntimeOptions = Omit<
 
 /** One workspace/session authority, independent of any connection's lifetime. */
 export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Promise<WorkspaceRuntime> {
+  let activityVersion = 0
+  const tracked = trackRuntimeAi(opts.ai, () => activityVersion++)
   const session = await createSession({
     ...opts,
+    ai: tracked.ai,
     extensions: opts.extensions ?? [],
     noBuiltins: opts.noBuiltins ?? false,
     executionOnly: true,
@@ -218,9 +226,15 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
     signal: options?.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal,
   })
   function track<T>(run: () => Promise<T>): Promise<T> {
+    activityVersion++
     const result = run()
     inflight.add(result)
-    void result.finally(() => inflight.delete(result)).catch(() => {})
+    void result
+      .finally(() => {
+        inflight.delete(result)
+        activityVersion++
+      })
+      .catch(() => {})
     return result
   }
 
@@ -228,7 +242,22 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
     modelProxy: opts.modelProxy,
     journal: capture.journal,
     signal: lifetime.signal,
+    get activityVersion() {
+      return activityVersion + capture.journal.watermark
+    },
     workspaceSnapshot: () => capture.snapshot(),
+    quiescent: () =>
+      !active &&
+      !inflight.size &&
+      !tracked.pending() &&
+      !session.host.ui.pending.length &&
+      !ownerHasWork(commands.agent) &&
+      ![...bindings.values()].some(({ conversation }) => {
+        const owner = agentSessionOwner(conversation.id)
+        return owner && ownerHasWork(owner)
+      }) &&
+      !commands.control.subagents().some((child) => ["queued", "running", "paused"].includes(child.status)) &&
+      !session.host.backgroundJobs.list().some((job) => ["starting", "running"].includes(job.status)),
     attach(options = {}) {
       if (lifetime.signal.aborted) throw new FrontendOperationError("disconnected", "The runtime is stopped")
       if (active) throw new FrontendOperationError("agent_busy", "A workspace frontend is already attached")
@@ -378,6 +407,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
         async detach() {
           if (detached) return
           detached = true
+          activityVersion++
           for (const off of subscriptions) off()
           subscriptions.clear()
           if (active === attachment) {
@@ -387,6 +417,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
         },
       }
       active = attachment
+      activityVersion++
       return attachment
     },
     stop() {

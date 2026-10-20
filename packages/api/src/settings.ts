@@ -123,6 +123,19 @@ export interface Settings {
     /** Native compaction deadline in milliseconds. See DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS; 0 disables it. */
     nativeCompactionTimeoutMs?: number
   }
+  /** Remote daemon timeouts, read from settings on the remote host, not the local client. */
+  remote?: {
+    /**
+     * Shut down only after this long without a controller or work, including pending approvals/forms.
+     * Whole milliseconds from 0 to 2147483647; 0 disables idle shutdown. See DEFAULT_REMOTE_IDLE_TIMEOUT_MS.
+     */
+    idleTimeoutMs?: number
+    /**
+     * Wait this long for the local model proxy to reconnect, separate from provider request timeouts.
+     * Whole milliseconds from 0 to 2147483647; 0 waits indefinitely. See DEFAULT_REMOTE_PROXY_RECONNECT_TIMEOUT_MS.
+     */
+    proxyReconnectTimeoutMs?: number
+  }
   /** MCP servers by name (D64). Their shape belongs to the MCP extension. */
   mcpServers?: Record<string, Record<string, unknown>>
   /**

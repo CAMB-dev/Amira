@@ -18,6 +18,7 @@ import {
   loadSettings,
   ProviderSettingsError,
   providersFromSettings,
+  resolveRemoteSettings,
   SettingsError,
   settingsFiles,
   validateSettings,
@@ -56,6 +57,63 @@ test("agent.maxSteps accepts non-negative integers, including unlimited", () => 
       '"agent.maxSteps" must be a whole number of at least 0',
     )
   }
+})
+
+test.each(["idleTimeoutMs", "proxyReconnectTimeoutMs"] as const)(
+  "remote.%s accepts only whole milliseconds in the timer range",
+  (key) => {
+    for (const value of [0, 1, 600_000, 1_800_000, 2_147_483_647]) {
+      const settings = { remote: { [key]: value } }
+      expect(validateSettings(settings, "settings.json")).toEqual({ settings, warnings: [] })
+    }
+    for (const value of [-1, 1.5, 2_147_483_648, Number.MAX_SAFE_INTEGER, NaN, Infinity, "0", null, true]) {
+      expect(() => validateSettings({ remote: { [key]: value } }, "settings.json")).toThrow(
+        `"remote.${key}" must be a whole number between 0 and 2147483647`,
+      )
+    }
+  },
+)
+
+test("remote settings resolve defaults without changing omissions or explicit zero", () => {
+  expect(resolveRemoteSettings({})).toEqual({
+    idleTimeoutMs: 1_800_000,
+    proxyReconnectTimeoutMs: 600_000,
+  })
+  const settings = validateSettings({ remote: { idleTimeoutMs: 0 } }, "settings.json").settings
+  expect(resolveRemoteSettings(settings)).toEqual({
+    idleTimeoutMs: 0,
+    proxyReconnectTimeoutMs: 600_000,
+  })
+  expect(settings.remote).toEqual({ idleTimeoutMs: 0 })
+  expect(resolveRemoteSettings({ remote: { proxyReconnectTimeoutMs: 0 } })).toEqual({
+    idleTimeoutMs: 1_800_000,
+    proxyReconnectTimeoutMs: 0,
+  })
+  expect(() => resolveRemoteSettings({ remote: { idleTimeoutMs: -1 } })).toThrow('"remote.idleTimeoutMs"')
+  expect(validateSettings({}, "settings.json").settings.remote).toBeUndefined()
+  expect(() => validateSettings({ remote: null }, "settings.json")).toThrow('"remote" must be an object')
+  expect(validateSettings({ remote: { target: "host" } }, "settings.json")).toEqual({
+    settings: { remote: {} },
+    warnings: ['settings.json: unknown setting "remote.target" (ignored)'],
+  })
+})
+
+test("remote timeouts merge field by field with normal settings precedence", () => {
+  put(userFile(), { remote: { idleTimeoutMs: 60_000, proxyReconnectTimeoutMs: 120_000 } })
+  put(projectFile(), { remote: { idleTimeoutMs: 30_000 } })
+  put(localFile(), { remote: { proxyReconnectTimeoutMs: 0 } })
+  const loaded = loadSettings({ cwd, home, flags: { remote: { idleTimeoutMs: 15_000 } } })
+  expect(loaded.warnings).toEqual([])
+  expect(resolveRemoteSettings(loaded.settings)).toEqual({
+    idleTimeoutMs: 15_000,
+    proxyReconnectTimeoutMs: 0,
+  })
+  expect(loaded.layers.remote?.map((layer) => layer.scope)).toEqual([
+    "user",
+    "project",
+    "project-local",
+    "flags",
+  ])
 })
 
 test("update settings accept channels and exact SemVer minimums", () => {

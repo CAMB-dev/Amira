@@ -186,6 +186,87 @@ test("nightly construction normalizes RC versions and discovery shares its polic
   expect(prune).toContain("nightlies = nightly_releases(releases)")
 })
 
+test("separate server artifacts are built, signed, recovered immutably and uploaded without changing npm", () => {
+  const build = script("build")
+  const compile = workflow.jobs.build!.steps.find((step) =>
+    step.name?.startsWith("Build separate Linux server"),
+  )!
+  expect(compile.if).toContain("published != 'true'")
+  expect(compile.run).toContain(
+    'bun scripts/build-server.ts --all --version "$VERSION" --channel "$CHANNEL" --build-id "$BUILD_ID"',
+  )
+  expect(compile.env!.BUILD_ID).toBe(`\${{ needs.plan.outputs.sha }}`)
+  expect(build).toContain("--pattern 'amira-server-bun-linux-*'")
+  expect(build).toContain("--pattern server-manifest.json --pattern server-manifest.json.sig")
+  expect(build).toContain("bun scripts/server-manifest.ts verify --key-env SIGNING_KEY")
+  expect(build).toContain(
+    'bun scripts/server-manifest.ts recover --version "$VERSION" --channel "$CHANNEL" --target all --build-id "$BUILD_ID"',
+  )
+  expect(workflow.jobs.build!.steps.find((step) => step.env?.PUBLISHED)!.env!.BUILD_ID).toBe(
+    `\${{ needs.plan.outputs.sha }}`,
+  )
+  expect(build).toContain("sha256sum --check SERVER_SHA256SUMS")
+  const archives = workflow.jobs.build!.steps.find((step) => step.with?.name === "release-archives")!
+  for (const file of [
+    "amira-server-bun-linux-*",
+    "SERVER_SHA256SUMS",
+    "server-manifest.json",
+    "server-manifest.json.sig",
+  ]) {
+    expect(archives.with!.path).toContain(`dist/${file}`)
+  }
+  const publish = script("publish")
+  const publishedBranch = publish.slice(publish.indexOf("if published:"), publish.indexOf("else:"))
+  expect(publishedBranch).toContain("server-manifest.json.sig")
+  expect(publishedBranch).toContain("SERVER_SHA256SUMS")
+  expect(publishedBranch).not.toContain("'upload'")
+  const nightlyBuild = nightly.jobs.build!.steps.map((step) => step.run ?? "").join("\n")
+  expect(nightlyBuild).toContain(
+    'bun scripts/build-server.ts --all --version "$VERSION" --channel next --build-id "$BUILD_ID"',
+  )
+  expect(nightly.jobs.build!.steps.find((step) => step.env?.SIGNING_KEY)!.env!.BUILD_ID).toBe(
+    `\${{ needs.plan.outputs.sha }}`,
+  )
+  expect(nightlyBuild).toContain("AMIRA_RELEASE_ED25519_KEY is required for server artifacts")
+  expect(nightlyBuild).toContain("bun scripts/server-manifest.ts sign --key-env SIGNING_KEY")
+  expect(nightlyBuild).not.toContain("--ephemeral")
+  const nightlyPublish = nightly.jobs.publish!.steps.map((step) => step.run ?? "").join("\n")
+  expect(nightlyPublish).toContain("dist/server-manifest.json dist/server-manifest.json.sig")
+})
+
+test("server CI compiles Linux production targets and an explicitly test-only native Windows target", async () => {
+  const ci = Bun.YAML.parse(
+    await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text(),
+  ) as Workflow
+  const server = ci.jobs.server!
+  const run = server.steps.map((step) => step.run ?? "").join("\n")
+  expect(run).toContain(
+    "bun scripts/build-server.ts --all --build-id 0123456789abcdef0123456789abcdef01234567",
+  )
+  expect(run).toContain('for flag in ["--version-json", "--self-check"]')
+  expect(run).toContain('"buildId"')
+  expect(run).toContain("Server Linux ARM64 execution unverified: no native runner")
+  expect(run).not.toContain("./dist/amira-server-bun-linux-arm64 --self-check")
+  const windows = ci.jobs.check!.steps.find(
+    (step) => step.name === "Compile a native Windows test-only server",
+  )!
+  expect(windows.if).toBe("runner.os == 'Windows'")
+  expect(windows.run).toBe(
+    "bun scripts/build-server.ts --native-windows-test --build-id 0123456789abcdef0123456789abcdef01234567",
+  )
+  for (const staged of [workflow, nightly]) {
+    const smoke = staged.jobs.smoke!.steps.find((step) =>
+      step.name?.startsWith("Verify and smoke the Linux x64 baseline server"),
+    )!
+    expect(smoke.if).toBe("runner.os == 'Linux'")
+    expect(smoke.run).toContain('assert len(data) == artifact["size"]')
+    expect(smoke.run).toContain('hashlib.sha256(data).hexdigest() == artifact["sha256"]')
+    expect(smoke.run).toContain("--self-check")
+    expect(smoke.run).toContain('export AMIRA_HOME="$RUNNER_TEMP/server-smoke/home/amira"')
+    expect(smoke.run).toContain("Server Linux ARM64 execution unverified: no native runner")
+  }
+})
+
 test("publication resolves the remote peeled tag immediately before creation and publication", () => {
   const publish = script("publish")
   expect(publish).toContain("from scripts.release_policy import verify_tag_commit")
