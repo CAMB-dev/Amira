@@ -399,7 +399,7 @@ function createStrict(lockPath: string, heartbeatMs?: number): FileLock | undefi
   const pending = `${lockPath}.pending-${process.pid}-${randomUUID()}`
   const owner = leaseOwner()
   const contents = `${owner.pid}\n${owner.nonce}\n${JSON.stringify(owner)}\n`
-  const fd = openSync(pending, "wx")
+  const fd = openSync(pending, "wx", 0o600)
   let closed = false
   const close = () => {
     if (closed) return

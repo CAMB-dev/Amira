@@ -76,3 +76,65 @@ jobs:
         run: |
           "./dist/amira-$TARGET/$EXE" --version
           "./dist/amira-$TARGET/$EXE" --self-check
+      - name: Compile a native Windows test-only server
+        if: runner.os == 'Windows'
+        run: bun scripts/build-server.ts --native-windows-test --build-id 0123456789abcdef0123456789abcdef01234567
+      - name: Smoke the native Windows test-only server
+        if: runner.os == 'Windows'
+        run: |
+          mkdir -p "$RUNNER_TEMP/server-smoke/home" "$RUNNER_TEMP/server-smoke/remote-home" "$RUNNER_TEMP/server-smoke/workspace"
+          export HOME="$RUNNER_TEMP/server-smoke/home" USERPROFILE="$RUNNER_TEMP/server-smoke/home"
+          export AMIRA_HOME="$RUNNER_TEMP/server-smoke/home/amira"
+          export XDG_CONFIG_HOME="$HOME/config" XDG_CACHE_HOME="$HOME/cache" XDG_DATA_HOME="$HOME/data" XDG_STATE_HOME="$HOME/state" XDG_RUNTIME_DIR="$HOME/runtime"
+          ./dist/amira-server-native-test.exe --version-json
+          ./dist/amira-server-native-test.exe --self-check
+
+  server:
+    name: Build production Linux servers (CI only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/build-server.ts --all --build-id 0123456789abcdef0123456789abcdef01234567
+      - name: Verify server manifest signing without release credentials
+        run: |
+          bun scripts/server-manifest.ts generate
+          bun scripts/server-manifest.ts sign --ephemeral true > "$RUNNER_TEMP/server-public.pem"
+          bun scripts/server-manifest.ts verify --public-key "$RUNNER_TEMP/server-public.pem"
+      - name: Verify and smoke the Linux x64 baseline server (no Bun installation)
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib, json
+          from pathlib import Path
+          manifest = json.loads(Path("dist/server-manifest.json").read_text())
+          assert manifest["product"] == "amira-server"
+          for artifact in manifest["artifacts"]:
+              file = Path("dist") / artifact["file"]
+              data = file.read_bytes()
+              assert len(data) == artifact["size"], file
+              assert hashlib.sha256(data).hexdigest() == artifact["sha256"], file
+          PYCODE
+          mkdir -p "$RUNNER_TEMP/server-smoke/home" "$RUNNER_TEMP/server-smoke/remote-home" "$RUNNER_TEMP/server-smoke/workspace"
+          export HOME="$RUNNER_TEMP/server-smoke/home" USERPROFILE="$RUNNER_TEMP/server-smoke/home"
+          export AMIRA_HOME="$RUNNER_TEMP/server-smoke/home/amira"
+          export XDG_CONFIG_HOME="$HOME/config" XDG_CACHE_HOME="$HOME/cache" XDG_DATA_HOME="$HOME/data" XDG_STATE_HOME="$HOME/state" XDG_RUNTIME_DIR="$HOME/runtime"
+          chmod 755 dist/amira-server-bun-linux-x64-baseline
+          python3 - <<'PYCODE'
+          import json, subprocess
+          from pathlib import Path
+          manifest = json.loads(Path("dist/server-manifest.json").read_text())
+          for flag in ["--version-json", "--self-check"]:
+              result = json.loads(subprocess.check_output(["./dist/amira-server-bun-linux-x64-baseline", flag], text=True))
+              for key in ["product", "version", "channel", "buildId"]:
+                  assert result[key] == manifest[key], key
+              assert result["target"] == "bun-linux-x64-baseline"
+              if flag == "--self-check":
+                  assert result["ok"] and result["worker"] == "worker" and result["stdoutWorker"], result
+          PYCODE
+          echo 'Server Linux x64 baseline native smoke passed. Server Linux ARM64 execution unverified: no native runner.' >> "$GITHUB_STEP_SUMMARY"

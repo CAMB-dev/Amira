@@ -56,6 +56,8 @@ const integerBetween = (min: number, max: number) =>
     `a whole number between ${min} and ${max}`,
     (v) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max,
   )
+/** Stay within the runtime's signed 32-bit timer range; zero explicitly disables the timeout. */
+const remoteTimeout = integerBetween(0, 2_147_483_647)
 const share = expect("a number between 0 and 1", (v) => typeof v === "number" && v > 0 && v < 1)
 const oneOf = (...values: string[]) =>
   expect(`one of ${values.map((v) => `"${v}"`).join(", ")}`, (v) => values.includes(v as string))
@@ -272,6 +274,7 @@ const settings = object({
     idleTimeoutMs: integer(0),
     nativeCompactionTimeoutMs: integer(0),
   }),
+  remote: object({ idleTimeoutMs: remoteTimeout, proxyReconnectTimeoutMs: remoteTimeout }),
   mcpServers: record(anyObject),
   extensions: record(anyObject),
   mcpTrustedProjects: list(string),

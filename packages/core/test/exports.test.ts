@@ -452,6 +452,7 @@ test("the public core exports stay stable", async () => {
     "renderPrompt",
     "renderTranscript",
     "resolvePermissions",
+    "resolveRemoteSettings",
     "resolveShimmer",
     "restrictToCurrentUser",
     "resultText",

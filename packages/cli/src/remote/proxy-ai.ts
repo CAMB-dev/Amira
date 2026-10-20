@@ -87,6 +87,11 @@ export class ProxyAi implements Ai {
     }
   }
 
+  /** Remote settings affect future admission waits; already accepted calls are never restarted. */
+  setReconnectTimeout(timeoutMs: number): void {
+    this.gate.configure(timeoutMs)
+  }
+
   attach(
     connection: RemoteConnection,
     authority: RemoteWelcome,
@@ -407,7 +412,8 @@ export class ProxyAi implements Ai {
       clearTimeout(oldest.timer)
       map.delete(id)
     }
-    const timer = setTimeout(() => map.delete(call.id), this.gate.timeoutMs)
+    // Disabling admission expiry does not make terminal receipt retention unbounded.
+    const timer = setTimeout(() => map.delete(call.id), this.gate.timeoutMs || 10 * 60_000)
     timer.unref()
     map.set(call.id, { call, timer })
   }

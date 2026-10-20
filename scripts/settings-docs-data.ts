@@ -84,6 +84,15 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
     keys: ["compact", "retry"],
   },
   {
+    title: { en: "Remote runtime", zh: "远程运行时", ja: "リモートランタイム" },
+    intro: {
+      en: "Read from settings on the remote host, not the local client. These timeouts do not change provider request timeouts.",
+      zh: "从远程主机上的设置读取，而非本地客户端。这些超时不会改变 provider 请求的超时。",
+      ja: "ローカルクライアントではなく、リモートホストの設定から読み取ります。プロバイダーへのリクエストのタイムアウトとは別の設定です。",
+    },
+    keys: ["remote"],
+  },
+  {
     title: { en: "Context management", zh: "上下文管理", ja: "コンテキスト管理" },
     intro: {
       en: "What model requests carry of the history; the session file always keeps everything. See [Context management](usage.md#context-management).",
@@ -156,6 +165,18 @@ export const sections: { title: Text; intro?: Text; keys: string[] }[] = [
 ]
 
 export const annotations: Record<string, Annotation> = {
+  "remote.idleTimeoutMs": {
+    default: documentedDefault("remote.idleTimeoutMs"),
+    en: "Shut down the daemon after this many milliseconds with no controller or work. Turns, tools, jobs, monitors, runnable children, model calls, pending approvals/forms and queued work prevent idle shutdown. Whole number from 0 to 2147483647; 0 disables idle shutdown. Does not cancel pending approvals.",
+    zh: "守护进程在没有控制端且没有工作达到此毫秒数后关闭。轮次、工具、后台任务、监视器、可运行的子 agent、模型调用、待处理的审批或表单以及排队工作都会阻止空闲关闭。取 0 到 2147483647 的整数；0 禁用空闲关闭。不会取消待处理的审批。",
+    ja: "コントローラーも処理もない状態がこのミリ秒数続くとデーモンを終了します。ターン、ツール、ジョブ、モニター、実行可能な子エージェント、モデル呼び出し、未回答の承認・フォーム、待機中の処理がある間は終了しません。0〜2147483647 の整数。0 は自動終了を無効にします。未回答の承認は取り消しません。",
+  },
+  "remote.proxyReconnectTimeoutMs": {
+    default: documentedDefault("remote.proxyReconnectTimeoutMs"),
+    en: "Wait this many milliseconds for the authorized local model proxy to reconnect before failing the model call. Whole number from 0 to 2147483647; 0 waits indefinitely. Provider timeouts start only after the local proxy accepts execution.",
+    zh: "等待已授权的本地模型代理重连的毫秒数，超时后模型调用失败。取 0 到 2147483647 的整数；0 表示无限等待。Provider 超时仅在本地代理接受执行后开始计时。",
+    ja: "認可されたローカルモデルプロキシの再接続を待つミリ秒数。期限を過ぎるとモデル呼び出しは失敗します。0〜2147483647 の整数。0 は無期限に待機します。プロバイダーのタイムアウトは、ローカルプロキシが実行を受け付けてから開始します。",
+  },
   "updates.auto": {
     default: documentedDefault("updates.auto"),
     en: "Check self-managed single-file installs in the background and install patch updates for the next start. Minor and major releases only show a notice. Package-manager and source installs never self-update.",

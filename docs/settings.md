@@ -256,6 +256,15 @@ What the model may do without asking; see [Permissions](usage.md#permissions). A
 | `retry.idleTimeoutMs` | `number` | `100000` (100 s) | Maximum silence in milliseconds between streamed content events after the first one. The reply then ends with a timeout error that keeps its partial text; it is not sent again, since that would repeat what was already shown (a reply that has only begun reasoning, with nothing shown yet, is retried). Type a message to continue, or press ↑ to resend. Plain print mode reports the error on stderr and exits non-zero. While a hosted web search runs, the limit is at least 10 minutes. `0` disables this timeout; keep-alive comments do not reset it. |  |
 | `retry.nativeCompactionTimeoutMs` | `number` | `300000` (5 minutes) | Deadline in milliseconds for server-side compaction, including all attempts and retry waits. On timeout, the native request is aborted and a text summary is written instead, with a notice. `0` disables this timeout; Esc still cancels compaction without writing a summary. |  |
 
+## Remote runtime
+
+Read from settings on the remote host, not the local client. These timeouts do not change provider request timeouts.
+
+| Key | Type | Default | Description | User file only |
+| --- | --- | --- | --- | --- |
+| `remote.idleTimeoutMs` | `number` | `1800000` (30 minutes) | Shut down the daemon after this many milliseconds with no controller or work. Turns, tools, jobs, monitors, runnable children, model calls, pending approvals/forms and queued work prevent idle shutdown. Whole number from 0 to 2147483647; 0 disables idle shutdown. Does not cancel pending approvals. |  |
+| `remote.proxyReconnectTimeoutMs` | `number` | `600000` (10 minutes) | Wait this many milliseconds for the authorized local model proxy to reconnect before failing the model call. Whole number from 0 to 2147483647; 0 waits indefinitely. Provider timeouts start only after the local proxy accepts execution. |  |
+
 ## Context management
 
 What model requests carry of the history; the session file always keeps everything. See [Context management](usage.md#context-management).

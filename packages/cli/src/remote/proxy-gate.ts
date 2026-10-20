@@ -1,6 +1,7 @@
 import type { ModelError } from "@amira/ai"
+import { DEFAULT_REMOTE_PROXY_RECONNECT_TIMEOUT_MS } from "@amira/api"
 
-export const PROXY_RECONNECT_TIMEOUT_MS = 10 * 60_000
+export const PROXY_RECONNECT_TIMEOUT_MS = DEFAULT_REMOTE_PROXY_RECONNECT_TIMEOUT_MS
 
 /** Admission is separate from provider deadlines; disconnect never aborts a turn signal. */
 export class ProxyGate<T> {
@@ -8,9 +9,14 @@ export class ProxyGate<T> {
   private waiters = new Set<() => void>()
   private failures = new WeakMap<AbortSignal, ModelError>()
 
-  constructor(readonly timeoutMs = PROXY_RECONNECT_TIMEOUT_MS) {
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
-      throw new RangeError("Proxy reconnect timeout must be a positive safe integer")
+  constructor(public timeoutMs = PROXY_RECONNECT_TIMEOUT_MS) {
+    this.configure(timeoutMs)
+  }
+
+  configure(timeoutMs: number): void {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647)
+      throw new RangeError("Proxy reconnect timeout must be a nonnegative timer-safe integer")
+    this.timeoutMs = timeoutMs
   }
 
   attach(peer: T): void {
@@ -44,10 +50,9 @@ export class ProxyGate<T> {
         if (this.peer) finish()
       }
       const abort = () => finish(proxyFailure("proxy_cancelled"))
-      const timer = setTimeout(
-        () => finish(this.latch(proxyFailure("proxy_reconnect_expired"), scope)),
-        this.timeoutMs,
-      )
+      const timer = this.timeoutMs
+        ? setTimeout(() => finish(this.latch(proxyFailure("proxy_reconnect_expired"), scope)), this.timeoutMs)
+        : undefined
       this.waiters.add(wake)
       signal?.addEventListener("abort", abort, { once: true })
     })

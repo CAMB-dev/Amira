@@ -49,6 +49,8 @@ export const settingsDefaults = {
   "retry.firstContentTimeoutMs": d.DEFAULT_FIRST_CONTENT_TIMEOUT_MS,
   "retry.idleTimeoutMs": d.DEFAULT_IDLE_TIMEOUT_MS,
   "retry.nativeCompactionTimeoutMs": d.DEFAULT_NATIVE_COMPACTION_TIMEOUT_MS,
+  "remote.idleTimeoutMs": d.DEFAULT_REMOTE_IDLE_TIMEOUT_MS,
+  "remote.proxyReconnectTimeoutMs": d.DEFAULT_REMOTE_PROXY_RECONNECT_TIMEOUT_MS,
   "web.nativeSearch": d.DEFAULT_WEB_NATIVE_SEARCH,
   "web.search.backend": d.DEFAULT_WEB_SEARCH_BACKEND,
   "web.search.maxResults": d.DEFAULT_WEB_SEARCH_MAX_RESULTS,
@@ -104,6 +106,8 @@ export function documentedDefault(key: DefaultKey): string | { en: string; zh: s
     case "retry.idleTimeoutMs":
       return `${code} (${Number(value) / 1000} s)`
     case "retry.nativeCompactionTimeoutMs":
+    case "remote.idleTimeoutMs":
+    case "remote.proxyReconnectTimeoutMs":
       return {
         en: `${code} (${Number(value) / 60_000} minutes)`,
         zh: `${code}（${Number(value) / 60_000} 分钟）`,

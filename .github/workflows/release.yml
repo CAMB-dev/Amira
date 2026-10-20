@@ -126,6 +126,13 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
         run: bun run build:all --version "$VERSION" --channel "$CHANNEL"
+      - name: Build separate Linux server artifacts (CI only)
+        if: needs.plan.outputs.published != 'true'
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          BUILD_ID: ${{ needs.plan.outputs.sha }}
+        run: bun scripts/build-server.ts --all --version "$VERSION" --channel "$CHANNEL" --build-id "$BUILD_ID"
       - name: Recover published bytes for npm retries, never rebuild or mutate them
         if: needs.plan.outputs.published == 'true'
         env:
@@ -135,12 +142,15 @@ jobs:
           mkdir -p dist
           gh release download "$TAG" --dir dist --pattern '*.zip' --pattern '*.tar.gz' \
             --pattern SHA256SUMS --pattern manifest.json --pattern manifest.json.sig \
-            --pattern install.sh --pattern install.ps1
+            --pattern install.sh --pattern install.ps1 \
+            --pattern 'amira-server-bun-linux-*' --pattern SERVER_SHA256SUMS \
+            --pattern server-manifest.json --pattern server-manifest.json.sig
       - name: Sign new manifests or verify immutable published manifests
         env:
           SIGNING_KEY: ${{ secrets.AMIRA_RELEASE_ED25519_KEY }}
           DRY_RUN: ${{ needs.plan.outputs.dry-run }}
           PUBLISHED: ${{ needs.plan.outputs.published }}
+          BUILD_ID: ${{ needs.plan.outputs.sha }}
           VERSION: ${{ needs.plan.outputs.version }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
@@ -160,6 +170,8 @@ jobs:
           fi
           if [[ "$PUBLISHED" == true ]]; then
             bun scripts/sign-manifest.ts verify --key-env SIGNING_KEY
+            bun scripts/server-manifest.ts verify --key-env SIGNING_KEY
+            bun scripts/server-manifest.ts recover --version "$VERSION" --channel "$CHANNEL" --target all --build-id "$BUILD_ID"
             cp dist/manifest.json "$RUNNER_TEMP/published-manifest.json"
             # Regenerate from the downloaded archives to verify metadata, every hash and every target.
             bun scripts/sign-manifest.ts generate --version "$VERSION" --channel "$CHANNEL" --target all
@@ -173,15 +185,19 @@ jobs:
             '
           else
             bun scripts/sign-manifest.ts generate
+            bun scripts/server-manifest.ts generate
             # Only the public key leaves the signing process; private keys stay in memory.
             if [[ -n "$SIGNING_KEY" ]]; then
               bun scripts/sign-manifest.ts sign --key-env SIGNING_KEY > "$RUNNER_TEMP/release-public.pem"
+              bun scripts/server-manifest.ts sign --key-env SIGNING_KEY > "$RUNNER_TEMP/server-public.pem"
             else
               bun scripts/sign-manifest.ts sign --ephemeral true > "$RUNNER_TEMP/release-public.pem"
+              bun scripts/server-manifest.ts sign --ephemeral true > "$RUNNER_TEMP/server-public.pem"
             fi
             bun scripts/sign-manifest.ts verify --public-key "$RUNNER_TEMP/release-public.pem"
+            bun scripts/server-manifest.ts verify --public-key "$RUNNER_TEMP/server-public.pem"
           fi
-          (cd dist && sha256sum --check SHA256SUMS)
+          (cd dist && sha256sum --check SHA256SUMS && sha256sum --check SERVER_SHA256SUMS)
       - name: Restore native files when resuming a published release
         if: needs.plan.outputs.published == 'true'
         run: |
@@ -209,6 +225,10 @@ jobs:
             dist/manifest.json.sig
             dist/install.sh
             dist/install.ps1
+            dist/amira-server-bun-linux-*
+            dist/SERVER_SHA256SUMS
+            dist/server-manifest.json
+            dist/server-manifest.json.sig
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -275,6 +295,38 @@ jobs:
             "$exe" --version
             "$exe" --self-check
           done
+      - name: Verify and smoke the Linux x64 baseline server (no Bun installation)
+        if: runner.os == 'Linux'
+        run: |
+          python3 - <<'PYCODE'
+          import hashlib, json
+          from pathlib import Path
+          manifest = json.loads(Path("dist/server-manifest.json").read_text())
+          assert manifest["product"] == "amira-server"
+          for artifact in manifest["artifacts"]:
+              file = Path("dist") / artifact["file"]
+              data = file.read_bytes()
+              assert len(data) == artifact["size"], file
+              assert hashlib.sha256(data).hexdigest() == artifact["sha256"], file
+          PYCODE
+          mkdir -p "$RUNNER_TEMP/server-smoke/home" "$RUNNER_TEMP/server-smoke/remote-home" "$RUNNER_TEMP/server-smoke/workspace"
+          export HOME="$RUNNER_TEMP/server-smoke/home" USERPROFILE="$RUNNER_TEMP/server-smoke/home"
+          export AMIRA_HOME="$RUNNER_TEMP/server-smoke/home/amira"
+          export XDG_CONFIG_HOME="$HOME/config" XDG_CACHE_HOME="$HOME/cache" XDG_DATA_HOME="$HOME/data" XDG_STATE_HOME="$HOME/state" XDG_RUNTIME_DIR="$HOME/runtime"
+          chmod 755 dist/amira-server-bun-linux-x64-baseline
+          python3 - <<'PYCODE'
+          import json, subprocess
+          from pathlib import Path
+          manifest = json.loads(Path("dist/server-manifest.json").read_text())
+          for flag in ["--version-json", "--self-check"]:
+              result = json.loads(subprocess.check_output(["./dist/amira-server-bun-linux-x64-baseline", flag], text=True))
+              for key in ["product", "version", "channel", "buildId"]:
+                  assert result[key] == manifest[key], key
+              assert result["target"] == "bun-linux-x64-baseline"
+              if flag == "--self-check":
+                  assert result["ok"] and result["worker"] == "worker" and result["stdoutWorker"], result
+          PYCODE
+          echo 'Server Linux x64 baseline native smoke passed. Server Linux ARM64 execution unverified: no native runner.' >> "$GITHUB_STEP_SUMMARY"
       - name: Record targets without a native smoke runner
         if: runner.os == 'macOS'
         run: |
@@ -335,7 +387,7 @@ jobs:
           SHA: ${{ needs.plan.outputs.sha }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
-          (cd dist && sha256sum --check SHA256SUMS)
+          (cd dist && sha256sum --check SHA256SUMS && sha256sum --check SERVER_SHA256SUMS)
           gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$RUNNER_TEMP/releases.json"
           python3 - <<'PY'
           import json, os, subprocess
@@ -348,8 +400,11 @@ jobs:
               verify_tag_commit(os.environ['GITHUB_REPOSITORY'], os.environ['TAG'], os.environ['SHA'])
               # Never edit or upload to an already published (possibly immutable) release.
               subprocess.run(['gh', 'release', 'download', os.environ['TAG'], '--dir', 'existing',
-                              '--pattern', 'manifest.json', '--pattern', 'manifest.json.sig', '--pattern', 'SHA256SUMS'], check=True)
-              for name in ['manifest.json', 'manifest.json.sig', 'SHA256SUMS']:
+                              '--pattern', 'manifest.json', '--pattern', 'manifest.json.sig', '--pattern', 'SHA256SUMS',
+                              '--pattern', 'server-manifest.json', '--pattern', 'server-manifest.json.sig',
+                              '--pattern', 'SERVER_SHA256SUMS'], check=True)
+              for name in ['manifest.json', 'manifest.json.sig', 'SHA256SUMS',
+                           'server-manifest.json', 'server-manifest.json.sig', 'SERVER_SHA256SUMS']:
                   subprocess.run(['cmp', f'dist/{name}', f'existing/{name}'], check=True)
               print('Published release verified; leaving it untouched.')
           else:

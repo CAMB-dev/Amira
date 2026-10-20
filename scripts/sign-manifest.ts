@@ -68,7 +68,10 @@ export function verifyManifest(bytes: Uint8Array, signature: string, pem: string
   return verify(null, bytes, key, Buffer.from(signature.trim(), "base64"))
 }
 
-export async function manifestCommand(argv: string[]) {
+export async function manifestCommand(
+  argv: string[],
+  manifestName: "manifest.json" | "server-manifest.json" = "manifest.json",
+) {
   const command = argv[0]
   const allowed: Record<string, readonly string[]> = {
     generate: ["--dist", "--version", "--channel", "--target"],
@@ -86,8 +89,8 @@ export async function manifestCommand(argv: string[]) {
     options.set(flag, value)
   }
   const directory = options.get("--dist") ?? "dist"
-  const manifest = path.join(directory, "manifest.json")
-  const signature = path.join(directory, "manifest.json.sig")
+  const manifest = path.join(directory, manifestName)
+  const signature = path.join(directory, `${manifestName}.sig`)
   if (command === "generate") {
     let metadata: BuildMetadata | undefined
     if (["--version", "--channel", "--target"].some((flag) => options.has(flag))) {

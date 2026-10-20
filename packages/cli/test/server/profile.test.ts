@@ -196,10 +196,51 @@ test("configured entry uses remote settings/instructions and emits no terminal o
   }
 })
 
+test("daemon restart restores saved history with a fresh epoch and no invented work", async () => {
+  const cwd = path.join(root, "restart-workspace")
+  mkdirSync(path.join(cwd, ".amira"), { recursive: true })
+  writeFileSync(
+    path.join(cwd, ".amira", "settings.json"),
+    JSON.stringify({ model: "mock/m", sessions: { autoTitle: false } }),
+  )
+  const ai = createAi({
+    dialects: [createMockDialect([{ text: "saved before restart" }])],
+    providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
+  })
+  const first = await createServerRuntime({ cwd, ai })
+  let next: Awaited<ReturnType<typeof createServerRuntime>> | undefined
+  try {
+    const port = first.attach()
+    const sessionId = port.snapshot.state.sessionId
+    const ended = new Promise<void>((resolve) => {
+      const off = port.subscribeEvents((event) => {
+        if (event.type === "turn.end") {
+          off()
+          resolve()
+        }
+      })
+    })
+    await port.execute("turn.prompt", { message: "persist" })
+    await ended
+    await first.stop()
+    next = await createServerRuntime({ cwd, ai })
+    const restored = next.attach()
+    expect(restored.snapshot.state.sessionId).toBe(sessionId)
+    expect(JSON.stringify(restored.snapshot.transcript)).toContain("saved before restart")
+    expect(next.journal.daemonEpoch).not.toBe(first.journal.daemonEpoch)
+    expect(restored.pendingRequests).toEqual([])
+    await restored.detach()
+    expect(next.quiescent()).toBe(true)
+  } finally {
+    await first.stop()
+    await next?.stop()
+  }
+})
+
 test("executable probes are settings-free and write only their declared result", async () => {
   // The subprocess runs under the launcher's isolated home and inherits no live-provider opt-ins.
   const entry = path.resolve(import.meta.dir, "../../src/server-main.ts")
-  for (const flag of ["--version", "--self-check"]) {
+  for (const flag of ["--version", "--version-json", "--self-check"]) {
     const child = Bun.spawn([process.execPath, entry, flag], {
       env: process.env,
       stdout: "pipe",
