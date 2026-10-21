@@ -1,9 +1,17 @@
 import "./offline.ts"
 import { afterAll, expect, test } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import path from "node:path"
 import { DaemonDiscovery, type DaemonMetadata } from "../../src/server/discovery.ts"
-import { discoveryFixture, release } from "./daemon-fixture.ts"
+import { discoveryFixture, discoveryTempDir, release } from "./daemon-fixture.ts"
 
 const roots: string[] = []
 afterAll(() => {
@@ -27,6 +35,62 @@ function metadata(discovery: DaemonDiscovery): DaemonMetadata {
     lockIdentity: discovery.lockIdentity(),
   }
 }
+
+test("macOS discovery fixtures avoid long per-user tmpdirs within the Unix socket budget", () => {
+  const longTmpDir = "/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/"
+  const shortTmpDir = discoveryTempDir("darwin", longTmpDir)
+  expect(shortTmpDir).toBe("/tmp")
+  // Include macOS's canonical /private prefix, the random fixture suffix, and every socket layout.
+  const root = path.posix.join("/private", shortTmpDir, "ad-123456")
+  const key = "0".repeat(24)
+  for (const directory of ["r/amira", "amira-1-workspaces", "selected/amira"]) {
+    expect(Buffer.byteLength(path.posix.join(root, directory, key, "daemon.sock"))).toBeLessThanOrEqual(100)
+  }
+  expect(discoveryTempDir("linux", longTmpDir)).toBe(longTmpDir)
+  expect(discoveryTempDir("win32", "C:\\Temp")).toBe("C:\\Temp")
+})
+
+test("Windows CI discovery fixtures keep runner temp paths within the fallback socket budget", () => {
+  const runnerTemp = "D:\\a\\_temp"
+  const key = "0".repeat(24)
+  const socketPath = (tmpDir: string, directory: string) =>
+    path.win32.join(tmpDir, "ad-123456", directory, key, "daemon.sock")
+  for (const user of ["RUNNER~1", "runneradmin"]) {
+    const longTmpDir = `C:\\Users\\${user}\\AppData\\Local\\Temp`
+    // Even the runner's shortened username exceeds the stable fallback's 100-byte limit.
+    expect(Buffer.byteLength(socketPath(longTmpDir, "amira-1-workspaces"))).toBeGreaterThan(100)
+    const shortTmpDir = discoveryTempDir("win32", longTmpDir, runnerTemp)
+    for (const directory of ["r/amira", "amira-1-workspaces", "selected/amira"]) {
+      expect(Buffer.byteLength(socketPath(shortTmpDir, directory))).toBeLessThanOrEqual(100)
+    }
+    expect(shortTmpDir).toBe(runnerTemp)
+    expect(discoveryTempDir("linux", longTmpDir, runnerTemp)).toBe(longTmpDir)
+    expect(discoveryTempDir("darwin", longTmpDir, runnerTemp)).toBe("/tmp")
+  }
+  expect(discoveryTempDir("win32", "C:\\Temp")).toBe("C:\\Temp")
+  expect(discoveryTempDir("win32", "C:\\Temp", "")).toBe("C:\\Temp")
+})
+
+test("discovery fixtures canonicalize temporary-root aliases before creating socket paths", () => {
+  const f = fixture()
+  const alias = path.join(f.root, "tmp-alias")
+  symlinkSync(f.options.runtimeDir, alias, process.platform === "win32" ? "junction" : "dir")
+  const nested = discoveryFixture(alias)
+  roots.push(nested.root)
+  expect(nested.root).toBe(realpathSync(nested.root))
+  expect(nested.cwd).toBe(nested.discovery.workspace)
+  expect(nested.discovery.directory).toBe(realpathSync(nested.discovery.directory))
+  const owner = nested.discovery.claim("owner")!
+  try {
+    const meta = metadata(nested.discovery)
+    writeFileSync(meta.socket, "fake-private-socket")
+    nested.discovery.publish(meta)
+    expect(() => nested.discovery.endpoint(nested.discovery.read()!).verify()).not.toThrow()
+  } finally {
+    nested.discovery.clearOwnedFiles()
+    owner.release()
+  }
+})
 
 test("canonical workspace ownership and socket paths are independent of build identity", () => {
   const { cwd, options, discovery } = fixture()

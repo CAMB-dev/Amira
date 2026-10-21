@@ -1,6 +1,6 @@
 import "./offline.ts"
 import { afterEach, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createServerFileOperations } from "../../src/server/files.ts"
@@ -9,12 +9,41 @@ const roots: string[] = []
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
-async function workspace() {
-  const root = await mkdtemp(join(tmpdir(), "amira-files-"))
+async function workspace(aliased = false) {
+  let root = await mkdtemp(join(tmpdir(), "amira-files-"))
   roots.push(root)
+  if (aliased) {
+    const physical = join(root, "physical")
+    await mkdir(physical)
+    const alias = join(root, "alias")
+    await symlink(physical, alias, process.platform === "win32" ? "junction" : "dir")
+    root = alias
+  }
   await mkdir(join(root, "project"))
   return { root, cwd: join(root, "project") }
 }
+
+test("pins canonical paths rather than their input spelling", async () => {
+  const { cwd } = await workspace(true)
+  const spelling = process.platform === "win32" ? cwd.toUpperCase().replaceAll("\\", "/") : cwd
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+  await writeFile(join(cwd, "own.png"), png)
+  const service = createServerFileOperations({
+    generation: () => 1,
+    resolveScope: () => ({ cwd: spelling }),
+    stream: async (_cwd, emit) => {
+      emit(["own.png"])
+      return true
+    },
+  })
+  service.establishScope(spelling)
+  try {
+    expect((await service["files.list"]({})).entries).toEqual(["own.png"])
+    expect((await service["images.read"]({ path: "own.png" })).data).toBe(png.toString("base64"))
+  } finally {
+    service.dispose()
+  }
+})
 
 test("pages a bounded immutable listing and invalidates cursors on refresh", async () => {
   const { cwd } = await workspace()
@@ -67,46 +96,52 @@ test("cancels a pending listing before its generation has been delivered", async
   service.dispose()
 })
 
-test("image and artifact reads authorize canonical scope, not paths or symlink aliases", async () => {
-  const { root, cwd } = await workspace()
-  const outside = join(root, "outside")
-  const artifacts = join(root, "owned-artifacts")
-  await mkdir(outside)
-  await mkdir(artifacts)
-  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-  await writeFile(join(cwd, "画.png"), png)
-  await writeFile(join(cwd, "fake.png"), "not an image")
-  await writeFile(join(outside, "private.png"), png)
-  await writeFile(join(artifacts, "output.txt"), "owned output")
-  await symlink(outside, join(cwd, "link"), process.platform === "win32" ? "junction" : "dir")
-  const service = createServerFileOperations({
-    generation: () => 1,
-    resolveScope: (scope) => (scope === undefined ? { cwd } : undefined),
-    resolveArtifact: (id) => ({
-      path: id === "owned" ? join(artifacts, "output.txt") : join(outside, "private.png"),
-      root: artifacts,
-    }),
-  })
-  service.establishScope(cwd)
-  try {
-    expect(await service["images.read"]({ path: "画.png" })).toEqual({
-      name: "画.png",
-      mimeType: "image/png",
-      data: png.toString("base64"),
-      bytes: png.length,
+for (const aliased of [false, true]) {
+  test(`image and artifact reads authorize canonical scope, not paths or symlink aliases (aliased tmpdir: ${aliased})`, async () => {
+    const { root, cwd } = await workspace(aliased)
+    const outside = join(root, "outside")
+    const artifacts = join(root, "owned-artifacts")
+    await mkdir(outside)
+    await mkdir(artifacts)
+    // Like ArtifactStore.resolveOwned, pin the real directory, not its symlinked tmpdir spelling.
+    const artifactRoot = await realpath(artifacts)
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+    await writeFile(join(cwd, "画.png"), png)
+    await writeFile(join(cwd, "fake.png"), "not an image")
+    await writeFile(join(outside, "private.png"), png)
+    await writeFile(join(artifacts, "output.txt"), "owned output")
+    await symlink(outside, join(cwd, "link"), process.platform === "win32" ? "junction" : "dir")
+    const service = createServerFileOperations({
+      generation: () => 1,
+      resolveScope: (scope) => (scope === undefined ? { cwd } : undefined),
+      resolveArtifact: (id) => ({
+        path: id === "owned" ? join(artifacts, "output.txt") : join(outside, "private.png"),
+        root: artifactRoot,
+      }),
     })
-    await expect(service["images.read"]({ path: "../outside/private.png" })).rejects.toThrow("outside")
-    await expect(service["images.read"]({ path: "link/private.png" })).rejects.toThrow("outside")
-    await expect(service["images.read"]({ path: "fake.png" })).rejects.toThrow("MIME")
-    await expect(service["images.read"]({ scope: "foreign-child", path: "画.png" })).rejects.toThrow("scope")
-    expect(Buffer.from((await service["artifacts.read"]({ id: "owned" })).data, "base64").toString()).toBe(
-      "owned output",
-    )
-    await expect(service["artifacts.read"]({ id: "foreign" })).rejects.toThrow("outside")
-  } finally {
-    service.dispose()
-  }
-})
+    service.establishScope(cwd)
+    try {
+      expect(await service["images.read"]({ path: "画.png" })).toEqual({
+        name: "画.png",
+        mimeType: "image/png",
+        data: png.toString("base64"),
+        bytes: png.length,
+      })
+      await expect(service["images.read"]({ path: "../outside/private.png" })).rejects.toThrow("outside")
+      await expect(service["images.read"]({ path: "link/private.png" })).rejects.toThrow("outside")
+      await expect(service["images.read"]({ path: "fake.png" })).rejects.toThrow("MIME")
+      await expect(service["images.read"]({ scope: "foreign-child", path: "画.png" })).rejects.toThrow(
+        "scope",
+      )
+      expect(Buffer.from((await service["artifacts.read"]({ id: "owned" })).data, "base64").toString()).toBe(
+        "owned output",
+      )
+      await expect(service["artifacts.read"]({ id: "foreign" })).rejects.toThrow("outside")
+    } finally {
+      service.dispose()
+    }
+  })
+}
 
 for (const scope of [undefined, "native-child"]) {
   for (const replacement of ["junction", "directory"]) {

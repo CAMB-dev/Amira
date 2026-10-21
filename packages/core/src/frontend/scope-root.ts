@@ -12,7 +12,8 @@ const roots = new WeakMap<Agent, FrontendScopeRoot | undefined>()
 export function registerAgentScopeRoot(agent: Agent): void {
   if (roots.has(agent)) return
   try {
-    const cwd = realpathSync(agent.cwd)
+    // Native spelling agrees with async realpath on Windows (case and 8.3 aliases).
+    const cwd = realpathSync.native(agent.cwd)
     const info = statSync(cwd)
     roots.set(agent, info.isDirectory() ? Object.freeze({ cwd, ino: info.ino, dev: info.dev }) : undefined)
   } catch {

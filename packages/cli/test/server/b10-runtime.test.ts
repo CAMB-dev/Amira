@@ -21,7 +21,9 @@ async function waitFor(check: () => boolean) {
 }
 
 test("B10 bytes, image steering, native focus and live capture survive a real-codec detach", async () => {
-  const cwd = mkdtempSync(path.join(tmpdir(), "amira-b10-wire-"))
+  const root = mkdtempSync(path.join(tmpdir(), "amira-b10-wire-"))
+  // Host pinning must accept equivalent Windows spellings, including slash-separated paths.
+  const cwd = process.platform === "win32" ? root.toUpperCase().replaceAll("\\", "/") : root
   const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
   writeFileSync(path.join(cwd, "画.png"), png)
   let owned!: OwnedConversation

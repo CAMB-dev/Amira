@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { RemoteIO } from "../../src/remote/connection.ts"
@@ -11,8 +11,17 @@ import { assertDaemonPeer, type DaemonEndpoint } from "../../src/server/socket-e
 import { loopback } from "../remote/loopback.ts"
 
 export const release: RemoteRelease = { version: "fixture", buildId: "build-one", target: "fake-linux" }
-export function discoveryFixture() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "ad-"))
+export function discoveryTempDir(platform: NodeJS.Platform, tmpDir: string, runnerTemp?: string): string {
+  // macOS's per-user TMPDIR is too long for sockaddr_un, even with a short fixture prefix.
+  if (platform === "darwin") return "/tmp"
+  // Windows CI's per-user Temp also exceeds the stable fallback socket budget; RUNNER_TEMP is shorter.
+  return platform === "win32" && runnerTemp ? runnerTemp : tmpDir
+}
+export function discoveryFixture(
+  tmpDir = discoveryTempDir(process.platform, os.tmpdir(), process.env.RUNNER_TEMP),
+) {
+  // Resolve system aliases (/tmp -> /private/tmp on macOS) before strict ancestor checks.
+  const root = realpathSync(mkdtempSync(path.join(tmpDir, "ad-")))
   const home = path.join(root, "h")
   const runtimeDir = path.join(root, "r")
   const cwd = path.join(root, "w")

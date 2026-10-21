@@ -1,12 +1,15 @@
 import "./offline.ts"
 import { expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
-import type { AnyEvent } from "@amira/api"
+import type { AnyEvent, ExtensionAPI } from "@amira/api"
 import commands from "../../../../extensions/commands/src/index.ts"
+import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnWork } from "../../../../scripts/spawn-test.ts"
 import { createCommandHost } from "../../src/control.ts"
+import { serverBuiltins } from "../../src/server/profile.ts"
 import { createWorkspaceRuntime, type ServerEvent } from "../../src/server/runtime.ts"
 import { createSession } from "../../src/session.ts"
 
@@ -17,7 +20,8 @@ const mockAi = (baseUrl: string) =>
     providers: [{ id: "mock", dialect: "mock", baseUrl, apiKey: "MOCK_KEY_SENTINEL" }],
   })
 const root = () => mkdtempSync(path.join(os.tmpdir(), "amira-status-security-"))
-const remove = (cwd: string) => rmSync(cwd, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+// Let pending close callbacks run between bounded retries for transient Windows sharing locks.
+const remove = (cwd: string) => rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 
 function assertSafe(output: unknown, events: readonly (AnyEvent | ServerEvent)[], secrets: string[]) {
   expect(events.some((event) => event.type === "command.output")).toBe(true)
@@ -35,11 +39,27 @@ test.each([
   "server /status projects provider origins without URL userinfo or query credentials in output/events: %s",
   async (baseUrl) => {
     const cwd = root()
+    const pendingCommands = new Set<Promise<unknown>>()
     const runtime = await createWorkspaceRuntime({
       cwd,
       ai: mockAi(baseUrl),
       model: "mock/test",
       autoTitle: false,
+      builtins: async () =>
+        (await serverBuiltins()).map(({ source, extension }) => ({
+          source,
+          extension: (api: ExtensionAPI) =>
+            extension({
+              ...api,
+              runCommand: (...args) => {
+                const command = api.runCommand(...args)
+                pendingCommands.add(command)
+                const done = () => pendingCommands.delete(command)
+                void command.then(done, done)
+                return command
+              },
+            }),
+        })),
     })
     const attachment = runtime.attach()
     const events: ServerEvent[] = []
@@ -55,9 +75,12 @@ test.each([
       off()
       await attachment.detach()
       await runtime.stop()
-      remove(cwd)
+      // Workspace probes are cancelled by shutdown but their child processes must also finish.
+      await waitForSpawnWork("status workspace command cleanup", Promise.allSettled([...pendingCommands]))
+      await remove(cwd)
     }
   },
+  SPAWN_TEST_TIMEOUT_MS,
 )
 
 test.each([
@@ -122,7 +145,7 @@ test.each([
       session.host.unloadAll()
       await session.host.drain()
       await session.traceRecorder?.close()
-      remove(cwd)
+      await remove(cwd)
     }
   },
 )

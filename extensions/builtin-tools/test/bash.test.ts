@@ -119,11 +119,12 @@ test.if(hasBash)(
   "times out and kills the command",
   async () => {
     const start = Date.now()
-    const r = await execute({ command: "echo before; sleep 30", timeout: 1000 }, makeCtx(dir))
+    // Leave room for shell startup on loaded runners; still kill well before sleep completes.
+    const r = await execute({ command: "echo before; sleep 30", timeout: 5000 }, makeCtx(dir))
     expect(Date.now() - start).toBeLessThan(25_000)
     expect(r.isError).toBe(true)
     expect(textOf(r)).toContain("before")
-    expect(textOf(r)).toContain("timed out after 1000 ms")
+    expect(textOf(r)).toContain("timed out after 5000 ms")
     expect(textOf(r)).toContain("longer `timeout`")
     expect(textOf(r)).toContain("`background: true`")
     expect(textOf(r)).toContain("job_output")
@@ -145,7 +146,8 @@ test.if(hasBash)(
       )
       const run = await runCommand(argv, {
         ...spawn,
-        timeoutMs: 1000,
+        // Test pipe-holder cleanup, not whether a loaded runner starts/reaps Bash within 1s.
+        timeoutMs: 5000,
         signal: new AbortController().signal,
         onChunk: () => void calls++,
         // Contain the tree but leave it running, as if a pipe holder had escaped.
@@ -327,8 +329,9 @@ test.if(hasBash)(
     }
     // MSYS's /proc reports exec, not just fork. Confirm each sleep locally before signalling:
     // spawning PowerShell/CIM for every readiness poll competes with shell startup under load.
+    // MSYS can expose an empty cmdline before exec; retry that read while the child is alive.
     const check = isWindows
-      ? `while IFS= read -r -d '' name < /proc/$pid/cmdline; do [[ $name == sleep ]] && return; sleep 0.05; done`
+      ? `while kill -0 "$pid" 2>/dev/null; do name=; IFS= read -r -d '' name < /proc/$pid/cmdline; [[ $name == sleep ]] && return; sleep 0.05; done`
       : `while kill -0 "$pid" 2>/dev/null; do [[ $(ps -p "$pid" -o comm=) == *sleep ]] && return; sleep 0.05; done`
     const command = [
       `start_sleep() { sleep ${marker} & local pid=$! name; ${check}; return 1; }`,

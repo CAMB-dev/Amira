@@ -278,10 +278,10 @@ test.if(hasBash)(
 test.if(hasBash)(
   "a background pipeline fails when a command before the last one fails",
   async () => {
-    const r = await bashTool.execute(
-      { command: "false | tail -n 1", background: true },
-      ctxIn(session("s_main")),
-    )
+    const ctx = ctxIn(session("s_main"))
+    const started = await bashTool.execute({ command: "false | tail -n 1", background: true }, ctx)
+    // A start response may still be pending under load; assert the terminal pipeline result.
+    const r = await jobOutputTool.execute({ job_id: detailsOf(started).jobId, timeout: 30_000 }, ctx)
     expect(r.isError).toBe(true)
     expect(detailsOf(r)).toMatchObject({ status: "exited", exitCode: 1 })
   },
