@@ -107,6 +107,8 @@ test(
         throw new Error("not used")
       },
       ui: {
+        setInputSuggestion: () => {},
+        onInputSuggestionAccepted: () => () => {},
         select: async () => undefined,
         choose: async () => undefined,
         confirm: async () => false,

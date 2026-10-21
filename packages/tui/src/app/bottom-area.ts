@@ -71,6 +71,7 @@ export interface BottomAreaDeps {
   conversationIndicator?: (width: number) => string | undefined
   conversationFocused?: () => boolean
   editor: Editor
+  suggestion?: () => string | undefined
   keys: Keybindings
   reaches: (spec: KeySpec) => boolean
   enterDoes: WhileWorking
@@ -148,7 +149,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
           : []),
     ]
   }
-  const inputBox = new InputBox(editor, statusItems)
+  const inputBox = new InputBox(editor, statusItems, deps.suggestion)
   /** Lists supply their own two-cell gutter; the frame adds two more before the text. */
   const listLines = (
     list: NonNullable<ReturnType<typeof inputList>>,

@@ -166,9 +166,14 @@ export class InputRegistry {
 
   /** The handler that claims `text`, if any; one that throws does not. */
   claim(text: string): InputHandler | undefined {
-    for (const { handler } of [...this.#handlers].reverse()) {
+    return this.claimWithSource(text)?.handler
+  }
+
+  /** Keeps the claiming registration's ownership for its invocation context. */
+  claimWithSource(text: string): { handler: InputHandler; source: string } | undefined {
+    for (const entry of [...this.#handlers].reverse()) {
       try {
-        if (handler.claims(text)) return handler
+        if (entry.handler.claims(text)) return entry
       } catch {}
     }
     return undefined
@@ -354,6 +359,7 @@ export class CommandHost {
   /** Makes `agent` the active session and tells every listener. */
   switchTo(agent: Agent): void {
     this.#contexts.switched(() => {
+      this.#opts.ui.inputSuggestions.clear()
       this.#agent = agent
       activateAgentSession(agent)
       for (const fn of this.#listeners) fn(agent)
@@ -588,15 +594,17 @@ export class CommandHost {
   async runInput(line: string, opts: CommandRunOptions): Promise<CommandOutcome> {
     const output: string[] = []
     const text = line.trim()
-    const handler = this.#opts.inputs?.claim(text)
-    const print = this.#printer(handler?.name ?? "input", output)
-    if (!handler) {
+    const entry = this.#opts.inputs?.claimWithSource(text)
+    const print = this.#printer(entry?.handler.name ?? "input", output)
+    if (!entry) {
       const error = `No extension handles: ${text}`
       print(error, "error")
       return { ok: false, output, error }
     }
+    const { handler, source } = entry
     try {
-      await this.#contexts.run(() => handler.run(text, this.#context(opts, print)))
+      // Input handlers keep extension session controls while attributing UI to their source.
+      await this.#contexts.run(() => handler.run(text, this.#context(opts, print, undefined, source)))
       return { ok: true, command: handler.name, output }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)
@@ -647,7 +655,12 @@ export class CommandHost {
     }
   }
 
-  #context(opts: CommandRunOptions, print: CommandContext["print"], source?: string): CommandContext {
+  #context(
+    opts: CommandRunOptions,
+    print: CommandContext["print"],
+    source?: string,
+    uiSource = source,
+  ): CommandContext {
     const scope = this.#contexts.capture(opts.signal)
     const control = this.#opts.contextControl?.(source) ?? this.#opts.control
     const frontendCurrent = () => scope.current() && (opts.isFrontendCurrent?.() ?? true)
@@ -657,7 +670,7 @@ export class CommandHost {
       session: scope.control(control, opts.onSend),
       frontend: opts.frontend,
       signal: opts.signal ?? new AbortController().signal,
-      ui: scope.ui(this.#opts.ui.api()),
+      ui: scope.ui(this.#opts.ui.api(uiSource)),
       print,
       commands: () => this.list(),
       skills: () => this.skills(),

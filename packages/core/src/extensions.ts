@@ -34,6 +34,7 @@ import {
   StandbyGoneError,
   warmUpCommands,
 } from "@amira/proc"
+import { subscribeHolds } from "./agent/held-input.ts"
 import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { ownCommandViews } from "./command-view-context.ts"
@@ -217,6 +218,25 @@ export class ExtensionHost {
     this.themes.subscribe(() => this.#requestRender())
     this.inputs = opts.inputs ?? new InputRegistry()
     this.ui = opts.ui ?? new UiRequests(opts.bus, opts.sessionId ? { sessionId: opts.sessionId } : {})
+    this.ui.setInputSuggestionBusyAccessor(() => this.#agent?.().busy ?? false)
+    opts.bus.capture(
+      (event) => {
+        const sessionId = this.#agent?.().sessionId ?? opts.sessionId ?? "host"
+        if (event.parentSessionId !== undefined || event.sessionId !== sessionId) return
+        if (
+          event.type === "turn.start" ||
+          event.type === "session.start" ||
+          event.type === "session.end" ||
+          (event.type === "status.changed" &&
+            (event.data.status === "working" || event.data.status === "blocked"))
+        )
+          this.ui.inputSuggestions.clear()
+      },
+      () => this.ui.inputSuggestions.clear(),
+    )
+    subscribeHolds(opts.bus, (agent, hold) => {
+      if (hold && agent === this.#agent?.()) this.ui.inputSuggestions.clear()
+    })
     this.markdown = new MarkdownRendererRegistry((source, error) => void this.#fail(source, error))
     this.images = new ImageProviderRegistry()
     this.services = new ServiceRegistry()
@@ -528,6 +548,7 @@ export class ExtensionHost {
   #uiFor(source: string, track: (d: () => void) => void) {
     track(() => {
       this.ui.cancelAll(source)
+      this.ui.inputSuggestions.release(source)
       this.ui.setSourceLabel(source, undefined)
     })
     return this.ui.api(source)

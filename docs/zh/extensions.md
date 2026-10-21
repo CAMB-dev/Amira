@@ -221,6 +221,22 @@ amira
 | `notify`、`reportError` | 显示提示或报告后台错误 |
 | `registerFileRestoration` | 接管回退时的文件恢复（例如 checkpoints 扩展）：选择器显示你提供的选项，core 不再恢复文件；同一时间只能有一个扩展接管，卸载时释放 |
 
+### 输入建议
+
+- `api.ui.setInputSuggestion(text: string | undefined): void` 设置建议，宿主会将其清理为单行纯文本，去除首尾空白，并限制在 500 个 Unicode 码点以内。最后设置的扩展拥有该建议；传入 `undefined` 只会清除调用扩展自己的建议。
+- `api.ui.onInputSuggestionAccepted(handler: (text: string) => void): () => void` 将采纳的文本通知给拥有建议的扩展，并返回取消订阅函数。卸载或重载时，会移除该扩展的建议和回调。
+
+建议仅在输入框为空且获得焦点时显示为灰字。Tab 将建议填入输入框，不会提交，仍可编辑；原有 Tab 补全不变，补全弹窗打开时优先处理补全。打字、粘贴、浏览历史输入、提交、回合开始、进入忙碌状态、`/clear` 和切换会话都会清除建议。
+
+```ts
+api.ui.onInputSuggestionAccepted((text) => {
+  api.notify(`Accepted: ${text}`)
+})
+api.ui.setInputSuggestion("Summarize the changes.")
+```
+
+此宿主 API 仅供本地 TUI 使用，不向 RPC、远程或打印模式暴露。它本身不生成建议，也不发送模型请求。
+
 ### 卸载清理
 
 用 `api.onUnload(() => { ... })` 清理自行创建的资源，例如定时器、订阅或用于中止待完成工作的 `AbortController`。它返回一个移除该钩子的函数。每个已注册钩子在此实例卸载时调用一次：包括 `/reload`、禁用或移除生效、加载失败后的回滚，以及退出。停靠和全屏视图先关闭，在注册项仍可用时各调用一次 `onClose`；然后执行卸载钩子，最后移除注册项。钩子失败会被报告，但不会中断其他清理。

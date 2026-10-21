@@ -90,6 +90,15 @@ export class CommandContextScope {
           target,
           () => {},
           (key, run, args) => {
+            if (key === "setInputSuggestion") return current() ? run() : undefined
+            if (key === "onInputSuggestionAccepted") {
+              if (!current()) return () => {}
+              const handler = args[0] as (text: string) => void
+              args[0] = (text: string) => {
+                if (current()) return handler(text)
+              }
+              return run()
+            }
             if (!current()) return Promise.resolve(undefined)
             const dialog = { generation: this.#generation, controller: new AbortController() }
             const index = key === "select" || key === "choose" || key === "confirm" ? 2 : 1

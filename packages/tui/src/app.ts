@@ -1,11 +1,8 @@
 import { isNoModel } from "@amira/ai"
 import {
   type AnyEvent,
-  DEFAULT_TUI_BELL,
   DEFAULT_TUI_IMAGES,
-  DEFAULT_TUI_PROGRESS,
   DEFAULT_TUI_SUBMIT_WHILE_WORKING,
-  DEFAULT_TUI_TITLE,
   type EventMap,
   type ToolDetailLevel,
 } from "@amira/api"
@@ -13,7 +10,6 @@ import type { Agent, AgentPort } from "@amira/core"
 import {
   chooseImageSupport,
   detectEnv,
-  Editor,
   type InputEvent,
   InputReader,
   ProcessTerminal,
@@ -37,6 +33,7 @@ import { createFrontendFocus } from "./app/frontend-focus.ts"
 import { subscribeFrontend } from "./app/frontend-subscriptions.ts"
 import { createHintNote } from "./app/hint-note.ts"
 import { interactiveImages } from "./app/image-store.ts"
+import { createPromptInput } from "./app/input-suggestion.ts"
 import { createMainRewind } from "./app/main-rewind.ts"
 import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
@@ -47,7 +44,6 @@ import { createServerRows, turnFailureNotice } from "./app/server-rows.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
-  FOLD_PASTES,
   FRAME_MS,
   HINT_NOTE_MS,
   HOST_EVENTS,
@@ -59,7 +55,7 @@ import {
   withFrontend,
 } from "./app/startup.ts"
 import { createSubmission } from "./app/submission.ts"
-import { interactiveBanner, withFullscreenTerminal } from "./app/terminal.ts"
+import { createTerminalStatus, interactiveBanner, withFullscreenTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
 import { copyLastReply } from "./clipboard.ts"
 import { displayOutput } from "./display-history.ts"
@@ -72,7 +68,6 @@ import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { PromptHistory } from "./prompt-history.ts"
 import { replyCitations } from "./server-tools.ts"
-import { TerminalStatus } from "./terminal-status.ts"
 import { detailCommand, toggleDetail } from "./verbose.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
@@ -135,24 +130,21 @@ async function runFullscreen(
   /** What Enter does with a message while a turn runs; the queue key does the other. */
   const enterDoes: WhileWorking =
     (settings.submitWhileWorking ?? DEFAULT_TUI_SUBMIT_WHILE_WORKING) === "queue" ? "queue" : "steer"
-  const termStatus = new TerminalStatus(
-    terminal,
-    {
-      title: settings.title ?? DEFAULT_TUI_TITLE,
-      progress: settings.progress ?? DEFAULT_TUI_PROGRESS,
-      bell: settings.bell ?? DEFAULT_TUI_BELL,
-      notify: settings.notify,
-    },
-    env,
-  )
-  const editor = new Editor({
-    prompt: `${glyphs.user} `,
-    placeholder: "Message Amira",
+  const termStatus = createTerminalStatus(terminal, settings, env)
+  const suggestion = createPromptInput({
+    ui: opts.ui,
+    keys,
+    blocked: () =>
+      !agent ||
+      agent.busy ||
+      !!focus.conversation ||
+      overlays.hasFullscreen ||
+      overlays.dialogs.length > 0 ||
+      view.capturing ||
+      composer.suggestionBlocked,
     onSubmit: (text, info) => submission.submit(text, info.parts, info.display),
-    foldPastes: FOLD_PASTES,
-    isSubmit: (e) => keys.is(e, "submit"),
-    isNewline: (e) => keys.is(e, "newline"),
   })
+  const { editor } = suggestion
   const commands = opts.commands
   const mainHistory = opts.history ?? new PromptHistory()
   const files = conversationFiles(
@@ -180,6 +172,7 @@ async function runFullscreen(
     redraw,
     redrawTerminal: () => view.redraw(),
     runPopup: (line) => {
+      suggestion.clear()
       if (focus.guardCommand(line)) return
       if (line.startsWith("$")) submission.runSkill(line)
       else commandRunner.run(line)
@@ -237,6 +230,7 @@ async function runFullscreen(
     search: composer.search,
     popups: composer.popups,
     filePicker: composer.filePicker,
+    suggestion: suggestion.visible,
   })
   const overlays = new OverlayManager({
     ui: opts.ui,
@@ -512,6 +506,7 @@ async function runFullscreen(
       case "session.title":
         break
       case "turn.start": {
+        suggestion.clear()
         termStatus.setRunning(true)
         const prompt = e.data.prompt
         // A turn woken by notices carries every one that was waiting, and takes held ones along.
@@ -675,6 +670,7 @@ async function runFullscreen(
   }
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
+    suggestion.clear()
     rewind.reset(next)
     focus.unfocus()
     termStatus.setRunning(false, true)
@@ -776,9 +772,11 @@ async function runFullscreen(
       // Ctrl+C closes the dialog like Esc (dialog.cancel).
       dialog.handleInput(e)
     } else if (composer.search.active) {
+      // Discard hidden predictions before search can forward a key such as Tab.
+      suggestion.clear()
       // Keys like the arrows end the search and then do what they do.
       if (composer.handleSearchKey(e) === "accepted-pass") return onInput(e)
-    } else if (composer.handleCompletionKey(e)) {
+    } else if (composer.handleCompletionKey(e) || suggestion.handleInput(e)) {
       // The popup or file picker took one of its keys (popup.*).
     } else if (!viewFirst && view.handleInput(e)) {
       // The view took one of its keys (scrolling, find, selecting, copying).
@@ -795,12 +793,12 @@ async function runFullscreen(
       composer.cancelClipboard()
       if (focus.conversation) {
         if (focus.busy) focus.interrupt()
-        else if (focus.conversation && !editor.isEmpty) editor.clear()
+        else if (focus.conversation && !editor.isEmpty) suggestion.clearDraft()
         else if (focus.conversation) showNote(`Press ${keys.label("view.focus") ?? "F6"} to return to main.`)
       } else if (commandRunner.cancel()) {
         // A slash command runs alongside the turn; cancellation leaves the input intact.
       } else if (activity.working) outbox.interrupt()
-      else if (!editor.isEmpty) editor.clear()
+      else if (!editor.isEmpty) suggestion.clearDraft()
       else return quitOrWarn("cancel")
     } else if (keys.is(e, "exit") && !activity.working && editor.isEmpty) {
       if (focus.unfocus()) return redraw()
@@ -856,6 +854,7 @@ async function runFullscreen(
     quit,
     rewind: () => rewind.openRewind(),
     reset: () => {
+      suggestion.clear()
       focus.unfocus()
       composer.cancelClipboard()
       outbox.reset()

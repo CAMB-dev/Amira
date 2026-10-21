@@ -208,11 +208,28 @@ export interface UiRequestOptions {
 }
 
 /**
- * Dialogs for extensions. Every method resolves; a dialog nobody answered (dismissed, timed
- * out, aborted, or no frontend can ask, as in print mode) gives undefined. For confirm that
+ * Dialogs and local input suggestions for extensions. Every dialog method resolves; a dialog
+ * nobody answered (dismissed, timed out, aborted, or no frontend can ask, as in print mode)
+ * gives undefined. For confirm that
  * keeps "the user said no" (false) apart from "nobody answered" (undefined).
  */
 export interface UiApi {
+  /**
+   * Sets a local-TUI input suggestion (not exposed over RPC/remote). Shown only while the
+   * input is empty and the agent is idle; accepting fills the input without sending it.
+   * Sanitized to one trimmed line, with ANSI/control characters removed, at most 500 Unicode
+   * code points. Latest nonempty setter wins across extensions. Undefined or sanitized-empty
+   * text clears only this extension's suggestion; unloading its owner also clears it.
+   * The host clears suggestions on input edits/submission, new turns, busy work and session changes.
+   */
+  setInputSuggestion(text: string | undefined): void
+  /**
+   * Called only when this extension's suggestion is accepted, with the sanitized text. The
+   * suggestion is cleared before callbacks run. Returns an unsubscribe function; unloading
+   * the extension removes its callbacks and invalidates its old suggestion API handles.
+   * Local TUI only; no acceptance event or callback crosses RPC/remote transports.
+   */
+  onInputSuggestionAccepted(handler: (text: string) => void): () => void
   select(
     title: string,
     options: string[],

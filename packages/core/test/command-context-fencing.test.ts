@@ -392,6 +392,31 @@ for (const kind of kinds) {
   })
 }
 
+test("scoped suggestion methods stay synchronous and fence stale setters and callbacks", async () => {
+  const s = setup()
+  let retained!: UiApi
+  let off!: () => void
+  const accepted: string[] = []
+  const run = invocation(s, "command", (_args, ctx) => {
+    retained = ctx.ui
+    expect(ctx.ui.setInputSuggestion("fresh")).toBeUndefined()
+    off = ctx.ui.onInputSuggestionAccepted((text) => accepted.push(text))
+    expect(typeof off).toBe("function")
+  })
+  expect((await run({ frontend: "tui" })).ok).toBe(true)
+  expect(s.ui.inputSuggestions.accept()).toBe("fresh")
+  expect(accepted).toEqual(["fresh"])
+  retained.setInputSuggestion("before switch")
+  s.host.switchTo(s.makeAgent())
+  expect(retained.setInputSuggestion("stale")).toBeUndefined()
+  expect(s.ui.inputSuggestions.text).toBeUndefined()
+  s.ui.api().setInputSuggestion("new session")
+  s.ui.inputSuggestions.accept()
+  expect(accepted).toEqual(["fresh"])
+  expect(typeof retained.onInputSuggestionAccepted(() => {})).toBe("function")
+  off()
+})
+
 for (const frontend of ["rpc", "print", "tui"] as const) {
   test(`${frontend}: fresh session controls and frontend effects preserve their results`, async () => {
     const messages: ReturnType<SessionControl["messages"]> = []

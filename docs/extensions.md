@@ -221,6 +221,22 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `notify`, `reportError` | Show a notice or report a background failure |
 | `registerFileRestoration` | Take over rewind's file restoration (for example a checkpoints extension): the picker shows your label and the core restores nothing; one owner at a time, released on unload |
 
+### Input suggestions
+
+- `api.ui.setInputSuggestion(text: string | undefined): void` sets a suggestion, sanitized to one line of plain text, trimmed and limited to 500 Unicode code points. The latest setter owns the suggestion; `undefined` only clears the calling extension's own suggestion.
+- `api.ui.onInputSuggestionAccepted(handler: (text: string) => void): () => void` notifies the owning extension with the accepted text and returns an unsubscribe function. Unload or reload removes that extension's suggestion and callbacks.
+
+Suggestions appear as gray text only in an empty, focused prompt. Tab inserts the suggestion without submitting, so it can still be edited; Tab completion is unchanged and takes priority when the completion popup is open. Typing, pasting, history navigation, submission, turn start, becoming busy, `/clear` and session switches clear the suggestion.
+
+```ts
+api.ui.onInputSuggestionAccepted((text) => {
+  api.notify(`Accepted: ${text}`)
+})
+api.ui.setInputSuggestion("Summarize the changes.")
+```
+
+This host API is local TUI only; it is not exposed in RPC, remote or print modes. It does not generate suggestions or make model requests.
+
 ### Unload cleanup
 
 Register `api.onUnload(() => { ... })` for resources you create yourself, such as timers, subscriptions or an `AbortController` for pending work. It returns a function that removes the hook. Each registered hook runs once when this instance unloads: on `/reload`, when a disable/removal takes effect, after a failed load, or on exit. Dock and fullscreen views close first, calling `onClose` once while registrations are still available; unload hooks then run before registrations are removed. A failing hook is reported without stopping the remaining cleanup.
