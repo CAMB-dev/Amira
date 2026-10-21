@@ -389,6 +389,7 @@ export class InputParser {
   private buf = ""
   private held = ""
   private paste: string | undefined
+  private pasteRevision = 0
   private discardPaste = false
   private discardOpening = false
   private timedOutPaste = false
@@ -397,22 +398,35 @@ export class InputParser {
   private win32 = false
 
   constructor() {
-    registerParserPasteControl(this, () => {
-      if (this.paste === undefined) {
-        if (this.timedOutPaste) {
-          this.paste = ""
-          this.discardPaste = true
-          if (!this.buf.startsWith(this.timedOutTail)) this.buf = this.timedOutTail + this.buf
-          this.timedOutTail = ""
-        } else {
-          const opening = this.buf + this.held
-          if (opening && PASTE_BEGIN.startsWith(opening)) this.discardOpening = true
+    registerParserPasteControl(
+      this,
+      () => {
+        if (this.paste === undefined) {
+          if (this.timedOutPaste) {
+            this.paste = ""
+            this.discardPaste = true
+            if (!this.buf.startsWith(this.timedOutTail)) this.buf = this.timedOutTail + this.buf
+            this.timedOutTail = ""
+          } else {
+            const opening = this.buf + this.held
+            if (opening && PASTE_BEGIN.startsWith(opening)) this.discardOpening = true
+          }
+          return
         }
-        return
-      }
-      this.paste = ""
-      this.discardPaste = true
-    })
+        this.paste = ""
+        this.discardPaste = true
+      },
+      () => {
+        const opening = this.buf + this.held
+        return {
+          revision: this.pasteRevision,
+          pending:
+            this.paste !== undefined
+              ? !this.discardPaste
+              : !this.discardOpening && opening.length > 0 && PASTE_BEGIN.startsWith(opening),
+        }
+      },
+    )
   }
 
   feed(data: string): InputEvent[] {
@@ -521,6 +535,7 @@ export class InputParser {
       const discard = this.discardOpening
       this.discardOpening = false
       if (parsed.pasteStart) {
+        if (!discard) this.pasteRevision++
         this.paste = ""
         this.discardPaste = discard
         this.timedOutPaste = false

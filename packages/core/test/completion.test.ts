@@ -108,6 +108,32 @@ test("unbound completion charges every reported retry attempt without changing h
   expect(agent.messages).toEqual(before)
 })
 
+test("api.complete forwards the opt-in session-tool policy without executing returned calls", async () => {
+  const mock = createMockDialect([
+    { text: "answer", toolCalls: [{ name: "read", args: {} }], usage: { cost: 0.2 } },
+  ])
+  mock.id = "openai-chat"
+  const { api, agent, store } = await setup(mock)
+  let executed = false
+  agent.tools.register(
+    {
+      name: "read",
+      description: "Read a file",
+      parameters: { type: "object" },
+      async execute() {
+        executed = true
+        return { content: [] }
+      },
+    },
+    "test",
+  )
+  const result = await api.complete({ ...request, keepSessionTools: true })
+  expect(result).toMatchObject({ text: "answer", toolsKept: true })
+  expect(mock.requests[0]).toMatchObject({ tools: agent.tools.specs(), toolChoice: "none" })
+  expect(executed).toBe(false)
+  expect(storedSessionUsage(store).knownCostUsd).toBe(0.2)
+})
+
 test("omitted terminal optional metadata retains known spending without certifying coverage", async () => {
   const dialect: Dialect = {
     id: "omitted-metadata",

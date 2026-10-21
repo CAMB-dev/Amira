@@ -2,16 +2,26 @@ import type { InputParser } from "./input.ts"
 import type { InputEvent } from "./keys.ts"
 import type { Terminal } from "./terminal.ts"
 
-const parsers = new WeakMap<InputParser, () => void>()
+type PasteState = { revision: number; pending: boolean }
+const parsers = new WeakMap<InputParser, { discard: () => void; state: () => PasteState }>()
 const readers = new WeakMap<Terminal, () => void>()
 
 /** Internal controls, deliberately absent from the kit's public entry point. */
-export function registerParserPasteControl(parser: InputParser, discard: () => void): void {
-  parsers.set(parser, discard)
+export function registerParserPasteControl(
+  parser: InputParser,
+  discard: () => void,
+  state: () => PasteState,
+): void {
+  parsers.set(parser, { discard, state })
+}
+
+/** Framing only: even an empty paste advances the revision, without returning any content. */
+export function parserPasteState(parser: InputParser): PasteState {
+  return parsers.get(parser)?.state() ?? { revision: 0, pending: false }
 }
 
 export function discardParserPaste(parser: InputParser): void {
-  parsers.get(parser)?.()
+  parsers.get(parser)?.discard()
 }
 
 export function registerReaderPasteControl(terminal: Terminal, discard: () => void): void {

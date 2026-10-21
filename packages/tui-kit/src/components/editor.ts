@@ -1,6 +1,6 @@
 import { type Component, CURSOR_MARKER, type RenderContext } from "../component.ts"
 import { chromeGlyphs } from "../glyphs.ts"
-import { registerEditorState } from "../internal/editor-state.ts"
+import { editorFocus, editorStateChanged, registerEditorState } from "../internal/editor-state.ts"
 import { type InputEvent, isNewlineKey, isSubmitKey } from "../keys.ts"
 import { graphemes, TAB_WIDTH, textWidth, truncateToWidth, visibleWidth } from "../width.ts"
 import {
@@ -96,7 +96,12 @@ const ASCII_PRINTABLE = /^[\x20-\x7e]*$/
  * as with one.
  */
 export class Editor implements Component {
-  focused = true
+  get focused(): boolean {
+    return editorFocus(this)
+  }
+  set focused(focused: boolean) {
+    editorFocus(this, focused)
+  }
   /**
    * Rows shown at most. Longer text scrolls inside them, keeping the caret in view, so the
    * editor never grows past its share of the screen.
@@ -193,6 +198,7 @@ export class Editor implements Component {
     // Not through changed(), which calls onChange; it ends a run of kills all the same.
     this.lastKilled = false
     this.changes++
+    editorStateChanged(this)
   }
 
   /** Replaces the text and puts the caret at the end. Does not call `onChange`. */
@@ -523,6 +529,7 @@ export class Editor implements Component {
     this.goalCol = undefined
     this.textCache = undefined
     this.changes++
+    editorStateChanged(this)
     if (this.opts.onChange) this.opts.onChange(this.getText())
   }
 

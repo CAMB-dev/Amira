@@ -394,11 +394,16 @@ for (const kind of kinds) {
 
 test("scoped suggestion methods stay synchronous and fence stale setters and callbacks", async () => {
   const s = setup()
+  s.ui.inputSuggestions.attach(() => ({ revision: 0, ready: true }))
+  let slot: ReturnType<UiApi["acquireInputSuggestionSlot"]>
   let retained!: UiApi
   let off!: () => void
   const accepted: string[] = []
   const run = invocation(s, "command", (_args, ctx) => {
     retained = ctx.ui
+    slot = ctx.ui.acquireInputSuggestionSlot()
+    expect(slot?.signal.aborted).toBe(false)
+    expect(slot?.set("leased")).toBe(true)
     expect(ctx.ui.setInputSuggestion("fresh")).toBeUndefined()
     off = ctx.ui.onInputSuggestionAccepted((text) => accepted.push(text))
     expect(typeof off).toBe("function")
@@ -406,9 +411,13 @@ test("scoped suggestion methods stay synchronous and fence stale setters and cal
   expect((await run({ frontend: "tui" })).ok).toBe(true)
   expect(s.ui.inputSuggestions.accept()).toBe("fresh")
   expect(accepted).toEqual(["fresh"])
+  slot = retained.acquireInputSuggestionSlot()
   retained.setInputSuggestion("before switch")
   s.host.switchTo(s.makeAgent())
   expect(retained.setInputSuggestion("stale")).toBeUndefined()
+  expect(retained.acquireInputSuggestionSlot()).toBeUndefined()
+  expect(slot?.signal.aborted).toBe(true)
+  expect(slot?.set("stale")).toBe(false)
   expect(s.ui.inputSuggestions.text).toBeUndefined()
   s.ui.api().setInputSuggestion("new session")
   s.ui.inputSuggestions.accept()

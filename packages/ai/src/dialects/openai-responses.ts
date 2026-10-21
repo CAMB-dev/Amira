@@ -56,6 +56,7 @@ export function responsesBody(req: ModelRequest): Record<string, unknown> {
       strict: false,
     }))
   }
+  if (req.toolChoice === "none") body.tool_choice = "none"
   if (req.maxTokens) body.max_output_tokens = req.maxTokens
   if (req.temperature !== undefined) body.temperature = req.temperature
   if (req.reasoning) {

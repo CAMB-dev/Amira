@@ -58,6 +58,7 @@ export function requestBody(
     }
     body.tools = tools
   }
+  if (req.toolChoice === "none") body.tool_choice = { type: "none" }
   if (webSearch) body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), ANTHROPIC_SEARCH_TOOL]
   if (cache) markCacheBreakpoints(messages, MAX_BREAKPOINTS - breakpoints)
   body.messages = messages

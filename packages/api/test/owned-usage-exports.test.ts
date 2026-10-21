@@ -35,6 +35,7 @@ test("owned accounting, inert reads and bound completion are public contracts", 
   const read: OwnedConversations["read"] = async () => snapshot
   const current: OwnedConversation["usage"] = () => usage
   const complete: OwnedConversation["complete"] = async (request) => ({
+    toolsKept: false,
     text: request.label ?? "",
     message: { role: "assistant", model: { provider: "mock", model: "test" }, content: [] },
   })

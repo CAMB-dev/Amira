@@ -218,6 +218,8 @@ export interface ModelRequest {
   systemPrompt: string
   messages: Message[]
   tools: ToolSpec[]
+  /** Keep definitions in the prompt while forbidding tool calls in native dialects. */
+  toolChoice?: "none"
   maxTokens?: number
   temperature?: number
   /** How hard a reasoning model should think; dialects map it to their own setting. Omit for the default. */

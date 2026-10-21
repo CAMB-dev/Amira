@@ -42,6 +42,7 @@ export interface ComposerDeps {
   redraw: () => void
   redrawTerminal: () => void
   runPopup: (line: string) => void
+  changed?: () => void
 }
 
 export interface Composer {
@@ -80,6 +81,7 @@ export function createComposer(deps: ComposerDeps): Composer {
     workspaceRevision++
     workspaceRead?.abort()
     workspaceRead = undefined
+    deps.changed?.()
   }
 
   function cancelClipboard() {
@@ -87,6 +89,7 @@ export function createComposer(deps: ComposerDeps): Composer {
     if (clipboardRead) deps.clearNote?.("Reading clipboard…")
     clipboardRead?.abort()
     clipboardRead = undefined
+    deps.changed?.()
   }
 
   function attachImages(attachments: EditorImage[]): boolean {
@@ -119,6 +122,7 @@ export function createComposer(deps: ComposerDeps): Composer {
     if (clipboardRead) return
     const read = new AbortController()
     clipboardRead = read
+    deps.changed?.()
     const signal = AbortSignal.any([clipboardAbort.signal, read.signal])
     const session = deps.agent()
     const readingNote = setTimeout(() => {
@@ -141,6 +145,7 @@ export function createComposer(deps: ComposerDeps): Composer {
       signal.removeEventListener("abort", cancelNote)
       if (clipboardRead === read) {
         clipboardRead = undefined
+        deps.changed?.()
         deps.clearNote?.("Reading clipboard…")
       }
       if (!clipboardAbort.signal.aborted) redraw()
@@ -267,6 +272,7 @@ export function createComposer(deps: ComposerDeps): Composer {
     cancelWorkspaceImage()
     const read = new AbortController()
     workspaceRead = read
+    deps.changed?.()
     const revision = workspaceRevision
     const signal = AbortSignal.any([clipboardAbort.signal, read.signal])
     const session = deps.agent()
@@ -295,7 +301,10 @@ export function createComposer(deps: ComposerDeps): Composer {
         redraw()
       }
     } finally {
-      if (workspaceRead === read) workspaceRead = undefined
+      if (workspaceRead === read) {
+        workspaceRead = undefined
+        deps.changed?.()
+      }
     }
   }
 
@@ -339,7 +348,14 @@ export function createComposer(deps: ComposerDeps): Composer {
       return clipboardRead !== undefined
     },
     get suggestionBlocked() {
-      return search.active || historyNav.recalling || !!openPopup() || filePicker.visible || !!clipboardRead
+      return (
+        search.active ||
+        historyNav.recalling ||
+        popups.some((popup) => popup.visible) ||
+        filePicker.visible ||
+        !!clipboardRead ||
+        !!workspaceRead
+      )
     },
     cancelClipboard,
     abortClipboard() {

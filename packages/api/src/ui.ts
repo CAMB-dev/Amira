@@ -207,6 +207,16 @@ export interface UiRequestOptions {
   timeoutMs?: number
 }
 
+/** A lease on an empty, idle local TUI prompt. Never exposes the user's draft. */
+export interface InputSuggestionSlot {
+  /** Aborted on any composer edit or pending work, session/frontend change, or owner unload. */
+  readonly signal: AbortSignal
+  /** Uses setInputSuggestion's sanitizing and ownership; false once the lease is invalid. */
+  set(text: string): boolean
+  /** Aborts this lease and removes its suggestion, if it still owns one. */
+  release(): void
+}
+
 /**
  * Dialogs and local input suggestions for extensions. Every dialog method resolves; a dialog
  * nobody answered (dismissed, timed out, aborted, or no frontend can ask, as in print mode)
@@ -221,8 +231,17 @@ export interface UiApi {
    * code points. Latest nonempty setter wins across extensions. Undefined or sanitized-empty
    * text clears only this extension's suggestion; unloading its owner also clears it.
    * The host clears suggestions on input edits/submission, new turns, busy work and session changes.
+   * Extensions doing asynchronous prediction should acquire an input suggestion slot instead.
    */
   setInputSuggestion(text: string | undefined): void
+  /**
+   * Acquires a lease only for the current top-level session's local interactive TUI, while
+   * its prompt is empty, the agent idle, and no paste, history, completion, outgoing message
+   * or dialog/form/approval/popup is pending. Otherwise returns undefined (also in print,
+   * headless, RPC, remote frontends and subagents). A new acquisition aborts this extension's
+   * previous lease. Any edit, including type-then-delete, invalidates asynchronous results.
+   */
+  acquireInputSuggestionSlot(): InputSuggestionSlot | undefined
   /**
    * Called only when this extension's suggestion is accepted, with the sanitized text. The
    * suggestion is cleared before callbacks run. Returns an unsubscribe function; unloading

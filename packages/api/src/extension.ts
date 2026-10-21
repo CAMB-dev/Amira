@@ -37,12 +37,16 @@ export interface CompleteRequest {
   system?: string
   messages: Message[]
   maxTokens?: number
+  /** Retain session tool definitions for prompt caching, but forbid and never execute calls. */
+  keepSessionTools?: boolean
   signal?: AbortSignal
   label?: string
 }
 
 /** The assistant reply from an extension's host-accounted model call. */
 export interface CompleteResult {
+  /** Whether session tool definitions were retained; false when omitted or unsupported. */
+  toolsKept: boolean
   text: string
   message: AssistantMessage
   usage?: Usage

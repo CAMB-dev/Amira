@@ -3,6 +3,7 @@ import {
   type Form,
   type FormFieldView,
   type FormOptions,
+  type InputReaderOptions,
   type MarkdownStreamOptions,
   type ProcessTerminal,
   renderMarkdown,
@@ -18,6 +19,24 @@ test("the public Markdown policy can leave remote file links inert while retaini
   ).join("\n")
   expect(rows).not.toContain("\x1b]8;;file:")
   expect(rows).toContain("\x1b]8;;https://example.invalid")
+})
+
+test("input readers expose optional, content-free paste lifecycle notifications", () => {
+  const states: boolean[] = []
+  const options: InputReaderOptions = { onPasteState: (pending) => states.push(pending) }
+  options.onPasteState?.(true)
+  options.onPasteState?.(false)
+  expect({ options: Object.keys(options), states }).toMatchInlineSnapshot(`
+    {
+      "options": [
+        "onPasteState",
+      ],
+      "states": [
+        true,
+        false,
+      ],
+    }
+  `)
 })
 
 test("the public theme exports are part of the stable package surface", async () => {

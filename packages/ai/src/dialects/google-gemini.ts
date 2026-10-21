@@ -93,6 +93,12 @@ export function geminiBody(req: ModelRequest): Record<string, unknown> {
     body.tools = [...((body.tools as Record<string, unknown>[]) ?? []), { googleSearch: {} }]
     if (isGemini3(req.model.id)) body.toolConfig = { includeServerSideToolInvocations: true }
   }
+  if (req.toolChoice === "none") {
+    body.toolConfig = {
+      ...((body.toolConfig as Record<string, unknown> | undefined) ?? {}),
+      functionCallingConfig: { mode: "NONE" },
+    }
+  }
   const config: Record<string, unknown> = {}
   if (req.maxTokens) config.maxOutputTokens = req.maxTokens
   if (req.temperature !== undefined) config.temperature = req.temperature

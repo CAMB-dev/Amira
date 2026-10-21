@@ -128,6 +128,7 @@ export const modelRequest = object({
   systemPrompt: text,
   messages: array(message),
   tools: array(object({ name: text, description: text, parameters: record(json) })),
+  "toolChoice?": values("none"),
   "maxTokens?": number,
   "temperature?": number,
   "reasoning?": object({ effort: reasoning }),

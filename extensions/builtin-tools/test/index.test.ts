@@ -107,6 +107,7 @@ test(
         throw new Error("not used")
       },
       ui: {
+        acquireInputSuggestionSlot: () => undefined,
         setInputSuggestion: () => {},
         onInputSuggestionAccepted: () => () => {},
         select: async () => undefined,

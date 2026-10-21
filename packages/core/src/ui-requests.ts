@@ -148,6 +148,7 @@ export class UiRequests {
     this.inputSuggestions = new InputSuggestions(
       () => this.#bus.emit("ui.render", {}, { sessionId: this.#sessionId }),
       () => this.#inputSuggestionBusy(),
+      () => this.#pending.size === 0 && this.#dialogForms.size === 0,
     )
   }
 
@@ -247,6 +248,7 @@ export class UiRequests {
       if (upstream?.aborted) onAbort()
       else upstream?.addEventListener("abort", onAbort, { once: true })
       this.#dialogForms.set(controller, opts.source)
+      this.inputSuggestions.invalidate()
       const operation = runFormDialogs(
         spec,
         {
@@ -313,6 +315,8 @@ export class UiRequests {
         ...(form ? { form } : {}),
         ...(settings ? { settings } : {}),
       })
+      this.inputSuggestions.invalidate()
+      if (!this.#pending.has(requestId)) return
       if (live && event.kind === "select") {
         let previous = JSON.stringify(presentation)
         unsubscribe = this.#bus.subscribe((e) => {

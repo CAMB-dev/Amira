@@ -90,7 +90,8 @@ export class CommandContextScope {
           target,
           () => {},
           (key, run, args) => {
-            if (key === "setInputSuggestion") return current() ? run() : undefined
+            if (key === "setInputSuggestion" || key === "acquireInputSuggestionSlot")
+              return current() ? run() : undefined
             if (key === "onInputSuggestionAccepted") {
               if (!current()) return () => {}
               const handler = args[0] as (text: string) => void

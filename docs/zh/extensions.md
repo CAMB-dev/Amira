@@ -237,6 +237,8 @@ api.ui.setInputSuggestion("Summarize the changes.")
 
 此宿主 API 仅供本地 TUI 使用，不向 RPC、远程或打印模式暴露。它本身不生成建议，也不发送模型请求。
 
+异步预测应使用 `api.ui.acquireInputSuggestionSlot(): InputSuggestionSlot | undefined`，而不是普通 setter。仅当当前顶层会话连接本地 TUI、输入为空且空闲，并且没有待处理的粘贴、历史、补全、发出消息或对话框/表单/审批/弹窗时才能获取。slot 提供 `signal`、`set(text): boolean` 和 `release()`，不暴露草稿。任何编辑（包括输入后删除）、待处理工作、回合开始、`/clear`、会话切换、前端断开或扩展卸载/重载都会中止它；过期的 `set` 返回 false 且不显示内容。同一扩展再次获取会中止旧 slot。将 signal 传给预测任务，不再需要该建议时调用 release。
+
 ### 卸载清理
 
 用 `api.onUnload(() => { ... })` 清理自行创建的资源，例如定时器、订阅或用于中止待完成工作的 `AbortController`。它返回一个移除该钩子的函数。每个已注册钩子在此实例卸载时调用一次：包括 `/reload`、禁用或移除生效、加载失败后的回滚，以及退出。停靠和全屏视图先关闭，在注册项仍可用时各调用一次 `onClose`；然后执行卸载钩子，最后移除注册项。钩子失败会被报告，但不会中断其他清理。
@@ -658,7 +660,9 @@ host 在 before 拦截器和审批之前固定 `shellKind()` 的结果，并通�
 
 `runCommand` 在命令退出后才返回。想边运行边拿到输出（比如显示一条耗时的 `git` 命令的进度），就传入 `onChunk`。通过 `signal` 中止（或等 `timeoutMs` 到期）会杀掉整个进程树，结果里的 `aborted` 或 `timedOut` 会说明原因。默认情况下，`output` 只保留最后 1,000,000 个字符；可以用正整数 `maxOutputChars` 覆盖该限制（无效值会导致调用被拒绝）。`onChunk` 仍会收到全部输出，`truncated` 会说明 `output` 是否被截断。截断不会拆开 UTF-16 代理对。
 
-`complete({ messages, system?, model?, maxTokens?, signal?, label? })` 在对话之外发起一次模型请求，不带工具，关闭托管网页搜索，返回回复的文本、消息和用量。默认使用会话当前的模型（`model` 接受 `provider/model` 引用）。每次请求都会消耗你的 token：用量保存在会话中，在 `/cost` 里以 `label`（未设置时为扩展来源）列出，并计入 agent 树的 `budget`；预算用完后调用直接被拒绝，不会发出请求。推理模型至少获得 2,048 个输出 token（不超过其上限），以便思考后仍能作答。provider 错误会让 promise 被拒绝；`signal` 中止或扩展被卸载时，以 `AbortError` 拒绝。`session()` 在宿主建好会话控制后返回顶层会话的 `SessionControl`；`rename(title, { source: "auto", sessionId })` 不会覆盖 `/rename` 设置的名称，`sessionId` 已不是当前会话时什么也不做。
+`complete({ messages, system?, model?, maxTokens?, signal?, label?, keepSessionTools? })` 在对话之外发起一次模型请求，默认不带工具，关闭托管网页搜索，返回回复的文本、消息和用量。默认使用会话当前的模型（`model` 接受 `provider/model` 引用）。每次请求都会消耗你的 token：用量保存在会话中，在 `/cost` 里以 `label`（未设置时为扩展来源）列出，并计入 agent 树的 `budget`；预算用完后调用直接被拒绝，不会发出请求。推理模型至少获得 2,048 个输出 token（不超过其上限），以便思考后仍能作答。provider 错误会让 promise 被拒绝；`signal` 中止或扩展被卸载时，以 `AbortError` 拒绝。`session()` 在宿主建好会话控制后返回顶层会话的 `SessionControl`；`rename(title, { source: "auto", sessionId })` 不会覆盖 `/rename` 设置的名称，`sessionId` 已不是当前会话时什么也不做。
+
+传入 `keepSessionTools: true` 可保留会话当前提供的工具定义，同时禁止工具调用（OpenAI Chat/Responses、Anthropic Messages 和 Gemini）。提供相同的系统提示和对话消息（可从 `api.session()?.preview()` 获取），便可共享会话的 prompt-cache 前缀。托管搜索仍关闭；返回的工具调用会被忽略，绝不执行。`CompleteResult.toolsKept` 表示是否保留了定义；不支持的 dialect 或端点会退回到移除工具；启用托管搜索的 Gemini 也会如此，因为其禁止调用选项仅覆盖函数。默认仍不带工具。`OwnedConversation.complete` 也接受此标志，使用其自身会话的工具。
 
 `api.complete` 计入当前主会话，不计入 owned conversation；`label` 不能覆盖归属。如需按 owner 记账，请使用上文绑定的 `OwnedConversation.complete`，固定模型并保持相同的纯文本语义。两条路径都会在拒绝前计入已报告的重试/错误/中止尝试；成功结果返回的 `usage` 本身不是完整账本。没有报告用量的请求保持未知，不能当作免费工作。
 

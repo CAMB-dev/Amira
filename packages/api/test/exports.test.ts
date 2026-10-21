@@ -6,6 +6,8 @@ import type {
   BackgroundJobInfo,
   BackgroundJobStartOptions,
   CommandContext,
+  CompleteRequest,
+  CompleteResult,
   ConversationRuntime,
   ConversationSpec,
   EventMap,
@@ -14,6 +16,7 @@ import type {
   FormFieldSchema,
   FormSchema,
   FormSpec,
+  InputSuggestionSlot,
   ModelSettings,
   OwnedConversation,
   OwnedConversations,
@@ -34,6 +37,7 @@ import type {
   ToolResult,
   ToolResultMessage,
   TuiSettings,
+  UiApi,
   UiEvent,
   UiNode,
   UiRequest,
@@ -200,6 +204,38 @@ test("card forms and footer action labels are additive public contracts without 
         },
       ],
       "version": "0.1.66",
+    }
+  `)
+})
+
+test("input suggestion slots are public without a version bump", async () => {
+  const controller = new AbortController()
+  const slot: InputSuggestionSlot = {
+    signal: controller.signal,
+    set: () => !controller.signal.aborted,
+    release: () => controller.abort(),
+  }
+  const ui: Pick<UiApi, "acquireInputSuggestionSlot"> = { acquireInputSuggestionSlot: () => slot }
+  const acquired = ui.acquireInputSuggestionSlot()!
+  expect({ set: acquired.set("next"), aborted: acquired.signal.aborted }).toMatchInlineSnapshot(`
+    {
+      "aborted": false,
+      "set": true,
+    }
+  `)
+  acquired.release()
+  expect(acquired.set("late")).toBe(false)
+  expect((await import("../src/index.ts")).API_VERSION).toBe("0.1.66")
+})
+
+test("cache-friendly completion flags are shared by main and owned requests", () => {
+  const request: CompleteRequest = { messages: [], keepSessionTools: true }
+  const owned: Parameters<OwnedConversation["complete"]>[0] = request
+  const result: Pick<CompleteResult, "toolsKept"> = { toolsKept: true }
+  expect({ keepSessionTools: owned.keepSessionTools, ...result }).toMatchInlineSnapshot(`
+    {
+      "keepSessionTools": true,
+      "toolsKept": true,
     }
   `)
 })

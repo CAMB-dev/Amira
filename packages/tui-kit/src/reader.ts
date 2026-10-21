@@ -1,5 +1,10 @@
 import { InputParser } from "./input.ts"
-import { discardParserPaste, hasPasteOrigin, registerReaderPasteControl } from "./input-paste-control.ts"
+import {
+  discardParserPaste,
+  hasPasteOrigin,
+  parserPasteState,
+  registerReaderPasteControl,
+} from "./input-paste-control.ts"
 import type { InputEvent } from "./keys.ts"
 import type { Terminal } from "./terminal.ts"
 
@@ -10,6 +15,8 @@ export interface InputReaderOptions {
   sequenceTimeoutMs?: number
   /** A paste whose end marker never comes ends after this long without input. */
   pasteTimeoutMs?: number
+  /** Content-free framing state; starts before dispatch, ends on completion, timeout, discard or stop. */
+  onPasteState?: (pending: boolean) => void
 }
 
 const attached = new WeakSet<Terminal>()
@@ -32,9 +39,13 @@ export class InputReader {
   private readonly sequenceTimeoutMs: number
   private readonly pasteTimeoutMs: number
   private dispatching = new Set<InputEvent[]>()
+  private pasteFrames = new Set<InputEvent[]>()
+  private pastePending = false
+  private readonly onPasteState: InputReaderOptions["onPasteState"]
   private discarded = new WeakSet<InputEvent>()
   private readonly discardPendingPaste = () => {
     discardParserPaste(this.parser)
+    this.pasteFrames.clear()
     // feed() parses a whole chunk before dispatch. A callback can change owners (and even
     // reenter feed) while paste events from that old chunk are still waiting in any frame.
     for (const events of this.dispatching) {
@@ -42,6 +53,7 @@ export class InputReader {
         if (event.type === "paste" || hasPasteOrigin(event)) this.discarded.add(event)
       }
     }
+    this.notifyPasteState()
   }
 
   constructor(
@@ -52,6 +64,7 @@ export class InputReader {
     this.escapeTimeoutMs = opts.escapeTimeoutMs ?? 40
     this.sequenceTimeoutMs = Math.max(this.escapeTimeoutMs, opts.sequenceTimeoutMs ?? 500)
     this.pasteTimeoutMs = opts.pasteTimeoutMs ?? 1500
+    this.onPasteState = opts.onPasteState
     registerReaderPasteControl(this.terminal, this.discardPendingPaste)
   }
 
@@ -61,6 +74,7 @@ export class InputReader {
     if (this.off) return
     attached.add(this.terminal)
     this.off = this.terminal.onInput((data) => this.feed(data))
+    this.notifyPasteState()
   }
 
   stop(): void {
@@ -69,40 +83,60 @@ export class InputReader {
     this.off?.()
     this.off = undefined
     clearTimeout(this.timer)
+    this.notifyPasteState()
   }
 
   /** Feeds data directly, e.g. input that arrived while capabilities were being probed. */
   feed(data: string): void {
     clearTimeout(this.timer)
-    this.dispatch(this.parser.feed(data))
+    this.parse(() => this.parser.feed(data))
     this.schedule()
   }
 
   private schedule(): void {
     if (this.stopped) return
     if (this.parser.pasting) {
-      this.timer = setTimeout(() => this.dispatch(this.parser.endPaste()), this.pasteTimeoutMs)
+      this.timer = setTimeout(() => this.parse(() => this.parser.endPaste()), this.pasteTimeoutMs)
       return
     }
     if (!this.parser.pending) return
     this.timer = setTimeout(() => {
-      this.dispatch(this.parser.flush())
+      this.parse(() => this.parser.flush())
       if (this.stopped || !this.parser.pending) return
       this.timer = setTimeout(
-        () => this.dispatch(this.parser.flush(true)),
+        () => this.parse(() => this.parser.flush(true)),
         this.sequenceTimeoutMs - this.escapeTimeoutMs,
       )
     }, this.escapeTimeoutMs)
   }
 
-  private dispatch(events: InputEvent[]): void {
+  private parse(read: () => InputEvent[]): void {
+    const before = parserPasteState(this.parser)
+    const events = read()
+    const after = parserPasteState(this.parser)
+    this.dispatch(events, before.pending || after.pending || before.revision !== after.revision)
+  }
+
+  private notifyPasteState(): void {
+    const pending = !this.stopped && (parserPasteState(this.parser).pending || this.pasteFrames.size > 0)
+    if (pending === this.pastePending) return
+    this.pastePending = pending
+    this.onPasteState?.(pending)
+  }
+
+  private dispatch(events: InputEvent[], pasteFrame: boolean): void {
     this.dispatching.add(events)
+    if (pasteFrame) this.pasteFrames.add(events)
     try {
+      // Register the whole frame first: abort listeners may discard it or reenter input.
+      this.notifyPasteState()
       for (const e of events) {
         if (!this.discarded.has(e)) this.onEvent(e)
       }
     } finally {
       this.dispatching.delete(events)
+      this.pasteFrames.delete(events)
+      this.notifyPasteState()
     }
   }
 }

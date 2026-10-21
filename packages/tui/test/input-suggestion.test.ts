@@ -105,6 +105,70 @@ test("hidden suggestions never consume Tab; absence leaves Tab's editor behavior
   expect(s.input.editor.getText()).toBe(normal.getText())
 })
 
+test("attached slots observe programmatic edits, type-delete and focus immediately, and detach cleanly", () => {
+  const s = fixture()
+  const off = s.input.attach()
+  for (const edit of [
+    () => s.input.editor.setText("programmatic"),
+    () => s.input.editor.setParts([{ paste: "folded\npaste" }]),
+    () => s.input.editor.insert("typed"),
+    () => {
+      s.input.editor.focused = false
+    },
+  ]) {
+    const slot = s.api.acquireInputSuggestionSlot()!
+    expect(slot).toBeDefined()
+    edit()
+    expect(slot.signal.aborted).toBe(true)
+    expect(s.api.acquireInputSuggestionSlot()).toBeUndefined()
+    s.input.editor.clear()
+    s.input.editor.focused = true
+  }
+  const slot = s.api.acquireInputSuggestionSlot()!
+  s.input.editor.insert("x")
+  s.input.editor.handleInput(key("backspace"))
+  expect(s.input.editor.isEmpty).toBe(true)
+  expect(slot.signal.aborted).toBe(true)
+  expect(slot.set("late result")).toBe(false)
+  const detached = s.api.acquireInputSuggestionSlot()!
+  off()
+  expect(detached.signal.aborted).toBe(true)
+  expect(s.api.acquireInputSuggestionSlot()).toBeUndefined()
+})
+
+test("Tab accepts a live slot through the ordinary editor and aborts its generation", () => {
+  const s = fixture()
+  const off = s.input.attach()
+  const slot = s.api.acquireInputSuggestionSlot()!
+  expect(slot.set("Slot suggestion")).toBe(true)
+  expect(s.input.editor.isEmpty).toBe(true)
+  expect(s.input.handleInput(key("tab"))).toBe(true)
+  expect(s.input.editor.getText()).toBe("Slot suggestion")
+  expect(s.accepted).toEqual(["Slot suggestion"])
+  expect(s.submitted).toEqual([])
+  expect(slot.signal.aborted).toBe(true)
+  expect(slot.set("Late replacement")).toBe(false)
+  off()
+})
+
+test("readiness is consulted synchronously and refresh preserves hidden legacy suggestions", () => {
+  const s = fixture()
+  const off = s.input.attach()
+  const slot = s.api.acquireInputSuggestionSlot()!
+  s.api.setInputSuggestion("legacy")
+  s.block(true)
+  expect(s.api.acquireInputSuggestionSlot()).toBeUndefined()
+  expect(slot.signal.aborted).toBe(true)
+  expect(s.ui.inputSuggestions.text).toBe("legacy")
+  s.block(false)
+  const fresh = s.api.acquireInputSuggestionSlot()!
+  s.block(true)
+  s.input.refresh()
+  expect(fresh.signal.aborted).toBe(true)
+  expect(s.ui.inputSuggestions.text).toBe("legacy")
+  off()
+})
+
 test("typing, pasting, history and all send keys dismiss suggestions before editing or submitting", () => {
   const s = fixture()
   for (const event of [
