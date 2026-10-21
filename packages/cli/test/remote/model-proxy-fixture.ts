@@ -55,6 +55,7 @@ export function proxyFixture(
   async function connect(
     replace = false,
     hooks: {
+      paused?: boolean
       localWrite?(bytes: Uint8Array): Promise<void>
       serverWrite?(bytes: Uint8Array): Promise<void>
     } = {},
@@ -86,7 +87,7 @@ export function proxyFixture(
       onMessage: (message) => proxy.receive(server, message),
     })
     const [authority] = await Promise.all([server.ready, local.ready])
-    proxy.attach(server, authority)
+    proxy.attach(server, authority, undefined, { paused: hooks.paused })
     connections.push(server, local)
     return server
   }

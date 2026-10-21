@@ -53,7 +53,7 @@ export function displayEnv(
   theme: Theme,
   width: number,
   detail: ToolDetailLevel,
-  hyperlinks = false,
+  hyperlinks: boolean | "web" = false,
 ): BlockEnv {
   return {
     theme,

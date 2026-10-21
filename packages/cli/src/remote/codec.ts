@@ -116,7 +116,9 @@ export class RemoteDecoder {
     const incomplete = this.lineBytes !== 0 || this.transfers.size !== 0
     this.failed = true
     this.clear()
-    if (incomplete) throw new RemoteError("invalid_frame", "Incomplete remote frame at EOF")
+    // EOF cannot establish that an unfinished line/transfer is malformed. Discard it,
+    // but preserve transport-loss typing so a fresh attachment may recover safely.
+    if (incomplete) throw new RemoteError("disconnected", "Incomplete remote frame at EOF")
   }
 
   private clear(): void {

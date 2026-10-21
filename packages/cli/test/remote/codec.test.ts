@@ -1,12 +1,14 @@
 import "../server/offline.ts"
 import { describe, expect, test } from "bun:test"
 import { encodeRemoteMessage, RemoteDecoder } from "../../src/remote/codec.ts"
+import { RemoteError } from "../../src/remote/errors.ts"
 import {
   REMOTE_LIMITS,
   REMOTE_OPERATIONS,
   type RemoteFrame,
   type RemoteMessage,
 } from "../../src/remote/protocol.ts"
+import { classifyReconnectFailure } from "../../src/remote/reconnect-failure.ts"
 import { remoteSchema, validateRemoteFrame } from "../../src/remote-schema.ts"
 import { hello, welcome } from "./loopback.ts"
 import { operationFixtures, state } from "./schema-fixtures.ts"
@@ -145,6 +147,55 @@ describe("remote codecs", () => {
     const decoder = new RemoteDecoder()
     decoder.push(encode.encode(JSON.stringify(hello)))
     expect(() => decoder.finish()).toThrow("Incomplete")
+  })
+
+  test("EOF discards incomplete lines and chunk transfers as typed transport loss", () => {
+    const chunks = [...encodeRemoteMessage(event("x".repeat(300_000)))]
+    for (const partial of [wire(welcome).subarray(0, 17), chunks[0]!]) {
+      const decoder = new RemoteDecoder()
+      expect(decoder.push(partial)).toEqual([])
+      let failure: unknown
+      try {
+        decoder.finish()
+      } catch (error) {
+        failure = error
+      }
+      expect(failure).toBeInstanceOf(RemoteError)
+      expect(failure).toMatchObject({ code: "disconnected" })
+      expect(classifyReconnectFailure(failure)).toMatchObject({ code: "transport", retryable: true })
+      // The unfinished payload is discarded, never accepted on this or another attachment.
+      expect(() => decoder.push(wire(welcome))).toThrow("failed")
+      expect(() => decoder.finish()).not.toThrow()
+    }
+  })
+
+  test("complete malformed frames and integrity/limit failures remain terminal", () => {
+    const chunks = [...encodeRemoteMessage(event("x".repeat(300_000)))].map((bytes) =>
+      JSON.parse(new TextDecoder().decode(bytes)),
+    )
+    const cases: { frames: Uint8Array[]; code: string }[] = [
+      { frames: [encode.encode('{"v":1,\n')], code: "invalid_frame" },
+      { frames: [Uint8Array.of(0xff, 10)], code: "invalid_frame" },
+      { frames: [wire({ ...welcome, extra: true })], code: "invalid_frame" },
+      {
+        frames: chunks.map((chunk) => wire({ ...chunk, sha256: "0".repeat(64) })),
+        code: "invalid_frame",
+      },
+      { frames: [new Uint8Array(REMOTE_LIMITS.lineBytes + 1)], code: "limit_exceeded" },
+    ]
+    for (const { frames, code } of cases) {
+      const decoder = new RemoteDecoder()
+      let failure: unknown
+      try {
+        for (const frame of frames) decoder.push(frame)
+      } catch (error) {
+        failure = error
+      }
+      expect(failure).toBeInstanceOf(RemoteError)
+      expect(failure).toMatchObject({ code })
+      expect(classifyReconnectFailure(failure)).toMatchObject({ code, retryable: false })
+      expect(() => decoder.push(wire(welcome))).toThrow("failed")
+    }
   })
 
   test("partial Buffer input is copied, not retained as an externally mutable view", () => {

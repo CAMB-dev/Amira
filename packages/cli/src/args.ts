@@ -103,6 +103,8 @@ Commands:
   amira update [--check] [--channel stable|next]
                                 Check for or install a single-file release update
   amira rollback               Switch to the previous kept single-file version
+  amira remote add <host>       Set up a remote Linux workspace (amira remote --help)
+  amira remote attach <target>  Attach the fullscreen UI; quitting detaches
   amira sessions rm <id>        Delete a stored session and its sub-agent files
   amira provider <command>      Add, edit and remove providers and their keys
                                 (see amira provider help)

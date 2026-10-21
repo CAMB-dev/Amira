@@ -78,14 +78,17 @@ test("incompatible version fails before accepting a workspace or executing opera
   expect(accepted).toBe(false)
 })
 
-test("operations before hello, repeated hello and incomplete EOF are rejected", async () => {
-  for (const initial of [encode({ v: 1, kind: "ping", id: "p1" }), new TextEncoder().encode('{"v":1')]) {
+test("invalid handshake operations stay terminal while incomplete EOF is typed transport loss", async () => {
+  for (const [initial, code] of [
+    [encode({ v: 1, kind: "ping", id: "p1" }), "invalid_frame"],
+    [new TextEncoder().encode('{"v":1'), "disconnected"],
+  ] as const) {
     const io = loopback()
     const server = new RemoteConnection(io.server, { handshake: { role: "server", accept: () => welcome } })
     const rejected = server.ready.catch((error) => error)
     io.injectServer(initial)
     io.client.close()
-    expect(await rejected).toMatchObject({ code: "invalid_frame" })
+    expect(await rejected).toMatchObject({ code })
     await server.closed
   }
   const io = loopback()

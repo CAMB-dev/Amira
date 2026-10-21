@@ -24,6 +24,8 @@ export interface ThemeFilesOptions {
   home: string
   /** The starting working directory, never the Git root. */
   cwd: string
+  /** Remote frontends use user themes only; never read a remote path on the local filesystem. */
+  project?: boolean
   /** Absolute JSON paths contributed by active, trusted package manifests. */
   packageThemes?: readonly string[]
 }
@@ -65,7 +67,7 @@ export function loadThemeFiles(registry: ThemeRegistry, opts: ThemeFilesOptions)
     for (const name of names) load(path.join(dir, name), source)
   }
   directory(path.join(opts.home, "themes"), "user")
-  directory(path.join(opts.cwd, ".amira", "themes"), "project")
+  if (opts.project !== false) directory(path.join(opts.cwd, ".amira", "themes"), "project")
   // Active package order and each manifest's declared path order determine precedence.
   for (const file of opts.packageThemes ?? []) load(file, "package")
   registry.replaceFiles(entries)

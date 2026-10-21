@@ -25,14 +25,17 @@ function stdio(): RemoteIO {
 
 export async function runServerCommand(args: string[]): Promise<number> {
   const interpreter = /^bun(?:\.exe)?$/i.test(path.basename(process.execPath))
-  const platform = new LinuxDaemonPlatform(interpreter ? [process.execPath, Bun.main] : [process.execPath])
+  const platform = new LinuxDaemonPlatform(
+    interpreter ? [process.execPath, Bun.main] : [process.execPath],
+    args.at(-1) === "--remote-key" ? "remote-key" : "local-proxy",
+  )
   const discover = (cwd: string) =>
     new DaemonDiscovery(cwd, {
       runtimeDir: process.env.XDG_RUNTIME_DIR,
       tmpDir: "/tmp",
       uid: process.getuid!(),
     })
-  if (args.length === 1 && args[0] === "attach") {
+  if (args[0] === "attach" && (args.length === 1 || (args.length === 2 && args[1] === "--remote-key"))) {
     await attachWorkspace({ io: stdio(), discovery: discover, platform, release: serverRelease })
     return 0
   }
@@ -43,7 +46,7 @@ export async function runServerCommand(args: string[]): Promise<number> {
     (args.length !== 3 && !(args.length === 4 && args[0] === "daemon" && args[3] === "--remote-key"))
   )
     throw new Error(
-      "Usage: amira-server attach | daemon --cwd <workspace> [--remote-key] | stop --cwd <workspace>",
+      "Usage: amira-server attach [--remote-key] | daemon --cwd <workspace> [--remote-key] | stop --cwd <workspace>",
     )
   const discovery = discover(args[2])
   if (args[0] === "stop") {

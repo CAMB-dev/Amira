@@ -45,7 +45,7 @@ export interface HistoryOptions {
   /** Names the session in the boundary before the history. */
   session?: SessionBoundary
   /** Make links in replies clickable (OSC 8); default: what the terminal is known to support. */
-  hyperlinks?: boolean
+  hyperlinks?: boolean | "web"
   glyphs?: MarkdownGlyphs
   /** Output lines a successful shell command shows at `summary` detail (tui.shellOutputLines). */
   outputLines?: number
@@ -139,7 +139,15 @@ export function historyLines(theme: Theme, messages: Message[], opts: HistoryOpt
       if (m.role === "user") {
         block(
           "summary",
-          summaryLines(theme, summaryText(m), opts.width, true, opts.compactionInfo?.(m), opts.glyphs),
+          summaryLines(
+            theme,
+            summaryText(m),
+            opts.width,
+            true,
+            opts.compactionInfo?.(m),
+            opts.glyphs,
+            opts.hyperlinks,
+          ),
         )
       }
     } else if (m.role === "user") {
@@ -277,6 +285,7 @@ export function summaryLines(
   folded: boolean,
   info?: CompactionInfo,
   markdownGlyphs?: MarkdownGlyphs,
+  hyperlinks?: boolean | "web",
 ): string[] {
   const n = summary ? summary.split("\n").length : 0
   // A server's checkpoint may have no readable text (OpenAI's is encrypted).
@@ -309,6 +318,7 @@ export function summaryLines(
     const indent = " ".repeat(visibleWidth(glyphs.assistant))
     const body = renderMarkdown(note, Math.max(1, width - visibleWidth(glyphs.assistant)), theme, {
       glyphs: markdownGlyphs,
+      hyperlinks,
     })
     const detail = facts.length
       ? [truncateToWidth(`${indent}${theme.muted(facts.join(" · "))}`, width, glyphs.more)]
@@ -326,6 +336,7 @@ export function summaryLines(
     : []
   const body = renderMarkdown(summary, Math.max(1, width - visibleWidth(glyphs.assistant)), theme, {
     glyphs: markdownGlyphs,
+    hyperlinks,
   })
   return [head, ...detail, "", ...replyRows(body)]
 }

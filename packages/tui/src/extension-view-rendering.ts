@@ -1,6 +1,28 @@
 import type { ToolLine, ViewLine } from "@amira/api"
-import { visibleWidth, wrapText } from "@amira/tui-kit"
+import { type Glyphs, renderMarkdown, type Theme, visibleWidth, wrapText } from "@amira/tui-kit"
 import { terminalText } from "./diff-view.ts"
+import { replyRows } from "./format.ts"
+import { glyphs } from "./glyphs.ts"
+
+/** Host-rendered replies share the transcript gutter and link policy, including on nested pages. */
+export function viewReplyRows(
+  text: string,
+  width: number,
+  theme: Theme,
+  markdownGlyphs: Glyphs | undefined,
+  hyperlinks: boolean | "web" | undefined,
+): string[] {
+  const markers = new Set<string>()
+  const rows = renderMarkdown(text, Math.max(1, width - visibleWidth(glyphs.assistant)), theme, {
+    glyphs: markdownGlyphs,
+    hyperlinks,
+    markerOutset: 2,
+    onMarkerRow: (row) => {
+      markers.add(row)
+    },
+  })
+  return replyRows(rows, markers)
+}
 
 /** Lines of text that wrap to the width; the rest (code, diffs) are cut, as tool output is. */
 const WRAPPED: ReadonlySet<ToolLine["kind"]> = new Set([

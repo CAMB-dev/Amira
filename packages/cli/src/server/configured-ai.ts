@@ -36,7 +36,13 @@ export function configuredServerAi(config: Config, mode: "proxy" | "remote-key")
         replay: metadataAi.replayTarget(model),
       }
     }),
-    { reconnectTimeoutMs: resolveRemoteSettings(config.settings).proxyReconnectTimeoutMs },
+    {
+      reconnectTimeoutMs: resolveRemoteSettings(config.settings).proxyReconnectTimeoutMs,
+      origins: config.providers.map((provider) => ({
+        provider: provider.id,
+        origin: new URL(metadataAi.providerEndpoint(provider.id).baseUrl).origin,
+      })),
+    },
   )
   // The local binding negotiation must supply approved broker metadata before model admission.
   return { mode, ai }

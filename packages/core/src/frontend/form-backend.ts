@@ -139,7 +139,9 @@ export function createUiFormBackend(ui: UiRequests, request: FormRequest): Front
       return { revision: draft.revision, ...ack, result }
     },
     cancel: (claim, revision) =>
-      claim === authority.editor && (revision === undefined || revision === authority.revision)
+      // An editor may cancel a newer local draft that never reached evaluation.
+      // Older revisions and replaced editors still cannot cancel the current draft.
+      claim === authority.editor && (revision === undefined || revision >= authority.revision)
         ? ui.respondAcknowledged(requestId, undefined)
         : { status: "invalid", message: "stale form editor" },
   }

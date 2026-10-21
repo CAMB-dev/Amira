@@ -34,6 +34,7 @@ interface Peer {
   connection: RemoteConnection
   authority: RemoteWelcome
   generation(): number
+  ready: boolean
 }
 interface Call {
   id: string
@@ -61,12 +62,16 @@ interface Call {
 export class ProxyAi implements Ai {
   private stopped = false
   private gate: ProxyGate<Peer>
+  private peer?: Peer
   private models = new Map<string, ProxyModelMetadata>()
   private calls = new Map<string, Call>()
   private cancelled = new Map<string, { call: Call; timer: ReturnType<typeof setTimeout> }>()
   private receipts = new Map<string, { call: Call; timer: ReturnType<typeof setTimeout> }>()
 
-  constructor(models: ProxyModelMetadata[], options: { reconnectTimeoutMs?: number } = {}) {
+  constructor(
+    models: ProxyModelMetadata[],
+    private options: { reconnectTimeoutMs?: number; origins?: { provider: string; origin: string }[] } = {},
+  ) {
     this.gate = new ProxyGate(options.reconnectTimeoutMs)
     // Core Ai decorators intentionally spread the interface; preserve methods through those copies.
     this.model = this.model.bind(this)
@@ -87,6 +92,34 @@ export class ProxyAi implements Ai {
     }
   }
 
+  /** Credential-free remote model authority, used only for explicit local binding approval. */
+  describeBindings() {
+    return {
+      enabled: true,
+      models: [...this.models.values()].map(({ model }) => copyModelInfo(model)),
+      origins: structuredClone(this.options.origins ?? []),
+    }
+  }
+
+  /** Only availability/replay receipts change; local metadata cannot replace remote model facts. */
+  bindMetadata(metadata: ProxyModelMetadata[]): void {
+    const next = new Map(this.models)
+    for (const item of metadata) {
+      const ref = `${item.model.provider}/${item.model.id}`
+      const current = next.get(ref)
+      if (!current || JSON.stringify(copyModelInfo(item.model)) !== JSON.stringify(current.model))
+        throw new Error("Model binding does not match the remote configuration")
+      if (
+        item.replay.provider !== current.model.provider ||
+        item.replay.model !== current.model.id ||
+        item.replay.dialect !== current.model.dialect
+      )
+        throw new Error("Invalid model binding replay identity")
+      next.set(ref, structuredClone({ ...item, model: current.model }))
+    }
+    this.models = next
+  }
+
   /** Remote settings affect future admission waits; already accepted calls are never restarted. */
   setReconnectTimeout(timeoutMs: number): void {
     this.gate.configure(timeoutMs)
@@ -96,14 +129,28 @@ export class ProxyAi implements Ai {
     connection: RemoteConnection,
     authority: RemoteWelcome,
     generation = () => authority.sessionGeneration,
+    options: { paused?: boolean } = {},
   ): () => void {
-    const peer = { connection, authority, generation }
-    this.gate.attach(peer)
+    if (this.peer) this.gate.detach(this.peer)
+    const peer = { connection, authority, generation, ready: false }
+    this.peer = peer
     for (const { call } of this.cancelled.values()) this.sendCancellation(call, peer)
-    for (const { call } of this.receipts.values()) void this.resumeReceipts(call, peer)
-    const detach = () => this.gate.detach(peer)
+    if (!options.paused) this.admit(connection)
+    const detach = () => {
+      this.gate.detach(peer)
+      if (this.peer === peer) this.peer = undefined
+    }
     void connection.closed.then(detach)
     return detach
+  }
+
+  /** A wire welcome is not model approval. Only this attachment's completed negotiation admits calls. */
+  admit(connection: RemoteConnection): void {
+    const peer = this.peer
+    if (!peer || peer.connection !== connection || peer.ready) return
+    peer.ready = true
+    this.gate.attach(peer)
+    for (const { call } of this.receipts.values()) void this.resumeReceipts(call, peer)
   }
 
   receive(connection: RemoteConnection, frame: RemoteMessage): void {
@@ -323,7 +370,6 @@ export class ProxyAi implements Ai {
   ): AsyncGenerator<{ [key: string]: RemoteJson }> {
     if (this.stopped) throw proxyFailure("proxy_cancelled")
     const metadata = this.metadata(request.model)
-    if (!metadata.available) throw { code: "model_binding_rejected" }
     const call: Call = {
       id: randomUUID(),
       request,
@@ -484,6 +530,13 @@ export class ProxyAi implements Ai {
         const signal = call.signal ? AbortSignal.any([call.signal, call.end.signal]) : call.end.signal
         const peer = await this.gate.wait(signal, call.scope)
         if (call.terminal) return
+        if (!call.attempted) {
+          // Approval may have changed while waiting, including across local process death.
+          // Once attempted, identity/revision stay immutable: reconnect must only resume that call.
+          const metadata = this.metadata(call.request.model)
+          if (!metadata.available) throw { code: "model_binding_rejected" }
+          call.revision = metadata.revision
+        }
         call.peer = peer
         call.admitted = false
         call.generation ??= peer.generation()
@@ -535,5 +588,7 @@ export class ProxyAi implements Ai {
   }
 }
 
-export const createProxyAi = (models: ProxyModelMetadata[], options?: { reconnectTimeoutMs?: number }) =>
-  new ProxyAi(models, options)
+export const createProxyAi = (
+  models: ProxyModelMetadata[],
+  options?: ConstructorParameters<typeof ProxyAi>[1],
+) => new ProxyAi(models, options)

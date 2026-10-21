@@ -30,7 +30,7 @@ export interface BlockEnv {
   /** Bound key that switches summary detail to full, expanding retained thinking. */
   reasoningExpandKey?: string
   presenters: PresenterSource | undefined
-  hyperlinks: boolean
+  hyperlinks: boolean | "web"
   /** Every sub-agent seen, by id; tool calls draw theirs from here. */
   nodes: Map<string, SubagentNode>
   /** Spawn groups by id; a compact one's members show as one line. */

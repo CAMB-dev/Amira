@@ -1,5 +1,24 @@
 import { expect, test } from "bun:test"
-import type { Form, FormFieldView, FormOptions, ProcessTerminal } from "../src/index.ts"
+import {
+  type Form,
+  type FormFieldView,
+  type FormOptions,
+  type MarkdownStreamOptions,
+  type ProcessTerminal,
+  renderMarkdown,
+} from "../src/index.ts"
+
+test("the public Markdown policy can leave remote file links inert while retaining web links", () => {
+  const options: MarkdownStreamOptions = { hyperlinks: "web" }
+  const rows = renderMarkdown(
+    "[file](file:///remote/secret.ts) [web](https://example.invalid)",
+    100,
+    undefined,
+    options,
+  ).join("\n")
+  expect(rows).not.toContain("\x1b]8;;file:")
+  expect(rows).toContain("\x1b]8;;https://example.invalid")
+})
 
 test("the public theme exports are part of the stable package surface", async () => {
   expect(Object.keys(await import("../src/index.ts")).sort()).toEqual([

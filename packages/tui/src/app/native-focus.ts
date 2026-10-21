@@ -13,7 +13,7 @@ import { ConversationFocus } from "./conversation-focus.ts"
 import type { OverlayManager } from "./overlays.ts"
 
 /** History navigation retains a stable source while the selected conversation changes. */
-export function focusHistory(main: PromptHistory, focus: () => ConversationFocus): PromptHistory {
+export function focusHistory(main: PromptHistory, focus: () => { history: PromptHistory }): PromptHistory {
   return new Proxy(main, {
     get: (_target, property) => {
       const history = focus().history
@@ -28,7 +28,7 @@ export function createNativeFocus(deps: {
   editor: Editor
   mainView: TranscriptView
   mainHistory: PromptHistory
-  agent: () => Agent
+  agent: () => Agent | undefined
   port?: AgentPort
   ui?: UiRequests
   activity: TurnActivity
@@ -50,10 +50,15 @@ export function createNativeFocus(deps: {
     editor: deps.editor,
     mainView: deps.mainView,
     mainHistory: deps.mainHistory,
-    mainId: () => deps.agent().sessionId,
-    mainContainsSession: (id) => sessionScopeContains(deps.agent().tree, id, deps.agent().sessionId),
+    mainId: () => deps.agent()?.sessionId ?? deps.port!.snapshot.state.sessionId,
+    mainContainsSession: (id) => {
+      const agent = deps.agent()
+      return agent
+        ? sessionScopeContains(agent.tree, id, agent.sessionId)
+        : id === deps.port?.snapshot.state.sessionId
+    },
     mainWorking: () => deps.activity.working || deps.activity.compacting,
-    mainTurnId: () => deps.agent().turnId,
+    mainTurnId: () => deps.agent()?.turnId ?? deps.port?.snapshot.state.turnId,
     requireApprovalOwner: true,
     approvalOwner: (requestId) => deps.ui && uiRequestOwner(deps.ui, requestId),
     mainAttention: deps.mainAttention,

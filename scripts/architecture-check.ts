@@ -234,6 +234,7 @@ function lineCount(file: string): number {
 const bundlingRoots = new Set([
   "packages/cli/src/session/builtin-profiles.ts",
   "packages/cli/src/server/profile.ts",
+  "packages/cli/src/frontend/builtin-presenters.ts",
 ])
 const packageRoot = path.join(root, "packages")
 const extensionRoot = path.join(root, "extensions")

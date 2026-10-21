@@ -1,3 +1,4 @@
+import type { AnyEvent } from "@amira/api"
 import type { FrontendExecuteOptions, FrontendMutations } from "./operations.ts"
 import type { FrontendSnapshot, FrontendState, FrontendTranscript } from "./snapshot.ts"
 
@@ -7,7 +8,7 @@ export interface FrontendOperations extends FrontendMutations {
 }
 
 export type FrontendUpdate =
-  | { readonly kind: "snapshot"; readonly snapshot: FrontendSnapshot }
+  | { readonly kind: "snapshot"; readonly snapshot: FrontendSnapshot; readonly reset?: boolean }
   | {
       readonly kind: "error"
       readonly error: { readonly code: "invalid_snapshot"; readonly message: string }
@@ -28,6 +29,13 @@ export function frontendIdentity(port: AgentPort): FrontendSessionIdentity {
   )
 }
 
+export interface FrontendConnectionIssue {
+  readonly code: string
+  readonly message: string
+  readonly recovery: string
+  readonly retryable: boolean
+}
+
 export interface AgentPort {
   /** Current control authority, independent of successful transcript/state projection. */
   readonly identity?: FrontendSessionIdentity
@@ -41,6 +49,13 @@ export interface AgentPort {
    */
   readonly snapshot: FrontendSnapshot
   subscribe(listener: (update: FrontendUpdate) => void): () => void
+  /** Live, ordered events after the adapter's snapshot/replay watermark. */
+  subscribeEvents?(listener: (event: AnyEvent, context?: { readonly replay: boolean }) => void): () => void
+  /** Connection state is local presentation, not an agent status. */
+  readonly connection?: "connecting" | "connected" | "reconnecting" | "disconnected"
+  /** Cached local setup/transport failure and explicit recovery; announced by subscribeConnection. */
+  readonly connectionIssue?: FrontendConnectionIssue
+  subscribeConnection?(listener: () => void): () => void
   execute<K extends keyof FrontendOperations>(
     operation: K,
     params: FrontendOperations[K]["params"],

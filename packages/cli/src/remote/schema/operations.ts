@@ -12,6 +12,7 @@ import {
   union,
   enumeration as values,
 } from "./base.ts"
+import { bindingSchemas } from "./bindings.ts"
 import { fileOperationSchemas, uploadOperationSchemas } from "./files.ts"
 import { formDraft, formEvaluation, formMutation, formValues, uiAck, uiAnswer } from "./forms.ts"
 import {
@@ -44,10 +45,15 @@ const draft = object(formDraft)
 /** Every operation has its own closed input and output DTO. No method-name-to-arbitrary-JSON fallback. */
 export const operationSchemas = {
   ...serverTaskSchemas,
+  ...bindingSchemas,
   ...fileOperationSchemas,
   ...uploadOperationSchemas,
   "uploads.send": uploadSendSchema,
   "state.read": { params: empty, result: frontendState },
+  "permissions.cycle": {
+    params: empty,
+    result: object({ sessionGeneration: integer, mode: values("auto", "edits", "plan") }),
+  },
   "transcript.read": { params: empty, result: transcript },
   "turn.prompt": {
     params: object({ message: input, "turnId?": text, "expectedHoldId?": text }),
@@ -65,6 +71,22 @@ export const operationSchemas = {
   },
   "turn.abort": { params: object({ "turnId?": text, "holdId?": text }), result: acknowledgement },
   "command.run": { params: command, result: commandOutcome },
+  "commands.describe": {
+    params: empty,
+    result: object({
+      commands: array(
+        object({ name: text, aliases: array(text), description: text, "hint?": text, source: text }),
+      ),
+      skills: array(object({ name: text, description: text, hint: text, source: text })),
+    }),
+  },
+  "commands.complete": {
+    params: object({ line: text, "skill?": bool }),
+    result: object({
+      "command?": text,
+      candidates: array(object({ value: text, "description?": text, "label?": text })),
+    }),
+  },
   "skill.run": { params: command, result: commandOutcome },
   "input.run": { params: command, result: commandOutcome },
   "session.resume": { params: object({ id: text }), result: acknowledgement },

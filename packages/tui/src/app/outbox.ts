@@ -1,6 +1,6 @@
 // Owns queued and steering messages, interrupt flushing and the pending-notice strip.
 import type { SendOptions, UserMessage } from "@amira/api"
-import { type Agent, type AgentPort, frontendIdentity, isFrontendError, newTurnId } from "@amira/core"
+import { type AgentPort, frontendIdentity, isFrontendError, newTurnId } from "@amira/core"
 import {
   type Editor,
   type EditorPart,
@@ -15,6 +15,7 @@ import { CONTENT_INSET, contentRoom } from "../grid.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { TranscriptView } from "../view.ts"
 import type { TurnActivity } from "./activity.ts"
+import type { DisplayModel } from "./frontend-display.ts"
 import { DOUBLE_ESC_MS } from "./startup.ts"
 
 /** A message on its way: the text the model gets, and what the transcript shows when that differs. */
@@ -86,7 +87,7 @@ export interface Outbox {
   /** Releases waiting messages after the turn's notices have been shown. */
   turnEnded(): void
   /** Handles user steering after NoticeStrip; true means the restored editor needs a redraw. */
-  steer(message: UserMessage, state: NoticeSteerState, duringTurn?: boolean): boolean
+  steer(message: UserMessage, state: NoticeSteerState, duringTurn?: boolean, display?: boolean): boolean
   /** Returns waiting messages to the editor when following another session. */
   reset(): void
   interrupt(turnId?: string): void
@@ -95,7 +96,7 @@ export interface Outbox {
 }
 
 export interface OutboxDeps {
-  agent: () => Pick<Agent, "model"> & Partial<Pick<Agent, "turnId" | "holdId">>
+  agent: () => { model: DisplayModel; turnId?: string; holdId?: string }
   frontend: AgentPort
   editor: Pick<Editor, "getParts" | "setParts" | "isEmpty">
   activity: Pick<TurnActivity, "working" | "compacting" | "beginSend" | "sendFailed">
@@ -172,7 +173,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   /** The user's message shows up in the transcript on turn.start. */
   function send(message: Outgoing) {
     if (disposed) return
-    if (message.content?.some((b) => b.type === "image") && !deps.agent().model.caps.images) {
+    if (message.content?.some((b) => b.type === "image") && !deps.agent().model.caps?.images) {
       putBack([message])
       view.notice(
         "warning",
@@ -439,7 +440,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         }
       } else releaseQueued()
     },
-    steer(message, state, duringTurn = true) {
+    steer(message, state, duringTurn = true, display = true) {
       const text = messageText(message)
       if (state === "queued") {
         let queued = steered.find((entry) => sameOutgoing(entry, message) && !announced.has(entry))
@@ -454,7 +455,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         return false
       }
       const pendingSteer = steered.find((entry) => sameOutgoing(entry, message))
-      if (state === "dropped" && !duringTurn) {
+      if (state === "dropped" && !duringTurn && display) {
         // All inputs of the cancelled hold drop without turn.end. Wait for the whole known
         // batch, including acknowledgements already received, instead of prepending each event.
         heldRecovery ??= {
@@ -490,11 +491,13 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       if (i !== -1) steering.splice(i, 1)
       const echoed = state !== "promoted" && deps.takeEcho(message)
       if (state === "injected") {
-        if (echoed) deps.echoedNote(message)
-        else view.user(message)
+        if (display) {
+          if (echoed) deps.echoedNote(message)
+          else view.user(message)
+        }
       }
       // Stopped with Esc while messages waited: it goes out again at once, with the queued ones.
-      else if (state === "dropped" && flush) {
+      else if (state === "dropped" && flush && display) {
         const m = message
         flush.dropped.push({
           ...draftMessage(userText(m), m.display?.text, messageParts(m)),
@@ -503,7 +506,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         })
       }
       // Put a message the turn dropped back into the editor rather than losing it.
-      else if (state === "dropped") {
+      else if (state === "dropped" && display) {
         // A message with folded pastes comes back folded.
         const back = message.content.some((b) => b.type === "image")
           ? messageParts(message)

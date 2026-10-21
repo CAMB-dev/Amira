@@ -51,8 +51,8 @@ export interface MarkdownStreamOptions {
   /** Width remaining after the host's retained table inset. */
   tableWidth?: (table: object, width: number) => number
   glyphs?: Glyphs
-  /** Make links clickable with OSC 8. Defaults to what the terminal is known to support. */
-  hyperlinks?: boolean
+  /** OSC 8 links; "web" leaves file/workspace paths inert. Defaults to terminal support. */
+  hyperlinks?: boolean | "web"
   /** Color keywords, strings and comments in code blocks of the languages it knows. */
   highlight?: boolean
   /**
@@ -185,7 +185,7 @@ export class MarkdownStream implements Component {
   committedRows = 0
   private glyphs: Glyphs
   private readonly configuredGlyphs: Glyphs
-  private readonly hyperlinks: boolean
+  private readonly hyperlinks: boolean | "web"
   private readonly highlight: boolean
   private readonly headingMarkers: boolean
   private readonly markerOutset: number

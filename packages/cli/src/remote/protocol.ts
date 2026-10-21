@@ -36,11 +36,14 @@ export const REMOTE_LIMITS = {
 /** Finite operation names; each owning host adapter validates its operation-specific DTO. */
 export const REMOTE_OPERATIONS = [
   "state.read",
+  "permissions.cycle",
   "transcript.read",
   "turn.prompt",
   "turn.steer",
   "turn.abort",
   "command.run",
+  "commands.describe",
+  "commands.complete",
   "skill.run",
   "input.run",
   "session.resume",
@@ -53,6 +56,8 @@ export const REMOTE_OPERATIONS = [
   "sessions.list",
   "sessions.read",
   "models.list",
+  "proxy.describe",
+  "proxy.bind",
   "model.set",
   "thinking.set",
   "fastMode.set",

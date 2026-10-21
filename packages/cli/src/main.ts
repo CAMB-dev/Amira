@@ -58,6 +58,10 @@ async function run(argv: string[]): Promise<number> {
     stdout: (s: string) => void process.stdout.write(s),
     stderr: (s: string) => void process.stderr.write(s),
   }
+  if (argv[0] === "remote") {
+    const { runRemoteCli } = await import("./remote/main.ts")
+    return runRemoteCli(argv.slice(1))
+  }
   if (argv[0] === "sessions") {
     process.stdout.write(runSessionsCommand(argv.slice(1)))
     return 0

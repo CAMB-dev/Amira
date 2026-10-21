@@ -1,10 +1,11 @@
 import type { ModelInfo } from "@amira/ai"
 import type { ReasoningEffort, SessionControl } from "@amira/api"
-import type { FrontendExecuteOptions } from "@amira/core"
+import type { CommandHost, FrontendExecuteOptions } from "@amira/core"
 import { FrontendOperationError } from "@amira/core"
 import { frontendJson } from "../../../core/src/frontend/json.ts"
 import { agentScopeRoot } from "../../../core/src/frontend/scope-root.ts"
 import { agentSessionOwner } from "../../../core/src/session-routing.ts"
+import type { ProxyAi, ProxyModelMetadata } from "../remote/proxy-ai.ts"
 import type { ServerUploadSendOperations } from "../remote/schema/upload-send.ts"
 import { validateRemoteParams, validateRemoteResult } from "../remote-schema.ts"
 import type { Session } from "../session-factory.ts"
@@ -35,6 +36,22 @@ export interface ServerOperations
     result: { sessions: ReturnType<SessionControl["sessions"]>; nextOffset?: number }
   }
   "sessions.read": { params: { id: string }; result: ServerSessionHistory | null }
+  "commands.describe": {
+    params: Record<string, never>
+    result: { commands: ReturnType<CommandHost["list"]>; skills: ReturnType<CommandHost["skills"]> }
+  }
+  "commands.complete": {
+    params: { line: string; skill?: boolean }
+    result: Awaited<ReturnType<CommandHost["complete"]>>
+  }
+  "proxy.describe": {
+    params: Record<string, never>
+    result: { enabled: boolean; models: ModelInfo[]; origins: { provider: string; origin: string }[] }
+  }
+  "proxy.bind": {
+    params: { metadata: ProxyModelMetadata[] }
+    result: { sessionGeneration: number }
+  }
   "models.list": { params: Record<string, never>; result: ServerModel[] }
   "model.set": { params: { model: string }; result: { sessionGeneration: number } }
   "thinking.set": { params: { level: ReasoningEffort | "default" }; result: { sessionGeneration: number } }
@@ -53,6 +70,8 @@ export interface ServerOperations
 export function createServerOperations(deps: {
   control: SessionControl
   session: Session
+  commands?: Pick<CommandHost, "list" | "skills" | "complete" | "completeSkill">
+  modelProxy?: Pick<ProxyAi, "describeBindings" | "bindMetadata">
   generation: () => number
   historyCut: Parameters<typeof createServerConversations>[0]["historyCut"]
   onFocus?: Parameters<typeof createServerConversations>[0]["onFocus"]
@@ -149,6 +168,20 @@ export function createServerOperations(deps: {
       if (!stored) return null
       const { subagentMessages: _readChild, ...history } = stored
       return history
+    },
+    "commands.describe": () => ({
+      commands: deps.commands?.list() ?? [],
+      skills: deps.commands?.skills() ?? [],
+    }),
+    "commands.complete": ({ line, skill }) =>
+      (skill ? deps.commands?.completeSkill(line) : deps.commands?.complete(line)) ?? { candidates: [] },
+    "proxy.describe": () =>
+      deps.modelProxy?.describeBindings() ?? { enabled: false, models: [], origins: [] },
+    "proxy.bind": ({ metadata }) => {
+      if (!deps.modelProxy)
+        throw new FrontendOperationError("unsupported_operation", "This workspace uses remote credentials")
+      deps.modelProxy.bindMetadata(metadata)
+      return ack()
     },
     "models.list": () =>
       deps.control.models().map((ref) => {

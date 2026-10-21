@@ -127,7 +127,15 @@ export class SummaryBlock extends Block {
   }
 
   lines(env: BlockEnv): string[] {
-    return summaryLines(env.theme, this.summary, env.width, this.folded, this.info, env.glyphs)
+    return summaryLines(
+      env.theme,
+      this.summary,
+      env.width,
+      this.folded,
+      this.info,
+      env.glyphs,
+      env.hyperlinks,
+    )
   }
 
   copyText(): string {

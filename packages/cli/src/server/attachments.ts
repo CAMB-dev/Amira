@@ -174,6 +174,7 @@ class WorkspaceAttachments {
             sessionGeneration: attachment.identity!.sessionGeneration,
             limits: REMOTE_PEER_LIMITS,
             capabilities: [
+              "frontend.v1",
               "replay",
               "controller",
               "mutation.ledger",
@@ -181,7 +182,7 @@ class WorkspaceAttachments {
               "images",
               "jobs",
               "conversations",
-              ...(this.runtime.modelProxy ? ["model.proxy"] : []),
+              ...(this.runtime.modelProxy ? ["model.proxy"] : ["model.remote-key"]),
             ],
           }
         },
@@ -217,6 +218,9 @@ class WorkspaceAttachments {
             "sessions.list",
             "sessions.read",
             "models.list",
+            "commands.describe",
+            "commands.complete",
+            "proxy.describe",
             "status.read",
             "jobs.list",
             "jobs.output",
@@ -233,7 +237,14 @@ class WorkspaceAttachments {
           reads.set(id, abort)
           return this.#execute(frontend, payload, id, undefined, abort).finally(() => reads.delete(id))
         }
-        return this.#observers.wait(this.#ledger.run(scope, id, payload, run), transportSignal)
+        const result = this.#observers.wait(this.#ledger.run(scope, id, payload, run), transportSignal)
+        if (request.op === "proxy.bind")
+          return result.then((value) => {
+            current()
+            this.runtime.modelProxy?.admit(connection)
+            return value
+          })
+        return result
       },
       onCancel: (id, frame) => {
         current()
@@ -275,7 +286,9 @@ class WorkspaceAttachments {
     void connection.ready
       .then((welcome) => {
         if (ended) return
-        this.runtime.modelProxy?.attach(connection, welcome, () => attachment!.identity!.sessionGeneration)
+        this.runtime.modelProxy?.attach(connection, welcome, () => attachment!.identity!.sessionGeneration, {
+          paused: true,
+        })
         if (!this.#heartbeatMs) return
         lastPong = Date.now()
         heartbeat = setInterval(() => {

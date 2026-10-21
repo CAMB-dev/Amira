@@ -1,4 +1,11 @@
+export type {
+  FrontendConversationRef,
+  FrontendConversationSnapshot,
+  FrontendConversationSource,
+  FrontendConversationUpdate,
+} from "./app/frontend-focus.ts"
 export type { OverlayRequestBackend } from "./app/overlays.ts"
+export type { FrontendEffect } from "./app/startup.ts"
 export { type InteractiveOptions, runInteractive } from "./app.ts"
 export {
   type ExtensionSettingsRequest,

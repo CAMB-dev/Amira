@@ -210,6 +210,36 @@ export const operationFixtures = {
     invalidParams: [{ id: false }],
     invalidResults: [{ ...history, subagents: [{}] }],
   },
+  "permissions.cycle": {
+    params: {},
+    result: { sessionGeneration: 1, mode: "plan" },
+    invalidParams: [{ mode: "auto" }],
+    invalidResults: [{ sessionGeneration: 1, mode: "invalid" }],
+  },
+  "commands.describe": {
+    params: {},
+    result: { commands: [], skills: [] },
+    invalidParams: [{ all: true }],
+    invalidResults: [{ commands: [{ run: "no" }], skills: [] }],
+  },
+  "commands.complete": {
+    params: { line: "/model " },
+    result: { candidates: [{ value: "mock/test" }] },
+    invalidParams: [{ line: 1 }],
+    invalidResults: [{ candidates: [{ value: 1 }] }],
+  },
+  "proxy.describe": {
+    params: {},
+    result: { enabled: true, models: [], origins: [] },
+    invalidParams: [{ secret: "no" }],
+    invalidResults: [{ enabled: true, models: [], origins: [], credentials: {} }],
+  },
+  "proxy.bind": {
+    params: { metadata: [] },
+    result: ack,
+    invalidParams: [{ metadata: [{ apiKey: "no" }] }],
+    invalidResults: [false],
+  },
   "models.list": {
     params: {},
     result: [

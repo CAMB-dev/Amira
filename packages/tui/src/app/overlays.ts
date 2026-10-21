@@ -52,6 +52,7 @@ export interface OverlayManagerDeps {
   keys: Keybindings
   theme: Theme
   presenters?: PresenterSource
+  hyperlinks?: boolean | "web"
   images?: () => ImageStore | undefined
   previewTheme?: ExtensionSettingsViewOptions["previewTheme"]
   toolDetail?: () => ToolDetailLevel
@@ -238,6 +239,7 @@ export class OverlayManager {
           hostFocus: true,
           keys,
           toolDetail: this.deps.toolDetail,
+          hyperlinks: this.deps.hyperlinks,
           state: v.state,
           onClose: () => this.dock?.viewer === next && this.closeDock(),
           requestRender: () => next.ready && this.deps.view().requestRender(),
@@ -273,6 +275,7 @@ export class OverlayManager {
         keys,
         hostFocus: true,
         toolDetail: this.deps.toolDetail,
+        hyperlinks: this.deps.hyperlinks,
         state: v.state,
         waiting: this.waitingTitles,
         onClose: () => this.viewer === next && this.closeView(),

@@ -3,6 +3,7 @@ import { type FrontendMessage, FrontendOperationError } from "@amira/core"
 import { freezeSnapshot, frontendJson } from "../../../core/src/frontend/json.ts"
 import { nativeConversationHistory } from "../../../core/src/frontend/native-conversations.ts"
 import {
+  agentSessionOwner,
   conversationIncarnation,
   conversationScopeContains,
   isConversationIncarnation,
@@ -21,6 +22,7 @@ export interface ServerConversationInfo {
   incarnation: string
   state: ReturnType<OwnedConversation["status"]>["state"]
   busy: boolean
+  acceptsImages?: boolean
 }
 /** Replace scoped history/activity at this cursor, then apply only events above it.
  * All pages of a snapshot retain the same cut; buffer live events until paging completes.
@@ -28,6 +30,8 @@ export interface ServerConversationInfo {
 export interface ServerConversationCut {
   watermark: { daemonEpoch: string; seq: number }
   activity: RemoteWorkspaceSnapshot["activity"]
+  /** Host-proven prompt ownership in this history cut, independent of JSON object identity. */
+  renderedTurnIds?: readonly string[]
 }
 
 export interface ServerConversationOperations {
@@ -112,6 +116,7 @@ export function createServerConversations(deps: {
                 name: conversation.name,
                 cwd: conversation.cwd,
                 incarnation,
+                acceptsImages: agentSessionOwner(conversation.id)?.model.caps.images ?? false,
                 ...conversation.status(),
               },
             ]
@@ -140,7 +145,12 @@ export function createServerConversations(deps: {
           if (!messages) throw stale()
           return copyHistory(messages)
         })
-        const cut = freezeSnapshot(frontendJson(projected.cut)) as unknown as ServerConversationCut
+        const cut = freezeSnapshot(
+          frontendJson({
+            ...projected.cut,
+            renderedTurnIds: projected.history.renderedTurnIds,
+          }),
+        ) as unknown as ServerConversationCut
         const bytes = projected.history.bytes + Buffer.byteLength(JSON.stringify(cut))
         if (bytes > 32 * 1024 * 1024)
           throw new FrontendOperationError(

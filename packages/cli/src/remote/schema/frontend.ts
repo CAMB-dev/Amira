@@ -19,13 +19,25 @@ export const frontendState = object({
   resumed: bool,
   "updatedAt?": number,
   status: values("idle", "working", "blocked", "error"),
-  model: object({ provider: text, id: text, contextWindow: number }),
+  model: object({ provider: text, id: text, contextWindow: number, "caps?": object({ "images?": bool }) }),
+  "turnId?": text,
+  "holdId?": text,
+  "permissionMode?": text,
+  "thinking?": text,
+  "fastMode?": object({ requested: bool, applied: bool }),
   "contextTokens?": number,
   children: number,
 })
 export const transcript = object({
   messages: array(
-    object({ id: text, "entryId?": text, message, "ts?": number, "compaction?": object(compaction) }),
+    object({
+      id: text,
+      "entryId?": text,
+      "turnId?": text,
+      message,
+      "ts?": number,
+      "compaction?": object(compaction),
+    }),
   ),
   displays: array(
     object({
@@ -39,11 +51,17 @@ export const transcript = object({
 })
 export const snapshot = object({ sessionGeneration: integer, state: frontendState, transcript })
 export const update = union(
-  object({ kind: values("snapshot"), snapshot }),
+  object({ kind: values("snapshot"), snapshot, "reset?": bool }),
   object({ kind: values("error"), error: object({ code: values("invalid_snapshot"), message: text }) }),
 )
 export const acknowledgement = object({ sessionGeneration: integer })
-export const commandOutcome = object({ ok: bool, "command?": text, output: array(text), "error?": text })
+export const commandOutcome = object({
+  ok: bool,
+  "command?": text,
+  output: array(text),
+  "error?": text,
+  "effectWatermark?": integer,
+})
 export const rewindPlan = object({
   owner: text,
   enabled: bool,
@@ -141,8 +159,13 @@ export const status = object({
   "budget?": budget,
 })
 export const serverEffect = union(
-  object({ kind: values("detach", "rewind", "unfocus") }),
-  object({ kind: values("view"), view: values("background-job", "subagent"), id: text }),
-  object({ kind: values("focus"), conversationId: text, incarnation: text }),
+  object({ kind: values("detach", "rewind", "unfocus"), "invocationId?": text }),
+  object({
+    kind: values("view"),
+    view: values("background-job", "subagent"),
+    id: text,
+    "invocationId?": text,
+  }),
+  object({ kind: values("focus"), conversationId: text, incarnation: text, "invocationId?": text }),
 )
 export const nullableStoredSession = union(storedSession, nil)

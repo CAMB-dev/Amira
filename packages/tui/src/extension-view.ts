@@ -16,7 +16,6 @@ import {
   LineInput,
   matchesKey,
   type RenderContext,
-  renderMarkdown,
   ScrollView,
   Spinner,
   stripAnsi,
@@ -25,8 +24,7 @@ import {
   visibleWidth,
 } from "@amira/tui-kit"
 import { terminalText } from "./diff-view.ts"
-import { oneLine, wrapViewLines } from "./extension-view-rendering.ts"
-import { replyRows } from "./format.ts"
+import { oneLine, viewReplyRows, wrapViewLines } from "./extension-view-rendering.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { fitViewHint } from "./hint.ts"
 import {
@@ -78,6 +76,8 @@ interface ViewPage {
 }
 
 export interface ExtensionViewerOptions {
+  /** OSC 8 policy for host-rendered replies; remote views allow only web targets. */
+  hyperlinks?: boolean | "web"
   /** A dock initially leaves keyboard focus in the main composer. */
   placement?: "fullscreen" | "dock"
   /** The host supplies a shared focus hint below the composer. */
@@ -728,15 +728,7 @@ export class ExtensionViewer implements Component {
       },
       renderReply: (text) => {
         finished ||= !!text.trim()
-        const markers = new Set<string>()
-        const rows = renderMarkdown(text, Math.max(1, width - visibleWidth(glyphs.assistant)), theme, {
-          glyphs: markdownGlyphs,
-          markerOutset: 2,
-          onMarkerRow: (row) => {
-            markers.add(row)
-          },
-        })
-        return this.#hostRows(replyRows(rows, markers))
+        return this.#hostRows(viewReplyRows(text, width, theme, markdownGlyphs, this.#opts.hyperlinks))
       },
     }
   }
