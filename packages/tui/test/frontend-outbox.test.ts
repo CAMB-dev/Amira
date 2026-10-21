@@ -26,6 +26,7 @@ function fixture(forward = true) {
   const editor = new Editor()
   const activity = createTurnActivity()
   const notices: string[] = []
+  let changes = 0
   const outbox = createOutbox({
     agent: () => agent,
     frontend,
@@ -39,6 +40,7 @@ function fixture(forward = true) {
     canRewind: () => false,
     openRewind: () => false,
     onInterrupt: () => {},
+    changed: () => changes++,
   })
   return {
     agent,
@@ -49,6 +51,9 @@ function fixture(forward = true) {
     activity,
     notices,
     outbox,
+    get changes() {
+      return changes
+    },
     async dispose() {
       outbox.dispose()
       await local.detach()
@@ -61,6 +66,74 @@ async function settle() {
   await Promise.resolve()
   await Promise.resolve()
 }
+
+test("suggestion readiness includes queued batches, their release microtask and pending admissions", async () => {
+  const s = fixture(false)
+  try {
+    expect(s.outbox.suggestionBlocked).toBe(false)
+    s.activity.beginSend()
+    const message = s.outbox.prepare("queued", ["queued"])
+    s.outbox.dispatch(message, ["queued"], "queue")
+    expect(s.outbox.suggestionBlocked).toBe(true)
+    expect(s.changes).toBeGreaterThan(0)
+    const queuedRevision = s.changes
+    s.activity.turnEnded()
+    s.outbox.turnEnded()
+    expect(s.outbox.queued).toHaveLength(0)
+    expect(s.outbox.suggestionBlocked).toBe(true)
+    expect(s.changes).toBeGreaterThan(queuedRevision)
+    await settle()
+    expect(s.calls).toHaveLength(1)
+    // Activity can finish before an operation admission acknowledges the prompt.
+    s.activity.turnEnded()
+    expect(s.outbox.suggestionBlocked).toBe(true)
+    s.pending.reject(new Error("rejected admission"))
+    await Bun.sleep(0)
+    expect(s.outbox.suggestionBlocked).toBe(false)
+    expect(s.editor.getText()).toBe("queued")
+  } finally {
+    await s.dispose()
+  }
+})
+
+test("suggestion readiness includes command sends even without a visible steering notice", async () => {
+  const s = fixture(false)
+  try {
+    const settleSend = s.outbox.commandSend("command prompt")
+    expect(s.outbox.queued).toHaveLength(0)
+    expect(s.outbox.steering).toHaveLength(0)
+    expect(s.outbox.suggestionBlocked).toBe(true)
+    const revision = s.changes
+    settleSend()
+    expect(s.outbox.suggestionBlocked).toBe(false)
+    expect(s.changes).toBeGreaterThan(revision)
+  } finally {
+    await s.dispose()
+  }
+})
+
+test("the double-Esc timer blocks suggestions after turn end even with empty visible queues", async () => {
+  const s = fixture(false)
+  const turn = s.agent.prompt("active turn")
+  try {
+    s.activity.beginSend()
+    const message = s.outbox.prepare("queued", ["queued"])
+    s.outbox.dispatch(message, ["queued"], "queue")
+    s.outbox.pressInterrupt()
+    s.activity.turnEnded()
+    s.outbox.turnEnded()
+    expect(s.outbox.queued).toHaveLength(0)
+    expect(s.outbox.steering).toHaveLength(0)
+    expect(s.outbox.suggestionBlocked).toBe(true)
+    expect(s.calls).toMatchObject([{ operation: "turn.abort" }])
+    s.outbox.reset()
+    expect(s.outbox.suggestionBlocked).toBe(false)
+    expect(s.editor.getText()).toBe("queued")
+  } finally {
+    await turn
+    await s.dispose()
+  }
+})
 
 test("outbox recognizes a JSON busy code and queues rather than losing the draft", async () => {
   const s = fixture()

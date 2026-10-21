@@ -1,7 +1,17 @@
-import type { Ai, AssistantMessage, ModelInfo, Usage } from "@amira/ai"
+import {
+  type Ai,
+  type AssistantMessage,
+  hasNativeWebSearch,
+  type ModelInfo,
+  type ModelRequest,
+  NATIVE_WEB_SEARCH,
+  type StreamEvent,
+  type Usage,
+} from "@amira/ai"
 import type { CompleteRequest, CompleteResult } from "@amira/api"
 import { accountingRecorded, requestAccountingTarget, withAccountingRequests } from "./accounting-requests.ts"
 import type { Agent } from "./agent.ts"
+import { offeredTools } from "./deferred-tools.ts"
 import { recordConversationUsage } from "./owned-conversations-usage.ts"
 import { overBudget } from "./subagents/budget.ts"
 import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
@@ -17,7 +27,12 @@ export async function completeForAgent(options: {
   /** Only independently owned completions reserve a permit; unbound callers retain scheduling. */
   admission?: boolean
 }): Promise<CompleteResult> {
-  const { agent, model, request } = options
+  const { agent, request } = options
+  // Decide retention against the same hosted-tool policy as normal conversation requests.
+  const model =
+    agent.callableTools && !agent.callableTools.has(NATIVE_WEB_SEARCH)
+      ? { ...options.model, caps: { ...options.model.caps, webSearch: false } }
+      : options.model
   const ai = withAccountingRequests(options.ai, agent, () => {
     const target = requestAccountingTarget(agent)
     return target.store ? target : { store: agent.session }
@@ -25,7 +40,6 @@ export async function completeForAgent(options: {
   const signals = [options.signal, request.signal].filter((signal) => signal !== undefined)
   const callerSignal = AbortSignal.any(signals)
   const label = sideLabel(request.label) ?? options.label
-  const sideModel = { ...model, caps: { ...model.caps, webSearch: false } }
   const run = async (signal: AbortSignal): Promise<CompleteResult> => {
     signal.throwIfAborted()
     const spent = agent.tree && (agent.tree.budgetExceeded ?? overBudget(agent.tree.usage, agent.tree.budget))
@@ -55,6 +69,17 @@ export async function completeForAgent(options: {
         outputReported: false,
         pricingUnknown: true,
       })
+    const keepTools =
+      request.keepSessionTools === true &&
+      model.caps.tools === "native" &&
+      ["openai-chat", "openai-responses", "anthropic-messages", "google-gemini"].includes(model.dialect) &&
+      // Gemini's NONE forbids functions, not hosted search; do not leave search enabled.
+      !(model.dialect === "google-gemini" && hasNativeWebSearch(model))
+    const tools = keepTools
+      ? offeredTools(agent.tools, agent.loadedTools, (tool) => agent.toolRestriction(tool) === undefined)
+      : []
+    let toolsKept = tools.length > 0 || (keepTools && hasNativeWebSearch(model))
+    const sideModel = toolsKept ? model : { ...model, caps: { ...model.caps, webSearch: false } }
     let reported = false
     let settled = false
     let terminalFailure = false
@@ -84,16 +109,33 @@ export async function completeForAgent(options: {
     }
     try {
       let message: AssistantMessage | undefined
-      for await (const event of ai.stream(
+      for await (const event of completionEvents(
+        ai,
         {
           model: sideModel,
           systemPrompt: request.system ?? "",
           messages: request.messages,
-          tools: [],
+          tools,
+          ...(toolsKept ? { toolChoice: "none" as const } : {}),
           ...sideMaxTokens(sideModel, request.maxTokens),
         },
         signal,
       )) {
+        if (event.type === "tools.stripped") {
+          settle()
+          const spent =
+            agent.tree && (agent.tree.budgetExceeded ?? overBudget(agent.tree.usage, agent.tree.budget))
+          if (signal.aborted || spent) {
+            // No fallback was dispatched: the drained attempt's coverage is still complete.
+            terminalFailure = true
+            signal.throwIfAborted()
+            throw new Error(`the agent tree's budget is spent (${spent})`)
+          }
+          toolsKept = false
+          nextAttempt()
+          dispatched = false
+          continue
+        }
         if (event.type === "retry" || event.type === "fast.fallback") {
           settle()
           backoff = true
@@ -134,6 +176,7 @@ export async function completeForAgent(options: {
       }
       if (!message) throw new Error("model request ended without a reply")
       return {
+        toolsKept,
         text: message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join(""),
         message,
         ...(message.usage ? { usage: message.usage } : {}),
@@ -159,6 +202,38 @@ export async function completeForAgent(options: {
       throw abortError()
     throw error
   }
+}
+
+/** Drain and account for a rejected no-calls request before trying once without definitions. */
+async function* completionEvents(
+  ai: Ai,
+  request: ModelRequest,
+  signal: AbortSignal,
+): AsyncGenerator<StreamEvent | { type: "tools.stripped" }> {
+  let strip = false
+  for await (const event of ai.stream(request, signal)) {
+    if (
+      request.toolChoice === "none" &&
+      event.type === "error" &&
+      [400, 422, 501].includes(event.error.status ?? 0) &&
+      /tool[_ .-]?choice|function[_ .-]?calling|toolconfig/i.test(event.error.message) &&
+      event.message.content.length === 0
+    ) {
+      strip = true
+      yield { type: "request.end", message: event.message }
+    } else yield event
+  }
+  if (!strip) return
+  yield { type: "tools.stripped" }
+  const { toolChoice: _, ...stripped } = request
+  yield* ai.stream(
+    {
+      ...stripped,
+      model: { ...request.model, caps: { ...request.model.caps, webSearch: false } },
+      tools: [],
+    },
+    signal,
+  )
 }
 
 /** Reasoning models spend their output budget thinking first; a small one would end before any answer. */

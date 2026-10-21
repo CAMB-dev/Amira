@@ -212,11 +212,14 @@ function hostSetup(bus = new EventBus(), sessionId?: string, ui?: UiRequests) {
 
 test("extension unload and failed load release suggestions and invalidate retained UI handles", async () => {
   const host = hostSetup()
+  host.ui.inputSuggestions.attach(() => ({ revision: 0, ready: true }))
+  const slots: NonNullable<ReturnType<UiApi["acquireInputSuggestionSlot"]>>[] = []
   const handles: UiApi[] = []
   const accepted: string[] = []
   const load = (fail = false) =>
     host.load((api) => {
       handles.push(api.ui)
+      slots.push(api.ui.acquireInputSuggestionSlot()!)
       api.ui.onInputSuggestionAccepted((text) => accepted.push(text))
       api.ui.setInputSuggestion("extension prediction")
       if (fail) throw new Error("load failed")
@@ -224,9 +227,13 @@ test("extension unload and failed load release suggestions and invalidate retain
   expect(await load()).toBe(true)
   expect(host.ui.inputSuggestions.text).toBe("extension prediction")
   expect(host.unload("ext")).toBe(true)
+  expect(slots[0]!.signal.aborted).toBe(true)
+  expect(slots[0]!.set("late after unload")).toBe(false)
   handles[0]!.setInputSuggestion("late after unload")
   expect(host.ui.inputSuggestions.text).toBeUndefined()
   expect(await load(true)).toBe(false)
+  expect(slots[1]!.signal.aborted).toBe(true)
+  expect(slots[1]!.set("late after failed load")).toBe(false)
   handles[1]!.setInputSuggestion("late after failed load")
   expect(host.ui.inputSuggestions.text).toBeUndefined()
   expect(await load()).toBe(true)

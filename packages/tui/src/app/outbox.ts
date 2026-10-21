@@ -76,6 +76,8 @@ export interface Outbox {
   readonly queued: readonly Outgoing[]
   readonly steering: readonly string[]
   readonly sentParts: ReadonlyMap<string, EditorPart[]>
+  /** Includes invisible admissions, released batches and the double-Esc timer. */
+  readonly suggestionBlocked: boolean
   /** Records an accepted submission and releases any older batch waiting out a double press. */
   prepare(text: string, parts: EditorPart[], display?: string): Outgoing
   dispatch(message: Outgoing, parts: EditorPart[], how: WhileWorking): void
@@ -108,6 +110,7 @@ export interface OutboxDeps {
   canRewind: () => boolean
   openRewind: () => boolean
   onInterrupt: () => void
+  changed?: () => void
 }
 
 function sameOutgoing(outgoing: Outgoing, message: UserMessage): boolean {
@@ -189,6 +192,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     admissions.add(admission)
     pendingPrompt = message
     pendingPromptId = admission.turnId
+    deps.changed?.()
     view.requestRender()
     deps.frontend
       .execute(
@@ -230,7 +234,10 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         }
         view.requestRender()
       })
-      .finally(() => admissions.delete(admission))
+      .finally(() => {
+        admissions.delete(admission)
+        deps.changed?.()
+      })
   }
 
   /** Keeps the folded pastes of the last few messages sent, for a steer the turn drops. */
@@ -245,7 +252,10 @@ export function createOutbox(deps: OutboxDeps): Outbox {
 
   /** Sends messages as one prompt that the transcript still shows one by one. */
   function sendMerged(next: Outgoing[]) {
-    if (flushTimer?.next === next) flushTimer = undefined
+    if (flushTimer?.next === next) {
+      flushTimer = undefined
+      deps.changed?.()
+    }
     if (!next.length) return
     const text = next.map((q) => q.text).join("\n\n")
     const shown = next.map((q) => q.display ?? q.text)
@@ -274,9 +284,11 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     if (!queued.length) return
     const next = queued.splice(0, queued.length)
     pending = next
+    deps.changed?.()
     queueMicrotask(() => {
       if (pending !== next) return
       pending = undefined
+      deps.changed?.()
       sendMerged(next)
     })
   }
@@ -345,6 +357,19 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     queued,
     steering,
     sentParts,
+    get suggestionBlocked() {
+      return !!(
+        queued.length ||
+        steering.length ||
+        steered.length ||
+        pendingPrompt ||
+        admissions.size ||
+        heldRecovery ||
+        flush ||
+        flushTimer ||
+        pending
+      )
+    },
     prepare(text, parts, display) {
       const message: Outgoing = { ...draftMessage(text, display, parts), parts, seq: ++typed }
       remember(message, parts)
@@ -365,9 +390,11 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         seq: sequence ?? ++typed,
       }
       steered.push(message)
+      deps.changed?.()
       return () => {
         const index = steered.indexOf(message)
         if (index !== -1) steered.splice(index, 1)
+        deps.changed?.()
         if (recoverRejected(message)) view.requestRender()
       }
     },
@@ -383,6 +410,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
             ? { expectedHoldId: active.holdId }
             : { expectedIdle: true }
         admissions.add(admission)
+        deps.changed?.()
         void deps.frontend
           .execute(
             "turn.steer",
@@ -400,9 +428,14 @@ export function createOutbox(deps: OutboxDeps): Outbox {
               view.notice("error", error instanceof Error ? error.message : String(error))
             view.requestRender()
           })
-          .finally(() => admissions.delete(admission))
-      } else if (activity.working) queued.push(message)
-      else if (!deps.noModelYet(parts)) send(message)
+          .finally(() => {
+            admissions.delete(admission)
+            deps.changed?.()
+          })
+      } else if (activity.working) {
+        queued.push(message)
+        deps.changed?.()
+      } else if (!deps.noModelYet(parts)) send(message)
     },
     turnStarted(prompt, turnId) {
       if (turnId !== undefined) {
@@ -415,12 +448,14 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       // Messages queued together go as one prompt but read as what they were: one each.
       const merged = mergedQueue && messageText(prompt) === mergedQueue.join("\n\n") ? mergedQueue : undefined
       mergedQueue = undefined
+      deps.changed?.()
       return merged ? merged.map((text) => ({ ...prompt, display: { text } })) : [prompt]
     },
     clearSteering() {
       // Steering the turn never reached becomes the next turn, which shows it again.
       steering.length = 0
       steered.length = 0
+      deps.changed?.()
     },
     turnEnded() {
       endedTurns++
@@ -439,6 +474,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
           flushTimer = { next, timer: setTimeout(() => sendMerged(next), wait) }
         }
       } else releaseQueued()
+      deps.changed?.()
     },
     steer(message, state, duringTurn = true, display = true) {
       const text = messageText(message)
@@ -452,6 +488,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         announced.add(queued)
         reconcileAdmission(queued)
         steering.push(text)
+        deps.changed?.()
         return false
       }
       const pendingSteer = steered.find((entry) => sameOutgoing(entry, message))
@@ -483,6 +520,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         spinner.stop()
         flush = undefined
         steering.length = 0
+        deps.changed?.()
         return restoreHeld()
       }
       reconcileAdmission(pendingSteer)
@@ -515,6 +553,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         return true
       }
       // A promoted one shows up again as the next turn's prompt.
+      deps.changed?.()
       return false
     },
     reset() {
@@ -543,6 +582,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       sentParts.clear()
       typed = 0
       lastInterruptAt = 0
+      deps.changed?.()
     },
     interrupt,
     /**
@@ -580,6 +620,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       pendingPromptId = undefined
       heldRecovery = undefined
       if (flushTimer) clearTimeout(flushTimer.timer)
+      deps.changed?.()
     },
   }
 }

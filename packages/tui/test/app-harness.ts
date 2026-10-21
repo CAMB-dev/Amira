@@ -56,6 +56,9 @@ export async function waitFor(check: () => boolean, what: string, timeoutMs = 30
 
 export interface SetupOptions {
   frontend?: (agent: Agent, commands?: CommandHost) => AgentPort
+  /** Exercise DTO-only frontend presentation without handing the app the local agent. */
+  remote?: boolean
+  parentSessionId?: string
   requests?: InteractiveOptions["requests"]
   cwd?: string
   acceptsImages?: boolean
@@ -157,6 +160,7 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
     ai,
     model: o.noModel ? NO_MODEL : ai.model("mock/m1"),
     cwd: o.cwd ?? "/work/proj",
+    ...(o.parentSessionId ? { parentSessionId: o.parentSessionId } : {}),
     ...(o.session ? { session: o.session } : {}),
     systemPrompt: "",
     bus,
@@ -221,7 +225,7 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
     ...(o.frontend ? { frontend: o.frontend(agent, commands) } : {}),
     ...(o.requests ? { requests: o.requests } : {}),
     bindTerminal: (terminal) => host.bindTerminal(terminal),
-    agent,
+    ...(o.remote ? {} : { agent }),
     status: host.status,
     theme: o.theme,
     themes: o.themes,

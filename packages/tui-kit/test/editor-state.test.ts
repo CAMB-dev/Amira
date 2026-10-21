@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { Editor, type EditorPart } from "../src/components/editor.ts"
-import { restoreEditorState } from "../src/internal/editor-state.ts"
+import { observeEditorState, restoreEditorState } from "../src/internal/editor-state.ts"
 import { plain } from "./context.ts"
 
 const image = { name: "private.png", mimeType: "image/png", data: "YQ==" }
@@ -63,6 +63,30 @@ test("ordinary setParts keeps its public undo behavior, including attachment sna
   expect(editor.getParts()).toEqual([])
   editor.yank()
   expect(editor.getParts()).toEqual(privateParts)
+})
+
+test("internal observers see each edit and focus boundary synchronously without changing onChange", () => {
+  const changes: string[] = []
+  const editor = new Editor({ onChange: (text) => changes.push(text) })
+  const states: { version: number; focused: boolean; empty: boolean }[] = []
+  const off = observeEditorState(editor, () => {
+    states.push({ version: editor.version, focused: editor.focused, empty: editor.isEmpty })
+  })
+  editor.setText("draft")
+  editor.clear()
+  expect(changes).toEqual([])
+  editor.insert("x")
+  editor.handleInput({ type: "key", name: "backspace", ctrl: false, alt: false, shift: false })
+  expect(states.map((state) => state.empty)).toEqual([false, true, false, true])
+  expect(states.map((state) => state.version)).toEqual([1, 2, 3, 4])
+  editor.focused = false
+  editor.focused = false
+  editor.focused = true
+  expect(states.slice(-2).map((state) => state.focused)).toEqual([false, true])
+  expect(changes).toEqual(["x", ""])
+  off()
+  editor.setText("after detach")
+  expect(states).toHaveLength(6)
 })
 
 test("editor reset closures are isolated per instance", () => {

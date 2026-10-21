@@ -33,7 +33,7 @@ import { createFrontendFocus } from "./app/frontend-focus.ts"
 import { subscribeFrontend } from "./app/frontend-subscriptions.ts"
 import { createHintNote } from "./app/hint-note.ts"
 import { interactiveImages } from "./app/image-store.ts"
-import { createPromptInput } from "./app/input-suggestion.ts"
+import { createPromptInput, suggestionAgentBlocked } from "./app/input-suggestion.ts"
 import { createMainRewind } from "./app/main-rewind.ts"
 import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
@@ -135,14 +135,20 @@ async function runFullscreen(
     ui: opts.ui,
     keys,
     blocked: () =>
-      !agent ||
-      agent.busy ||
+      suggestionAgentBlocked(agent, activity, quitting) ||
       !!focus.conversation ||
-      overlays.hasFullscreen ||
-      overlays.dialogs.length > 0 ||
+      overlays.suggestionBlocked ||
+      !!opts.ui?.pending.length ||
       view.capturing ||
-      composer.suggestionBlocked,
+      composer.suggestionBlocked ||
+      outbox.suggestionBlocked ||
+      commandRunner.animationActive,
     onSubmit: (text, info) => submission.submit(text, info.parts, info.display),
+    onFocus: (focused) => {
+      shimmerClock.focus(focused)
+      termStatus.setFocused(focused)
+      agent?.bus.emit("ui.focus", { focused }, { sessionId: "host" })
+    },
   })
   const { editor } = suggestion
   const commands = opts.commands
@@ -171,6 +177,7 @@ async function runFullscreen(
     requestRender: () => view.requestRender(),
     redraw,
     redrawTerminal: () => view.redraw(),
+    changed: suggestion.changed,
     runPopup: (line) => {
       suggestion.clear()
       if (focus.guardCommand(line)) return
@@ -247,6 +254,7 @@ async function runFullscreen(
     view: () => view,
     toolDetail: () => detail,
     emitWaiting: (data) => {
+      suggestion.changed()
       termStatus.setWaiting(data.pending, overlays.needsAttention)
       agent?.bus.emit("ui.waiting", data, { sessionId: "host" })
     },
@@ -266,6 +274,7 @@ async function runFullscreen(
     inputFocused: (focused) => {
       if (!focused) composer.search.cancel()
       editor.focused = focused
+      suggestion.changed()
     },
     renderInput: bottomArea.overlayInput,
     handleInputPointer: (event) => bottomArea.handleOverlayPointer(event, composer.handleCompletionKey),
@@ -371,6 +380,7 @@ async function runFullscreen(
     onInterrupt: () => {
       interrupted = true
     },
+    changed: suggestion.changed,
   })
   const rewind = createMainRewind({
     port: opts.frontend,
@@ -401,7 +411,7 @@ async function runFullscreen(
     onSend: (text, options, sequence) => outbox.commandSend(text, options, sequence),
     commandOutput: (level, text) => mainView.commandOutput(level, text),
     requestRender: () => view.requestRender(),
-    animationChanged: () => overlays.syncAnimation(),
+    animationChanged: suggestion.after(() => overlays.syncAnimation()),
     sessionId: () => agent?.sessionId ?? state().sessionId,
     quit: () => quit(),
     openView: focus.openView,
@@ -482,7 +492,7 @@ async function runFullscreen(
       termStatus,
       changed: () => view.requestRender(),
     })
-  const onEvent = (e: AnyEvent, context?: { replay: boolean }) => {
+  const onEvent = suggestion.after((e: AnyEvent, context?: { replay: boolean }) => {
     if (focus.onUiEvent(e, context)) return mainView.requestRender()
     const view = mainView
     focus.refresh()
@@ -652,7 +662,7 @@ async function runFullscreen(
     shimmerClock.sync()
     rewind.flush()
     view.requestRender()
-  }
+  })
   // Lifecycle: confirmation before quitting with background work still running.
   /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents or background jobs run. */
   let quitArmedUntil = 0
@@ -696,6 +706,7 @@ async function runFullscreen(
     composer.abortClipboard()
     if (quitting) return
     quitting = true
+    suggestion.dispose()
     focus.dispose()
     files.dispose()
     if (!detachesOnQuit(opts.frontend)) commandRunner.abortAll(new Error("quitting"))
@@ -729,19 +740,9 @@ async function runFullscreen(
       else resolveExit(code)
     }
   }
-  // Lifecycle: terminal focus is unknown until the first report.
-  let focused: boolean | undefined
-  function onInput(e: InputEvent) {
+  const onInput = suggestion.after((e: InputEvent) => {
     // Focus reaches extensions even over the viewer.
-    if (e.type === "focus") {
-      if (e.focused !== focused) {
-        focused = e.focused
-        shimmerClock.focus(focused)
-        termStatus.setFocused(focused)
-        agent?.bus.emit("ui.focus", { focused }, { sessionId: "host" })
-      }
-      return
-    }
+    if (suggestion.handleFocus(e)) return
     overlays.reconcileResolvedRequests()
     if (focus.conversation && keys.is(e, "view.focus")) {
       focus.unfocus()
@@ -830,7 +831,7 @@ async function runFullscreen(
       composer.handleEditorInput(e)
     }
     redraw()
-  }
+  })
   /**
    * Brings the popup up to the editor text, then asks for a frame. Candidates the host has at
    * once (command names, sync completers) show in the same frame as the key; async ones get
@@ -868,10 +869,11 @@ async function runFullscreen(
     themes.command({ overlays, keys, requestRender: () => view.requestRender() }),
   )
   let unbindTerminal: (() => void) | undefined
-  const reader = new InputReader(terminal, onInput)
+  const reader = new InputReader(terminal, onInput, suggestion.readerOptions)
   try {
     termStatus.start()
     unbindTerminal = opts.bindTerminal?.(termStatus)
+    suggestion.attachLocal(opts.agent)
     opts.onReady?.()
     reader.start()
     view.banner((theme) => interactiveBanner(theme, state().model, tildePath(state().cwd, env)))

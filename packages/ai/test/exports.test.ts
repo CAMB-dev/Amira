@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { UsageCounts } from "@amira/ai-shared"
-import type { Ai, CompactReceipt, StreamEvent } from "../src/index.ts"
+import type { Ai, CompactReceipt, ModelRequest, StreamEvent } from "../src/index.ts"
 
 test("local-only request approval and resolution helpers have an explicit package subpath", async () => {
   const pkg = await Bun.file(new URL("../package.json", import.meta.url)).json()
@@ -13,6 +13,16 @@ test("local-only request approval and resolution helpers have an explicit packag
     "resolvedEndpointCredentials",
     "withAiRequestBoundary",
   ])
+})
+
+test("model requests can forbid tool calls without dropping definitions", () => {
+  const request: Pick<ModelRequest, "toolChoice" | "tools"> = { toolChoice: "none", tools: [] }
+  expect(request).toMatchInlineSnapshot(`
+    {
+      "toolChoice": "none",
+      "tools": [],
+    }
+  `)
 })
 
 test("the public ai exports stay stable", async () => {

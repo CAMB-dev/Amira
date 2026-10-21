@@ -123,6 +123,7 @@ function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<str
       function: { name: t.name, description: t.description, parameters: t.parameters },
     }))
   }
+  if (req.toolChoice === "none") body.tool_choice = "none"
   if (req.maxTokens) body[compat.maxTokensField ?? DEFAULT_MAX_TOKENS_FIELD] = req.maxTokens
   if (req.temperature !== undefined) body.temperature = req.temperature
   return body

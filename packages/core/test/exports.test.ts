@@ -26,8 +26,29 @@ import {
   type SubagentEntry,
   streamProjectFiles,
   ToolRegistry,
+  UiRequests,
 } from "../src/index.ts"
 import { usageReceiptDestination } from "../src/owned-conversations-receipts.ts"
+
+test("local suggestion attachment is a host-only composer seam", () => {
+  const ui = new UiRequests(new EventBus())
+  const detach = ui.inputSuggestions.attach(() => ({ revision: 0, ready: true }))
+  expect({
+    attach: typeof ui.inputSuggestions.attach,
+    refresh: typeof ui.inputSuggestions.refresh,
+    invalidate: typeof ui.inputSuggestions.invalidate,
+    acquire: typeof ui.api().acquireInputSuggestionSlot,
+  }).toMatchInlineSnapshot(`
+    {
+      "acquire": "function",
+      "attach": "function",
+      "invalidate": "function",
+      "refresh": "function",
+    }
+  `)
+  detach()
+  expect(ui.api().acquireInputSuggestionSlot()).toBeUndefined()
+})
 
 test("frontend transport metadata remains a host-library contract", () => {
   const state: FrontendState = {

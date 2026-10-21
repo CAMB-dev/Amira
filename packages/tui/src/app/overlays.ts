@@ -143,6 +143,17 @@ export class OverlayManager {
     return !!(this.form || this.viewer)
   }
 
+  /** Waiting forms and in-flight responses count even when no overlay currently owns the screen. */
+  get suggestionBlocked(): boolean {
+    return !!(
+      this.hasFullscreen ||
+      this.dock ||
+      this.dialogs.length ||
+      this.forms.length ||
+      this.dialogResponses.size
+    )
+  }
+
   /** Only the foreground question replaces its duplicate turn and tool activity. */
   get askDialogVisible(): boolean {
     return !this.hasFullscreen && this.dialogs[0]?.request.kind === "ask"
