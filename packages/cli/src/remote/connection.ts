@@ -40,7 +40,7 @@ export interface RemoteRequestOptions {
 }
 export interface RemoteConnectionOptions {
   handshake:
-    | { role: "client"; hello: RemoteHello }
+    | { role: "client"; hello: RemoteHello; validateWelcome?: (welcome: RemoteWelcome) => void }
     | {
         role: "server"
         accept(hello: RemoteHello): RemoteWelcome | Promise<RemoteWelcome>
@@ -200,6 +200,11 @@ export class RemoteConnection {
     })
   }
 
+  /** Local terminal cause; protocol rejections win over later pipe/process cleanup. */
+  get failureReason(): unknown {
+    return this.failure
+  }
+
   async send(message: Exclude<RemoteMessage, RemoteHello | RemoteWelcome | RemoteRequest>): Promise<void> {
     await this.ready
     await this.writer.send(message)
@@ -278,6 +283,7 @@ export class RemoteConnection {
           return
         }
       } else if (handshake.role === "client" && message.kind === "welcome") {
+        handshake.validateWelcome?.(message)
         welcome = message
       } else {
         throw new RemoteError("invalid_frame", "Expected remote handshake before operations")

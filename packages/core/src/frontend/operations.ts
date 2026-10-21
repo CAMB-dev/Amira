@@ -1,4 +1,4 @@
-import type { FileRewindPlan, KeyHelp, OwnedConversation, UserMessage } from "@amira/api"
+import type { FileRewindPlan, KeyHelp, OwnedConversation, PermissionMode, UserMessage } from "@amira/api"
 import type { CommandOutcome, CommandRunOptions } from "../commands.ts"
 import { conversationIncarnation, isConversationIncarnation } from "../session-routing.ts"
 import type { AgentPort } from "./port.ts"
@@ -16,6 +16,10 @@ export interface FrontendCommandParams {
 
 /** Finite, JSON-compatible mutations. Executable presentation callbacks stay local. */
 export interface FrontendMutations {
+  "permissions.cycle": {
+    params: Record<string, never>
+    result: FrontendAcknowledgement & { mode: PermissionMode }
+  }
   "turn.prompt": {
     params: { message: string | UserMessage; turnId?: string; expectedHoldId?: string }
     result: FrontendAcknowledgement

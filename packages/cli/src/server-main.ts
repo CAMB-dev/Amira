@@ -1,6 +1,7 @@
 import type { Ai } from "@amira/ai"
 import { resolveRemoteSettings } from "@amira/core"
 import type { ProxyAi } from "./remote/proxy-ai.ts"
+import { serverVersionIdentity } from "./remote/release-identity.ts"
 import { configuredServerAi } from "./server/configured-ai.ts"
 import { version } from "./version.ts"
 
@@ -75,7 +76,7 @@ export async function serverMain(args: string[]): Promise<number> {
   }
   if (args.length === 1 && args[0] === "--version-json") {
     const { serverRelease } = await import("./server/identity.ts")
-    process.stdout.write(`${JSON.stringify({ product: "amira-server", ...serverRelease })}\n`)
+    process.stdout.write(`${JSON.stringify(serverVersionIdentity(serverRelease))}\n`)
     return 0
   }
   if (args.length === 1 && args[0] === "--self-check") {

@@ -99,6 +99,7 @@ export function createLocalAgentPort(options: LocalAgentPortOptions): AgentPort 
     quitBehavior: "stop",
     supportedOperations: [
       "state.read",
+      "permissions.cycle",
       "transcript.read",
       "turn.prompt",
       "turn.steer",

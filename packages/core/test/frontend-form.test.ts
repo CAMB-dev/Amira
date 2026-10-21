@@ -124,6 +124,22 @@ test("cancellation and approval remain tied to the current revision of an editor
   }
 })
 
+test("the current editor can cancel a newer local revision without evaluating it", async () => {
+  const app = setup({ title: "Offline cancellation", fields: [field] })
+  try {
+    const editor = await app.backend.openEditor!()
+    await app.backend.evaluate({ ...editor, values: { name: "host" } })
+    expect(await app.backend.cancel("replaced-editor", editor.revision + 1)).toMatchObject({
+      status: "invalid",
+    })
+    expect(await app.backend.cancel(editor.editor, editor.revision + 1)).toEqual({ status: "cancelled" })
+    expect(await app.answer).toBeUndefined()
+  } finally {
+    app.ui.cancelAll()
+    await app.answer
+  }
+})
+
 test("a slow before-submit cannot settle or approve a newer draft", async () => {
   const deferred = Promise.withResolvers<{ message: string }>()
   const app = setup({ title: "Name", fields: [field], beforeSubmit: () => deferred.promise })

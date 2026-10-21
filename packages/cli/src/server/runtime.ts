@@ -32,12 +32,13 @@ import { validateMessageImages } from "./message-images.ts"
 import { createServerOperations, type ServerOperations } from "./operations.ts"
 import { serverBuiltins } from "./profile.ts"
 
-export type ServerEffect =
+export type ServerEffect = (
   | { kind: "detach" }
   | { kind: "rewind" }
   | { kind: "view"; view: "background-job" | "subagent"; id: string }
   | { kind: "focus"; conversationId: string; incarnation: string }
   | { kind: "unfocus" }
+) & { invocationId?: string }
 
 type SelectRequest = Extract<EventMap["ui.request"], { kind: "select" }>
 /** JSON uses null for an unbadged select option; the in-process UI API uses undefined. */
@@ -101,7 +102,7 @@ function eventDto(event: AnyEvent): ServerEvent {
   }
 }
 
-export interface WorkspaceAttachment extends AgentPort {
+export interface WorkspaceAttachment extends Omit<AgentPort, "subscribeEvents"> {
   request<K extends keyof ServerOperations>(
     operation: K,
     params: ServerOperations[K]["params"],
@@ -114,7 +115,10 @@ export interface WorkspaceAttachment extends AgentPort {
 }
 
 export interface WorkspaceRuntime {
-  readonly modelProxy?: Pick<ProxyAi, "attach" | "receive" | "close">
+  readonly modelProxy?: Pick<
+    ProxyAi,
+    "attach" | "admit" | "receive" | "close" | "describeBindings" | "bindMetadata"
+  >
   /** Host-only replay authority; transport subscribers must use bounded queues. */
   readonly journal: ReplayJournal
   readonly signal: AbortSignal
@@ -133,7 +137,7 @@ export type WorkspaceRuntimeOptions = Omit<
   "ai" | "executionOnly" | "loadThemes" | "noBuiltins" | "extensions"
 > & {
   ai: Ai
-  modelProxy?: Pick<ProxyAi, "attach" | "receive" | "close">
+  modelProxy?: Pick<ProxyAi, "attach" | "admit" | "receive" | "close" | "describeBindings" | "bindMetadata">
   extensions?: string[]
   noBuiltins?: boolean
 }
@@ -164,7 +168,9 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
   let frontendEffect: ((effect: ServerEffect) => void) | undefined
   const request = createServerOperations({
     control: commands.control,
+    commands,
     session,
+    modelProxy: opts.modelProxy,
     generation: () => port.identity!.sessionGeneration,
     historyCut: (ref, read) => capture.conversationCut((id) => request.conversations.includes(ref, id), read),
     send: (operation, params, options) => execute(operation, params, options),
@@ -327,12 +333,18 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
           if (operation !== "command.run" && operation !== "skill.run" && operation !== "input.run")
             return track(() => execute(operation, params, guarded(executeOptions)))
           const invocationId = crypto.randomUUID()
+          const callerInvocation = (params as FrontendOperations["command.run"]["params"]).invocationId
+          let effectWatermark: number | undefined
+          const commandEffect = (value: ServerEffect) => {
+            effect({ ...value, ...(callerInvocation && { invocationId: callerInvocation }) })
+            effectWatermark = capture.journal.watermark
+          }
           const unbind = bindLocalCommandContext(port, invocationId, {
             frontend: "tui",
             isFrontendCurrent: () => !detached,
-            quit: () => effect({ kind: "detach" }),
+            quit: () => commandEffect({ kind: "detach" }),
             openRewind: () => {
-              effect({ kind: "rewind" })
+              commandEffect({ kind: "rewind" })
               return !detached
             },
             openView: (view) => {
@@ -347,7 +359,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
                     : undefined
               if ((view.kind !== "background-job" && view.kind !== "subagent") || typeof id !== "string")
                 return false
-              effect({ kind: "view", view: view.kind, id })
+              commandEffect({ kind: "view", view: view.kind, id })
               return true
             },
             focusConversation: (conversation) => {
@@ -360,7 +372,11 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
                 previous?.conversation === conversation &&
                 request.conversations.ownedScope(conversation.id) === conversation
               ) {
-                effect({ kind: "focus", conversationId: conversation.id, incarnation: previous.incarnation })
+                commandEffect({
+                  kind: "focus",
+                  conversationId: conversation.id,
+                  incarnation: previous.incarnation,
+                })
                 return true
               }
               previous?.unbind()
@@ -382,7 +398,11 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
                     ownedBinding()
                   },
                 })
-                effect({ kind: "focus", conversationId: conversation.id, incarnation: binding.incarnation })
+                commandEffect({
+                  kind: "focus",
+                  conversationId: conversation.id,
+                  incarnation: binding.incarnation,
+                })
                 return true
               } catch (error) {
                 offCapture()
@@ -390,12 +410,15 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
               }
             },
             unfocusConversation: () => {
-              effect({ kind: "unfocus" })
+              commandEffect({ kind: "unfocus" })
               return !detached
             },
           })
           try {
-            return await track(() => execute(operation, { ...params, invocationId }, guarded(executeOptions)))
+            const result = await track(() =>
+              execute(operation, { ...params, invocationId }, guarded(executeOptions)),
+            )
+            return effectWatermark === undefined ? result : { ...result, effectWatermark }
           } finally {
             unbind()
           }

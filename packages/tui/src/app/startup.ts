@@ -5,6 +5,7 @@ import {
   type Agent,
   type AgentPort,
   type CommandHost,
+  type CommandRunOptions,
   createLocalAgentPort,
   type PanelRegistry,
   type StatusRegistry,
@@ -14,17 +15,31 @@ import {
 import type { EditorImage, InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
 import type { ViewSource } from "../extension-view.ts"
 import type { FileSource } from "../file-index.ts"
+import { glyphs } from "../glyphs.ts"
 import type { ClipboardContent } from "../image-input.ts"
 import type { Keybindings } from "../keybindings.ts"
 import type { ImageSource, MarkdownRenderSource } from "../markdown-nodes.ts"
 import type { PromptHistory } from "../prompt-history.ts"
 import type { PresenterSource } from "../tool-view.ts"
+import type { TranscriptView } from "../view.ts"
+import type { FrontendConversationRef, FrontendConversationSource } from "./frontend-focus.ts"
 import type { OverlayRequestBackend } from "./overlays.ts"
 
+export type FrontendEffect =
+  | { readonly kind: "detach" | "rewind" | "unfocus" }
+  | { readonly kind: "view"; readonly view: "background-job" | "subagent"; readonly id: string }
+  | ({ readonly kind: "focus" } & FrontendConversationRef)
+
 export interface InteractiveOptions {
-  agent: Agent
+  agent?: Agent
   /** Host-owned display reads. Omitted by local embedders: composed for this UI's lifetime. */
   frontend?: AgentPort
+  /** Finite, live command effects only; replay must not re-open views or change focus. */
+  subscribeFrontendEffects?: (listener: (effect: FrontendEffect) => void) => () => void
+  /** Optional invocation-scoped command callbacks, owned by a transport adapter. */
+  bindCommandFrontend?: (invocationId: string, options: CommandRunOptions) => () => void
+  /** Cached DTO-backed owned-conversation reads and events; no executable remote handles. */
+  conversations?: FrontendConversationSource
   status: StatusRegistry
   /** Live panels registered by extensions, shown above the activity line. */
   panels?: PanelRegistry
@@ -37,6 +52,11 @@ export interface InteractiveOptions {
    * the agent it switches to (/clear, /resume).
    */
   commands?: CommandHost
+  /** Cached command/skill metadata and asynchronous completion, without a local command host. */
+  completions?: Pick<
+    CommandHost,
+    "complete" | "list" | "completeSkill" | "skills" | "inputLine" | "skillLine"
+  >
   /**
    * Adds the TUI's own slash commands (/verbose) to the registry `commands` runs from; the
    * returned function removes them again when the UI quits.
@@ -109,12 +129,29 @@ export interface InteractiveOptions {
   runningJobs?: () => number
 }
 
+/** Shared startup directions, limited to capabilities this frontend actually supplies. */
+export function startupDirections(
+  view: Pick<TranscriptView, "banner">,
+  keys: Keybindings,
+  commands: boolean,
+) {
+  const helpKey = keys.label("help")
+  const starts = [
+    commands && "/help commands",
+    "@ files",
+    commands && "$ skills",
+    helpKey && `${helpKey} keys`,
+  ].filter(Boolean)
+  view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
+}
+
 /** Local embedding compatibility; the CLI normally supplies its own port. */
 export async function withFrontend<T>(
   opts: InteractiveOptions,
   run: (opts: InteractiveOptions & { frontend: AgentPort }) => Promise<T>,
 ): Promise<T> {
-  const frontend = opts.frontend ?? createLocalAgentPort({ agent: opts.agent, commands: opts.commands })
+  if (!opts.frontend && !opts.agent) throw new Error("Interactive UI requires a frontend or local agent")
+  const frontend = opts.frontend ?? createLocalAgentPort({ agent: opts.agent!, commands: opts.commands })
   try {
     return await run({ ...opts, frontend })
   } finally {

@@ -20,6 +20,7 @@ export function createConversationEvents(
 ) {
   const serverRows = new Map<string, { startedAt: number; ended: boolean }>()
   let shownUsers = new WeakSet<UserMessage>()
+  let shownTurns = new Set<string>()
   let endedMessages = new WeakSet<AssistantMessage>()
   let turnShowedOutput = false
   let textSinceRow = true
@@ -33,24 +34,24 @@ export function createConversationEvents(
     streamedThinking = ""
   }
 
-  function finalContent(message: AssistantMessage) {
+  function finalContent(message: AssistantMessage, at: number) {
     for (const block of message.content) {
       if (block.type === "thinking") view.reasoningDelta(block.text)
       else if (block.type === "text") {
         view.replyDelta(block.text)
         if (block.text) textSinceRow = true
-      } else if (block.type === "serverTool") serverRow(block, true)
+      } else if (block.type === "serverTool") serverRow(block, at, true)
     }
   }
 
-  function reconcile(message: AssistantMessage) {
+  function reconcile(message: AssistantMessage, at: number) {
     const text = message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("")
     const thinking = message.content
       .flatMap((block) => (block.type === "thinking" ? [block.text] : []))
       .join("")
     if (text === streamedText && thinking === streamedThinking) return
     if (!streamedText && !streamedThinking) {
-      finalContent(message)
+      finalContent(message, at)
       return
     }
     // Only append a proven suffix of a complete stream. Late thinking cannot be appended
@@ -76,7 +77,7 @@ export function createConversationEvents(
     if (view.replyEnd([])) turnShowedOutput = true
     view.notice("info", "Complete reply (earlier live output was partial):")
     textSinceRow = true
-    finalContent(message)
+    finalContent(message, at)
   }
 
   function user(message: UserMessage) {
@@ -87,13 +88,13 @@ export function createConversationEvents(
   }
 
   /** Hosted tools start after the preceding reply and finish once, at latest at message.end. */
-  function serverRow(block: ServerToolBlock, final = false) {
+  function serverRow(block: ServerToolBlock, at: number, final = false) {
     const call = serverToolCall(block)
     let row = serverRows.get(block.id)
     if (row?.ended) return
     if (!row) {
       if (final && block.status === "running") return
-      row = { startedAt: Date.now(), ended: false }
+      row = { startedAt: at, ended: false }
       serverRows.set(block.id, row)
       if (view.replyEnd([])) turnShowedOutput = true
       textSinceRow = false
@@ -104,7 +105,7 @@ export function createConversationEvents(
     if (
       view.toolEnd(block.id, {
         result: call.result,
-        durationMs: Date.now() - row.startedAt,
+        durationMs: Math.max(0, at - row.startedAt),
         interrupted: call.rejected === "aborted",
         ...(call.rejected ? { rejected: call.rejected } : {}),
       })
@@ -130,7 +131,11 @@ export function createConversationEvents(
     }
     switch (e.type) {
       case "turn.start":
-        user(e.data.prompt)
+        if (!e.turnId || !shownTurns.has(e.turnId)) user(e.data.prompt)
+        if (e.turnId) {
+          shownTurns.add(e.turnId)
+          if (shownTurns.size > 4096) shownTurns.delete(shownTurns.values().next().value!)
+        }
         activity.turnStarted(() => {
           turnShowedOutput = false
           textSinceRow = true
@@ -159,7 +164,7 @@ export function createConversationEvents(
           activity.thinkingDelta(text, () => view.reasoningDelta(text))
         } else if (e.data.kind === "serverTool") {
           const block = e.data.block
-          activity.serverToolDelta(() => serverRow(block))
+          activity.serverToolDelta(() => serverRow(block, e.ts))
         } else {
           activity.toolCallDelta(e.data.argsDelta.length, e.data.name)
         }
@@ -168,8 +173,8 @@ export function createConversationEvents(
         const { message } = e.data
         if (endedMessages.has(message)) return
         endedMessages.add(message)
-        reconcile(message)
-        for (const block of message.content) if (block.type === "serverTool") serverRow(block, true)
+        reconcile(message, e.ts)
+        for (const block of message.content) if (block.type === "serverTool") serverRow(block, e.ts, true)
         const sources = replyCitations(message.content)
         if (sources) view.replyDelta(textSinceRow ? sources : sources.trimStart())
         textSinceRow = true
@@ -181,7 +186,7 @@ export function createConversationEvents(
       }
       case "tool.execute.start":
         activity.toolStarted()
-        view.toolStart(e.data.toolCallId, e.data.name, e.data.args, Date.now())
+        view.toolStart(e.data.toolCallId, e.data.name, e.data.args, e.ts)
         changed()
         // The tool may block the event loop before a scheduled frame can run.
         view.render()
@@ -259,8 +264,9 @@ export function createConversationEvents(
   }
 
   /** Clear renderer state after the caller refreshes the shared view, without replaying history. */
-  function reset(history: readonly Message[] = []): void {
+  function reset(history: readonly Message[] = [], renderedTurnIds: readonly string[] = []): void {
     serverRows.clear()
+    shownTurns = new Set(renderedTurnIds)
     shownUsers = new WeakSet(history.filter((message): message is UserMessage => message.role === "user"))
     endedMessages = new WeakSet(
       history.filter((message): message is AssistantMessage => message.role === "assistant"),

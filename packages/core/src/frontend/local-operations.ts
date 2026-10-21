@@ -72,6 +72,12 @@ export function localMutationHandlers(deps: {
   const conversation = (id: string, incarnation: string) =>
     deps.conversation?.(id, incarnation) ?? unsupported()
   return {
+    "permissions.cycle": () => {
+      const agent = deps.agent()
+      const mode = agent.permissions.cycleMode()
+      agent.bus.emit("ui.render", {}, { sessionId: agent.sessionId })
+      return { ...ack(), mode }
+    },
     "turn.prompt": ({ message, turnId, expectedHoldId }) => prompt(message, turnId, expectedHoldId),
     "turn.steer": ({ message, turnId, expectedTurnId, expectedHoldId, expectedIdle }) => {
       const agent = deps.agent()

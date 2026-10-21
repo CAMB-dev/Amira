@@ -16,7 +16,7 @@ import { type NoticeLevel, replyEndNotice } from "../transcript.ts"
 export interface HistoryBlocksDeps {
   displays?: readonly DisplayHistory[]
   compactionInfo?: (message: Message) => CompactionInfo | undefined
-  hyperlinks: boolean
+  hyperlinks: boolean | "web"
   noticeBlock: (level: NoticeLevel, text: string) => LinesBlock
   sessionId: () => string
   terminal: Pick<Terminal, "columns">

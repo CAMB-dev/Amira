@@ -23,7 +23,12 @@ export class ModelBrokerPeer {
     this.retention = new ModelRetention(options)
   }
 
-  connect(io: RemoteIO, hello: RemoteHello, onMessage?: (message: RemoteMessage) => void): RemoteConnection {
+  connect(
+    io: RemoteIO,
+    hello: RemoteHello,
+    onMessage?: (message: RemoteMessage) => void,
+    validateWelcome?: (welcome: RemoteWelcome) => void,
+  ): RemoteConnection {
     this.active?.close()
     this.retention.detach()
     let authority: RemoteWelcome | undefined
@@ -35,7 +40,7 @@ export class ModelBrokerPeer {
       return authority
     }
     const connection = new RemoteConnection(io, {
-      handshake: { role: "client", hello },
+      handshake: { role: "client", hello, validateWelcome },
       handle: async (request) => {
         const welcome = current()
         if (request.op !== "model.open")

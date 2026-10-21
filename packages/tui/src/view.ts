@@ -69,8 +69,8 @@ export interface ViewHost {
   capabilities: Capabilities
   settings: TuiSettings
   presenters: PresenterSource | undefined
-  /** Links in replies are clickable (OSC 8). */
-  hyperlinks: boolean
+  /** OSC 8 links; remote views use "web" so workspace/file targets stay inert. */
+  hyperlinks: boolean | "web"
   /**
    * Loads the images of replies where the terminal can draw them in the transcript (D83). Full-screen
    * overlays (forms, the sub-agent viewer) show their alt text. Asked each time: undefined while

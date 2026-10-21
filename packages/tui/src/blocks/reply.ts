@@ -160,7 +160,7 @@ export class ReplyBlock extends Block {
   constructor(
     source: string,
     streaming: boolean,
-    private hyperlinks: boolean,
+    private hyperlinks: boolean | "web",
     readonly timestamp?: number,
   ) {
     super()

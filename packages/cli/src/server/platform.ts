@@ -30,7 +30,10 @@ export function socketIO(socket: Socket): RemoteIO {
 
 /** Linux-only OS effects. Tests substitute this entire seam, never invoke SSH or detach a child. */
 export class LinuxDaemonPlatform implements DaemonPlatform {
-  constructor(private command: readonly string[]) {
+  constructor(
+    private command: readonly string[],
+    private modelMode: "local-proxy" | "remote-key" = "local-proxy",
+  ) {
     if (process.platform !== "linux") throw new Error("Remote daemons require Linux")
   }
 
@@ -59,7 +62,13 @@ export class LinuxDaemonPlatform implements DaemonPlatform {
     try {
       const child = spawn(
         this.command[0]!,
-        [...this.command.slice(1), "daemon", "--cwd", discovery.workspace],
+        [
+          ...this.command.slice(1),
+          "daemon",
+          "--cwd",
+          discovery.workspace,
+          ...(this.modelMode === "remote-key" ? ["--remote-key"] : []),
+        ],
         {
           detached: true,
           stdio: ["ignore", log, log],

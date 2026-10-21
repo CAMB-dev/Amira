@@ -92,8 +92,8 @@ export interface LeadPart {
 
 export interface InlineOptions {
   styles: MarkdownStyles
-  /** Make links clickable with OSC 8; otherwise their URL follows the text. */
-  hyperlinks: boolean
+  /** OSC 8 links; "web" leaves file/workspace paths inert and prints their targets. */
+  hyperlinks: boolean | "web"
   /** Style of the text around the spans, e.g. a heading's. */
   base?: StyleFn
   /** Reference definitions seen so far, for `[text][label]` and `![alt][label]`. */
@@ -149,6 +149,22 @@ function isFileLink(url: string): boolean {
     /^[a-z]:[\\/]/i.test(url) ||
     (url !== "" && !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(url))
   )
+}
+
+/** Remote links are an allowlist: editor/custom handlers must never turn remote paths into local opens. */
+function clickableLink(url: string, policy: InlineOptions["hyperlinks"]): boolean {
+  if (policy !== "web") return policy
+  if (
+    !/^https?:\/\//i.test(url) ||
+    Array.from(url).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)
+  )
+    return false
+  try {
+    const target = new URL(url)
+    return target.protocol === "http:" || target.protocol === "https:"
+  } catch {
+    return false
+  }
 }
 
 interface Scope {
@@ -313,10 +329,11 @@ function parse(s: string, start: number, end: number, scope: Scope, ctx: Context
         const linkStyle = path ? compose(opts.styles.link, path) : opts.styles.link
         const linkStyles = [...scope.styles, linkStyle]
         const inner: Scope = { styles: linkStyles, carry: `${scope.carry}[`, inLink: true }
-        if (opts.hyperlinks) inner.link = link.url
+        const clickable = clickableLink(link.url, opts.hyperlinks)
+        if (clickable) inner.link = link.url
         if (link.textEnd > i + 1 || ctx.lead) parse(s, i + 1, link.textEnd, inner, ctx)
         const text = s.slice(i + 1, link.textEnd)
-        if (!opts.hyperlinks && text !== link.url) {
+        if (!clickable && text !== link.url) {
           const url = styleOf([...scope.styles, path ?? opts.styles.linkUrl])
           const r = run(` (${link.url})`, link.end, url, scope, false)
           r.rest = { url: false, resume: link.end }
@@ -388,7 +405,7 @@ function run(text: string, src: number, style: StyleFn | undefined, scope: Scope
 
 function pushUrl(url: string, src: number, scope: Scope, opts: InlineOptions, out: Run[]): Run {
   const r = run(url, src, styleOf([...scope.styles, opts.styles.link]), scope, false)
-  if (opts.hyperlinks) r.link = url
+  if (clickableLink(url, opts.hyperlinks)) r.link = url
   out.push(r)
   return r
 }
@@ -404,7 +421,7 @@ function pushLead(s: string, i: number, end: number, scope: Scope, ctx: Context)
       .replace(URL_TAIL, "")
     if (text === "") return i
     const r: Run = { text, src: i, carry: scope.carry, cuttable: false, rest: { url: true, head: lead.head } }
-    if (ctx.opts.hyperlinks) r.link = lead.head + text
+    if (clickableLink(lead.head + text, ctx.opts.hyperlinks)) r.link = lead.head + text
     if (lead.style) r.style = lead.style
     ctx.out.push(r)
     return i + text.length
@@ -419,7 +436,7 @@ function pushLead(s: string, i: number, end: number, scope: Scope, ctx: Context)
       cuttable: false,
       rest: { url: false, resume: next },
     }
-    if (part.link) r.link = part.link
+    if (part.link && clickableLink(part.link, ctx.opts.hyperlinks)) r.link = part.link
     if (part.style) r.style = part.style
     ctx.out.push(r)
   }
@@ -571,7 +588,7 @@ function pushImage(s: string, i: number, image: LinkMatch, scope: Scope, ctx: Co
     .replace(/\\([!-/:-@[-`{-~])/g, "$1")
     .trim()
   const name = alt || fileName(image.url) || "image"
-  const clickable = !scope.inLink && opts.hyperlinks && image.url !== undefined
+  const clickable = !scope.inLink && image.url !== undefined && clickableLink(image.url, opts.hyperlinks)
   const style = styleOf([...scope.styles, clickable ? opts.styles.link : opts.styles.image])
   // Added text, like a link's URL: it stands at the image's end, so the rest of it after a cut
   // goes on there.
@@ -588,7 +605,7 @@ function pushImage(s: string, i: number, image: LinkMatch, scope: Scope, ctx: Co
   if (link) r.link = link
   out.push(r)
   // Inside a link too: a link still open may close around it, and the rows stay the same then.
-  if (!opts.hyperlinks && image.url !== undefined) {
+  if (image.url !== undefined && !clickableLink(image.url, opts.hyperlinks)) {
     const u = run(` (${image.url})`, image.end, styleOf([...scope.styles, opts.styles.linkUrl]), scope, false)
     u.rest = { url: false, resume: image.end }
     out.push(u)

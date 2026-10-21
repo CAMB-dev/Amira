@@ -35,7 +35,7 @@ export interface Env {
   rowWidth?: (() => number) | undefined
   styles: MarkdownStyles
   glyphs: Glyphs
-  hyperlinks: boolean
+  hyperlinks: boolean | "web"
   highlight: boolean
   /** With it, headings show their # markers in this style. */
   headingMarker?: StyleFn

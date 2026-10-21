@@ -18,6 +18,8 @@ export interface FrontendMessageEntry {
   /** Session-scoped identity, independent of object identity and transcript position. */
   readonly id: string
   readonly entryId?: string
+  /** Stable live-turn ownership; independently decoded history/activity cannot share object identity. */
+  readonly turnId?: string
   readonly message: FrontendMessage
   readonly ts?: number
   readonly compaction?: CompactionInfo
@@ -44,7 +46,13 @@ export interface FrontendState {
   readonly resumed: boolean
   readonly updatedAt?: number
   readonly status: SessionStatus
-  readonly model: { provider: string; id: string; contextWindow: number }
+  readonly model: { provider: string; id: string; contextWindow: number; caps?: { images?: boolean } }
+  /** Cached control targets: never infer these from a busy indicator. */
+  readonly turnId?: string
+  readonly holdId?: string
+  readonly permissionMode?: string
+  readonly thinking?: string
+  readonly fastMode?: { requested: boolean; applied: boolean }
   readonly contextTokens?: number
   readonly children: number
 }

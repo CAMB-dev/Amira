@@ -22,7 +22,7 @@ type RewindMode = { fork: true } | { restoreFiles: boolean; plan?: FileRewindPla
 
 export interface RewindFlowDeps {
   /** The active session; commands such as /resume can replace it while the UI is open. */
-  agent: () => Agent
+  agent: () => Agent | undefined
   commands?: Pick<CommandHost, "control">
   port?: AgentPort
   dialogs: Dialog[]
@@ -106,7 +106,7 @@ export class RewindFlow {
       return false
     const messages = snapshot
       ? snapshot.transcript.messages.map((entry) => entry.message)
-      : this.deps.agent().messages
+      : (this.deps.agent()?.messages ?? [])
     const picks = messages
       .map((m, index) => ({ m, index }))
       .filter((p): p is RewindPick => p.m.role === "user" && !p.m.display?.origin)

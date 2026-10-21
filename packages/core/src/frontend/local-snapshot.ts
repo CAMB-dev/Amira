@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { statSync } from "node:fs"
 import type { Message } from "@amira/ai"
 import type { CompactionInfo } from "@amira/api"
+import { messageTurnId } from "../agent/message-turn.ts"
 import type { Agent } from "../agent.ts"
 import { frontendDisplayHistory } from "./display-history.ts"
 import { freezeSnapshot, frontendJson } from "./json.ts"
@@ -65,9 +66,11 @@ export function localSnapshotProjector(agent: Agent) {
         const ts = entryId ? times.get(entryId) : undefined
         if (ts !== undefined) frontendJson(ts)
         const compaction = agent.compactionInfo(message)
+        const turnId = messageTurnId(message)
         return {
           id,
           ...(entryId !== undefined ? { entryId } : {}),
+          ...(turnId !== undefined ? { turnId } : {}),
           message: copy,
           ...(ts !== undefined ? { ts } : {}),
           ...(compaction ? { compaction: frontendJson(compaction) as unknown as CompactionInfo } : {}),
@@ -87,6 +90,7 @@ export function localSnapshotProjector(agent: Agent) {
     }
     revision = nextRevision
     leaf = nextLeaf
+    const thinking = agent.thinking.state(agent.model).thinking
     const state = {
       sessionId: agent.sessionId,
       cwd: agent.cwd,
@@ -94,7 +98,17 @@ export function localSnapshotProjector(agent: Agent) {
       resumed: transcript!.messages.length > 0 || transcript!.displays.length > 0,
       ...(updatedAt !== undefined ? { updatedAt } : {}),
       status: agent.status,
-      model: { provider: agent.model.provider, id: agent.model.id, contextWindow: agent.model.contextWindow },
+      model: {
+        provider: agent.model.provider,
+        id: agent.model.id,
+        contextWindow: agent.model.contextWindow,
+        caps: { images: agent.model.caps.images },
+      },
+      ...(agent.turnId ? { turnId: agent.turnId } : {}),
+      ...(agent.holdId ? { holdId: agent.holdId } : {}),
+      permissionMode: agent.permissions.mode,
+      ...(thinking !== undefined ? { thinking } : {}),
+      fastMode: { requested: agent.fastMode, applied: agent.fastModeApplied },
       ...(agent.contextTokens !== undefined ? { contextTokens: agent.contextTokens } : {}),
       children: agent.tree?.children.length ?? 0,
     }

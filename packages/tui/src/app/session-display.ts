@@ -9,7 +9,9 @@ import type { TranscriptView } from "../view.ts"
 export function createSessionDisplay(
   frontend: AgentPort,
   view: Pick<TranscriptView, "notice" | "requestRender" | "openSession">,
+  options: { follow?: boolean; reset?: () => void } = {},
 ) {
+  let generation = frontend.snapshot.sessionGeneration
   let valid = true
   let pending: { sessionId: string; switched: boolean } | undefined
   const off = frontend.subscribe((update) => {
@@ -18,7 +20,12 @@ export function createSessionDisplay(
       view.notice("warning", update.error.message)
     } else {
       valid = true
-      if (pending?.sessionId === update.snapshot.state.sessionId) {
+      if (options.follow && (update.reset || update.snapshot.sessionGeneration !== generation)) {
+        generation = update.snapshot.sessionGeneration
+        options.reset?.()
+        showAgentSession(view, update.snapshot, true)
+        pending = undefined
+      } else if (pending?.sessionId === update.snapshot.state.sessionId) {
         showAgentSession(view, update.snapshot, pending.switched)
         pending = undefined
       }

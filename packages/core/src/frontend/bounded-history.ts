@@ -1,3 +1,5 @@
+import type { Message } from "@amira/ai"
+import { messageTurnId } from "../agent/message-turn.ts"
 import type { Agent } from "../agent.ts"
 import { sessionBranchEntries } from "../session-branch-reader.ts"
 import { freezeSnapshot, frontendJson } from "./json.ts"
@@ -58,6 +60,10 @@ export function copyHistory(history: Iterable<unknown>, reverse = false) {
   return {
     bytes,
     sizes,
+    renderedTurnIds: retained.flatMap((message) => {
+      const turnId = messageTurnId(message as Message)
+      return turnId ? [turnId] : []
+    }),
     messages: freezeSnapshot(frontendJson(retained)) as unknown as readonly FrontendMessage[],
   }
 }

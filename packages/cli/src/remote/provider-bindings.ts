@@ -93,6 +93,15 @@ export class ProviderBindings {
     for (const approval of approvals) this.approve(approval)
   }
 
+  /** Local-only approval receipt. The digest detects endpoint/credential changes without storing secrets. */
+  approvalFingerprint(approval: ProviderBindingApproval): string {
+    try {
+      return endpointSnapshot(this.#ai, approval).fingerprint
+    } catch {
+      throw new ModelBindingError()
+    }
+  }
+
   approve(approval: ProviderBindingApproval): string {
     try {
       const snapshot = endpointSnapshot(this.#ai, approval)

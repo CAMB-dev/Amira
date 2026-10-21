@@ -125,6 +125,7 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.version }}
           CHANNEL: ${{ needs.plan.outputs.channel }}
+          AMIRA_SERVER_BUILD_ID: ${{ needs.plan.outputs.sha }}
         run: bun run build:all --version "$VERSION" --channel "$CHANNEL"
       - name: Build separate Linux server artifacts (CI only)
         if: needs.plan.outputs.published != 'true'

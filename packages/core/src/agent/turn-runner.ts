@@ -21,6 +21,7 @@ import type { Compactor } from "./compactor.ts"
 import type { buildContext } from "./context-builder.ts"
 import type { ContextManager } from "./context-manager.ts"
 import type { History } from "./history.ts"
+import { rememberMessageTurn } from "./message-turn.ts"
 import { joinMessages, modelRef } from "./messages.ts"
 import { modelCall, reportedSpeed, type Thinking } from "./model-call.ts"
 import type { NoticeInbox } from "./notices.ts"
@@ -102,6 +103,7 @@ export class TurnRunner {
     }
     this.#state.turn = turn
     const user = typeof input === "string" ? userMessage(input) : input
+    rememberMessageTurn(user, turn.id)
     // Whatever starts now takes the held notices along: no retry is needed any more.
     this.#deps.inbox.cancelRetry()
     this.#deps.inbox.resume()

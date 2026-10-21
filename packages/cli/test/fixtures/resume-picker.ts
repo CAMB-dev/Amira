@@ -13,7 +13,7 @@ const waitFor = (check: () => boolean, timeoutMs = SPAWN_WAIT_TIMEOUT_MS) =>
 mock.module("@amira/tui", () => ({
   ...tui,
   runInteractive: async (opts: tui.InteractiveOptions) => {
-    process.stdout.write(`startup stored: ${!!opts.agent.session}\n`)
+    process.stdout.write(`startup stored: ${!!opts.agent?.session}\n`)
     let settled = false
     const exited = runUi({
       ...opts,

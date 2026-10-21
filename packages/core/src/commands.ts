@@ -291,6 +291,8 @@ export interface CommandOutcome {
   /** Everything it printed, in order. */
   output: string[]
   error?: string
+  /** A remote frontend must apply effects through this cursor before settling the invocation. */
+  effectWatermark?: number
 }
 
 export interface CommandHostOptions {

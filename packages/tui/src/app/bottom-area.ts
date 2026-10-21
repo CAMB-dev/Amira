@@ -1,5 +1,5 @@
 // Owns bottom-area layout: panels, activity, pending messages, input, status and hints.
-import type { Agent, PanelRegistry, StatusRegistry } from "@amira/core"
+import type { Agent, AgentPort, PanelRegistry, StatusRegistry } from "@amira/core"
 import {
   bold,
   type Editor,
@@ -46,7 +46,8 @@ export interface BottomArea {
 
 /** The functions are read at draw time, never once: the agent is replaced on a session switch. */
 export interface BottomAreaDeps {
-  agent: () => Agent
+  agent: () => Agent | undefined
+  frontend?: AgentPort
   activity: () => TurnActivity
   /** The activity row survived the final bottom-aligned viewport budget. */
   activityVisible?: (visible: boolean, ctx: RenderContext) => void
@@ -101,17 +102,34 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
    * and the running turn's rate stay out of the border, so each is shown only once.
    */
   const statusItems = (): StatusEntry[] => {
+    const connection = deps.frontend?.connection
+    const connectionItems: StatusEntry[] = connection
+      ? [
+          {
+            id: "connection",
+            align: "left",
+            tone: connection === "connected" ? "muted" : "warning",
+            priority: 100,
+            text: `Remote ${connection}`,
+          },
+        ]
+      : []
     // Root model and permission decorations must not masquerade as the owned runtime.
-    if (deps.conversationFocused?.()) return []
+    if (deps.conversationFocused?.()) return connectionItems
     const agent = deps.agent()
     const items = deps.status
       .snapshot()
       .filter((i) => !["context", "cost", "place", "token-speed"].includes(i.id))
     const model = items.find((i) => i.id === "model")
-    const thinking = agent.thinking.state(agent.model).thinking
-    const fallback = agent.model.provider
-      ? `${agent.model.id}${thinking ? ` (${thinking})` : ""}`
+    const state = deps.frontend?.snapshot.state
+    const thinking = agent ? agent.thinking.state(agent.model).thinking : state?.thinking
+    const activeModel = agent?.model ?? state?.model
+    const fallback = activeModel?.provider
+      ? `${activeModel.id}${thinking ? ` (${thinking})` : ""}`
       : "(no model)"
+    const mode = agent?.permissions.mode ?? state?.permissionMode
+    const fastRequested = agent?.fastMode ?? state?.fastMode?.requested
+    const fastApplied = agent?.fastModeApplied ?? state?.fastMode?.applied
     return [
       ...items.filter((i) => i.id !== "model"),
       {
@@ -119,12 +137,13 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         align: "right",
         tone: model?.tone ?? "accent",
         priority: model?.priority ?? 40,
-        text: `${model?.text ?? fallback} ${glyphs.separator} ${agent.permissions.mode}`,
+        text: `${model?.text ?? fallback}${mode ? ` ${glyphs.separator} ${mode}` : ""}`,
       },
       // Requested but not supported by the current model: say so, instead of hiding the choice.
-      ...(agent.fastModeApplied
+      ...connectionItems,
+      ...(fastApplied
         ? [{ id: "fast", align: "right", tone: "accent", priority: 40, text: "fast" } as const]
-        : agent.fastMode
+        : fastRequested
           ? [{ id: "fast", align: "right", tone: "muted", priority: 40, text: "fast n/a" } as const]
           : []),
     ]
@@ -172,13 +191,13 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
 
   /** The panels' rows; unfolded, a blank row sets each panel apart from the one before. */
   const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
-    (deps.panels?.size
+    (deps.panels?.size && deps.agent()
       ? deps.panels.snapshot({
           width,
           now: Date.now(),
           spinner: deps.commandActivity().spinner,
-          sessionId: deps.agent().sessionId,
-          data: deps.agent().data,
+          sessionId: deps.agent()!.sessionId,
+          data: deps.agent()!.data,
           collapsed,
         })
       : []

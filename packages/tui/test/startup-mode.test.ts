@@ -12,7 +12,7 @@ import { type InteractiveOptions, runInteractive } from "../src/app.ts"
 
 const notice = "inline mode was removed; running fullscreen. Use -p for plain output."
 
-function interactiveOptions(): InteractiveOptions & { terminal: FakeTerminal } {
+function interactiveOptions(): InteractiveOptions & { agent: Agent; terminal: FakeTerminal } {
   const ai = createAi({
     dialects: [createMockDialect([])],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],

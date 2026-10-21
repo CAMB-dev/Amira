@@ -103,6 +103,7 @@ async function build(argv: string[]) {
         AMIRA_VERSION: JSON.stringify(options.version),
         AMIRA_CHANNEL: JSON.stringify(options.channel),
         AMIRA_TARGET: JSON.stringify(target),
+        AMIRA_SERVER_BUILD_ID: JSON.stringify(process.env.AMIRA_SERVER_BUILD_ID ?? "development-unverified"),
       },
     })
     if (!result.success) throw new AggregateError(result.logs, `Build failed: ${target}`)

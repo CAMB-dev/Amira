@@ -26,6 +26,14 @@ export function copyToClipboard(
   )
 }
 
+export function copyLastReply(
+  terminal: Terminal,
+  messages: readonly Message[],
+  showNote: (text: string) => void,
+) {
+  copyToClipboard(terminal, lastReplyText(messages), "the last reply", showNote)
+}
+
 /** The text of the session's last reply with any, as the model wrote it (Markdown). */
 export function lastReplyText(messages: readonly Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {

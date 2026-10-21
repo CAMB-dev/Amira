@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "node:os"
+import type {
+  AgentPort,
+  CommandOutcome,
+  FrontendConnectionIssue,
+  FrontendMessageEntry,
+  FrontendState,
+  FrontendUpdate,
+} from "../src/index.ts"
 import {
   ArtifactStore,
   type ArtifactStoreOptions,
@@ -20,6 +28,62 @@ import {
   ToolRegistry,
 } from "../src/index.ts"
 import { usageReceiptDestination } from "../src/owned-conversations-receipts.ts"
+
+test("frontend transport metadata remains a host-library contract", () => {
+  const state: FrontendState = {
+    sessionId: "s",
+    cwd: "/remote",
+    resumed: false,
+    status: "working",
+    children: 0,
+    model: { provider: "p", id: "m", contextWindow: 1000, caps: { images: true } },
+    turnId: "t",
+    holdId: "h",
+    permissionMode: "plan",
+    thinking: "high",
+    fastMode: { requested: true, applied: false },
+  }
+  const update: FrontendUpdate = {
+    kind: "snapshot",
+    snapshot: { state, sessionGeneration: 1, transcript: { messages: [], displays: [] } },
+    reset: true,
+  }
+  const message: FrontendMessageEntry = {
+    id: "m",
+    turnId: "t",
+    message: { role: "user", content: [{ type: "text", text: "prompt" }] },
+  }
+  expect(Object.keys(message).sort()).toEqual(["id", "message", "turnId"])
+  const outcome: CommandOutcome = { ok: true, output: [], effectWatermark: 7 }
+  const issue: FrontendConnectionIssue = {
+    code: "consent_required",
+    message: "Target changed",
+    recovery: "Approve setup again",
+    retryable: false,
+  }
+  const connection: Pick<
+    AgentPort,
+    "connection" | "connectionIssue" | "subscribeConnection" | "subscribeEvents"
+  > = {
+    connectionIssue: issue,
+    connection: "reconnecting",
+    subscribeConnection: () => () => {},
+    subscribeEvents: () => () => {},
+  }
+  expect(Object.keys(connection.connectionIssue!).sort()).toEqual([
+    "code",
+    "message",
+    "recovery",
+    "retryable",
+  ])
+  expect({
+    reset: update.reset,
+    cursor: outcome.effectWatermark,
+    connection: connection.connection,
+    targets: [state.turnId, state.holdId],
+    images: state.model.caps?.images,
+  }).toEqual({ reset: true, cursor: 7, connection: "reconnecting", targets: ["t", "h"], images: true })
+})
 
 test("finished subagent public types carry an opaque accounting destination, not a transcript", () => {
   const store = SessionStore.create({ cwd: process.cwd(), dir: tmpdir() })

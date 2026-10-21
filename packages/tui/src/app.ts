@@ -1,4 +1,4 @@
-import { isNoModel, type ServerToolBlock } from "@amira/ai"
+import { isNoModel } from "@amira/ai"
 import {
   type AnyEvent,
   DEFAULT_TUI_BELL,
@@ -9,12 +9,11 @@ import {
   type EventMap,
   type ToolDetailLevel,
 } from "@amira/api"
-import { type Agent, type AgentPort, MODE_SUMMARY } from "@amira/core"
+import type { Agent, AgentPort } from "@amira/core"
 import {
   chooseImageSupport,
   detectEnv,
   Editor,
-  ImageStore,
   type InputEvent,
   InputReader,
   ProcessTerminal,
@@ -28,14 +27,23 @@ import { createBottomArea } from "./app/bottom-area.ts"
 import { createCommandRunner } from "./app/command-runner.ts"
 import { createComposer } from "./app/composer.ts"
 import { conversationFiles } from "./app/conversation-files.ts"
+import {
+  cycleFrontendPermission,
+  frontendDisplay,
+  unavailableWorkspaceImage,
+} from "./app/frontend-display.ts"
+import { createFrontendEvents } from "./app/frontend-events.ts"
+import { createFrontendFocus } from "./app/frontend-focus.ts"
+import { subscribeFrontend } from "./app/frontend-subscriptions.ts"
 import { createHintNote } from "./app/hint-note.ts"
+import { interactiveImages } from "./app/image-store.ts"
 import { createMainRewind } from "./app/main-rewind.ts"
 import { createNativeFocus, focusHistory } from "./app/native-focus.ts"
 import { createNoticeStrip, createOutbox, otherWay, type WhileWorking } from "./app/outbox.ts"
 import { OverlayManager } from "./app/overlays.ts"
 import { activePointerHint, pointerGeometry, routePointer } from "./app/pointer.ts"
 import { detachesOnQuit, interruptedText, quitWarning, runningJobCount } from "./app/quit.ts"
-import { createSessionDisplay } from "./app/session-display.ts"
+import { createServerRows, turnFailureNotice } from "./app/server-rows.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
@@ -44,6 +52,7 @@ import {
   HINT_NOTE_MS,
   HOST_EVENTS,
   resumeAtStartup,
+  startupDirections,
   startupNotices,
   tildePath,
   welcomeCard,
@@ -52,19 +61,18 @@ import {
 import { createSubmission } from "./app/submission.ts"
 import { interactiveBanner, withFullscreenTerminal } from "./app/terminal.ts"
 import { RuntimeThemes } from "./app/themes.ts"
-import { copyToClipboard, lastReplyText } from "./clipboard.ts"
+import { copyLastReply } from "./clipboard.ts"
 import { displayOutput } from "./display-history.ts"
+import { fileList } from "./file-index.ts"
 import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
 import { headerLine } from "./header.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
-import { mouseLabels } from "./mouse-labels.ts"
 import { PromptHistory } from "./prompt-history.ts"
-import { replyCitations, serverToolCall } from "./server-tools.ts"
+import { replyCitations } from "./server-tools.ts"
 import { TerminalStatus } from "./terminal-status.ts"
-import { modelErrorNotice } from "./transcript.ts"
 import { detailCommand, toggleDetail } from "./verbose.ts"
 import { type TranscriptView, View, type ViewHost } from "./view.ts"
 
@@ -72,7 +80,6 @@ export type { RetryState } from "./app/activity.ts"
 export { activityLabel, lastReasoningLine, retryLabel, statusRetryLabel } from "./app/activity.ts"
 export { pendingMessageRows } from "./app/outbox.ts"
 export { type InteractiveOptions, tildePath } from "./app/startup.ts"
-
 /**
  * The interactive terminal UI. This is its controller: it follows the bus and the keys, keeps
  * the input, dialogs, forms and the message queue, and hands the conversation to the full-screen
@@ -85,7 +92,6 @@ export async function runInteractive(opts: InteractiveOptions): Promise<number> 
     withFullscreenTerminal(terminal, env, () => runFullscreen(options, terminal, env)),
   )
 }
-
 async function runFullscreen(
   opts: InteractiveOptions & { frontend: AgentPort },
   terminal: Terminal,
@@ -94,6 +100,8 @@ async function runFullscreen(
   // Wiring and collaborators: terminal setup and the UI's shared services.
   let { agent } = opts
   const state = () => opts.frontend.snapshot.state
+  const display = () => frontendDisplay(opts.frontend, agent)
+  const sessionOwner = () => agent ?? opts.frontend.snapshot.sessionGeneration
   const presenters = opts.toolRenderers
   const settings = opts.settings ?? {}
   const imageSetting = settings.images ?? DEFAULT_TUI_IMAGES
@@ -103,38 +111,26 @@ async function runFullscreen(
   })
   const themes = new RuntimeThemes(opts, env, capabilities)
   let theme = themes.current.theme
-
   // Links are clickable (OSC 8) where the terminal is known to support them.
-  const hyperlinks = supportsHyperlinks(env)
+  const hyperlinks = supportsHyperlinks(env) ? (agent ? true : "web") : false
   // Images on a line of their own are drawn where the terminal can: at most 20
   // rows, and 40% of the screen. Full-screen overlays (the sub-agent viewer, forms) show their
   // alt text (D83, D84). What images are made of comes from image providers (the images
   // extension, D88): without one, they are their alt text.
   const imageSupport = chooseImageSupport(imageSetting, capabilities.graphics, env)
-  const providers = opts.imageProviders
-  const imageStore =
-    imageSupport &&
-    providers &&
-    new ImageStore({
-      support: imageSupport,
-      open: (input, ctx) => providers.open(input, ctx),
-      cwd: () => focus.conversation?.cwd ?? agent.cwd,
-      maxRows: () => Math.max(1, Math.min(20, Math.floor(terminal.rows * 0.4))),
-    })
-  const images = imageStore ? () => (providers!.size > 0 ? imageStore : undefined) : undefined
+  const images = interactiveImages(
+    opts.imageProviders,
+    imageSupport,
+    () => focus.conversation?.cwd ?? display().cwd,
+    () => terminal.rows,
+  )
   // Nodes of replies extensions render, e.g. ```mermaid diagrams (D88).
   const renders = new ReplyRenderers(opts.markdownRenderers, themes.current.variant)
   const spinner = new Spinner()
   const activity = createTurnActivity()
   // Turn display state: provider tool rows and transient hint notes.
-  /**
-   * The provider's own tool calls (hosted web search) shown as rows this turn: when each
-   * started, and whether it ended.
-   */
-  const serverRows = new Map<string, { startedAt: number; ended: boolean }>()
   const hint = createHintNote(() => view.requestRender())
   const showNote = hint.show
-
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   /** What Enter does with a message while a turn runs; the queue key does the other. */
   const enterDoes: WhileWorking =
@@ -160,24 +156,24 @@ async function runFullscreen(
   const commands = opts.commands
   const mainHistory = opts.history ?? new PromptHistory()
   const files = conversationFiles(
-    opts.files,
-    () => focus.conversation?.cwd ?? agent.cwd,
+    opts.files ?? (agent ? undefined : fileList([])),
+    () => focus.conversation?.cwd ?? display().cwd,
     () => !!focus.conversation,
-    opts.filesForCwd,
+    opts.filesForCwd ?? (agent ? undefined : () => fileList([])),
   )
   const composer = createComposer({
     editor,
     keys,
     history: focusHistory(mainHistory, () => focus),
-    commands,
+    commands: opts.completions ?? commands,
     files,
     commandsEnabled: () => !focus.conversation,
-    agent: () => focus.conversation ?? agent,
+    agent: () => focus.conversation ?? display(),
     env,
     terminal,
     clipboard: opts.clipboard,
-    localCwd: opts.localCwd,
-    readWorkspaceImage: opts.readWorkspaceImage,
+    localCwd: opts.localCwd ?? (agent ? undefined : process.cwd()),
+    readWorkspaceImage: opts.readWorkspaceImage ?? (agent ? undefined : unavailableWorkspaceImage),
     showNote,
     clearNote: hint.clear,
     requestRender: () => view.requestRender(),
@@ -212,6 +208,7 @@ async function runFullscreen(
   ]
   const bottomArea = createBottomArea({
     agent: () => agent,
+    frontend: opts.frontend,
     activity: () => focus.activity ?? activity,
     conversationIndicator: (width) => focus.indicator(width),
     conversationFocused: () => !!focus.conversation,
@@ -241,11 +238,11 @@ async function runFullscreen(
     popups: composer.popups,
     filePicker: composer.filePicker,
   })
-
   const overlays = new OverlayManager({
     ui: opts.ui,
     requests: opts.requests,
     views: opts.views,
+    hyperlinks,
     keys,
     theme,
     presenters,
@@ -257,7 +254,7 @@ async function runFullscreen(
     toolDetail: () => detail,
     emitWaiting: (data) => {
       termStatus.setWaiting(data.pending, overlays.needsAttention)
-      agent.bus.emit("ui.waiting", data, { sessionId: "host" })
+      agent?.bus.emit("ui.waiting", data, { sessionId: "host" })
     },
     working: () => activity.working,
     interrupt: () => outbox.interrupt(),
@@ -293,7 +290,7 @@ async function runFullscreen(
     renders,
     keys,
     spinner,
-    sessionId: () => agent.sessionId,
+    sessionId: () => agent?.sessionId ?? state().sessionId,
     detail: () => detail,
     bottom: (...args) => {
       const rows = bottomArea.layout(...args)
@@ -317,7 +314,7 @@ async function runFullscreen(
   }
   const mainView = createFullscreenView(host)
   let view: TranscriptView = mainView
-  const focus = createNativeFocus({
+  const nativeFocus = createNativeFocus({
     port: opts.frontend,
     ui: opts.ui,
     editor,
@@ -339,6 +336,24 @@ async function runFullscreen(
     },
     quitting: () => quitting,
   })
+  const focus = createFrontendFocus(nativeFocus, {
+    source: opts.conversations,
+    port: opts.frontend,
+    editor,
+    mainView,
+    createView: (id) => createFullscreenView({ ...host, sessionId: () => id }),
+    activate: (next) => {
+      view = next
+    },
+    prepare: () => {
+      composer.cancelClipboard()
+      composer.search.cancel()
+    },
+    overlays,
+    showNote,
+    returnKey: () => keys.label("view.focus") ?? "F6",
+    canFocus: () => !quitting && !overlays.hasFullscreen && !overlays.dock && !overlays.dialogs.length,
+  })
   const shimmerClock = createActivityShimmer(
     terminal,
     () => focus.activity ?? activity,
@@ -349,7 +364,7 @@ async function runFullscreen(
   const noticeStrip = createNoticeStrip({ theme, requestRender: () => view.requestRender() })
   const outbox = createOutbox({
     frontend: opts.frontend,
-    agent: () => agent,
+    agent: display,
     editor: focus.mainEditor,
     activity,
     spinner,
@@ -383,6 +398,7 @@ async function runFullscreen(
   })
   const commandRunner = createCommandRunner({
     port: opts.frontend,
+    bindCommandFrontend: opts.bindCommandFrontend,
     captureFrontend: focus.commandContext,
     commands,
     keys,
@@ -392,7 +408,7 @@ async function runFullscreen(
     commandOutput: (level, text) => mainView.commandOutput(level, text),
     requestRender: () => view.requestRender(),
     animationChanged: () => overlays.syncAnimation(),
-    sessionId: () => agent.sessionId,
+    sessionId: () => agent?.sessionId ?? state().sessionId,
     quit: () => quit(),
     openView: focus.openView,
     openRewind: () => rewind.openRewind(),
@@ -402,14 +418,15 @@ async function runFullscreen(
     isCompacting: () => activity.compacting,
     interrupt: () => outbox.interrupt(),
   })
-
   const submission = createSubmission({
     port: opts.frontend,
+    bindCommandFrontend: opts.bindCommandFrontend,
     captureFrontend: focus.commandContext,
-    agent: () => agent,
+    agent: display,
     editor,
     history: focus.history,
     focusedSubmit: (text, parts, display) => focus.submit(text, parts, display),
+    skillLine: opts.completions?.skillLine,
     commands,
     composer,
     commandRunner,
@@ -427,7 +444,6 @@ async function runFullscreen(
       unfocusConversation: focus.unfocus,
     },
   })
-
   themes.connect((selection) => {
     if (!activity.working && !activity.compacting) {
       if (themes.previewing) spinner.start(() => view.requestRender())
@@ -439,13 +455,11 @@ async function runFullscreen(
     overlays.setTheme(theme)
     focus.setTheme(theme, selection.markdownGlyphs)
   })
-
   // Lifecycle: the exit result resolved by shutdown.
   let resolveExit!: (code: number) => void
   const exited = new Promise<number>((r) => {
     resolveExit = r
   })
-
   // Turn display state: output and interruptions in the current turn.
   /** Whether the current turn showed anything besides the user's message. */
   let turnShowedOutput = false
@@ -453,44 +467,44 @@ async function runFullscreen(
   let textSinceRow = true
   /** The user interrupted this turn: the failures of calls it cut short are not the tools'. */
   let interrupted = false
-
-  /**
-   * A tool the provider runs (its hosted web search) as a tool row: it starts when first seen,
-   * after what the reply said before it, and ends once the provider says it finished (or, at
-   * the reply's end, `final`, as it was left).
-   */
-  function serverRow(b: ServerToolBlock, final = false) {
-    const view = mainView
-    const call = serverToolCall(b)
-    let row = serverRows.get(b.id)
-    if (row?.ended) return
-    if (!row) {
-      if (final && b.status === "running") return
-      row = { startedAt: Date.now(), ended: false }
-      serverRows.set(b.id, row)
-      if (view.replyEnd([])) turnShowedOutput = true
+  const serverRows = createServerRows(mainView, {
+    interrupted: () => interrupted,
+    output: () => {
+      turnShowedOutput = true
+    },
+    started: () => {
       textSinceRow = false
-    }
-    view.toolStart(b.id, call.name, call.args, row.startedAt)
-    if (b.status === "running" && !final) return
-    row.ended = true
-    const end = {
-      result: call.result,
-      durationMs: Date.now() - row.startedAt,
-      interrupted,
-      ...(call.rejected ? { rejected: call.rejected } : {}),
-    }
-    if (view.toolEnd(b.id, end)) turnShowedOutput = true
-  }
-
-  const onEvent = (e: AnyEvent) => {
-    if (focus.onUiEvent(e)) return
+    },
+  })
+  const remoteEvents =
+    !agent &&
+    createFrontendEvents({
+      frontend: opts.frontend,
+      view: mainView,
+      activity,
+      outbox,
+      noticeStrip,
+      spinner,
+      termStatus,
+      changed: () => view.requestRender(),
+    })
+  const onEvent = (e: AnyEvent, context?: { replay: boolean }) => {
+    if (focus.onUiEvent(e, context)) return mainView.requestRender()
     const view = mainView
     focus.refresh()
     if (view.subagentEvent(e)) view.requestRender()
     overlays.onEvent(e)
     // Sub-agents share the bus; only this session's turn events drive the transcript.
-    if (e.sessionId !== agent.sessionId && !HOST_EVENTS.has(e.type)) return
+    if (e.sessionId !== (agent?.sessionId ?? state().sessionId) && !HOST_EVENTS.has(e.type)) return
+    if (
+      remoteEvents &&
+      e.type !== "ui.request" &&
+      e.type !== "ui.resolved" &&
+      e.type !== "workspace.changed"
+    ) {
+      remoteEvents.onEvent(e, context)
+      return
+    }
     switch (e.type) {
       case "workspace.changed":
         workspace = e.data
@@ -530,7 +544,7 @@ async function runFullscreen(
           activity.thinkingDelta(text, () => view.reasoningDelta(text))
         } else if (e.data.kind === "serverTool") {
           const block = e.data.block
-          activity.serverToolDelta(() => serverRow(block))
+          activity.serverToolDelta(() => serverRows.show(block))
         } else {
           activity.toolCallDelta(e.data.argsDelta.length, e.data.name)
         }
@@ -538,7 +552,7 @@ async function runFullscreen(
       case "message.end": {
         const { message } = e.data
         // Searches the provider left unfinished end with the reply; the sources it cited follow it.
-        for (const b of message.content) if (b.type === "serverTool") serverRow(b, true)
+        for (const b of message.content) if (b.type === "serverTool") serverRows.show(b, true)
         const sources = replyCitations(message.content)
         // Right after a search row the list starts a block of its own: no blank rows first.
         if (sources) view.replyDelta(textSinceRow ? sources : sources.trimStart())
@@ -578,7 +592,7 @@ async function runFullscreen(
         if (!themes.previewing) spinner.stop()
         outbox.clearSteering()
         activity.setRetry(undefined)
-        if (e.data.reason === "error") errorNotice(e.data)
+        if (e.data.reason === "error") turnFailureNotice(mainView, e.data)
         else if (e.data.reason === "aborted") view.notice("interrupted", interruptedText(state().children))
         else if (!turnShowedOutput) view.notice("info", "No reply")
         outbox.turnEnded()
@@ -631,7 +645,7 @@ async function runFullscreen(
         break
       }
       case "ui.request":
-        overlays.onUiRequest(e.data)
+        overlays.onUiRequest(e.data, { replay: context?.replay })
         break
       case "ui.resolved":
         overlays.onUiResolved(e.data)
@@ -644,16 +658,6 @@ async function runFullscreen(
     rewind.flush()
     view.requestRender()
   }
-
-  /** A failed turn: what went wrong in plain words and what to do, the provider's text folded. */
-  function errorNotice(end: EventMap["turn.end"]) {
-    const view = mainView
-    const f = end.failure
-    // Without a next step of its own, the notice says what the user can always do.
-    if (!f) return view.notice("error", modelErrorNotice(end.error))
-    view.notice("error", f.hint ? `${f.summary}\n${f.hint}` : modelErrorNotice(f.summary), f.detail)
-  }
-
   // Lifecycle: confirmation before quitting with background work still running.
   /** Until when a second Ctrl+C or Ctrl+D quits although sub-agents or background jobs run. */
   let quitArmedUntil = 0
@@ -669,7 +673,6 @@ async function runFullscreen(
     const key = keys.label(action) ?? keyLabel({ name: "c", ctrl: true })
     showNote(quitWarning(n, jobs, key))
   }
-
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
     rewind.reset(next)
@@ -691,7 +694,6 @@ async function runFullscreen(
     view.requestRender()
     return view.detailNote(level)
   }
-
   // Lifecycle: shutdown is idempotent and resolves the exit result.
   let quitting = false
   function quit(code = 0) {
@@ -731,7 +733,6 @@ async function runFullscreen(
       else resolveExit(code)
     }
   }
-
   // Lifecycle: terminal focus is unknown until the first report.
   let focused: boolean | undefined
   function onInput(e: InputEvent) {
@@ -741,7 +742,7 @@ async function runFullscreen(
         focused = e.focused
         shimmerClock.focus(focused)
         termStatus.setFocused(focused)
-        agent.bus.emit("ui.focus", { focused }, { sessionId: "host" })
+        agent?.bus.emit("ui.focus", { focused }, { sessionId: "host" })
       }
       return
     }
@@ -806,14 +807,7 @@ async function runFullscreen(
       return quitOrWarn("exit")
     } else if (keys.is(e, "copy.reply")) {
       // From the session's messages, so a new session (/clear) has none yet.
-      const fallback = `${mouseLabels.drag} selects text.`
-      copyToClipboard(
-        terminal,
-        lastReplyText([...(focus.historySnapshot() ?? agent.messages)]),
-        "the last reply",
-        showNote,
-        fallback,
-      )
+      copyLastReply(terminal, focus.historySnapshot() ?? display().messages, showNote)
     } else if (keys.is(e, "tool-output")) {
       showNote(setDetail(toggleDetail(detail)))
     } else if (keys.is(e, "panels.toggle") && bottomArea.panelsShown) {
@@ -822,8 +816,7 @@ async function runFullscreen(
       // The user's choice for the whole session tree, sub-agents included; the border shows it.
       if (focus.conversation)
         return showNote(`Return to main with ${keys.label("view.focus") ?? "F6"} to change permission mode.`)
-      const next = agent.permissions.cycleMode()
-      showNote(`Permission mode: ${next} — ${MODE_SUMMARY[next]}`)
+      cycleFrontendPermission(opts.frontend, showNote)
     } else if (keys.is(e, "help") && editor.isEmpty) {
       // Lists open only on text, so an empty input has none; a dialog took the key above.
       return overlays.openKeyReference()
@@ -840,7 +833,6 @@ async function runFullscreen(
     }
     redraw()
   }
-
   /**
    * Brings the popup up to the editor text, then asks for a frame. Candidates the host has at
    * once (command names, sync completers) show in the same frame as the key; async ones get
@@ -854,8 +846,23 @@ async function runFullscreen(
     else view.requestRender()
   }
   // Lifecycle: subscriptions and terminal startup, in registration order.
-  const sessions = createSessionDisplay(opts.frontend, mainView)
-  const off = agent.bus.subscribe(onEvent)
+  const { sessions, off } = subscribeFrontend(opts, {
+    agent,
+    view: mainView,
+    activeView: () => view,
+    focus,
+    onEvent,
+    quitting: () => quitting,
+    quit,
+    rewind: () => rewind.openRewind(),
+    reset: () => {
+      focus.unfocus()
+      composer.cancelClipboard()
+      outbox.reset()
+      overlays.sessionChanged()
+      if (remoteEvents) remoteEvents.reset()
+    },
+  })
   const offSwitch = commands?.onSwitch(followAgent)
   const offCommand = opts.registerCommand?.(detailCommand(() => detail, setDetail))
   const offThemeCommand = opts.registerCommand?.(
@@ -869,16 +876,9 @@ async function runFullscreen(
     opts.onReady?.()
     reader.start()
     view.banner((theme) => interactiveBanner(theme, state().model, tildePath(state().cwd, env)))
-    // Where to start: how to find the commands, the files, the skills and the keys.
-    const helpKey = keys.label("help")
-    const starts = [
-      commands && "/help commands",
-      "@ files",
-      commands && "$ skills",
-      helpKey && `${helpKey} keys`,
-    ].filter(Boolean)
-    view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
-    if (state().resumed) sessions.show(agent.sessionId, false)
+    startupDirections(view, keys, !!commands || !agent)
+    if (state().resumed) sessions.show(state().sessionId, false)
+    if (remoteEvents) remoteEvents.reset()
     for (const e of opts.startupEvents ?? []) onEvent(e)
     // With no provider yet, a welcome card with the steps to a first message replaces the notice.
     const welcome = isNoModel(state().model) && submission.noProviders()
@@ -886,7 +886,7 @@ async function runFullscreen(
     for (const notice of startupNotices(opts, welcome)) view.notice("warning", notice)
     // The first frame carries the banner, history and startup messages.
     view.start()
-    if (opts.resumePicker) resumeAtStartup({ run: commandRunner.run, agent: () => agent, quit })
+    if (opts.resumePicker) resumeAtStartup({ run: commandRunner.run, agent: sessionOwner, quit })
     else if (opts.initialPrompt?.trim()) submission.submit(opts.initialPrompt)
     if (leftoverInput) reader.feed(leftoverInput)
   } catch (error) {
@@ -895,6 +895,5 @@ async function runFullscreen(
     } catch {}
     throw error
   }
-
   return exited
 }

@@ -1,7 +1,6 @@
 // Owns submission validation and routing to commands, skills, input handlers or the outbox.
 import { isNoModel } from "@amira/ai"
 import {
-  type Agent,
   type AgentPort,
   type CommandHost,
   type CommandRunOptions,
@@ -15,13 +14,15 @@ import type { PromptHistory } from "../prompt-history.ts"
 import type { TranscriptView } from "../view.ts"
 import type { CommandRunner, CommandRunnerOptions } from "./command-runner.ts"
 import type { Composer } from "./composer.ts"
+import type { DisplayModel } from "./frontend-display.ts"
 import type { Outbox, WhileWorking } from "./outbox.ts"
 
 interface SubmissionDeps {
-  agent: () => Pick<Agent, "model">
+  agent: () => { model: DisplayModel }
   editor: Pick<Editor, "setParts" | "clear" | "getText" | "getParts" | "getDisplayText">
   history: Pick<PromptHistory, "add">
   commands?: CommandHost
+  skillLine?: CommandHost["skillLine"]
   port?: AgentPort
   captureFrontend?: CommandRunnerOptions["captureFrontend"]
   bindCommandFrontend?: (invocationId: string, options: CommandRunOptions) => () => void
@@ -84,7 +85,7 @@ export function createSubmission(deps: SubmissionDeps) {
       composer.clipboardPending ||
       (hasImages &&
         (imageBytes(parts) > MAX_IMAGE_BYTES ||
-          (!isNoModel(deps.agent().model) && !deps.agent().model.caps.images)))
+          (!isNoModel(deps.agent().model) && !deps.agent().model.caps?.images)))
     ) {
       editor.setParts(parts)
       const visible = deps.composerView?.() ?? view
@@ -107,7 +108,8 @@ export function createSubmission(deps: SubmissionDeps) {
     const commandPort = deps.port && deps.port.supportedOperations?.includes("command.run") !== false
     if (!hasImages && (commands || commandPort) && parseCommandLine(trimmed))
       void commandRunner.run(trimmed, message.seq)
-    else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed, message.seq)
+    else if (!hasImages && (commands?.skillLine(trimmed) || deps.skillLine?.(trimmed)))
+      runSkill(trimmed, message.seq)
     else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display, message.seq)
     else outbox.dispatch(message, parts, how)
     view.requestRender()

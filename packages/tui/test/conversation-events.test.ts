@@ -353,7 +353,7 @@ test("tool execution renders immediately and preserves partials, approval, and a
   try {
     onEvent(event("tool.execute.start", { toolCallId: "call", name: "read", args: { path: "a" } }))
     expect(activity.toolStarted).toHaveBeenCalledTimes(1)
-    expect(view.toolStart).toHaveBeenCalledWith("call", "read", { path: "a" }, 1200)
+    expect(view.toolStart).toHaveBeenCalledWith("call", "read", { path: "a" }, 1000)
     expect(changed).toHaveBeenCalledTimes(1)
     expect(view.render).toHaveBeenCalledTimes(1)
     onEvent(event("tool.execute.update", { toolCallId: "call", name: "read", partial: result }))
@@ -393,17 +393,39 @@ test("tool execution renders immediately and preserves partials, approval, and a
   }
 })
 
+test("replayed tools retain remote event timestamps rather than local arrival time", () => {
+  const { onEvent, view } = setup()
+  const clock = spyOn(Date, "now").mockReturnValue(9_000_000)
+  try {
+    onEvent({
+      ...event("tool.execute.start", { toolCallId: "remote-call", name: "read", args: {} }),
+      ts: 1_000,
+    })
+    expect(view.toolStart).toHaveBeenCalledWith("remote-call", "read", {}, 1_000)
+    onEvent({ ...event("message.delta", { kind: "serverTool", block: search }), ts: 2_000 })
+    clock.mockReturnValue(20_000_000)
+    onEvent({
+      ...event("message.delta", { kind: "serverTool", block: { ...search, status: "done" } }),
+      ts: 3_500,
+    })
+    expect(view.toolStart).toHaveBeenLastCalledWith("search", "web_search", { query: "Bun" }, 2_000)
+    expect(view.toolEnd.mock.calls.at(-1)?.[1].durationMs).toBe(1_500)
+  } finally {
+    clock.mockRestore()
+  }
+})
+
 test("hosted search ends once and citations start directly below its row", () => {
   const { onEvent, view } = setup()
   const clock = spyOn(Date, "now").mockReturnValue(1200)
   try {
     onEvent(event("message.delta", { kind: "serverTool", block: search }))
     expect(view.replyEnd).toHaveBeenCalledWith([])
-    expect(view.toolStart).toHaveBeenCalledWith("search", "web_search", { query: "Bun" }, 1200)
+    expect(view.toolStart).toHaveBeenCalledWith("search", "web_search", { query: "Bun" }, 1000)
     expect(view.toolEnd).not.toHaveBeenCalled()
     clock.mockReturnValue(1500)
     const done: ServerToolBlock = { ...search, status: "done" }
-    onEvent(event("message.delta", { kind: "serverTool", block: done }))
+    onEvent({ ...event("message.delta", { kind: "serverTool", block: done }), ts: 1300 })
     onEvent(
       event("message.end", {
         message: {
