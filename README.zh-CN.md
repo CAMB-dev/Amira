@@ -46,6 +46,7 @@ Nightly 可执行程序预发布版本可从 [GitHub Releases](https://github.co
 - [快速开始](docs/zh/getting-started.md)
 - [Provider 与 API 密钥](docs/zh/providers.md)
 - [日常使用、会话与自动化](docs/zh/usage.md)
+- [通过 SSH 使用远程工作区](docs/zh/remote-workspaces.md)
 - [子 agent 与 worktree](docs/zh/subagents.md)
 - [使用和编写扩展](docs/zh/extensions.md)
 - [快捷键](docs/zh/keybindings.md)

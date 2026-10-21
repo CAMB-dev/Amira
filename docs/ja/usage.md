@@ -4,6 +4,8 @@
 
 作業対象のディレクトリで `amira` を実行します。位置引数のプロンプトが最初のメッセージになり、`--cwd` で別の作業ディレクトリを指定できます。プロバイダーの設定については[はじめに](getting-started.md)を参照してください。
 
+Linux の SSH ホストでエージェントとツールを動かし、手元のコンピューターで全画面 UI を使うには、`amira remote add` と `amira remote attach` を使います。[リモートワークスペース](remote-workspaces.md)で、セットアップ、設定の管理先、ローカルモデルプロキシとその制限を説明しています。リモートコマンドには専用のオプションがあります（`amira remote --help`）。以下の通常の起動フラグとプリント/RPC モードはローカル実行向けです。リモートモードで終了すると、リモートの作業を停止せずに切断します。
+
 ## 推論の強度
 
 対話モードでは `amira --thinking high`、print モードでは `amira -p --thinking xhigh "Explain this repository"` を使います。指定できるレベルは `low`、`medium`、`high`、`xhigh`、`max` です。

@@ -61,9 +61,10 @@ export class RemoteAgentOperations {
         sessionGeneration: record.generation,
       })
       .catch((error) => {
-        // A transport may fail with an adapter-specific error. Never equate EOF with cancellation.
+        // Connection failures (including replay gaps) are not authoritative operation replies.
+        // Retain their original epoch/identity for ledger-safe retry after reconnect.
         record.uncertain =
-          !(error instanceof RemoteReplyError) &&
+          (!(error instanceof RemoteReplyError) || error === connection.failureReason) &&
           !(error instanceof RemoteError && error.code === "cancelled")
         throw error
       })

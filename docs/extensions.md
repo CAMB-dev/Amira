@@ -4,6 +4,8 @@
 
 Extensions add tools, commands and UI behavior. Installed packages can contain multiple extensions, skills and top-level CLI commands. They run code on your computer with your permissions.
 
+This page describes local extension use. [Remote workspaces](remote-workspaces.md) run only bundled executable extensions: installed or explicitly configured executable extensions are skipped with notices, and local installed extensions do not run in the remote frontend. Trusted remote package skill data can still be discovered. `/ext` and `/provider` administration are not available in the attached UI; installing a package does not give its tools, commands or custom views remote support.
+
 ## Find and manage packages
 
 ```sh

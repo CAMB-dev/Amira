@@ -46,6 +46,7 @@ Type a request and press Enter. By default, during a turn Enter steers it and Al
 - [Getting started](docs/getting-started.md)
 - [Providers and API keys](docs/providers.md)
 - [Everyday use, sessions and automation](docs/usage.md)
+- [Remote workspaces over SSH](docs/remote-workspaces.md)
 - [Sub-agents and worktrees](docs/subagents.md)
 - [Using and writing extensions](docs/extensions.md)
 - [Keybindings](docs/keybindings.md)

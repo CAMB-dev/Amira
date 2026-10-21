@@ -21,9 +21,10 @@ export const REMOTE_USAGE = `Usage:
   amira remote add <host> [--name <name>] [--cwd <remote-path>] [--accept-install] [--remote-key] [--bundle <directory>]
   amira remote attach <name-or-host> [--cwd <remote-path>] [--accept-install] [--remote-key] [--bundle <directory>]
 
-Uses system OpenSSH without agent forwarding or a PTY. Setup requires a signed
-local server bundle matching this client build. --accept-install grants first-use
-consent, including automatic binary updates. Updates never stop running work.
+Uses system OpenSSH without agent forwarding or a PTY. Setup verifies a signed
+server bundle matching this client build. Release artifacts are cached/downloaded locally;
+--bundle selects an offline directory. --accept-install grants first-use consent,
+including automatic binary updates. Updates never stop running work.
 Models run through your local provider connection by default; keys are not copied remotely.
 --remote-key opts into provider credentials configured on the remote host.
 `

@@ -16,6 +16,101 @@ run, especially on Windows. Repeat native integration tests in **fresh invocatio
 diagnosis that produced PowerShell `uv_spawn ENOENT` on later repetitions, not a missing
 PowerShell installation.
 
+## Remote workspace acceptance (offline)
+
+Run remote acceptance with **launch-time** home isolation, before Bun loads the test
+preload or application imports. The normal `test-env.ts` preload adds a per-file
+home and a write guard; it is not a read sandbox and deliberately preserves live-test
+opt-ins. Clear those opt-ins and provider credentials in the launching environment.
+Do not use your normal Amira home for this acceptance run.
+
+For the new integrated scenarios alone, the test-only launcher creates disposable
+launch homes, clears live opt-ins/credentials, disables dotenv/automatic installation
+and preloads the strict network guard before any application import:
+
+```sh
+bun --no-env-file --no-install packages/cli/test/remote/e2e-offline.ts
+```
+
+It can also accept specific remote test files. It is not a generic full-suite runner:
+some existing full-suite tests intentionally use loopback HTTP fixtures, whereas this
+launcher's network guard rejects all sockets/requests.
+
+For example, run this in a **fresh PowerShell terminal** at the repository root
+(with locked dependencies already installed). It changes only that terminal's environment
+and removes only its newly created temporary directory:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$root = Join-Path ([IO.Path]::GetTempPath()) ('amira-offline-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $root | Out-Null
+try {
+  Get-ChildItem Env: | Where-Object {
+    $_.Name -match '^(AMIRA_|ANTHROPIC_|OPENAI_|GOOGLE_|GEMINI_|AZURE_|AWS_|GITHUB_|GH_|XAI_|MISTRAL_|GROQ_|DEEPSEEK_|OPENROUTER_)|API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL'
+  } | ForEach-Object { Remove-Item ('Env:' + $_.Name) }
+  # Unlike CLI flags on `bun run check`, BUN_OPTIONS reaches nested Bun processes.
+  $env:BUN_OPTIONS = '--no-env-file --no-install'
+  $env:HOME = $root
+  $env:USERPROFILE = $root
+  $env:AMIRA_HOME = Join-Path $root '.amira'
+  $env:HOMEDRIVE = [IO.Path]::GetPathRoot($root).TrimEnd('\')
+  $env:HOMEPATH = $root.Substring($env:HOMEDRIVE.Length)
+  foreach ($kind in @('CONFIG', 'CACHE', 'DATA', 'STATE', 'RUNTIME')) {
+    $name = if ($kind -eq 'RUNTIME') { 'XDG_RUNTIME_DIR' } else { "XDG_${kind}_HOME" }
+    [Environment]::SetEnvironmentVariable($name, (Join-Path $root $kind.ToLower()), 'Process')
+  }
+  bun --no-env-file --no-install test packages/cli/test/remote/e2e.test.ts
+  if ($LASTEXITCODE -ne 0) { throw 'Remote acceptance failed' }
+  bun --no-env-file --no-install run check
+  if ($LASTEXITCODE -ne 0) { throw 'Full verification failed' }
+} finally {
+  Remove-Item -LiteralPath $root -Recurse -Force
+}
+```
+
+Close that terminal afterwards; do not launch a normal Amira session in the sanitized
+environment. Do not enable `AMIRA_LIVE_*`, install dependencies, refresh catalogs,
+download cross-compilation runtimes, or run real SSH/provider calls for offline acceptance.
+The new remote/server suites deny networking and inject mock AI, signed fixture artifacts,
+local-spawn fake SSH and fake terminals. Existing full-suite HTTP integration tests use
+loopback fixture servers; this is not a claim of an OS-level network sandbox.
+
+Before merge, run `bun run typecheck`, `bun run lint`, `bun run architecture:check`,
+and affected tests in the same isolated environment, then one `bun run check`.
+Affected coverage includes `packages/cli/test/remote`, `packages/cli/test/server`,
+legacy `packages/cli/test/rpc*.test.ts`, frontend core/TUI regressions,
+`packages/core/test/docs.test.ts`, and server build/manifest/release/native smoke tests
+under `scripts/`. Keep the three-worker policy above. Allow at least 600,000 ms per
+shell command; a full run can exceed that on Windows, so use a longer-lived job rather
+than cutting it off. Fix failures and rerun only the failed checks/files; report the
+original failures and rerun results, not an unperformed second full-suite pass.
+
+`e2e.test.ts` consolidates adversarial codec-backed acceptance; the focused suites retain
+the detailed boundary/fault matrix:
+
+| Boundary | Focused suites |
+| --- | --- |
+| Framing, chunks, pressure and wire coverage | `remote/codec`, `connection`, `handshake`, `schema-parity*` |
+| Replay, single controller and duplicate mutations | `remote/replay`, `controller`, `operation-ledger`, `agent-port*` |
+| Retained dialogs and stale form revisions | `remote/form-admission*`, `form-evaluation*`, `agent-port-forms` |
+| Accepted model calls, expiry and credentials | `remote/model-retention`, `proxy-*`, `model-outbound-*`, `provider-*` |
+| Disconnect at the subprocess boundary | `remote/reconnect-install`, `reconnect-policy`, `incomplete-eof-reconnect`, `relay-*` |
+| Frontend parity, images, focus and inert file links | `remote/fullscreen`, `conversation-focus-regressions`, `image-upload`, `secondary-link-policy`; TUI regressions |
+| Discovery, idle, files/jobs and shutdown | `packages/cli/test/server/` |
+| Provenance, atomic updates and build graph | `remote/deployment*`, `upgrade-policy`; server build/manifest/release tests in `scripts/` |
+
+Names in the table abbreviate `.test.ts` files under `packages/cli/test/remote/` unless
+otherwise stated. Run legacy RPC regressions as well: remote detach must not change legacy
+RPC's exit-on-EOF behavior.
+
+Native Windows client/server compilation and
+settings-free self-checks are exercised by `packages/cli/test/remote/native-smoke.test.ts`
+and `scripts/server-native.test.ts`. They do **not** prove Linux x64/ARM64 binaries,
+real OpenSSH, Unix socket permissions, SIGHUP handling or session-manager survival.
+Run the opt-in [Linux/SSH verification checklist](../docs/remote-workspaces.md) separately
+on disposable hosts, with a mock provider first. Never count that manual gate as passed
+from a Windows fake-platform or compiled-fixture test.
+
 ## Four/six-worker diagnosis (2026-10-05)
 
 **Incomplete: no causal fix is claimed; retain three workers.** Windows, Bun 1.4.2,
