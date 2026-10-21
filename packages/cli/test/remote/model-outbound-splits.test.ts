@@ -127,21 +127,22 @@ test("all approved credential representations stay masked across structured outb
         check(input, [...input.flatMap((item) => interleaved.push(item)), ...interleaved.flush()])
       }
 
-      // A committed metadata tail seeds independent calls in both text lanes.
-      const split = Math.floor(variant.length / 2)
-      for (const field of fields.filter((field) => field.kind === "metadata")) {
-        const parent = new ModelOutboundFilter(source.secrets)
-        const head = inject(field, variant.slice(0, split))
-        let first: ModelOutboundItem[]
-        try {
-          first = [...parent.push(head), ...parent.flush()]
-        } catch (error) {
-          if (!(error instanceof ModelOutboundError) || !error.immutableScalar) throw error
-          check([head], [], false)
-          parent.discard()
-          continue
+      // A committed metadata tail seeds independent calls in both text lanes at every boundary.
+      for (let split = 0; split <= variant.length; split++) {
+        for (const field of fields.filter((field) => field.kind === "metadata")) {
+          const parent = new ModelOutboundFilter(source.secrets)
+          const head = inject(field, variant.slice(0, split))
+          let first: ModelOutboundItem[]
+          try {
+            first = [...parent.push(head), ...parent.flush()]
+          } catch (error) {
+            if (!(error instanceof ModelOutboundError) || !error.immutableScalar) throw error
+            check([head], [], false)
+            parent.discard()
+            continue
+          }
+          for (const destination of [text, thinking]) row(variant, split, field, destination, parent, first)
         }
-        for (const destination of [text, thinking]) row(variant, split, field, destination, parent, first)
       }
     }
   }
