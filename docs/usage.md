@@ -4,6 +4,8 @@
 
 Run `amira` in the directory you want it to work in. A positional prompt becomes the first message; `--cwd` selects a different working directory. See [Getting started](getting-started.md) for provider setup.
 
+To run the agent and tools on a Linux SSH host with the fullscreen UI on your computer, use `amira remote add` and `amira remote attach`. [Remote workspaces](remote-workspaces.md) covers setup, configuration ownership, local model proxying and its limits. The remote commands have their own options (`amira remote --help`); ordinary startup flags and the print/RPC modes below apply to local runs. In remote mode, quitting detaches rather than stopping remote work.
+
 ## Thinking effort
 
 Use `amira --thinking high` in interactive mode or `amira -p --thinking xhigh "Explain this repository"` in print mode. Accepted levels are `low`, `medium`, `high`, `xhigh` and `max`.

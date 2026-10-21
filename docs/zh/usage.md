@@ -4,6 +4,8 @@
 
 在要处理的项目目录运行 `amira`。命令行末尾的提示词会成为第一条消息，也可以用 `--cwd` 指定工作目录。provider 配置见[快速开始](getting-started.md)。
 
+要在 Linux SSH 主机上运行 agent 和工具、在本机使用全屏界面，请使用 `amira remote add` 和 `amira remote attach`。[远程工作区](remote-workspaces.md)说明设置步骤、配置归属、本地模型代理及其限制。远程命令有独立的选项（`amira remote --help`）；下文的普通启动标志及打印/RPC 模式适用于本地运行。远程模式下，退出会分离连接，而非停止远程工作。
+
 ## 思考强度
 
 交互模式使用 `amira --thinking high`，打印模式使用 `amira -p --thinking xhigh "Explain this repository"`。可选档位为 `low`、`medium`、`high`、`xhigh` 和 `max`。
