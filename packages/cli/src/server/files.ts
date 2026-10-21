@@ -279,7 +279,8 @@ export function createServerFileOperations(
   }
   return Object.assign(handlers, {
     establishScope: (cwd: string, scope?: string, root?: FrontendScopeRoot) => {
-      const canonical = realpathSync(cwd)
+      // Match async realpath's native Windows spelling without weakening identity checks.
+      const canonical = realpathSync.native(cwd)
       const info = statSync(canonical)
       const pinned = scopes.get(key(scope))
       if (

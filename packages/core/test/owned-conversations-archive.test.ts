@@ -32,8 +32,14 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
-function fixture(steps: MockStep[] = []) {
-  const home = fs.mkdtempSync(path.join(tmpdir(), "amira-owned-archive-"))
+function fixture(steps: MockStep[] = [], aliasHome = false) {
+  const directory = fs.mkdtempSync(path.join(tmpdir(), "amira-owned-archive-"))
+  const home = aliasHome ? path.join(directory, "alias") : directory
+  if (aliasHome) {
+    const target = path.join(directory, "target")
+    fs.mkdirSync(target)
+    fs.symlinkSync(target, home, process.platform === "win32" ? "junction" : "dir")
+  }
   const cwd = path.join(home, "worktree")
   fs.mkdirSync(cwd)
   const mock = createMockDialect(steps)
@@ -63,7 +69,7 @@ function fixture(steps: MockStep[] = []) {
   cleanups.push(async () => {
     for (const value of managers) await value.drain()
     await main.dispose()
-    fs.rmSync(home, { recursive: true, force: true })
+    fs.rmSync(directory, { recursive: true, force: true })
   })
   const host = manager()
   const owner = host.forOwner("project")
@@ -645,11 +651,12 @@ for (const phase of ["upgrade", "publication"] as const) {
 }
 
 test("post-rename migration failure retains a retryable fenced writer", async () => {
-  const f = fixture([{ text: "saved before migration" }])
+  const f = fixture([{ text: "saved before migration" }], true)
   const handle = await f.owner.openOrCreate(f.spec, f.runtime)
   await handle.send("save")
   const history = handle.history()
-  const file = path.join(ownedDirectory(f.home, "project"), `${handle.id}.jsonl`)
+  // Session writers canonicalize parents (including macOS /var and symlinked temp homes).
+  const file = fs.realpathSync(path.join(ownedDirectory(f.home, "project"), `${handle.id}.jsonl`))
   const rename = fs.renameSync
   let fail = true
   const hook = spyOn(fs, "renameSync").mockImplementation((source, target) => {

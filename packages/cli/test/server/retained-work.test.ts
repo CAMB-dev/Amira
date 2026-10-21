@@ -171,13 +171,18 @@ test("closed retry transports are collected while their single admitted operatio
     }
     const references: WeakRef<RemoteConnection>[] = []
     for (let i = 0; i < 100; i++) references.push(await cycle())
-    // Each observation must run in a fresh timer task: deref keeps targets alive for the
-    // rest of its JS job, and native pipe/iterator cleanup may finish after closed resolves.
+    // Run GC and deref inside a fresh timer callback, not the resumed async test frame:
+    // JSC can conservatively retain a previous deref result in that frame across awaits.
+    // Only indexes escape the callback; its target references and WeakRef keep-alive job
+    // have ended before the next GC. This also lets pipe/iterator cleanup finish after close.
     let retained: number[] = []
     for (let attempt = 0; attempt < 20; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 1))
-      Bun.gc(true)
-      retained = references.flatMap((reference, index) => (reference.deref() ? [index] : []))
+      retained = await new Promise<number[]>((resolve) => {
+        setTimeout(() => {
+          Bun.gc(true)
+          resolve(references.flatMap((reference, index) => (reference.deref() ? [index] : [])))
+        }, 1)
+      })
       if (!retained.length) break
     }
     expect(f.calls()).toBe(1)
