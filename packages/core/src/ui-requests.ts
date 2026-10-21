@@ -35,6 +35,7 @@ import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import { checkAskAnswers } from "./ask-answers.ts"
 import type { EventBus } from "./event-bus.ts"
 import type { UiResponseAck } from "./frontend/form-backend.ts"
+import { InputSuggestions } from "./input-suggestions.ts"
 import { captureUiRequest, releaseUiRequestOwner } from "./ui-request-capture.ts"
 
 type Value = UiAnswer[keyof UiAnswer]
@@ -129,6 +130,9 @@ export class UiRequests {
   #sourceLabels = new Map<string, string>()
   #seq = 0
   #settings: ((name: string) => ExtensionSettingsBackend | undefined) | undefined
+  #inputSuggestionBusy: () => boolean = () => false
+  /** Host-only composer state, never included in request DTOs or remote snapshots. */
+  readonly inputSuggestions: InputSuggestions
   formMode: FormMode = "native"
   /** Whether the frontend can call live form callbacks; otherwise those forms use dialogs. */
   nativeFormCallbacks = true
@@ -141,6 +145,15 @@ export class UiRequests {
   constructor(bus: EventBus, opts: { sessionId?: string } = {}) {
     this.#bus = bus
     this.#sessionId = opts.sessionId ?? "host"
+    this.inputSuggestions = new InputSuggestions(
+      () => this.#bus.emit("ui.render", {}, { sessionId: this.#sessionId }),
+      () => this.#inputSuggestionBusy(),
+    )
+  }
+
+  /** The active agent is selected by the host and may change without recreating this service. */
+  setInputSuggestionBusyAccessor(busy: () => boolean): void {
+    this.#inputSuggestionBusy = busy
   }
 
   /** A display name for an extension; its source remains the cancellation identity. */
@@ -664,6 +677,7 @@ export class UiRequests {
   api(source?: string): UiApi {
     const o = (opts?: UiRequestOptions) => ({ ...opts, ...(source ? { source } : {}) })
     return {
+      ...this.inputSuggestions.api(source),
       select: async (title, options, opts = {}) => {
         const { initial, ...rest } = opts
         const answer = await this.ask(

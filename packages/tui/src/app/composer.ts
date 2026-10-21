@@ -49,6 +49,8 @@ export interface Composer {
   readonly popups: CommandPopup[]
   readonly filePicker: FilePicker
   readonly clipboardPending: boolean
+  /** Lists, history and pending paste reads suppress the prompt's ghost text. */
+  readonly suggestionBlocked: boolean
   cancelClipboard(): void
   abortClipboard(): void
   dispose(): void
@@ -335,6 +337,9 @@ export function createComposer(deps: ComposerDeps): Composer {
     filePicker,
     get clipboardPending() {
       return clipboardRead !== undefined
+    },
+    get suggestionBlocked() {
+      return search.active || historyNav.recalling || !!openPopup() || filePicker.visible || !!clipboardRead
     },
     cancelClipboard,
     abortClipboard() {

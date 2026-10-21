@@ -1,7 +1,31 @@
 // Owns interactive terminal selection and fullscreen lifecycle cleanup.
-import { modelLabel } from "@amira/api"
+import {
+  DEFAULT_TUI_BELL,
+  DEFAULT_TUI_PROGRESS,
+  DEFAULT_TUI_TITLE,
+  modelLabel,
+  type TuiSettings,
+} from "@amira/api"
 import { ProcessTerminal, type Terminal, type Theme } from "@amira/tui-kit"
 import { glyphs } from "../glyphs.ts"
+import { TerminalStatus } from "../terminal-status.ts"
+
+export function createTerminalStatus(
+  terminal: Terminal,
+  settings: TuiSettings,
+  env: Record<string, string | undefined>,
+): TerminalStatus {
+  return new TerminalStatus(
+    terminal,
+    {
+      title: settings.title ?? DEFAULT_TUI_TITLE,
+      progress: settings.progress ?? DEFAULT_TUI_PROGRESS,
+      bell: settings.bell ?? DEFAULT_TUI_BELL,
+      notify: settings.notify,
+    },
+    env,
+  )
+}
 
 /** The brand is interactive accent; a working-directory reference is not. */
 export function interactiveBanner(

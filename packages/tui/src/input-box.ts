@@ -2,12 +2,15 @@ import {
   Box,
   bold,
   type Component,
+  CURSOR_MARKER,
   chromeGlyphs,
   compose,
   type Editor,
   type RenderContext,
   type Theme,
   themeToken,
+  truncateToWidth,
+  visibleWidth,
 } from "@amira/tui-kit"
 import { type StatusEntry, statusLine } from "./status-bar.ts"
 
@@ -42,16 +45,26 @@ export class InputBox implements Component {
   constructor(
     private editor: Editor,
     private status: () => readonly StatusEntry[] = () => [],
+    private suggestion: () => string | undefined = () => undefined,
   ) {
     this.input = {
       render: (width, ctx) => {
-        if (!ctx.color || !editor.focused) return editor.render(width, ctx)
-        let theme = inputThemes.get(ctx.theme)
-        if (!theme) {
-          theme = { ...ctx.theme, accent: compose(bold, ctx.theme.accent) }
+        let theme = ctx.theme
+        if (ctx.color && editor.focused) {
+          theme = inputThemes.get(ctx.theme) ?? { ...ctx.theme, accent: compose(bold, ctx.theme.accent) }
           inputThemes.set(ctx.theme, theme)
         }
-        return editor.render(width, { ...ctx, theme })
+        const rows = editor.render(width, { ...ctx, theme })
+        const suggestion = editor.focused && editor.isEmpty ? this.suggestion() : undefined
+        if (suggestion) {
+          // Preserve the editor's prompt and cursor, replacing only its empty-input placeholder.
+          const row = rows[0]!
+          const at = row.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length
+          const prefix = row.slice(0, at)
+          const room = Math.max(0, width - visibleWidth(prefix))
+          rows[0] = prefix + ctx.theme.dim(truncateToWidth(suggestion, room, chromeGlyphs(ctx.glyphs).more))
+        }
+        return rows
       },
     }
     this.box = new Box(this.input, {

@@ -10,6 +10,7 @@ import type {
   FrontendSnapshot,
   FrontendUpdate,
 } from "@amira/core"
+import { EventBus, UiRequests } from "@amira/core"
 import { FakeTerminal } from "@amira/tui-kit"
 import { StatusRegistry } from "../../core/src/status-registry.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
@@ -159,6 +160,24 @@ test("frontend-only TUI displays connection, rejects operations without losing t
     expect(s.calls[0]).toMatchObject({ operation: "turn.prompt", generation: 1 })
     await waitFor(() => s.live().includes("fixture operation not admitted"), "rejected prompt")
     expect(s.live()).toContain("remote draft")
+  } finally {
+    await s.close()
+  }
+})
+
+test("frontend-only TUI never displays or accepts host-local input suggestions", async () => {
+  const ui = new UiRequests(new EventBus())
+  const accepted: string[] = []
+  ui.api("test").onInputSuggestionAccepted((text) => accepted.push(text))
+  ui.api("test").setInputSuggestion("Local only ghost")
+  const s = await fixture({ ui })
+  try {
+    expect(s.live()).not.toContain("Local only ghost")
+    s.terminal.send("\t")
+    await Bun.sleep(30)
+    expect(s.live()).not.toContain("Local only ghost")
+    expect(accepted).toEqual([])
+    expect(s.calls).toEqual([])
   } finally {
     await s.close()
   }
