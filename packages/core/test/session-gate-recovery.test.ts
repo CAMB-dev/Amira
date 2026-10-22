@@ -165,7 +165,7 @@ test(
     }
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toBe(
-      `session stale-write guard is busy or unverifiable: ${gate}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
+      `session stale-write guard is busy or unverifiable: ${gate}; live or unprobeable PID: cannot prove owner ${worker.pid} has exited; verify the recorded PID and Amira command lines in each sharing host's OS process list before manual removal; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
     )
     expect((error as Error).message).toContain(gate)
     expect((error as Error).message).toContain("confirming no Amira process is running")
@@ -436,8 +436,18 @@ for (const corruption of [
         error = caught
       }
       expect(error).toBeInstanceOf(Error)
+      let failedCheck = ""
+      if (["foreign", "missing-host"].includes(corruption))
+        failedCheck =
+          "host identity mismatch: lease host hash does not match; verify the originating hostname and hardware MACs against trusted records"
+      else if (["foreign-boot", "missing-boot"].includes(corruption))
+        failedCheck = "unverifiable boot: lease and local boot identities differ or proof is missing"
+      else if (["foreign-pid-namespace", "missing-pid-namespace"].includes(corruption))
+        failedCheck = "unverifiable PID domain: PID namespaces differ or proof is missing"
+      else if (corruption === "live-owner-record")
+        failedCheck = `live PID: owner ${process.pid} is running or its PID probe is access-denied`
       expect((error as Error).message).toBe(
-        `session stale-write guard is busy or unverifiable: ${gate}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
+        `session stale-write guard is busy or unverifiable: ${gate}${failedCheck ? `; ${failedCheck}; verify the recorded PID and Amira command lines in each sharing host's OS process list before manual removal` : ""}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
       )
       expect(
         fs.readdirSync(gate).map((name) => [name, fs.readFileSync(path.join(gate, name), "utf8")]),

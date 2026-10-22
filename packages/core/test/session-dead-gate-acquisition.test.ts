@@ -531,8 +531,15 @@ for (const kind of ["live", "foreign", "unknown", "corrupt", "legacy"]) {
         )
         const timers = spyOn(globalThis, "setTimeout")
         try {
+          const failedCheck = unreadable
+            ? ""
+            : ["foreign", "unknown"].includes(kind)
+              ? "host identity mismatch: lease host hash does not match; verify the originating hostname and hardware MACs against trusted records"
+              : kind === "live"
+                ? `live PID: owner ${process.pid} is running or its PID probe is access-denied`
+                : ""
           expect(() => f.store.withClaim(() => "never claimed")).toThrow(
-            `session stale-write guard is busy or unverifiable: ${f.gate}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
+            `session stale-write guard is busy or unverifiable: ${f.gate}${failedCheck ? `; ${failedCheck}; verify the recorded PID and Amira command lines in each sharing host's OS process list before manual removal` : ""}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
           )
           expect(timers).not.toHaveBeenCalled()
           expect(fs.existsSync(f.file)).toBe(false)

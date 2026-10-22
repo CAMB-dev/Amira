@@ -262,10 +262,17 @@ test.if(hasBash && onWindows)(
 test.if(hasBash)(
   "a background command that fails at once is reported like a normal run",
   async () => {
-    const r = await bashTool.execute(
-      { command: "echo nope >&2; exit 3", background: true },
-      ctxIn(session("s_main")),
-    )
+    const ctx = ctxIn(session("s_main"))
+    const registry = ctx.backgroundJobs
+    const waitFor = registry.waitFor.bind(registry)
+    // Test the completed-start response, not whether the OS exits within the startup budget.
+    registry.waitFor = async (id, options) => {
+      expect(options.timeoutMs).toBe(STARTUP_WAIT_MS)
+      const ended = await waitFor(id, { ...options, timeoutMs: SPAWN_WAIT_TIMEOUT_MS })
+      expect(ended.reason).toBe("exit")
+      return ended
+    }
+    const r = await bashTool.execute({ command: "echo nope >&2; exit 3", background: true }, ctx)
     expect(r.isError).toBe(true)
     expect(textOf(r)).toBe(
       `nope\n\nThe background job ${detailsOf(r).jobId} already ended: it exited with code 3.`,
