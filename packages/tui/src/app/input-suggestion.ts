@@ -5,10 +5,10 @@ import { glyphs } from "../glyphs.ts"
 import type { Keybindings } from "../keybindings.ts"
 import { FOLD_PASTES } from "./startup.ts"
 
-/** Local top-level session eligibility, including work not yet reflected in agent.busy. */
+/** Core busy state is authoritative; display activity can lag behind turn.end subscribers. */
 export function suggestionAgentBlocked(
   agent: Pick<Agent, "parentSessionId" | "depth" | "busy"> | undefined,
-  activity: { working: boolean; compacting: boolean },
+  activity: { compacting: boolean },
   quitting: boolean,
 ): boolean {
   return (
@@ -16,7 +16,6 @@ export function suggestionAgentBlocked(
     agent.parentSessionId !== undefined ||
     agent.depth !== 0 ||
     agent.busy ||
-    activity.working ||
     activity.compacting ||
     quitting
   )
@@ -57,6 +56,7 @@ export function createPromptInput(deps: {
     }
     return { revision, ready: editor.focused && editor.isEmpty && !blocked }
   }
+  // Readiness notifications (e.g. outbox cleanup) need not represent a new input intent.
   const refresh = () => {
     if (attached) source?.refresh()
   }
