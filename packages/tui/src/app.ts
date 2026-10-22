@@ -380,7 +380,7 @@ async function runFullscreen(
     onInterrupt: () => {
       interrupted = true
     },
-    changed: suggestion.changed,
+    changed: suggestion.refresh,
   })
   const rewind = createMainRewind({
     port: opts.frontend,
