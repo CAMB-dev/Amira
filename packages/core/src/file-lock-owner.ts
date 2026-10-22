@@ -1,6 +1,5 @@
-import { createHash, randomUUID } from "node:crypto"
-import { readFileSync, readlinkSync } from "node:fs"
-import os from "node:os"
+import { randomUUID } from "node:crypto"
+import { type LeaseDomain, localDomain } from "./file-lock-domain.ts"
 
 interface Owner {
   v: 2
@@ -12,65 +11,87 @@ interface Owner {
   pidNamespace: string | null
 }
 
-// A hostname alone is not same-host proof on a shared volume. Boot identity prevents
-// reused Linux namespace inode numbers (or cloned machine IDs) from proving local death.
-function localDomain(): Pick<Owner, "host" | "boot" | "pidNamespace"> {
-  let machine: string | undefined
-  let boot: string | null = null
-  let pidNamespace: string | null = null
-  try {
-    if (process.platform === "linux") {
-      try {
-        machine = readFileSync("/etc/machine-id", "utf8").trim() || undefined
-      } catch {}
-      boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null
-      pidNamespace = readlinkSync("/proc/self/ns/pid") || null
-      if (!boot || !pidNamespace) return { host: null, boot, pidNamespace }
-    }
-    machine ??=
-      Object.values(os.networkInterfaces())
-        .flatMap((addresses) => addresses ?? [])
-        .filter((address) => !address.internal && address.mac !== "00:00:00:00:00:00")
-        .map((address) => address.mac)
-        .filter((mac, index, all) => all.indexOf(mac) === index)
-        .sort()
-        .join(",") || undefined
-    const host = machine
-      ? createHash("sha256").update(`${process.platform}\n${os.hostname()}\n${machine}`).digest("hex")
-      : null
-    return { host, boot, pidNamespace }
-  } catch {
-    return { host: null, boot, pidNamespace }
-  }
-}
 const domain = localDomain()
 
 export function leaseOwner(): Owner {
-  return { v: 2, pid: process.pid, nonce: randomUUID(), createdAt: Date.now(), ...domain }
+  const { host, boot, pidNamespace } = domain
+  return { v: 2, pid: process.pid, nonce: randomUUID(), createdAt: Date.now(), host, boot, pidNamespace }
 }
 
-/** Unknown host, PID domain, record or probe result must never authorize recovery. */
-export function ownerState(value: unknown): "live" | "dead" | "unknown" {
-  if (typeof value !== "object" || value === null) return "unknown"
+type OwnerState = "live" | "dead" | "unknown"
+
+/** The same classification powers recovery and diagnostics; a message never grants authority. */
+function inspectOwner(
+  value: unknown,
+  local: LeaseDomain,
+  probe: (pid: number) => OwnerState,
+): { state: OwnerState; reason?: string } {
+  if (typeof value !== "object" || value === null) return { state: "unknown" }
   const owner = value as Partial<Owner>
+  if (owner.v !== 2) return { state: "unknown" }
   if (
-    owner.v !== 2 ||
     !Number.isSafeInteger(owner.pid) ||
     owner.pid! <= 0 ||
     typeof owner.nonce !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(owner.nonce) ||
     !Number.isSafeInteger(owner.createdAt) ||
-    owner.createdAt! <= 0 ||
-    domain.host === null ||
-    owner.host !== domain.host ||
-    owner.boot !== domain.boot ||
-    owner.pidNamespace !== domain.pidNamespace
+    owner.createdAt! <= 0
   )
-    return "unknown"
-  // A nonce guards release, but cannot prove a live PID is not a reused PID. Block it.
-  if (owner.pid === process.pid) return "live"
+    return { state: "unknown", reason: "unverifiable owner record: PID, nonce or creation time is invalid" }
+  const sameHost =
+    typeof owner.host === "string" &&
+    owner.host.length > 0 &&
+    (owner.host === local.host || (local.platform === "win32" && owner.host === local.legacyHost))
+  if (!sameHost)
+    return {
+      state: "unknown",
+      reason:
+        "host identity mismatch: lease host hash does not match; verify the originating hostname and hardware MACs against trusted records",
+    }
+  // A boot mismatch excludes a PID domain. It never proves a previous owner dead:
+  // another live clone can share installation identity while having a different boot.
+  if (owner.boot !== local.boot)
+    return {
+      state: "unknown",
+      reason: "unverifiable boot: lease and local boot identities differ or proof is missing",
+    }
+  if (owner.pidNamespace !== local.pidNamespace)
+    return { state: "unknown", reason: "unverifiable PID domain: PID namespaces differ or proof is missing" }
+  const state = owner.pid === process.pid ? "live" : probe(owner.pid!)
+  return {
+    state,
+    ...(state === "dead"
+      ? {}
+      : {
+          reason:
+            state === "live"
+              ? `live PID: owner ${owner.pid} is running or its PID probe is access-denied`
+              : `live or unprobeable PID: cannot prove owner ${owner.pid} has exited`,
+        }),
+  }
+}
+
+/** Unknown host, PID domain, record or probe result must never authorize recovery. */
+export function ownerState(
+  value: unknown,
+  local = domain,
+  probe: (pid: number) => OwnerState = probePid,
+): OwnerState {
+  return inspectOwner(value, local, probe).state
+}
+
+/** Do not repeat a PID probe merely to explain a failed acquisition or identity recheck. */
+export function ownerRecoveryFailure(
+  value: unknown,
+  local = domain,
+  probe: (pid: number) => OwnerState = () => "unknown",
+): string | undefined {
+  return inspectOwner(value, local, probe).reason
+}
+
+function probePid(pid: number): OwnerState {
   try {
-    process.kill(owner.pid!, 0)
+    process.kill(pid, 0)
     return "live"
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code

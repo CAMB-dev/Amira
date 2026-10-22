@@ -24,7 +24,7 @@ import {
   takeFilesystemGate,
   withFilesystemGateAttempt,
 } from "./file-lock-gate.ts"
-import { leaseOwner, strictOwnerState } from "./file-lock-owner.ts"
+import { leaseOwner, ownerRecoveryFailure, strictOwnerState } from "./file-lock-owner.ts"
 
 // Only release-requested leases enter this registry; a live pid never grants cleanup
 // authority. Callbacks retain the original parent, inode and immutable nonce proof.
@@ -268,16 +268,22 @@ export class SessionWriteGuardError extends Error {
   readonly pendingOwnedCleanup: boolean
   constructor(readonly gatePath: string) {
     let legacy = false
+    let failedCheck: string | undefined
     try {
-      legacy =
-        !gatePath.endsWith(".lease-gate") &&
-        lstatSync(gatePath).isFile() &&
-        legacyLockPid(readFileSync(gatePath, "utf8")) !== undefined
+      if (gatePath.endsWith(".lease-gate")) {
+        failedCheck = ownerRecoveryFailure(
+          JSON.parse(readFileSync(path.join(gatePath, "owner.json"), "utf8")),
+        )
+      } else if (lstatSync(gatePath).isFile()) {
+        const contents = readFileSync(gatePath, "utf8")
+        legacy = legacyLockPid(contents) !== undefined
+        if (!legacy) failedCheck = ownerRecoveryFailure(JSON.parse(contents.split("\n")[2]!))
+      }
     } catch {}
     super(
       legacy
         ? `an older Amira build appears to hold the session: ${gatePath}; close it before resuming or deleting the session, then retry; if it crashed, wait for its lease to become stale`
-        : `session stale-write guard is busy or unverifiable: ${gatePath}; retry${
+        : `session stale-write guard is busy or unverifiable: ${gatePath}${failedCheck ? `; ${failedCheck}; verify the recorded PID and Amira command lines in each sharing host's OS process list before manual removal` : ""}; retry${
             existsSync(gatePath)
               ? `, or remove this ${gatePath.endsWith(".lease-gate") ? "directory" : "lease file"} manually only after confirming no Amira process is running on any host using these session files`
               : "; no guard exists at this path yet, so do not remove any files"
