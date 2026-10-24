@@ -840,6 +840,7 @@ test("/status says where the context window came from, and when it is only a gue
   )
   expect(await windowRow(1_050_000, "catalog")).toMatch(/^Window\s+1\.1M \(from the model catalog\)$/)
   expect(await windowRow(256_000, "settings")).toMatch(/^Window\s+256k \(your settings\)$/)
+  expect(await windowRow(200_000, "provider")).toMatch(/^Window\s+200k \(reported by the provider\)$/)
 })
 
 test("/status names the scope of each number: the session's output, cache and speed, the tree's cost", async () => {

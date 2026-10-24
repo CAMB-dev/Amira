@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { validateRemoteParams } from "../remote-schema.ts"
 import { RemoteDecoder } from "./codec.ts"
 import { RemoteError, RemoteReplyError } from "./errors.ts"
+import { remoteMessageForPeer } from "./peer-compat.ts"
 import {
   REMOTE_LIMITS,
   type RemoteCancel,
@@ -87,6 +88,7 @@ export class RemoteConnection {
   private rejectReady!: (error: unknown) => void
   private resolveClosed!: () => void
   private welcome?: RemoteWelcome
+  private peerCapabilities: readonly string[] = []
   private writer: RemoteWriter
   private decoder = new RemoteDecoder()
   private pending = new Map<string, Pending>()
@@ -175,7 +177,7 @@ export class RemoteConnection {
           if (!this.pending.has(id)) return
           cancel.sessionGeneration = options.sessionGeneration ?? welcome.sessionGeneration
           cancel.controllerGeneration = options.controllerGeneration ?? welcome.controllerGeneration
-          await this.writer.send({
+          await this.sendToPeer({
             v: 1,
             kind: "request",
             channel,
@@ -207,7 +209,11 @@ export class RemoteConnection {
 
   async send(message: Exclude<RemoteMessage, RemoteHello | RemoteWelcome | RemoteRequest>): Promise<void> {
     await this.ready
-    await this.writer.send(message)
+    await this.sendToPeer(message)
+  }
+
+  private async sendToPeer(message: RemoteMessage): Promise<void> {
+    await this.writer.send(remoteMessageForPeer(message, this.peerCapabilities))
   }
 
   close(error: unknown = new RemoteError("disconnected", "Remote attachment closed")): void {
@@ -277,6 +283,7 @@ export class RemoteConnection {
       if (handshake.role === "server" && message.kind === "hello") {
         try {
           welcome = await handshake.accept(message)
+          this.peerCapabilities = message.capabilities
           await this.writer.send(welcome)
         } catch (error) {
           await this.rejectHandshake(error)
@@ -284,6 +291,7 @@ export class RemoteConnection {
         }
       } else if (handshake.role === "client" && message.kind === "welcome") {
         handshake.validateWelcome?.(message)
+        this.peerCapabilities = message.capabilities
         welcome = message
       } else {
         throw new RemoteError("invalid_frame", "Expected remote handshake before operations")
@@ -348,7 +356,7 @@ export class RemoteConnection {
           throw new RemoteError("unsupported_operation", "No remote operation handler")
         const result = await this.options.handle(request, controller.signal)
         if (!controller.signal.aborted && !this.failure)
-          await this.writer.send({
+          await this.sendToPeer({
             v: 1,
             kind: "response",
             channel: request.channel,
@@ -364,7 +372,7 @@ export class RemoteConnection {
             error instanceof RemoteError || error instanceof RemoteReplyError
               ? { code: error.code, message: error.message }
               : { code: "operation_failed", message: "Remote operation failed" }
-          await this.writer.send({
+          await this.sendToPeer({
             v: 1,
             kind: "response",
             channel: request.channel,

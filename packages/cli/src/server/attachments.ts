@@ -4,6 +4,7 @@ import { frontendJson } from "../../../core/src/frontend/json.ts"
 import { RemoteConnection, type RemoteIO } from "../remote/connection.ts"
 import { RemoteError, RemoteReplyError } from "../remote/errors.ts"
 import {
+  CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY,
   REMOTE_LIMITS,
   REMOTE_PEER_LIMITS,
   type RemoteJson,
@@ -174,6 +175,7 @@ class WorkspaceAttachments {
             sessionGeneration: attachment.identity!.sessionGeneration,
             limits: REMOTE_PEER_LIMITS,
             capabilities: [
+              CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY,
               "frontend.v1",
               "replay",
               "controller",

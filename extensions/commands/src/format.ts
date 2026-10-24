@@ -39,6 +39,7 @@ const percent = (part: number, whole: number) => (whole > 0 ? `${Math.round((par
 export function windowLabel(tokens: number, source: ContextWindowSource | undefined): string {
   const size = formatTokens(tokens)
   if (source === "settings") return `${size} (your settings)`
+  if (source === "provider") return `${size} (reported by the provider)`
   if (source === "catalog") return `${size} (from the model catalog)`
   if (source === "default") return `${size} (default guess — set contextWindow for this model)`
   return size

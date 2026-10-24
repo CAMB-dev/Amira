@@ -17,6 +17,8 @@ export type ModelFramePayload =
   | { kind: "failure"; code: string }
 
 export const REMOTE_PROTOCOL_VERSION = 1
+/** Peer understands the optional endpoint-reported context-window source in model/session DTOs. */
+export const CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY = "context-window-source.provider"
 
 export type RemoteJson = null | boolean | number | string | RemoteJson[] | { [key: string]: RemoteJson }
 export type RemoteChannel = "control" | "model" | "files"

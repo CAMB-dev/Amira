@@ -26,6 +26,7 @@ import {
 import type { ActivePackages } from "@amira/packages"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
+import { installProviderModelCache } from "./provider-models.ts"
 import { userApprover, userAsker } from "./session/approvals.ts"
 import { createExtensionLoader, createReloadReplay } from "./session/extension-loading.ts"
 import {
@@ -86,6 +87,8 @@ export interface SessionOptions {
   compaction?: CompactionOptions
   /** Where the model catalog is cached and fetched from; false leaves it out. Unused with `ai`. */
   catalog?: CatalogCacheOptions | false
+  /** Endpoint limits cache; defaults to ~/.amira/cache/provider-models.json. Unused with `ai`. */
+  providerModelsFile?: string
   /** Receives failures of event subscribers (extensions or frontends). The core itself never prints. */
   onSubscriberError?: (error: unknown, event: AnyEvent) => void
   /** Loads the bundled extensions; injectable for tests. */
@@ -184,6 +187,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       ...((settings.web?.nativeSearch ?? DEFAULT_WEB_NATIVE_SEARCH) === false ? { webSearch: false } : {}),
       compactionMemory: fileCompactionMemory(amiraPath("cache", "native-compaction.json")),
     })
+  if (!opts.ai) installProviderModelCache(ai, opts.providerModelsFile)
   // A settings choice whose provider was removed falls back like a stored session's model.
   // Explicit flags/env still report a bad reference; never erase the saved setting.
   const missingProvider =

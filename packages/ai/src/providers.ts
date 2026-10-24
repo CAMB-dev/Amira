@@ -1,4 +1,4 @@
-import { type CatalogModel, catalogProviderId } from "./catalog.ts"
+import { type CatalogModel, catalogProviderId, type ModelLimits } from "./catalog.ts"
 import type { ProviderCompat } from "./dialect.ts"
 import {
   anthropicFastCost,
@@ -75,13 +75,14 @@ export function isNoModel(model: Pick<ModelInfo, "provider">): boolean {
 }
 
 /**
- * A model's settings. A model the provider lists wins over the catalog, which wins over the
- * provider's defaultModel (meant for models nobody described), which wins over built-in defaults.
+ * Per-model settings win over endpoint-reported limits, then catalog facts, then the
+ * provider's defaultModel (meant for models nobody described), then built-in defaults.
  */
 export function resolveModelInfo(
   provider: ProviderConfig,
   modelId: string,
   catalog?: CatalogModel,
+  reported?: ModelLimits,
 ): ModelInfo {
   const known = provider.models?.find((m) => m.id === modelId)
   const d = provider.defaultModel
@@ -90,11 +91,13 @@ export function resolveModelInfo(
   const window: [number, ContextWindowSource] =
     known?.contextWindow !== undefined
       ? [known.contextWindow, "settings"]
-      : catalog?.contextWindow !== undefined
-        ? [catalog.contextWindow, "catalog"]
-        : d?.contextWindow !== undefined
-          ? [d.contextWindow, "settings"]
-          : [DEFAULT_CONTEXT_WINDOW, "default"]
+      : reported?.contextWindow !== undefined
+        ? [reported.contextWindow, "provider"]
+        : catalog?.contextWindow !== undefined
+          ? [catalog.contextWindow, "catalog"]
+          : d?.contextWindow !== undefined
+            ? [d.contextWindow, "settings"]
+            : [DEFAULT_CONTEXT_WINDOW, "default"]
   const dialect = known?.dialect ?? d?.dialect ?? provider.dialect
   const caps: ModelCaps = { ...DEFAULT_CAPS, ...d?.caps, ...catalog?.caps, ...known?.caps }
   const vendor = fastVendor(provider.baseUrl)
@@ -168,7 +171,8 @@ export function resolveModelInfo(
     dialect,
     contextWindow: window[0],
     contextWindowSource: window[1],
-    maxOutput: known?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? DEFAULT_MAX_OUTPUT,
+    maxOutput:
+      known?.maxOutput ?? reported?.maxOutput ?? catalog?.maxOutput ?? d?.maxOutput ?? DEFAULT_MAX_OUTPUT,
     caps,
     ...(fast ? { fast } : declared === false ? { fast: false } : {}),
     ...(cost ? { cost } : {}),

@@ -86,7 +86,7 @@ export const sessionInfo = object({
     "unavailableReason?": text,
   }),
   contextWindow: number,
-  "contextWindowSource?": values("settings", "catalog", "default"),
+  "contextWindowSource?": values("settings", "provider", "catalog", "default"),
   "contextTokens?": number,
   "file?": text,
   busy: bool,

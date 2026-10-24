@@ -10,6 +10,9 @@ export interface CatalogModel {
   cost?: NonNullable<ModelInfo["cost"]>
 }
 
+/** Token limits only; safe to borrow without another endpoint's prices or capabilities. */
+export type ModelLimits = Pick<CatalogModel, "contextWindow" | "maxOutput">
+
 /** Connection metadata for one models.dev vendor, separate from configured providers. */
 export interface CatalogVendor {
   id: string
@@ -52,6 +55,54 @@ export function catalogProviderId(p: { id: string; catalogId?: string | false })
   const mapped = Object.hasOwn(CATALOG_PROVIDER_IDS, p.id) ? CATALOG_PROVIDER_IDS[p.id] : undefined
   const id = p.catalogId ?? mapped ?? p.id
   return id === false ? undefined : id
+}
+
+const borrowedLimits = new WeakMap<ModelCatalog, Map<string, ModelLimits | undefined>>()
+
+/** Own catalog metadata, with only missing token limits borrowed across vendors. */
+export function findCatalogModel(
+  catalog: ModelCatalog | undefined,
+  provider: { id: string; catalogId?: string | false },
+  modelId: string,
+): CatalogModel | undefined {
+  const id = catalogProviderId(provider)
+  if (!catalog || !id) return undefined
+  const own = catalog.find(id, modelId)
+  if (own?.contextWindow !== undefined && own.maxOutput !== undefined) return own
+  let memo = borrowedLimits.get(catalog)
+  if (!memo) {
+    memo = new Map()
+    borrowedLimits.set(catalog, memo)
+  }
+  if (!memo.has(modelId)) {
+    const collect = (mid: string): ModelLimits | undefined => {
+      const limits: ModelLimits = {}
+      for (const vendor of catalog.providers?.() ?? []) {
+        const model = catalog.find(vendor, mid)
+        for (const field of ["contextWindow", "maxOutput"] as const) {
+          const value = model?.[field]
+          if (value !== undefined) limits[field] = Math.min(limits[field] ?? value, value)
+        }
+      }
+      return Object.keys(limits).length ? limits : undefined
+    }
+    const bare = modelId.replace(/^models\//, "")
+    memo.set(
+      modelId,
+      collect(modelId) ?? (bare.includes("/") ? collect(bare.slice(bare.indexOf("/") + 1)) : undefined),
+    )
+  }
+  const limits = memo.get(modelId)
+  if (!limits) return own
+  return {
+    ...own,
+    ...(own?.contextWindow === undefined && limits.contextWindow !== undefined
+      ? { contextWindow: limits.contextWindow }
+      : {}),
+    ...(own?.maxOutput === undefined && limits.maxOutput !== undefined
+      ? { maxOutput: limits.maxOutput }
+      : {}),
+  }
 }
 
 type Raw = Record<string, any>

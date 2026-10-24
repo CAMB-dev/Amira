@@ -2,9 +2,9 @@ import path from "node:path"
 import {
   type Ai,
   BUILTIN_DIALECTS,
-  type CatalogModel,
   catalogProviderId,
   createAi,
+  findCatalogModel,
   host,
   LISTABLE_DIALECTS,
   listModels,
@@ -13,6 +13,7 @@ import {
   type ProbeEndpoint,
   ProbeError,
   type ProviderConfig,
+  resolveModelInfo,
   testConnection,
   vendorPreset,
 } from "@amira/ai"
@@ -36,6 +37,7 @@ import {
   validateSettings,
 } from "@amira/core"
 import { type CatalogCacheOptions, refreshCatalog } from "./catalog.ts"
+import { installProviderModelCache } from "./provider-models.ts"
 import { USER_AGENT } from "./user-agent.ts"
 
 export interface ProviderAdminOptions {
@@ -78,6 +80,7 @@ export function keyHint(key: string): string {
 export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
   const { ai } = opts
   const home = opts.home ?? amiraHome()
+  const modelCache = installProviderModelCache(ai, path.join(home, "cache", "provider-models.json"))
   const env = opts.env ?? process.env
   const settingsFile = path.join(home, "settings.json")
   const keysFile = authFile(home)
@@ -199,13 +202,17 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
   }
 
   /** Which catalog provider describes these models: the provider's own, or the one that knows most of them. */
-  const catalogFor = (d: ProviderDraft, ids: string[]): { catalogId?: string; catalog?: ModelCatalog } => {
+  const catalogFor = (
+    d: ProviderDraft,
+    ids: string[],
+  ): { catalogId?: string | false; catalog?: ModelCatalog } => {
     const catalog = ai.catalog?.()
     const existing = d.catalogId ?? userEntry(d.id)?.catalogId ?? config(d.id)?.catalogId
-    if (existing === false) return {}
+    if (existing === false) return { catalogId: false }
     if (existing !== undefined) return { catalogId: existing, ...(catalog ? { catalog } : {}) }
     if (!catalog) return {}
     const own = catalogProviderId({ id: d.id, ...(existing !== undefined ? { catalogId: existing } : {}) })
+    if (!own) return { catalogId: false }
     const known = (cid: string) => ids.filter((m) => catalog.find(cid, m)).length
     if (own && (catalog.vendor?.(own) || known(own) > 0 || !ids.length)) return { catalogId: own, catalog }
     const where = host(d.baseUrl).toLowerCase()
@@ -223,20 +230,22 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
     d: ProviderDraft,
     listed: { id: string; name?: string; contextWindow?: number; maxOutput?: number }[],
   ) => {
-    const { catalogId, catalog } = catalogFor(
+    const { catalogId, catalog } = catalogFor(d, d.models)
+    const entry = entryFor(
+      userEntry(d.id) ?? config(d.id) ?? {},
       d,
-      listed.map((m) => m.id),
+      catalogId && catalogId !== d.id ? catalogId : undefined,
     )
+    const provider: ProviderConfig = { ...entry, id: d.id, dialect: d.dialect, baseUrl: d.baseUrl }
     return listed.map((m): ProviderModelInfo => {
-      const c: CatalogModel | undefined = catalogId ? catalog?.find(catalogId, m.id) : undefined
-      const contextWindow = c?.contextWindow ?? m.contextWindow
-      const maxOutput = c?.maxOutput ?? m.maxOutput
+      const c = findCatalogModel(catalog, provider, m.id)
+      const resolved = resolveModelInfo(provider, m.id, c, { ...modelCache.lookup(provider, m.id), ...m })
       return {
         id: m.id,
         ...(m.name ? { name: m.name } : {}),
-        ...(contextWindow ? { contextWindow } : {}),
-        ...(maxOutput ? { maxOutput } : {}),
-        ...(c?.cost ? { cost: { input: c.cost.input, output: c.cost.output } } : {}),
+        contextWindow: resolved.contextWindow,
+        maxOutput: resolved.maxOutput,
+        ...(resolved.cost ? { cost: { input: resolved.cost.input, output: resolved.cost.output } } : {}),
         inCatalog: c !== undefined,
       }
     })
@@ -330,6 +339,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
           ...(opts.fetch ? { fetch: opts.fetch } : {}),
           ...(signal ? { signal } : {}),
         })
+        await modelCache.record(d, listed)
         return describe(d, listed)
       } catch (err) {
         const message = probeDiagnostic(
