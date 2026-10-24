@@ -24,7 +24,7 @@ test("the public budget.update contract carries optional estimate metadata from 
         "pricingUnknown": true,
         "tokens": 200,
       },
-      "version": "0.1.67",
+      "version": "0.1.68",
     }
   `)
 })
