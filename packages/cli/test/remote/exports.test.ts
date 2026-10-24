@@ -15,6 +15,7 @@ import * as retention from "../../src/remote/model-retention.ts"
 import * as modelSchema from "../../src/remote/model-schema.ts"
 import * as stringHistory from "../../src/remote/model-string-history.ts"
 import * as stringMasks from "../../src/remote/model-string-masks.ts"
+import * as peerCompat from "../../src/remote/peer-compat.ts"
 import * as protocol from "../../src/remote/protocol.ts"
 import * as bindings from "../../src/remote/provider-bindings.ts"
 import * as proxy from "../../src/remote/proxy-ai.ts"
@@ -44,6 +45,7 @@ const hostOperationsCovered: Exclude<
 test("remote host modules keep an explicit export surface independent of legacy RPC", () => {
   expect(hostOperationsCovered).toBe(true)
   expect(Object.keys(protocol).sort()).toEqual([
+    "CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY",
     "REMOTE_LIMITS",
     "REMOTE_OPERATIONS",
     "REMOTE_PEER_LIMITS",
@@ -102,6 +104,7 @@ test("remote host modules keep an explicit export surface independent of legacy 
   expect(Object.keys(secretPatterns)).toEqual(["secretPatterns"])
   expect(Object.keys(redaction).sort()).toEqual(["ModelStreamRedactor", "redactModelValue"])
   expect(Object.keys(connection)).toEqual(["RemoteConnection"])
+  expect(Object.keys(peerCompat)).toEqual(["remoteMessageForPeer"])
   expect(Object.keys(errors).sort()).toEqual(["RemoteError", "RemoteReplyError"])
   expect(Object.keys(writer)).toEqual(["RemoteWriter"])
   expect(Object.keys(replay)).toEqual(["RemoteReplay"])

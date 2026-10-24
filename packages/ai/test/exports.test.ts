@@ -57,6 +57,7 @@ test("the public ai exports stay stable", async () => {
     "describeServerTool",
     "emptyUsage",
     "endpointKey",
+    "findCatalogModel",
     "forReplay",
     "geminiBody",
     "googleGemini",

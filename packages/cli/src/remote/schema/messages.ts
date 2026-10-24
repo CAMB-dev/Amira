@@ -108,7 +108,7 @@ export const modelInfo = object({
   provider: text,
   dialect: text,
   contextWindow: number,
-  "contextWindowSource?": values("settings", "catalog", "default"),
+  "contextWindowSource?": values("settings", "provider", "catalog", "default"),
   maxOutput: number,
   "compat?": object({ "thinkingDisplay?": values("summarized", "omitted") }),
   caps: modelCaps,

@@ -1,5 +1,5 @@
 import { transferUsageAccounting } from "./accounting.ts"
-import { catalogProviderId, type ModelCatalog } from "./catalog.ts"
+import { catalogProviderId, findCatalogModel, type ModelCatalog, type ModelLimits } from "./catalog.ts"
 import { usageCost, withCost } from "./cost.ts"
 import type { Dialect, DialectCompactOutcome, DialectContext } from "./dialect.ts"
 import { BUILTIN_DIALECTS } from "./dialects/index.ts"
@@ -50,6 +50,8 @@ export interface AiOptions {
   apiKeys?: Record<string, string>
   /** Model facts (context window, caps, prices) under the provider's own settings (D51). */
   catalog?: ModelCatalog
+  /** Cached endpoint-reported limits; lookup must match both provider id and base URL. */
+  modelLimits?: (provider: ProviderConfig, modelId: string) => ModelLimits | undefined
   /** Retrying failed requests (D52); by default 3 retries, backing off from 1 s. */
   retry?: RetryOptions
   /** false turns every provider's hosted web search off (settings web.nativeSearch). */
@@ -82,6 +84,8 @@ export interface Ai {
   setCatalog?(catalog: ModelCatalog | undefined): void
   /** The catalog in use, if any. */
   catalog?(): ModelCatalog | undefined
+  /** Replaces the cached endpoint limit lookup; affects models resolved from now on. */
+  setModelLimits?(lookup: AiOptions["modelLimits"]): void
   /** Forgets a provider. */
   removeProvider?(id: string): void
   /** Sets or (undefined) forgets the stored key (auth.json) used for a provider when its variables are unset. */
@@ -126,6 +130,7 @@ export function createAi(opts: AiOptions = {}): Ai {
   const env = opts.env ?? process.env
   const doFetch = opts.fetch ?? fetch
   let catalog = opts.catalog
+  let modelLimits = opts.modelLimits
   // A copy, so keys stored or deleted later (/provider) change what requests use.
   // Null-prototype, so ids such as "constructor" never find Object's members.
   const storedKeys: Record<string, string> = Object.assign(Object.create(null), opts.apiKeys)
@@ -356,8 +361,7 @@ export function createAi(opts: AiOptions = {}): Ai {
       }
       const p = provider(ref.slice(0, slash))
       const id = ref.slice(slash + 1)
-      const catalogId = catalogProviderId(p)
-      const info = resolveModelInfo(p, id, catalogId ? catalog?.find(catalogId, id) : undefined)
+      const info = resolveModelInfo(p, id, findCatalogModel(catalog, p, id), modelLimits?.(p, id))
       if (opts.webSearch === false) info.caps.webSearch = false
       return info
     },
@@ -490,6 +494,9 @@ export function createAi(opts: AiOptions = {}): Ai {
       catalog = c
     },
     catalog: () => catalog,
+    setModelLimits: (lookup) => {
+      modelLimits = lookup
+    },
     setStoredKey: (id, key) => {
       if (key === undefined) delete storedKeys[id]
       else storedKeys[id] = key

@@ -178,7 +178,7 @@ export interface ModelCaps {
 }
 
 /** Where a model's context window came from (ModelInfo.contextWindowSource). */
-export type ContextWindowSource = "settings" | "catalog" | "default"
+export type ContextWindowSource = "settings" | "provider" | "catalog" | "default"
 
 /** How a model opts into its provider's faster serving tier. false disables a preset. */
 export type FastOption =
@@ -191,8 +191,8 @@ export interface ModelInfo {
   dialect: string
   contextWindow: number
   /**
-   * Where `contextWindow` came from: the user's settings, the model catalog, or the built-in
-   * default (a guess). Unset for models not resolved from a provider.
+   * Where `contextWindow` came from: settings, the provider's endpoint, the model catalog,
+   * or the built-in default (a guess). Unset for models not resolved from a provider.
    */
   contextWindowSource?: ContextWindowSource
   maxOutput: number

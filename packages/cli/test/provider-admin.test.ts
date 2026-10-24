@@ -202,11 +202,11 @@ test("fetching models uses the typed key and says what the catalog knows", async
       cost: { input: 0.27, output: 1.1 },
       inCatalog: true,
     },
-    { id: "deepseek-new", inCatalog: false },
+    { id: "deepseek-new", contextWindow: 64000, maxOutput: 8192, inCatalog: false },
   ])
   expect(models.map(modelNote)).toEqual([
     "deepseek-chat (128k context, $0.27/$1.1 per M)",
-    "deepseek-new (not in the catalog: the defaults apply)",
+    "deepseek-new (64k context)",
   ])
 })
 

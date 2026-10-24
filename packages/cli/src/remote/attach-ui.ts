@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto"
+import path from "node:path"
 import { createAi } from "@amira/ai"
 import { type InteractiveOptions, runInteractive } from "@amira/tui"
 import { remoteBuiltinPresenters } from "../frontend/builtin-presenters.ts"
+import { loadProviderModelCache } from "../provider-models.ts"
 import { createRemoteAgentPort } from "./agent-port.ts"
 import { createRemoteOverlayBackend } from "./agent-port-requests.ts"
 import { BindingApprovals } from "./binding-approvals.ts"
@@ -13,7 +15,7 @@ import { localModelBindings } from "./local-models.ts"
 import { loadRemoteLocalSettings } from "./local-settings.ts"
 import { ModelBrokerPeer } from "./model-peer.ts"
 import { remotePresentationPort } from "./presentation-port.ts"
-import { REMOTE_PEER_LIMITS } from "./protocol.ts"
+import { CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY, REMOTE_PEER_LIMITS } from "./protocol.ts"
 import { classifyReconnectFailure } from "./reconnect-failure.ts"
 import { observeSshRelay } from "./relay-io.ts"
 import { createRemoteViews } from "./views.ts"
@@ -35,7 +37,12 @@ export async function attachRemoteUi(
     context.modelMode === "remote-key"
       ? undefined
       : localModelBindings(
-          createAi({ ...local.credentials(), env: process.env }),
+          createAi({
+            ...local.credentials(),
+            env: process.env,
+            modelLimits: loadProviderModelCache(path.join(local.home, "cache", "provider-models.json"))
+              .lookup,
+          }),
           async (binding) => !mounted && (await options.approve?.(binding)) === true,
           new BindingApprovals(local.home, context.host, context.workspace),
         )
@@ -51,6 +58,7 @@ export async function attachRemoteUi(
       release: context.installedRelease,
       limits: REMOTE_PEER_LIMITS,
       capabilities: [
+        CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY,
         "forms.live",
         "files",
         "jobs",

@@ -215,6 +215,22 @@ test("rich model messages, metadata and native-compaction results keep their str
   ).toThrow()
 })
 
+test("all context-window sources roundtrip in model and session metadata", () => {
+  for (const contextWindowSource of ["settings", "provider", "catalog", "default"] as const) {
+    const requestDto = {
+      ...modelParams.request,
+      model: { ...modelParams.request.model, contextWindowSource },
+    }
+    roundtrip(validateRemoteFrame(request("model.stream", { request: requestDto })))
+    const status = operationFixtures["status.read"].result
+    roundtrip(
+      validateRemoteFrame(
+        response("status.read", { ...status, info: { ...status.info, contextWindowSource } }),
+      ),
+    )
+  }
+})
+
 test("revisioned forms expose every field kind without accepting callback or unknown fields", () => {
   const form = {
     kind: "form",
