@@ -186,6 +186,7 @@ export const uiRequest = union(
     "always?": union(bool, text),
     "other?": bool,
     "preview?": array(toolLine),
+    "tone?": values("warning"),
   }),
   object({
     ...pendingBase,

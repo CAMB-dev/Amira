@@ -35,22 +35,21 @@ test("picker controls highlight the focused label and value in bold accent, not 
   const theme = createTheme({ colorDepth: "truecolor", env: {} })
   const row = () =>
     dialog.render(80, { theme, color: true, rows: 24 }).find((line) => line.includes("Appearance:"))!
+  // The controls row keeps the list's cursor column inside the padded frame, focused or not.
   const framed = (text: string, selected = false) =>
-    selected
-      ? `│›${text}${" ".repeat(77 - visibleWidth(text))}│`
-      : `│ ${text}${" ".repeat(77 - visibleWidth(text))}│`
+    `│ ${selected ? "›" : " "} ${text}${" ".repeat(74 - visibleWidth(text))} │`
   const cursors = () =>
     dialog
       .render(80, { theme, color: true, rows: 24 })
       .map(stripAnsi)
-      .filter((line) => line.startsWith("│›"))
+      .filter((line) => line.startsWith("│ ›"))
   // It opens on the list: one cursor, on the current theme, and the controls unfocused.
   expect(shimmer.focus).toBe("list")
-  expect(cursors()).toEqual([expect.stringContaining("›1 amira")])
+  expect(cursors()).toEqual([expect.stringContaining("› 1  amira")])
   expect(stripAnsi(row())).toBe(framed("Appearance: auto · dark · light · Shimmer: theme (soft)"))
   dialog.handleInput(key("tab"))
   // In the controls, the list keeps its place but draws no cursor.
-  expect(cursors()).toEqual([expect.stringContaining("›Appearance:")])
+  expect(cursors()).toEqual([expect.stringContaining("› Appearance:")])
   expect(stripAnsi(row())).toBe(framed("Appearance: auto · dark · light · Shimmer: theme (soft)", true))
   expect(row()).toContain(bold(theme.accent("›")))
   expect(row()).toContain(bold(theme.accent("Appearance: ")))

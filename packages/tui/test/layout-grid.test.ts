@@ -36,39 +36,40 @@ test("prompt, thought and command share the marker column; the composer adds pad
   }
 })
 
-test("dialog frame title and filter align with content, option cursor with marker", () => {
+test("dialog frame title is set off by rules; filter and cursor share the padded content column", () => {
   const dialog = new Dialog(
     { requestId: "grid", kind: "select", title: "Models", options: ["claude", "other"] },
     () => {},
   )
   dialog.handleInput({ type: "key", name: "c", text: "c", ctrl: false, alt: false, shift: false })
   const rows = plain(dialog.render(30, { theme: defaultTheme, color: false, rows: 24 }))
-  expect(rows[0]).toStartWith("╭ Models")
+  expect(rows[0]).toStartWith("╭─ Models ─")
   expect(rows.find((row) => row.includes("filter:"))).toStartWith("│ filter: c")
-  expect(rows.find((row) => row.includes("claude"))).toStartWith("│›claude")
+  expect(rows.find((row) => row.includes("claude"))).toStartWith("│ › claude")
   expect(rows.at(-2)).toBe("│ enter choose · esc cancel  │")
   expect(rows.at(-1)).toBe(`╰${"─".repeat(28)}╯`)
   expect(rows.every((row) => visibleWidth(row) === 30)).toBe(true)
 })
 
-test("a whole-row colored focus marker stays in the gutter and keeps its styles", () => {
+test("a whole-row colored focus marker stays inside the padding and keeps its styles", () => {
   const selected = defaultTheme.accent("› selected")
   const rows = dialogFrame("Focus", [selected, "esc cancel"], 30, {
     theme: defaultTheme,
     color: true,
     rows: 24,
   })
-  expect(stripAnsi(rows[1]!)).toStartWith("│›selected")
-  expect(rows[1]).toContain(defaultTheme.accent("›selected"))
+  expect(stripAnsi(rows[1]!)).toStartWith("│ › selected")
+  expect(rows[1]).toContain(defaultTheme.accent("› selected"))
   expect(rows.every((row) => visibleWidth(row) === 30)).toBe(true)
 })
 
 test("a dialog title uses every available top-border cell without losing a character", () => {
   const title = "Which approach do you prefer?"
   const dialog = new Dialog({ requestId: "title-fit", kind: "select", title, options: ["one"] }, () => {})
-  const rows = plain(dialog.render(32, { theme: defaultTheme, color: false, rows: 24 }))
-  expect(rows[0]).toBe(`╭ ${title}╮`)
-  expect(visibleWidth(rows[0]!)).toBe(32)
+  // The padded frame spends seven cells on "╭─ ", " ", a closing rule and "╮" around the title.
+  const rows = plain(dialog.render(35, { theme: defaultTheme, color: false, rows: 24 }))
+  expect(rows[0]).toBe(`╭─ ${title} ─╮`)
+  expect(visibleWidth(rows[0]!)).toBe(35)
 })
 
 test("reply list and quote markers use the gutter; code labels are neither copy nor search text", () => {

@@ -70,11 +70,12 @@ test("the user band spans every cell with a shared-grid accent prompt and one fi
   expect(lines[0]).toBe(`\x1b[48;2;32;32;32m${" ".repeat(40)}\x1b[49m`)
   expect(lines[3]).toBe(lines[0])
   expect(rows[1]).toStartWith("› Hello there.")
-  expect(rows[1]).toEndWith(`${clock}`)
+  // The clock keeps a two-cell inset from the band's edge, as the prompt text starts two cells in.
+  expect(rows[1]).toEndWith(`${clock}  `)
   expect(rows[2]?.trimEnd()).toBe("  Next line.")
   expect(lines[1]).toContain(banded.accent("›"))
   expect(lines[1]).toContain(banded.surfaceMuted(clock))
-  expect(timestampIn(lines)).toEqual({ line: 1, text: clock, width: 26, to: 14 })
+  expect(timestampIn(lines)).toEqual({ line: 1, text: clock, width: 24, to: 14 })
   expect(rows.filter((r) => r.includes(clock))).toHaveLength(1)
   for (const line of lines) expect(visibleWidth(line)).toBe(40)
 })
@@ -275,14 +276,14 @@ test("banded real blocks use exactly one transcript gap in inline and fullscreen
   const fullscreen = pane.render(e, 11)
   const expected = [
     " ".repeat(40),
-    `› Hello there.${" ".repeat(26 - clockCells)}${clock}`,
+    `› Hello there.${" ".repeat(24 - clockCells)}${clock}  `,
     `  Next line.${" ".repeat(28)}`,
     " ".repeat(40),
     "",
     "  Done.",
     "",
     " ".repeat(40),
-    `› Hello there.${" ".repeat(26 - clockCells)}${clock}`,
+    `› Hello there.${" ".repeat(24 - clockCells)}${clock}  `,
     `  Next line.${" ".repeat(28)}`,
     " ".repeat(40),
   ]

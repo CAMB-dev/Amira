@@ -1,3 +1,4 @@
+import type { ContextWindowSource } from "@amira/ai"
 import type { Agent } from "@amira/core"
 import { bold, compose, type RenderContext, themeToken, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens } from "./format.ts"
@@ -29,6 +30,16 @@ export interface HeaderInfo {
   cost?: string
   used?: number
   limit?: number
+  /** The limit is the built-in default guess, not a known window: it reads "128K?". */
+  limitGuessed?: boolean
+}
+
+/** The context limit, marked as a guess when the model's window is the built-in default. */
+export function headerLimit(
+  limit: number,
+  model?: { contextWindowSource?: ContextWindowSource },
+): Pick<HeaderInfo, "limit" | "limitGuessed"> {
+  return { limit, ...(model?.contextWindowSource === "default" ? { limitGuessed: true } : {}) }
 }
 
 /** Context gets progressively louder at 50%, 75%, and 95%. */
@@ -43,13 +54,23 @@ export function contextStyle(ctx: RenderContext, used: number, limit?: number) {
         : ctx.theme.fg2
 }
 
-/** The trailing context survives first; the title is the first leading item to go. */
-export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext): string {
+/**
+ * The trailing context survives first; the title is the first leading item to go. The right
+ * items end two cells in from the edge, as the left ones start two cells in.
+ */
+export function headerLine(info: HeaderInfo, frameWidth: number, ctx: RenderContext): string {
+  const inset = frameWidth >= 20 ? 2 : 0
+  return headerItems(info, frameWidth - inset, ctx) + " ".repeat(inset)
+}
+
+function headerItems(info: HeaderInfo, width: number, ctx: RenderContext): string {
   const { theme } = ctx
   const used = compactTokens(info.used ?? 0).toUpperCase()
   const context =
     contextStyle(ctx, info.used ?? 0, info.limit)(used) +
-    (info.limit ? theme.muted(` / ${compactTokens(info.limit).toUpperCase()}`) : "")
+    (info.limit
+      ? theme.muted(` / ${compactTokens(info.limit).toUpperCase()}${info.limitGuessed ? "?" : ""}`)
+      : "")
   const cost = info.cost ? theme.muted(info.cost) : ""
   const divider = theme.dim(`  ${glyphs.separator}  `)
   let right = cost ? cost + divider + context : context

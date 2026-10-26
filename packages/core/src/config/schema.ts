@@ -346,6 +346,7 @@ const settings = object({
     title: boolean,
     progress: boolean,
     tokenSpeed: boolean,
+    clock: oneOf("auto", "12h", "24h"),
     reflow: oneOf("auto", "on", "off"),
     submitWhileWorking: oneOf("steer", "queue"),
     images: oneOf("auto", "on", "off"),

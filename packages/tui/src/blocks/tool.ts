@@ -17,6 +17,7 @@ import {
   explorationOf,
   exploredLines,
   type FinishedCall,
+  finishedCallWorking,
   finishedToolLines,
   runningToolLines,
   treeContinuation,
@@ -135,9 +136,11 @@ export class ToolBlock extends Block {
 
   lines(env: BlockEnv): string[] {
     const tree = this.tree(env.nodes)
-    this.running = this.started && (!this.end || tree.some(isActive))
-    if (!this.started || this.hidden(env)) return []
     const presenter = env.presenters?.get(this.name)
+    // A finished call whose work goes on (a background job) redraws until it ends.
+    this.running =
+      this.started && (!this.end || tree.some(isActive) || finishedCallWorking(presenter, this.finished()))
+    if (!this.started || this.hidden(env)) return []
     const { theme, width, now } = env
     const continuation = treeContinuation(theme, this.last)
     const treeWidth = Math.max(0, width - visibleWidth(continuation))

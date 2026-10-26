@@ -1,3 +1,4 @@
+import type { ContextWindowSource } from "@amira/ai"
 import type { ModelSettings, ProviderSettings } from "./settings.ts"
 
 /** Where a provider's API key comes from. */
@@ -56,6 +57,8 @@ export interface ProviderModelInfo {
   id: string
   name?: string
   contextWindow?: number
+  /** Where contextWindow came from; "default" marks the built-in guess. */
+  contextWindowSource?: ContextWindowSource
   maxOutput?: number
   /** USD per million tokens. */
   cost?: { input: number; output: number }

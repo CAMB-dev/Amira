@@ -248,14 +248,18 @@ export class ExtensionViewer implements Component {
     return !!this.#ui?.selectable
   }
 
-  /** Shared bottom hint, including a host-owned route out even with hidden view chrome. */
+  /**
+   * Shared bottom hint, including a host-owned route out even with hidden view chrome. A view
+   * that draws its own footer (hostKeys "none") gets only the route out, not the host keys again.
+   */
   focusHint(theme: Theme, width: number, inputEmpty = true): string {
     const toggle = this.needsTab ? (this.#keys.label("view.focus") ?? "") : "tab"
     if (!this.focused) return viewInputHint(theme, width, toggle, inputEmpty, this.#opts.placement === "dock")
     return fitViewHint(
       [
         !this.#prompt &&
-          !this.#confirm && {
+          !this.#confirm &&
+          this.#view.hostKeys !== "none" && {
             text: this.#keyBar(theme, Math.max(1, width - toggle.length - 11)),
             priority: 1,
           },

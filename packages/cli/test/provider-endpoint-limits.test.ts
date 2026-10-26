@@ -233,6 +233,7 @@ test("description uses the inferred vendor that saving the unchanged draft persi
   expect(described).toEqual({
     id: "m",
     contextWindow: 400_000,
+    contextWindowSource: "catalog",
     maxOutput: 8000,
     cost: { input: 3, output: 4 },
     inCatalog: true,

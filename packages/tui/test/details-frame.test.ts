@@ -95,7 +95,7 @@ test(
       view.render()
       expect(screen.lines[1]).toBe("")
       expect(screen.lines[3]).toBe(
-        `› Polish the transcript details.${" ".repeat(68 - visibleWidth(localClock(at)))}${localClock(at)}`,
+        `› Polish the transcript details.${" ".repeat(66 - visibleWidth(localClock(at)))}${localClock(at)}`,
       )
       expect(screen.lines[4]).toBe("  Keep all output reachable.")
       expect(screen.lines[5]).toBe("")

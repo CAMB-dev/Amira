@@ -418,6 +418,8 @@ test("model info columns carry limits and catalog prices for initial and fetched
     },
     { id: "provider-only", contextWindow: 128000, cost: { input: 9, output: 9 }, inCatalog: false },
     { id: "unknown", inCatalog: false },
+    // The built-in default window is a guess, marked with "?".
+    { id: "guessed", contextWindow: 128000, contextWindowSource: "default" as const, inCatalog: false },
   ]
   admin.describeModels = () => models
   admin.listModels = async () => models
@@ -426,6 +428,7 @@ test("model info columns carry limits and catalog prices for initial and fetched
     { value: "known", label: "known (Known model)", detail: ["400K", "$1.25/$10"] },
     { value: "provider-only", detail: ["128K"] },
     { value: "unknown" },
+    { value: "guessed", detail: ["128K?"] },
   ]
   const field = form.fields.find((field) => field.id === "models")
   if (field?.type !== "multiselect") throw new Error("Missing models field")

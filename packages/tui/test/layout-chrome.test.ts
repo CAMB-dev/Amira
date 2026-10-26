@@ -33,7 +33,8 @@ const info = {
 
 test("header aligns workspace/title and cost/context at opposite edges", () => {
   const row = headerLine(info, 100, plain)
-  expect(row).toBe(`  ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(33)}$0.42  ·  124K / 200K`)
+  // Right items end two cells in, as the left ones start two cells in.
+  expect(row).toBe(`  ⎇ main*  ~/dev/Amira  ·  remember last model${" ".repeat(31)}$0.42  ·  124K / 200K  `)
   expect(visibleWidth(row)).toBe(100)
 })
 

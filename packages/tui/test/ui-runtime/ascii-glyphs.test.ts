@@ -89,7 +89,10 @@ function renderNode(node: UiNode, width: number, height: number): string[] {
   }
 }
 
-/** The Unicode frames pinned in full, styling and padding included; they must never change. */
+/**
+ * The Unicode frames pinned in full, styling and padding included; they must never change
+ * by accident. The selected row reads like a host picker's: bold accent, not inverse.
+ */
 const UNICODE_12 = [
   "\u001b[90m╭\u001b[39m\u001b[90m\u001b[39m aside to…\u001b[90m╮\u001b[39m\u001b[0m",
   "\u001b[90m│\u001b[39mabcdefghi…\u001b[90m│\u001b[39m\u001b[0m",
@@ -97,7 +100,7 @@ const UNICODE_12 = [
   "\u001b[90mChanged fil…\u001b[39m\u001b[0m",
   "packages/ap…",
   "            ",
-  "\u001b[7m›   A very …\u001b[27m\u001b[0m",
+  "\u001b[1m\u001b[36m›   A very …\u001b[39m\u001b[22m\u001b[0m",
   "            ",
   "  \u001b[36m[First lo…\u001b[0m",
   "            ",
@@ -114,7 +117,7 @@ const UNICODE_24 = [
   "\u001b[90mChanged files           \u001b[39m\u001b[0m",
   "packages/api/src/events…",
   "                        ",
-  "\u001b[7m›   A very long list it…\u001b[27m\u001b[0m",
+  "\u001b[1m\u001b[36m›   A very long list it…\u001b[39m\u001b[22m\u001b[0m",
   "                        ",
   "  \u001b[36m[First long tab]\u001b[39m  \u001b[90mSec…\u001b[0m",
   "                        ",

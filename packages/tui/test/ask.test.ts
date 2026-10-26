@@ -409,8 +409,10 @@ for (const mode of MODES) {
       )
       s.terminal.send("clean up\r")
       await waitFor(() => s.dialog().length > 0, "the approval")
+      // Built-in askers go unnamed; a blank row sets the message off from the title, as in ask_user.
       expect(s.dialog()).toEqual([
-        "  Allow wipe? (approval)",
+        "  Allow wipe?",
+        "",
         "  it deletes files",
         "",
         "  Yes",
@@ -435,7 +437,7 @@ for (const mode of MODES) {
       expect(s.host.ui.pending).toEqual([])
       expect(s.all()).not.toContain("  Allow wipe? ›")
       // Asked once for both calls.
-      expect(s.all().split("Allow wipe? (approval)").length).toBeLessThanOrEqual(2)
+      expect(s.all().split("╭─ Allow wipe? ─").length).toBeLessThanOrEqual(2)
       // Each call says who let it run.
       expect(s.all()).toMatch(
         new RegExp(
@@ -451,7 +453,7 @@ for (const mode of MODES) {
 }
 
 test(
-  "Esc on an approval denies the call and stops the turn; meanwhile the activity line waits for you",
+  "Esc on an approval denies the call and stops the turn; meanwhile no spinning activity line duplicates it",
   async () => {
     const s = await setup([{ toolCalls: [{ name: "wipe", args: {} }] }, { text: "tried another way" }], {
       mode: "fullscreen",
@@ -459,8 +461,10 @@ test(
     })
     s.terminal.send("clean up\r")
     await waitFor(() => s.dialog().length > 0, "the approval")
-    // The dialog has the keys: its own footer says what Esc does, so the row offers no stop.
-    expect(s.live()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s$/m)
+    // As with ask_user, the warning-framed dialog is the static waiting state: no spinner,
+    // shimmer or clock row duplicates it, and its own footer says what Esc does.
+    expect(s.live()).not.toContain("Waiting for you")
+    expect(s.live()).not.toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /m)
     s.terminal.send(ESC)
     await s.idle()
     expect(s.host.ui.pending).toEqual([])

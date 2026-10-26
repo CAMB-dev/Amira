@@ -589,6 +589,39 @@ test("presenters: a background start, a read, a stop and the list", () => {
   expect(jobListPresenter.result!(list)).toBe("1 job · 1 running")
 })
 
+test("a background start shows as working while its job runs, then how it ended", () => {
+  const procs: ((e: Parameters<Parameters<typeof startJob>[1]>[0]) => void)[] = []
+  const registry = new JobRegistry({
+    start: (_spec, onEvent) => {
+      procs.push(onEvent)
+      return { stop() {} }
+    },
+  })
+  registerJobs(fakeApi().api, registry)
+  const call = (jobId: string) => ({
+    args: { command: "npm run dev", background: true },
+    result: {
+      content: [{ type: "text" as const, text: `Started background job ${jobId}.` }],
+      details: { jobId, command: "npm run dev", status: "running", exitCode: null, outputLines: 0 },
+    },
+    text: `Started background job ${jobId}.`,
+  })
+  const ok = registry.start({ command: "npm run dev", argv: [], cwd: dir })
+  procs[0]!({ type: "spawned", pid: 1, contained: true })
+  expect(shellPresenter.outcome!(call(ok.id))).toBe("working")
+  expect(shellPresenter.result!(call(ok.id))).toBe(`started ${ok.id}`)
+  procs[0]!({ type: "exit", code: 0, signal: null })
+  expect(shellPresenter.outcome!(call(ok.id))).toBe("done")
+  expect(shellPresenter.result!(call(ok.id))).toBe(`${ok.id} exited with code 0`)
+  const bad = registry.start({ command: "npm test", argv: [], cwd: dir })
+  procs[1]!({ type: "spawned", pid: 2, contained: true })
+  procs[1]!({ type: "exit", code: 1, signal: null })
+  expect(shellPresenter.outcome!(call(bad.id))).toBe("failed")
+  // A job this process does not run (a resumed session's) keeps the plain success mark.
+  expect(shellPresenter.outcome!(call("job999"))).toBeUndefined()
+  expect(shellPresenter.result!(call("job999"))).toBe("started job999")
+})
+
 /** The parts of ExtensionAPI registerJobs uses, recording what it registers. */
 function fakeApi(settings: Settings = {}) {
   const handlers = new Map<string, ((e: EventEnvelope<never>) => void)[]>()

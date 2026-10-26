@@ -88,6 +88,7 @@ export const DEFAULT_TUI_NOTIFY = "auto"
 export const DEFAULT_TUI_TITLE = true
 export const DEFAULT_TUI_PROGRESS = true
 export const DEFAULT_TUI_TOKEN_SPEED = true
+export const DEFAULT_TUI_CLOCK = "auto"
 export const DEFAULT_TUI_REFLOW = "auto"
 export const DEFAULT_TUI_SUBMIT_WHILE_WORKING = "steer"
 export const DEFAULT_TUI_IMAGES = "auto"

@@ -311,6 +311,7 @@ test("the public API exports stay stable", async () => {
     "DEFAULT_THEME_GLYPHS",
     "DEFAULT_THINKING_MODE",
     "DEFAULT_TUI_BELL",
+    "DEFAULT_TUI_CLOCK",
     "DEFAULT_TUI_COLOR_DEPTH",
     "DEFAULT_TUI_IMAGES",
     "DEFAULT_TUI_MARGIN",

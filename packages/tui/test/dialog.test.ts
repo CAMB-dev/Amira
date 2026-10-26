@@ -16,21 +16,18 @@ function open(request: DialogRequest, keys?: Keybindings) {
   const press = (...names: string[]) => {
     for (const n of names) dialog.handleInput(key(n as never))
   }
-  /** Behavioral rows without the new frame; raw frame geometry is asserted separately. */
+  /**
+   * Behavioral rows without the shared padded frame; raw frame geometry is asserted separately.
+   * Text rows (messages, filter) read two cells in, level with the option labels after "› ".
+   */
   const rows = (width = 60) =>
     dialog.render(width, plain).flatMap((l, i, frame) => {
       const row = stripAnsi(l.replace(CURSOR_MARKER, ""))
       if (row.startsWith("╭─ ")) return [row.slice(3).replace(/─*╮$/, "").trimEnd()]
-      if (request.kind === "ask" && row.startsWith("│ ")) {
+      if (row.startsWith("╰")) return []
+      if (row.startsWith("│ ")) {
         const content = row.slice(2, -2).trimEnd()
         return [i === frame.length - 2 || !content || /^\s|^›/.test(content) ? content : `  ${content}`]
-      }
-      if (row.startsWith("╭ ")) return [row.slice(2).replace(/─*╮$/, "").trimEnd()]
-      if (row.startsWith("╰")) return []
-      if (row.startsWith("│›")) return [`› ${row.slice(2, -1).trimEnd()}`]
-      if (row.startsWith("│ ")) {
-        const content = row.slice(2, -1).trimEnd()
-        return [i === frame.length - 2 ? content : content ? `  ${content}` : ""]
       }
       return [row]
     })
@@ -210,9 +207,9 @@ test("select badges precede titles and stay aligned when filtering without chang
     optionStatuses: ["done", "paused", undefined],
     sections: [{ at: 0, keys: [{ key: "p", label: "print" }] }, { at: 2 }],
   })
-  expect(d.rows()).toContain("› 1 ✓ done    First")
-  expect(d.rows()).toContain("  2 ‖ paused  Second")
-  expect(d.rows()).toContain("  3 Worktree")
+  expect(d.rows()).toContain("› 1  ✓ done    First")
+  expect(d.rows()).toContain("  2  ‖ paused  Second")
+  expect(d.rows()).toContain("  3  Worktree")
   d.type("Second")
   expect(d.rows()).toContain("› ‖ paused  2. Second")
   d.press("enter")
@@ -250,14 +247,14 @@ test("select animates only working badges at the shared spinner cadence", () => 
       optionStatuses: ["working", "paused"],
     })
     const first = d.rows()
-    expect(first).toContain("› 1 ⠋ working First")
-    expect(first).toContain("  2 ‖ paused  Second")
+    expect(first).toContain("› 1  ⠋ working First")
+    expect(first).toContain("  2  ‖ paused  Second")
     clock.mockReturnValue(79)
     expect(d.rows()).toEqual(first)
     clock.mockReturnValue(80)
     const next = d.rows()
-    expect(next).toContain("› 1 ⠙ working First")
-    expect(next).toContain("  2 ‖ paused  Second")
+    expect(next).toContain("› 1  ⠙ working First")
+    expect(next).toContain("  2  ‖ paused  Second")
 
     const paused = open({
       kind: "select",
@@ -282,7 +279,7 @@ test("select highlights its initial option, and Enter keeps it", () => {
     options: ["low", "high (current)", "default (not sent)"],
     initial: "high (current)",
   })
-  expect(d.rows()).toContain("› 2 high (current)")
+  expect(d.rows()).toContain("› 2  high (current)")
   d.press("enter")
   expect(d.answers).toEqual(["high (current)"])
 })
@@ -399,14 +396,15 @@ const ask = (questions = QUESTIONS) =>
 
 test("every dialog is a block with a bar down its left, the question, the options and the keys", () => {
   expect(approval().dialog.render(60, plain)).toEqual([
-    "╭ \u001b[1mAllow bash?\u001b[22m (approval)───────────────────────────────────╮",
+    "╭─ \u001b[1mAllow bash?\u001b[22m ────────────────────────────────────────────╮",
+    "│                                                          │",
     "│ policy                                                   │",
     '│ {"command":"rm -rf build/ && bun run build"}             │',
     "│                                                          │",
-    "│ Yes                                                      │",
-    "│ Yes, and don't ask again this session                    │",
-    "│ No                                                       │",
-    "│ Other…                                                   │",
+    "│   Yes                                                    │",
+    "│   Yes, and don't ask again this session                  │",
+    "│   No                                                     │",
+    "│   Other…                                                 │",
     "│                                                          │",
     "│ ↑↓ select · n no · esc deny                              │",
     "╰──────────────────────────────────────────────────────────╯",
@@ -440,7 +438,7 @@ test("a confirm starts with nothing selected: Enter and y do nothing until a cho
   early.press("enter")
   expect(early.answers).toEqual([])
   early.press("down")
-  expect(early.rows()[4]).toBe("› Yes")
+  expect(early.rows()[5]).toBe("› Yes")
   expect(early.rows().at(-1)).toBe("↑↓ move · n no · enter choose · esc deny")
   early.press("enter")
   expect(early.answers).toEqual([true])
@@ -460,7 +458,7 @@ test("a confirm starts with nothing selected: Enter and y do nothing until a cho
 test("Other opens a text field in its row; Esc closes the field, then cancels the dialog", () => {
   const d = approval()
   d.press("up", "enter")
-  expect(d.rows().slice(5, 9)).toEqual([
+  expect(d.rows().slice(6, 10)).toEqual([
     "  Yes, and don't ask again this session",
     "  No",
     "› Type your answer",
@@ -471,11 +469,11 @@ test("Other opens a text field in its row; Esc closes the field, then cancels th
   d.press("enter")
   d.type("no, use trash")
   expect(d.answers).toEqual([])
-  expect(d.rows()[7]).toBe("› no, use trash")
+  expect(d.rows()[8]).toBe("› no, use trash")
   d.press("escape")
   expect(d.answers).toEqual([])
   // Closed, the text stays with the choice, and choosing it again edits it.
-  expect(d.rows()[7]).toBe('› Other… "no, use trash"')
+  expect(d.rows()[8]).toBe('› Other… "no, use trash"')
   d.press("enter")
   d.type("!")
   d.press("enter")
@@ -508,8 +506,8 @@ test("a confirm's always choice says how far it reaches when the asker says so",
 
 test("a digit chooses an option of a short list; it shows before the option", () => {
   const { answers, type, rows } = select(["red", "green", "blue"])
-  expect(rows(40)).toContain("› 1 red")
-  expect(rows(40)).toContain("  2 green")
+  expect(rows(40)).toContain("› 1  red")
+  expect(rows(40)).toContain("  2  green")
   type("2")
   expect(answers).toEqual(["green"])
 })
@@ -542,9 +540,9 @@ test("a diff review fits the rows it has: title, options and keys stay, the diff
   expect(lines.length).toBe(11)
   expect(lines[0]).toBe("Merge the worktree?")
   expect(lines.slice(-4)).toEqual([
-    "› 1 merge",
-    "  2 keep worktree",
-    "  3 discard",
+    "› 1  merge",
+    "  2  keep worktree",
+    "  3  discard",
     "↑↓ move · enter choose · esc cancel",
   ])
   // Six diff rows leave a distinct footer and bottom edge: first 3, marker, final 2.
@@ -574,9 +572,9 @@ test("a short diff is shown whole with room to breathe, and a tall terminal show
   expect(rows.some((l) => l.includes("more lines"))).toBe(false)
   expect(rows.slice(-6)).toEqual([
     "",
-    "› 1 merge",
-    "  2 keep worktree",
-    "  3 discard",
+    "› 1  merge",
+    "  2  keep worktree",
+    "  3  discard",
     "",
     "↑↓ move · enter choose · esc cancel",
   ])
@@ -592,7 +590,7 @@ test("with barely any room the options scroll and the title still shows", () => 
   expect(lines[0]).toBe("Merge the worktree?")
   expect(lines.at(-1)).toBe("↑↓ move · enter choose · esc cancel")
   expect(lines.length).toBeLessThanOrEqual(5)
-  expect(lines).toContain("› 1 a")
+  expect(lines).toContain("› 1  a")
 })
 
 test("a long select is cut to the rows it has", () => {
@@ -609,7 +607,7 @@ test("a tight approval gives up its blank rows and message before its options", 
   const { dialog, rows } = approval()
   dialog.maxRows = 7
   expect(rows()).toEqual([
-    "Allow bash? (approval)",
+    "Allow bash?",
     "  Yes",
     "  Yes, and don't ask again this session",
     "  No",
@@ -828,10 +826,10 @@ test("a select's sections: a heading over their options, and their own Enter lab
   expect(rows()).toEqual([
     "Sub-agents",
     "",
-    "› 1 Fix the parser · coder",
-    "  2 Scan the logs · explorer",
+    "› 1  Fix the parser · coder",
+    "  2  Scan the logs · explorer",
     "  Kept worktrees",
-    "  3 sa_1 · 3 files",
+    "  3  sa_1 · 3 files",
     "",
     "↑↓ move · enter open · p print · esc cancel",
   ])
@@ -874,4 +872,29 @@ test("a filtered sectioned list has no headings; the echo names the key's label"
   expect(dialogEchoLines(r, { option: "1. Fix the parser · coder", key: "p" }, plain.theme)).toEqual([
     "  \u001b[1mSub-agents\u001b[22m › print 1. Fix the parser · coder",
   ])
+})
+
+test("a destructive confirm draws its frame in the warning colour, like approvals", () => {
+  const ctx = { theme: defaultTheme, color: true, rows: 24 }
+  const request = { kind: "confirm", requestId: "d", title: "Delete this session?" } as const
+  const warn = new Dialog({ ...request, tone: "warning" }, () => {})
+  expect(warn.render(40, ctx)[0]).toStartWith(defaultTheme.warning("╭─ "))
+  expect(new Dialog(request, () => {}).render(40, ctx)[0]).toStartWith(defaultTheme.accent("╭─ "))
+})
+
+test("built-in askers go unnamed in the title; extensions keep their label", () => {
+  const title = (source: string | undefined, sourceLabel?: string) =>
+    open({
+      kind: "select",
+      requestId: "t",
+      title: "Thinking effort",
+      options: ["low"],
+      ...(source ? { source } : {}),
+      ...(sourceLabel ? { sourceLabel } : {}),
+    }).rows()[0]
+  expect(title("builtin:commands")).toBe("Thinking effort")
+  expect(title("approval")).toBe("Thinking effort")
+  expect(title(undefined)).toBe("Thinking effort")
+  expect(title("/home/me/.amira/extensions/workflow/index.ts", "workflow")).toBe("Thinking effort (workflow)")
+  expect(title("mcp")).toBe("Thinking effort (mcp)")
 })

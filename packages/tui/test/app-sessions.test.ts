@@ -316,8 +316,9 @@ test("Esc twice opens the rewind picker; the message picked is cut off and back 
   await idle()
   terminal.send("\x1b[27u\x1b[27u")
   await waitFor(() => live().includes("Rewind the conversation"), "the picker")
-  // A/B: newest first, with the focused cursor in the marker column and the right border preserved.
-  expect(live()).toMatch(/^│›1 second question {40}│\n│ 2 first question {41}│$/m)
+  // A/B: newest first, with the focused cursor in the padded frame's marker column and the right
+  // border preserved.
+  expect(live()).toMatch(/^│ › 1 {2}second question {37}│\n│ {3}2 {2}first question {38}│$/m)
   terminal.send("\r")
   await shows("Files were not restored")
   expect(rewound).toEqual([2])

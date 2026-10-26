@@ -120,6 +120,10 @@ async function setup(
   } as unknown as SessionControl
   const host = new CommandHost({ registry: ext.commands, bus, ui: ext.ui, control, agent })
   const asked: Request[] = []
+  // The list reopens on the saved provider after a save; the list now always opens on the
+  // provider in use, so "reopened" means a save happened during this run.
+  const saves = () => calls.filter((c) => c.startsWith("save ")).length
+  let savesBefore = 0
   bus.subscribe(
     (e) => {
       if (e.type !== "ui.request") return
@@ -132,7 +136,7 @@ async function setup(
         }
       }
       const v =
-        e.data.kind === "select" && e.data.title === "Providers" && e.data.initial && !opts.afterSave
+        e.data.kind === "select" && e.data.title === "Providers" && saves() > savesBefore && !opts.afterSave
           ? undefined
           : answer(e.data)
       if (v instanceof Promise) return v.then(respond)
@@ -143,6 +147,7 @@ async function setup(
   const events: unknown[] = []
   bus.subscribe((e) => void events.push(e))
   const run = async (line: string, frontend: CommandFrontend = "tui", signal?: AbortSignal) => {
+    savesBefore = saves()
     const r = await host.run(line, { frontend, signal })
     await bus.flush()
     return { ...r, text: r.output.join("\n") }
@@ -457,6 +462,15 @@ test("TUI /provider opens a management page with Add first and configured provid
   expect(session.calls).toEqual([])
 })
 
+test("the management list opens on the provider in use and marks it current, as /model does", async () => {
+  const session = await setup(() => undefined, { current: "mock" })
+  expect((await session.run("/provider")).ok).toBe(true)
+  const list = session.asked[0] as Extract<Request, { kind: "select" }>
+  expect(list).toMatchObject({ title: "Providers", initial: "mock" })
+  expect(list.descriptions?.[2]).toStartWith("current · mock · ")
+  expect(list.descriptions?.[1]).not.toContain("current")
+})
+
 test("the empty management page offers Add and Escape cancels without changing providers", async () => {
   const session = await setup(() => undefined, { providers: [] })
   expect((await session.run("/provider")).ok).toBe(true)
@@ -542,6 +556,11 @@ test("management Remove preserves confirmation, optional key removal, and the in
     expect(session.asked.slice(2).map((r) => r.title)).toEqual([
       "Remove provider deepseek?",
       "Also delete its key (…wxyz) from ~/.amira/auth.json?",
+    ])
+    // Deleting is destructive: both confirms ask for the warning frame.
+    expect(session.asked.slice(2).map((r) => (r.kind === "confirm" ? r.tone : undefined))).toEqual([
+      "warning",
+      "warning",
     ])
   }
   for (const answer of [false, undefined]) {

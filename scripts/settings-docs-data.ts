@@ -980,6 +980,12 @@ export const annotations: Record<string, Annotation> = {
     zh: "在状态栏右侧显示实时 token 速度：`~N tok/s` 根据可见回复文字和工具参数估算，`thinking Ns` 显示思考时长；请求结束后，若有用量报告则改为精确的输出速度。空闲时保留上次速度，空间不足时优先隐藏此项。设为 `false` 可关闭。",
     ja: "ステータスバーの右側にリアルタイムのトークン速度を表示します。`~N tok/s` は表示される返信テキストとツール引数から推定し、`thinking Ns` は思考時間を示します。リクエスト後に使用量が報告されると、推定値を正確な出力速度に置き換えます。待機中は直前の速度を保持し、表示幅が足りないときは最初にこの項目を非表示にします。`false` で非表示にできます。",
   },
+  "tui.clock": {
+    default: documentedDefault("tui.clock"),
+    en: 'Timestamp hour cycle: `"auto"` follows the system locale, `"12h"` forces 12-hour time (`8:19 PM`) and `"24h"` forces 24-hour time (`20:19`).',
+    zh: '时间戳的小时制：`"auto"` 跟随系统区域设置，`"12h"` 强制 12 小时制（`8:19 PM`），`"24h"` 强制 24 小时制（`20:19`），与英文界面一致。',
+    ja: 'タイムスタンプの時間表記です。`"auto"` はシステムのロケールに従い、`"12h"` は 12 時間表記（`8:19 PM`）、`"24h"` は 24 時間表記（`20:19`）に固定します（英語の UI に合わせた表記）。',
+  },
   "tui.reflow": {
     default: documentedDefault("tui.reflow"),
     en: "Deprecated and ignored: fullscreen redraws the conversation at the current terminal width.",

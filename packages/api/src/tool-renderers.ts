@@ -92,10 +92,12 @@ export interface ToolPresenter<A = Record<string, unknown>, D = unknown> {
   /**
    * How a call that did not fail came out, for the mark before its result: "interrupted" for
    * one that ended without doing its work (a question declined), "failed" for one where some
-   * of the work failed (one of several sub-agents). Undefined, or "done", keeps the success
-   * mark. A call that failed always shows as failed.
+   * of the work failed (one of several sub-agents), "working" for one whose work goes on after
+   * it returned (a background job still running): frontends badge it as working and keep
+   * asking until the outcome changes. Undefined, or "done", keeps the success mark. A call
+   * that failed always shows as failed.
    */
-  outcome?(call: ToolCallView<A, D>): "done" | "interrupted" | "failed" | undefined
+  outcome?(call: ToolCallView<A, D>): "done" | "working" | "interrupted" | "failed" | undefined
   /**
    * Lines under the result: a diff, the output of a failed command. Return all of them; the
    * frontend cuts them to fit `detail`.

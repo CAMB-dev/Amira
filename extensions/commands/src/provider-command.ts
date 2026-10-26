@@ -122,6 +122,9 @@ async function manage(
   const sessionId = ctx.session.info().id
   const a = tests.wrap(sessionId, admin(ctx))
   const providers = ctx.session.providers()
+  // Like /model: open on the provider in use and mark it current.
+  const current = ctx.session.info().model.provider
+  const initial = highlight ?? (providers.some((p) => p.id === current) ? current : undefined)
   const descriptions = providers.map((p) => {
     const draft = a.draft(p.id)
     const url = p.baseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")
@@ -132,7 +135,7 @@ async function manage(
     const key =
       source === "env" ? (variable ? `env (${variable})` : "env") : source === "auth" ? "auth.json" : "none"
     const status = tests.status(sessionId, a, p.id)
-    return `${p.dialect} · ${shortUrl} · ${count} ${count === 1 ? "model" : "models"} · key: ${key}${status ? ` · ${status}` : ""}`
+    return `${p.id === current ? "current · " : ""}${p.dialect} · ${shortUrl} · ${count} ${count === 1 ? "model" : "models"} · key: ${key}${status ? ` · ${status}` : ""}`
   })
   const picked = await ctx.ui.choose("Providers", [ADD, ...providers.map((p) => p.id)], {
     sections: [
@@ -140,7 +143,7 @@ async function manage(
       ...(providers.length ? [{ at: 1, title: "Configured", choose: "manage" }] : []),
     ],
     descriptions: ["Configure a provider and its models", ...descriptions],
-    ...(highlight ? { initial: highlight } : {}),
+    ...(initial ? { initial } : {}),
     signal: ctx.signal,
   })
   if (!picked) return
@@ -257,6 +260,7 @@ async function remove(ctx: CommandContext, id: string, a: ProviderAdmin) {
   }
   const ok = await ctx.ui.confirm(`Remove provider ${id}?`, "Its entry is deleted from your settings.json.", {
     signal: ctx.signal,
+    tone: "warning",
   })
   if (!ok) {
     ctx.print("Kept it.")
@@ -266,6 +270,7 @@ async function remove(ctx: CommandContext, id: string, a: ProviderAdmin) {
   const removeKey = stored
     ? (await ctx.ui.confirm(`Also delete its key (${stored}) from ~/.amira/auth.json?`, undefined, {
         signal: ctx.signal,
+        tone: "warning",
       })) === true
     : false
   ctx.print(await a.remove(id, { removeKey }))

@@ -1,7 +1,7 @@
 // A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import { defaultTheme, stripAnsi, visibleWidth } from "@amira/tui-kit"
-import { createLocalClock, setClockPreference } from "../src/clock.ts"
+import { applyClockSetting, createLocalClock, reloadClockSetting, setClockPreference } from "../src/clock.ts"
 import { localClock, timestampRoom, userLines } from "../src/format.ts"
 
 const at = new Date(2026, 9, 10, 20, 9).getTime()
@@ -82,5 +82,47 @@ test("12:45 PM reserves its actual cells plus the two-cell clock gap", () => {
     expect(timestampRoom(Infinity, noon)).toBe(Infinity)
   } finally {
     restore()
+  }
+})
+
+test("tui.clock forces the hour cycle for 12h and 24h and leaves auto to the locale", () => {
+  const outer = setClockPreference({ locale: "en-US", hourCycle: "h12" })
+  try {
+    const before = localClock(at)
+    const restoreAuto = applyClockSetting("auto")
+    expect(localClock(at)).toBe(before)
+    restoreAuto()
+    const restore24 = applyClockSetting("24h")
+    expect(localClock(at)).toMatch(/^20[:.]09$/)
+    restore24()
+    expect(localClock(at)).toBe(before)
+    const restore12 = applyClockSetting("12h")
+    // Forced 12-hour time reads as the English interface does, whatever the locale.
+    expect(localClock(at)).toBe("8:09 PM")
+    restore12()
+    const restoreUnset = applyClockSetting(undefined)
+    expect(localClock(at)).toBe(before)
+    restoreUnset()
+  } finally {
+    outer()
+  }
+})
+
+test("a reloaded tui.clock changes the running session's clock; auto goes back to the locale's", () => {
+  const outer = setClockPreference({ locale: "en-US", hourCycle: "h12" })
+  try {
+    const before = localClock(at)
+    reloadClockSetting("24h")
+    expect(localClock(at)).toBe(before)
+    const restore = applyClockSetting("auto")
+    reloadClockSetting("24h")
+    expect(localClock(at)).toMatch(/^20[:.]09$/)
+    reloadClockSetting("auto")
+    expect(localClock(at)).toBe(before)
+    reloadClockSetting("12h")
+    restore()
+    expect(localClock(at)).toBe(before)
+  } finally {
+    outer()
   }
 })

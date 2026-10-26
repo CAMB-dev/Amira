@@ -126,7 +126,7 @@ test("theme picker lists built-ins first, custom themes next and terminal last",
     const rows = s.live().split("\n")
     const names = rows.flatMap((row) => {
       const name = row.match(
-        /^│[› ](?:\d+ )?(amira|amber|burnt|lavender|mono|ascii|custom|terminal)(?=\s|$)/,
+        /^│ [› ] (?:\d+ {2})?(amira|amber|burnt|lavender|mono|ascii|custom|terminal)(?=\s|$)/,
       )?.[1]
       return name ? [name] : []
     })
@@ -634,6 +634,8 @@ test("soft overrides a pulse theme and theme removes the override", async () => 
   themes.register({ name: "custom", shimmerEffect: "pulse" }, "user")
   const saved: (ShimmerEffect | undefined)[] = []
   const s = await setup([], {
+    // The padded frame needs 62 columns for the whole controls row and its shimmer label.
+    cols: 70,
     themes,
     commands: [],
     tuiCommands: true,
@@ -670,6 +672,8 @@ test("up/down focuses the theme list and leaves both controls unhighlighted", as
   themes.register({ name: "amira", shimmerEffect: "pulse" }, "built-in")
   themes.register({ name: "amber", shimmerEffect: "wave" }, "built-in")
   const s = await setup([], {
+    // The padded frame needs 62 columns for the whole controls row and its shimmer label.
+    cols: 70,
     themes,
     commands: [],
     tuiCommands: true,
@@ -679,18 +683,18 @@ test("up/down focuses the theme list and leaves both controls unhighlighted", as
     s.terminal.send("/theme\r")
     await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "Amira pulse")
     // It opens on the list: no control has the cursor, so the arrows are not offered.
-    expect(s.live()).not.toContain("│›Appearance:")
+    expect(s.live()).not.toContain("│ › Appearance:")
     expect(s.live()).not.toContain("←/→ change")
     s.terminal.send("\t\x1b[B")
     await waitFor(() => s.live().includes("Shimmer: theme (wave)"), "down previews Amber")
-    expect(s.live()).not.toContain("│›Shimmer:")
-    expect(s.live()).not.toContain("│›Appearance:")
+    expect(s.live()).not.toContain("│ › Shimmer:")
+    expect(s.live()).not.toContain("│ › Appearance:")
     // The arrows only change a focused control, so the list's footer leaves them out.
     expect(s.live()).not.toContain("←/→ change")
     s.terminal.send("\x1b[A")
     await waitFor(() => s.live().includes("Shimmer: theme (pulse)"), "up returns to Amira")
-    expect(s.live()).not.toContain("│›Shimmer:")
-    expect(s.live()).not.toContain("│›Appearance:")
+    expect(s.live()).not.toContain("│ › Shimmer:")
+    expect(s.live()).not.toContain("│ › Appearance:")
   } finally {
     s.terminal.send("\x1b")
     await Bun.sleep(40)
@@ -704,6 +708,8 @@ test("reloaded theme settings replace palette, appearance and shimmer in the run
   const themes = new ThemeRegistry()
   themes.register({ name: "custom", light: { accent: "#010203" }, shimmerEffect: "pulse" }, "user")
   const s = await setup([], {
+    // The padded frame needs 62 columns for the whole controls row and its shimmer label.
+    cols: 70,
     themes,
     commands: [],
     tuiCommands: true,
