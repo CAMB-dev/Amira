@@ -131,7 +131,8 @@ test("the single sticky row uses the band, accent, first-line ellipsis and origi
   const banded = { ...env, theme: { ...defaultTheme, ...surfaceTheme("dark") } }
   const block = userBlock(message("First line\nHidden second line"))
   const row = stickyPromptLine(block, banded)
-  expect(stripAnsi(row)).toBe(`› First line…${" ".repeat(87 - clockCells)}${clock}`)
+  // The clock keeps the message band's two-cell inset from the edge.
+  expect(stripAnsi(row)).toBe(`› First line…${" ".repeat(85 - clockCells)}${clock}  `)
   expect(row).toContain(banded.theme.accent("›"))
   expect(row).toContain(banded.theme.surfaceMuted!(clock))
   expect(row).toContain("\x1b[48;2;")
@@ -139,7 +140,7 @@ test("the single sticky row uses the band, accent, first-line ellipsis and origi
   const long = userBlock(message("界".repeat(100)))
   const longRow = stripAnsi(stickyPromptLine(long, banded))
   expect(longRow).toContain("…")
-  expect(longRow).toEndWith(`${clock}`)
+  expect(longRow).toEndWith(`${clock}  `)
   expect(visibleWidth(longRow)).toBe(100)
   for (const width of [1, 8, 15, 16, 30]) {
     const narrow = stickyPromptLine(long, { ...banded, width })
@@ -545,7 +546,7 @@ test("fullscreen uses expanded band coordinates, preserves the bottom, and falls
       const top = expanded ? 6 : 3
       expect(screen.lines[0]).toBe(" Amira · project")
       expect(screen.lines[2]).toBe(
-        expanded ? "" : `› Fix the transcript…${" ".repeat(79 - clockCells)}${clock}`,
+        expanded ? "" : `› Fix the transcript…${" ".repeat(77 - clockCells)}${clock}`,
       )
       if (expanded) {
         expect(screen.lines[3]).toContain("› Fix the transcript")

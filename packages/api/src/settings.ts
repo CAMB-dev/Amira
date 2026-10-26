@@ -311,6 +311,11 @@ export interface TuiSettings {
   progress?: boolean
   /** Show live token speed and thinking time in the status bar. See DEFAULT_TUI_TOKEN_SPEED. */
   tokenSpeed?: boolean
+  /**
+   * Timestamp hour cycle: "auto" follows the system locale, "12h" and "24h" force one.
+   * See DEFAULT_TUI_CLOCK.
+   */
+  clock?: "auto" | "12h" | "24h"
   /** @deprecated Ignored: fullscreen redraws the conversation at the current terminal width. */
   reflow?: "auto" | "on" | "off"
   /**

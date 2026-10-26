@@ -105,7 +105,8 @@ export class ShimmerControl {
       ) ?? effect.style
     const label = this.preset === "theme" ? `theme (${inherited})` : this.preset
     const shimmer = `Shimmer: ${label}`
-    const marker = this.focus === "list" ? "" : accent(`${glyphs.choice} `)
+    // The controls share the list's cursor column, so focusing them never shifts their text.
+    const marker = this.focus === "list" ? "  " : `${accent(glyphs.choice)} `
     return `${marker}${appearanceLabel}${variants.join(separator)}${separator}${
       this.focus === "shimmer" ? accent(shimmer) : theme.muted(shimmer)
     }`

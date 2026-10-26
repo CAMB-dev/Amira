@@ -267,6 +267,15 @@ test("live token speed is a boolean setting that project files can override", ()
   )
 })
 
+test("tui.clock accepts auto, 12h and 24h only", () => {
+  for (const clock of ["auto", "12h", "24h"] as const) {
+    expect(validateSettings({ tui: { clock } }, "settings.json").settings.tui?.clock).toBe(clock)
+  }
+  expect(() => validateSettings({ tui: { clock: "h12" } }, "settings.json")).toThrow(
+    '"tui.clock" must be one of',
+  )
+})
+
 test.each(["auto", "dark", "light", "terminal", "system", "Dark", "amber"])(
   "TUI theme accepts %s",
   (theme) => {

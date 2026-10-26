@@ -315,12 +315,21 @@ export const jobListPresenter: ToolPresenter<Record<string, never>, JobListDetai
 /** Subscriptions of the extension loaded last; a reload replaces them. */
 const unsubscribe: (() => void)[] = []
 
+/** The registry registerJobs watches, for presenters drawing a background start as it goes on. */
+let watched: JobRegistry | undefined
+
+/** A job's live state; undefined for one this process does not run (a resumed session's). */
+export function liveJobInfo(id: string): JobInfo | undefined {
+  return watched?.get(id)
+}
+
 /**
  * Adds everything above to the extension's registrations and starts the clean-up, for the
  * jobs in `registry` (the host's view by default; tests pass another without changing the tools').
  */
 export function registerJobs(api: ExtensionAPI, registry: JobRegistry = hostBackgroundJobs()): void {
   for (const off of unsubscribe.splice(0)) off()
+  watched = registry
   configureJobs(api.settings.backgroundJobs, registry)
   let lastOutputRender = 0
   unsubscribe.push(

@@ -16,7 +16,7 @@ for (const fullscreen of [true]) {
         dialog.maxRows = 8
         const frame = marginFrame(fullscreen, columns, 32, { margin, marginRows: 0 }, { bottom: dialog })
         const rows = frame.live.grid
-        const top = rows.findIndex((row) => row.includes("╭ Model"))
+        const top = rows.findIndex((row) => row.includes("╭─ Model "))
         const bottom = rows.findIndex((row, i) => i > top && row.includes("╰"))
         const left = rows[top]!.indexOf("╭")
         const right = rows[top]!.indexOf("╮")
@@ -29,10 +29,13 @@ for (const fullscreen of [true]) {
           expect(row[left]).toBe("│")
           expect(row[right]).toBe("│")
         }
+        // The shared padded frame: one padding cell, the cursor column, then labels; the
+        // position counter lines up with the labels.
         const selected = rows.find((row) => row.includes("model-1"))!
-        expect(selected[left + 1]).toBe("›")
-        expect(selected.indexOf("model-1")).toBe(left + 2)
-        expect(rows.find((row) => row.includes("1/14"))!.indexOf("1/14")).toBe(left + 2)
+        expect(selected[left + 1]).toBe(" ")
+        expect(selected[left + 2]).toBe("›")
+        expect(selected.indexOf("model-1")).toBe(left + 4)
+        expect(rows.find((row) => row.includes("1/14"))!.indexOf("1/14")).toBe(left + 4)
         expect(rows[bottom - 1]).toContain("enter choose")
         expect(rows[bottom]!.slice(left, right + 1)).toBe(`╰${"─".repeat(right - left - 1)}╯`)
       })
@@ -40,24 +43,24 @@ for (const fullscreen of [true]) {
   }
 }
 
-test("ANSI-styled padding is removed without losing the row's styles", () => {
+test("the padded frame keeps each row's styles and its own cursor column", () => {
   const counter = defaultTheme.muted("  1/14")
   const rows = dialogFrame("Model", [defaultTheme.accent("› selected"), counter, "esc cancel"], 30, ctx)
   expect(rows.map(stripAnsi)).toEqual([
-    `╭ Model${"─".repeat(22)}╮`,
-    `│›selected${" ".repeat(19)}│`,
-    `│ 1/14${" ".repeat(23)}│`,
-    `│ esc cancel${" ".repeat(17)}│`,
+    `╭─ Model ${"─".repeat(20)}╮`,
+    `│ › selected${" ".repeat(16)} │`,
+    `│   1/14${" ".repeat(20)} │`,
+    `│ esc cancel${" ".repeat(16)} │`,
     `╰${"─".repeat(28)}╯`,
   ])
-  expect(rows[2]).toContain(defaultTheme.muted("1/14"))
+  expect(rows[2]).toContain(defaultTheme.muted("  1/14"))
 })
 
-test("a colored no-match row starts at the content column", () => {
+test("a colored no-match row starts at the label column", () => {
   const dialog = new Dialog({ requestId: "empty", kind: "select", title: "Model", options }, () => {})
   dialog.handleInput(textKey("z"))
   const rows = dialog.render(30, ctx).map(stripAnsi)
-  expect(rows.find((row) => row.includes("no match"))!.indexOf("no match")).toBe(2)
+  expect(rows.find((row) => row.includes("no match"))!.indexOf("no match")).toBe(4)
 })
 
 test("four-row dialogs retain title, selection, interior hint and bottom border", () => {
@@ -65,8 +68,8 @@ test("four-row dialogs retain title, selection, interior hint and bottom border"
   dialog.maxRows = 4
   const rows = dialog.render(30, ctx).map(stripAnsi)
   expect(rows).toHaveLength(4)
-  expect(rows[0]).toStartWith("╭ Model")
-  expect(rows[1]).toStartWith("│›model-1")
+  expect(rows[0]).toStartWith("╭─ Model ")
+  expect(rows[1]).toStartWith("│ › model-1")
   expect(rows[2]).toContain("enter choose")
   expect(rows[3]).toBe(`╰${"─".repeat(28)}╯`)
 })
@@ -88,8 +91,8 @@ test("a two-row diff preview retains both ends and an inline omission count", ()
   expect(rows[1]).toContain("+ line 1")
   expect(rows[1]).toContain("… 52 more lines …")
   expect(rows[2]).toContain("+ line 54")
-  expect(rows[3]).toStartWith("│›1 merge")
-  expect(rows[4]).toStartWith("│ 2 keep")
+  expect(rows[3]).toStartWith("│ › 1  merge")
+  expect(rows[4]).toStartWith("│   2  keep")
   expect(rows[5]).toContain("enter choose")
   expect(rows[6]).toBe(`╰${"─".repeat(58)}╯`)
 })

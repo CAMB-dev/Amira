@@ -95,7 +95,8 @@ for (const kind of ["relative file", "absolute file", "package", "scoped package
       const dialog = new Dialog(request, (answer) => session!.host.ui.respond(request.requestId, answer))
       const title = `Continue? (${label})`
       const top = dialog.render(120, plain)[0]!
-      expect(stripAnsi(top)).toBe(`╭ ${title}${"─".repeat(117 - title.length)}╮`)
+      // The shared padded frame sets the title off with rules on both sides.
+      expect(stripAnsi(top)).toBe(`╭─ ${title} ${"─".repeat(115 - title.length)}╮`)
       expect(top).toContain(bold(plain.theme.text("Continue?")))
 
       // A display name must never become the cancellation identity.

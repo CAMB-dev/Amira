@@ -1,4 +1,5 @@
 import {
+  AGENT_STATUS_BADGES,
   ARTIFACT_HEADER,
   clipMiddle,
   DEFAULT_SHELL_OUTPUT_LINES,
@@ -32,6 +33,7 @@ import { renderToolLines, type ToolLayoutLine, terminalText, type ViewMarkers } 
 import { formatDuration, formatElapsed, stampRows, summarizeArgs, timestampRoom } from "./format.ts"
 import { asciiGlyphs, chromeText, glyphs, viewEllipsis, viewSeparator } from "./glyphs.ts"
 import { CONTENT_INSET, MARKER_WIDTH, markerPrefix } from "./grid.ts"
+import { badgeSymbol, spinnerFrameAt } from "./status-badge.ts"
 
 /** Where the TUI finds the presenter of a tool; the core's ToolRendererRegistry is one. */
 export interface PresenterSource {
@@ -124,7 +126,7 @@ export function treeContinuation(theme: Theme, last = false): string {
   return markerPrefix(pipe)
 }
 
-type Outcome = "done" | "failed" | "interrupted" | "blocked" | "unknownTool" | "invalidArgs"
+type Outcome = "done" | "working" | "failed" | "interrupted" | "blocked" | "unknownTool" | "invalidArgs"
 
 function outcomeOf(call: FinishedCall): Outcome {
   if (call.rejected === "aborted") return "interrupted"
@@ -404,8 +406,22 @@ function presentedResult(presenter: ToolPresenter | undefined, view: ToolCallVie
   return chromeText(stripAnsi(String(result)).split(/\r?\n/).map(oneLine).join("\n").trim())
 }
 
+/** How a call that worked came out by its presenter: "working" while its work goes on. */
+function presentedOutcome(presenter: ToolPresenter | undefined, call: FinishedCall): Outcome {
+  const outcome = outcomeOf(call)
+  if (outcome !== "done") return outcome
+  return attempt(presenter?.outcome && (() => presenter.outcome!(callView(call))), () => "done")
+}
+
+/** A finished call whose work goes on (a background job): its row keeps redrawing. */
+export function finishedCallWorking(presenter: ToolPresenter | undefined, call: FinishedCall): boolean {
+  return presentedOutcome(presenter, call) === "working"
+}
+
 function outcomeMark(outcome: Outcome): string {
   switch (outcome) {
+    case "working":
+      return badgeSymbol("working", spinnerFrameAt(Date.now()))
     case "done":
       return glyphs.toolDone
     case "failed":
@@ -463,11 +479,9 @@ export function finishedToolLines(
 ): string[] {
   const outcome = outcomeOf(call)
   const view = callView(call)
-  // A call that worked can still say it did not do its work, or that part of it failed.
-  const shown: Outcome =
-    outcome === "done"
-      ? attempt(presenter?.outcome && (() => presenter.outcome!(view)), () => "done")
-      : outcome
+  // A call that worked can still say it did not do its work, that part of it failed, or that
+  // its work goes on (a background job, followed in /tasks).
+  const shown = presentedOutcome(presenter, call)
   const mark = outcomeMark(shown)
   const summary = callSummary(presenter, call.args, opts.separator, opts.ellipsis)
   const ran = outcome === "done" || outcome === "failed"
@@ -503,18 +517,26 @@ export function finishedToolLines(
         : `interrupted ${glyphs.separator} ${said}`
   } else if (!ran) result = lines(view.text).join("\n") || outcome
   else result = presentedResult(presenter, view, opts.separator)
-  const style = shown === "done" ? theme.success : shown === "failed" ? theme.error : theme.muted
+  const style =
+    shown === "done"
+      ? theme.success
+      : shown === "failed"
+        ? theme.error
+        : shown === "working"
+          ? theme[AGENT_STATUS_BADGES.working.role]
+          : theme.muted
   const approval =
     call.approval === "user"
       ? ` ${glyphs.separator} allowed by you`
       : call.approval === "rule"
         ? ` ${glyphs.separator} allowed ${glyphs.separator} session rule`
         : ""
+  const follow = shown === "working" ? ` ${glyphs.separator} /tasks` : ""
   const time = `${
     call.durationMs !== undefined && call.durationMs >= 1000
       ? ` ${glyphs.separator} ${formatDuration(call.durationMs)}`
       : ""
-  }${approval}`
+  }${approval}${follow}`
   const prefix = continuation
   const failed = outcome !== "done"
   let body: ToolLayoutLine[] = []

@@ -10,7 +10,6 @@ import {
   type MouseInput,
   type RenderContext,
   Spinner,
-  stripAnsi,
   type Theme,
   truncateToWidth,
   visibleWidth,
@@ -298,7 +297,8 @@ export class Dialog implements Component {
     if (hit) {
       if (hit.key) return this.handleInput(hit.key)
       if (hit.row !== undefined) {
-        this.#editor?.placeCursor(e.x, hit.row)
+        // The frame's border and padding cell sit before the editor's own columns.
+        this.#editor?.placeCursor(e.x - (hit.column ?? 0), hit.row)
         return true
       }
       if (hit.id === "secret") {
@@ -343,25 +343,27 @@ export class Dialog implements Component {
       if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
       this.#spinnerFrame = frame
     }
-    // Border semantics: approvals warn, other live questions use the interactive accent.
-    const border = this.request.source === "approval" ? theme.warning : theme.accent
-    const ask = this.request.kind === "ask"
-    const inner = Math.max(1, width - (ask ? 4 : 3))
-    const title = this.#titleRows(ask ? Math.max(1, inner - 2) : inner, theme)[0] ?? ""
-    // Body producers include their two-cell gutter; the frame absorbs one into its side.
+    // Border semantics: approvals and destructive confirms warn; other questions use the accent.
+    const warn =
+      this.request.source === "approval" ||
+      (this.request.kind === "confirm" && this.request.tone === "warning")
+    const border = warn ? theme.warning : theme.accent
+    // Every kind shares the padded frame: one cell inside each border, title set off by rules.
+    const inner = Math.max(1, width - 4)
+    const title = this.#titleRows(Math.max(1, inner - 2), theme)[0] ?? ""
     const body =
       this.request.kind === "input"
-        ? renderDialogInput(inner + 2, ctx, {
+        ? renderDialogInput(inner, ctx, {
             budget: this.#bodyBudget,
-            title: this.#titleRows(inner, theme).slice(1),
+            title: this.#titleRows(Math.max(1, inner - 2), theme).slice(1),
             targets: this.#mouse,
             hints: this.#footer(),
             editor: this.#editor,
             secret: this.#secret,
             placeholder: this.request.placeholder,
           })
-        : this.#renderList(ask ? inner : inner + 2, ctx)
-    const { rows, kept } = this.#mouse.frame(title, body, width, ctx, border, this.maxRows, ask)
+        : this.#renderList(inner, ctx)
+    const { rows, kept } = this.#mouse.frame(title, body, width, ctx, border, this.maxRows)
     if (kept.some((row) => this.#animatedRows.has(row))) this.#refreshIntervalMs = Spinner.INTERVAL_MS
     return rows
   }
@@ -379,16 +381,14 @@ export class Dialog implements Component {
     const title = this.#titleRows(Math.max(1, width - 2), theme).slice(1)
     const message =
       r.kind === "confirm" && r.message
-        ? r.message
-            .split("\n")
-            .flatMap((l) => wrapText(theme.muted(l), Math.max(1, width - 2)).map((w) => `  ${w}`))
+        ? r.message.split("\n").flatMap((l) => wrapText(theme.muted(l), width))
         : []
     // A diff to review, or what an approval is about as its tool presents it (a command, a diff).
     const diff =
       r.kind === "diff-review"
-        ? renderToolLines(parseUnifiedDiff(r.diff), theme, Math.max(1, width - 2))
+        ? renderToolLines(parseUnifiedDiff(r.diff), theme, width)
         : r.kind === "confirm" && r.preview?.length
-          ? renderToolLines(r.preview, theme, Math.max(1, width - 2))
+          ? renderToolLines(r.preview, theme, width)
           : []
     const indicator =
       this.#pages.length > 1
@@ -403,16 +403,12 @@ export class Dialog implements Component {
     // At the four-row minimum, the selected answer and hint take precedence over the filter.
     const filter =
       this.#filter && this.#bodyBudget >= 3
-        ? [
-            truncateToWidth(
-              `${theme.muted("filter:")} ${this.#filter}`,
-              Math.max(1, width - 2),
-              viewEllipsis(),
-            ),
-          ]
+        ? [truncateToWidth(`${theme.muted("filter:")} ${this.#filter}`, width, viewEllipsis())]
         : []
+    // What comes before the options: blank rows set it off from the frame title and from them.
+    const head = indicator !== undefined || title.length > 0 || message.length > 0 || diff.length > 0
     const fit: Fit = {
-      blanks: ask && (indicator || title.length) ? 3 : 2,
+      blanks: head ? 3 : 2,
       inlineDescriptions: false,
       descriptions: true,
       message: message.length,
@@ -424,18 +420,18 @@ export class Dialog implements Component {
     }
     const layout = (diffRows: number) => {
       const out: string[] = []
-      if (ask && fit.blanks > (indicator || title.length ? 2 : 1)) out.push("")
+      if (fit.blanks > (head ? 2 : 1)) out.push("")
       if (fit.indicator && indicator) out.push(indicator)
       out.push(...fitTitle(title, fit.title))
       out.push(...cutEnd(message, fit.message, theme))
-      if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme, Math.max(1, width - 2)))
-      if (fit.blanks > 1 && (!ask || indicator || title.length)) out.push("")
+      if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme, width))
+      if (fit.blanks > 1 && head) out.push("")
       out.push(...filter)
       const offset = out.length
       out.push(...this.#optionRows(choices, width, fit, theme))
       this.#mouse.placeOptions(offset)
       if (fit.blanks > 0) out.push("")
-      out.push(this.#mouse.footer(out.length, this.#footer(), Math.max(1, width - (ask ? 0 : 2)), theme))
+      out.push(this.#mouse.footer(out.length, this.#footer(), width, theme))
       return out
     }
     // The diff takes what the rest leaves, and a diff cut short is worth more than blank rows.
@@ -487,7 +483,7 @@ export class Dialog implements Component {
       const i = start + j
       const selected = i === page.selected && focused
       const marker = selected ? theme.accent(glyphs.choice) : " "
-      const digit = digits ? `${theme.muted(String(i + 1))}${this.request.kind === "ask" ? "  " : " "}` : ""
+      const digit = digits ? `${theme.muted(String(i + 1))}  ` : ""
       const box = page.multi ? `${page.checked.has(i) ? glyphs.checked : glyphs.unchecked} ` : ""
       const status =
         this.request.kind === "select" && c.index !== undefined
@@ -519,10 +515,8 @@ export class Dialog implements Component {
       this.request.kind !== "ask" &&
       (fit.inlineDescriptions ||
         (!(this.request.kind === "select" && this.request.searchTexts) &&
-          described.every((it) => column + 3 + visibleWidth(it.description) <= width)))
+          described.every((it) => column + 2 + visibleWidth(it.description) <= width)))
     const rows: string[] = []
-    // A cut row keeps one free cell before the right border, as the ask frame's padding does.
-    const cut = this.request.kind === "ask" ? width : Math.max(1, width - 1)
     for (const { c, i, selected, lead, badge, typed, description, status } of items) {
       const heading = this.#heading(c)
       if (heading && fit.headings)
@@ -547,12 +541,12 @@ export class Dialog implements Component {
       const head = `${lead}${badge}${styledExtensionLabel(typed, extensionStatus, theme, selected)}`
       const optionRow = rows.length
       if (!description) {
-        rows.push(truncateToWidth(head, cut, viewEllipsis()))
+        rows.push(truncateToWidth(head, width, viewEllipsis()))
       } else if (inline) {
         const pad = " ".repeat(Math.max(0, column - visibleWidth(head)))
-        rows.push(truncateToWidth(`${head}${pad}  ${theme.muted(description)}`, cut, viewEllipsis()))
+        rows.push(truncateToWidth(`${head}${pad}  ${theme.muted(description)}`, width, viewEllipsis()))
       } else {
-        rows.push(truncateToWidth(head, cut, viewEllipsis()))
+        rows.push(truncateToWidth(head, width, viewEllipsis()))
         const indentWidth = Math.min(width - 1, leadWidth + (this.request.kind === "ask" ? 2 : 0))
         const indent = " ".repeat(indentWidth)
         for (const l of wrapText(description, Math.max(1, width - indentWidth)))
@@ -567,19 +561,19 @@ export class Dialog implements Component {
     return rows
   }
 
-  /** The bold title, and who asked in muted text; wrapped under itself. */
+  /** The bold title, and which extension asked in muted text; wrapped under itself. */
   #titleRows(width: number, theme: Theme): string[] {
     const r = this.request
-    const sourceLabel = r.sourceLabel ?? r.source
+    // Built-in askers (builtin:*, approvals) are the host itself and go unnamed.
+    const builtin = !r.source || r.source.startsWith("builtin:") || r.source === "approval"
+    const sourceLabel = r.sourceLabel ?? (builtin ? undefined : r.source)
     const from = sourceLabel ? theme.muted(` (${sourceLabel})`) : ""
     const asked = this.#current?.question ?? r.title
     const question = r.kind === "ask" ? asked : chromeText(asked)
     const title = wrapText(`${bold(theme.text(question))}${from}`, Math.max(1, width))
     const header = this.selection.header?.(theme)
-    if (header) {
-      const marked = stripAnsi(header).startsWith(`${glyphs.choice} `)
-      title.push(truncateToWidth(header, width + (marked ? 2 : 0), viewEllipsis()))
-    }
+    // Titles wrap two cells short of the frame title's room; the control row uses the full body.
+    if (header) title.push(truncateToWidth(header, width + 2, viewEllipsis()))
     return title
   }
 

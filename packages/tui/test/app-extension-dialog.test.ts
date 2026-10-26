@@ -26,8 +26,8 @@ for (const mode of ["fullscreen"] as const) {
       expect(await s.host.loadFile(file, { name: "workflow" })).toBe(true)
       s.terminal.send("/workflow repair\r")
       await waitFor(() => s.live().includes('Start workflow "repair"?'), "workflow confirmation")
-      // B/D: the rounded top border keeps the title punctuation and muted source suffix.
-      expect(s.live()).toContain('╭ Start workflow "repair"? (workflow)')
+      // B/D: the rounded top border keeps the title punctuation and a third-party muted source suffix.
+      expect(s.live()).toContain('╭─ Start workflow "repair"? (workflow) ─')
       expect(s.live()).not.toContain(dir)
       expect(s.live()).not.toContain("index.ts")
       // The short label is presentation only: unloading still cancels by the source path.

@@ -141,8 +141,9 @@ function tokens(n: number): string {
 
 /** What the checklist says next to a model. */
 export function modelDescription(m: ProviderModelInfo): string {
+  const guess = m.contextWindowSource === "default" ? "?" : ""
   const parts = [
-    ...(m.contextWindow ? [`${tokens(m.contextWindow)} ctx`] : []),
+    ...(m.contextWindow ? [`${tokens(m.contextWindow)}${guess} ctx`] : []),
     ...(m.cost ? [`$${m.cost.input}/$${m.cost.output} per M`] : []),
   ]
   if (!m.inCatalog)
@@ -150,9 +151,10 @@ export function modelDescription(m: ProviderModelInfo): string {
   return parts.join(" · ")
 }
 
-/** Compact limits and catalog prices in the checklist's right-aligned column. */
+/** Compact limits and catalog prices in the checklist's muted right-aligned column; "?" marks a guess. */
 function modelOption(m: ProviderModelInfo): FormOption {
-  const context = m.contextWindow ? tokens(m.contextWindow).replace("k", "K") : ""
+  const guess = m.contextWindowSource === "default" ? "?" : ""
+  const context = m.contextWindow ? `${tokens(m.contextWindow).replace("k", "K")}${guess}` : ""
   const price = m.inCatalog && m.cost ? `$${m.cost.input}/$${m.cost.output}` : ""
   const detail = [context, ...(price ? [price] : [])]
   return {

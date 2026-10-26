@@ -326,8 +326,9 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   const clockRows = screen.lines.filter((row) => row.endsWith(userClock) || row.endsWith(clock))
   expect(clockRows).toHaveLength(2)
   const userHead = "› what is in a.ts?"
+  // The user band's clock sits two cells in from the band's edge (screen rows are trimmed).
   expect(clockRows[0]).toBe(
-    `${userHead}${" ".repeat(60 - visibleWidth(userHead) - visibleWidth(userClock))}${userClock}`,
+    `${userHead}${" ".repeat(58 - visibleWidth(userHead) - visibleWidth(userClock))}${userClock}`,
   )
   const toolHead = "└ read a.ts  ✓ contents of a.ts (+2 lines)"
   expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(60 - visibleWidth(toolHead) - clockCells)}${clock}`)
@@ -1348,7 +1349,7 @@ test("dialogs answer in the bottom area; forms and the viewer take the screen wi
   }, "asker")
   terminal.send("go\r")
   // B/D: the question is the rounded dialog's title, with no question-marker prefix.
-  await shows("╭ Proceed? (asker)")
+  await shows("╭─ Proceed? (asker) ─")
   // A click on the transcript does not select a block while the dialog has the keyboard.
   terminal.send(click(screen.lines.findIndex((l) => l.startsWith("› go"))))
   await Bun.sleep(30)

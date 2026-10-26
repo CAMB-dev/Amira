@@ -69,7 +69,7 @@ test("a diff review shows the diff above its options", async () => {
   await waitFor(() => live().includes("Merge?"), "review dialog")
   expect(live()).toContain("1 - old")
   expect(live()).toContain("1 + new")
-  expect(live()).toContain("│›1 merge")
+  expect(live()).toContain("│ › 1  merge")
   terminal.send("2")
   await idle()
   expect(agent.messages.find((m) => m.role === "toolResult")?.content[0]).toEqual({
@@ -130,8 +130,8 @@ test("a diff review taller than the terminal keeps its title, options and keys i
     expect(rows.some((l) => /… \d+ more lines …/.test(l))).toBe(true)
     expect(live()).toContain("+ line 1")
     expect(live()).toContain("+ line 54")
-    expect(live()).toContain("│›1 merge")
-    expect(live()).toContain("│ 2 keep")
+    expect(live()).toContain("│ › 1  merge")
+    expect(live()).toContain("│   2  keep")
     expect(live()).toContain("↑↓ move · enter choose · esc cancel")
     expect(live()).not.toContain("type to filter")
     // The running call that asked stays in view above it, and the frame fits the screen.

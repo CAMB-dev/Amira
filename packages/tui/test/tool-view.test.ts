@@ -1,6 +1,7 @@
 // A deliberate oracles: fixed two-cell marker gutter, hanging output and ASCII arms consuming the gap.
 import { expect, test } from "bun:test"
 import {
+  AGENT_STATUS_BADGES,
   outputPreview,
   type ThemeDefinition,
   type ToolDetailLevel,
@@ -71,6 +72,37 @@ test("a presenter's outcome replaces the success mark of a call that did not fai
   expect(stripAnsi(finishedToolLines(theme, { outcome: () => "done" }, failed, "summary", 60)[0]!)).toContain(
     `${glyphs.toolFailed} boom`,
   )
+})
+
+test("a working outcome badges the row as working, points to /tasks and keeps its block live", () => {
+  let state: "working" | "done" = "working"
+  const presenter: ToolPresenter = { result: () => "started job1", outcome: () => state }
+  const call: FinishedCall = { name: "bash", args: { command: "bun run dev" }, result: textResult("ok") }
+  const head = finishedToolLines(theme, presenter, call, "summary", 80)[0]!
+  // The working badge's spinner frame and the result share the badge's colour.
+  const working = theme[AGENT_STATUS_BADGES.working.role]
+  const frame = stripAnsi(head).match(/ {2}(\S) started job1/)?.[1]
+  expect(frame).toBeDefined()
+  expect(head).toContain(working(`${frame} started job1`))
+  expect(head).toContain(theme.muted(" · /tasks"))
+  expect(stripAnsi(head)).not.toContain(glyphs.toolDone)
+  const block = new ToolBlock("call", "bash", { command: "bun run dev" }, "session")
+  block.end = { result: textResult("ok") }
+  const env = {
+    theme,
+    width: 80,
+    now: 0,
+    spinner: "*",
+    detail: "summary",
+    hyperlinks: false,
+    presenters: new Map([["bash", presenter]]),
+    nodes: new Map(),
+  } as unknown as BlockEnv
+  block.lines(env)
+  expect(block.live).toBe(true)
+  state = "done"
+  expect(stripAnsi(block.lines(env)[0]!)).toContain(`${glyphs.toolDone} started job1`)
+  expect(block.live).toBe(false)
 })
 
 test("built-in heads use bold text verbs while targets keep their semantic tokens", () => {

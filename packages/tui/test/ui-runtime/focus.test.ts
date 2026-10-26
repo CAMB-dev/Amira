@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { UiEvent, UiNode } from "@amira/api"
-import { CURSOR_MARKER, defaultTheme, key, monoTheme, stripAnsi, textKey } from "@amira/tui-kit"
+import { bold, CURSOR_MARKER, defaultTheme, key, monoTheme, stripAnsi, textKey } from "@amira/tui-kit"
 import { UiRuntime } from "../../src/ui-runtime/runtime.ts"
 import { renderViewLines } from "../../src/view-lines.ts"
 
@@ -31,9 +31,11 @@ for (const theme of [defaultTheme, monoTheme]) {
       const unfocused = render(false)
       const index = node.type === "tree" ? 1 : 2
       const selected = (node.type === "tree" ? "›   second" : "› second").padEnd(24)
-      expect(focused[index]).toContain(theme.selection!(selected))
+      // Focused, the selected row is bold accent like a host picker's cursor row, not inverse.
+      expect(focused[index]).toContain(bold(theme.accent(selected)))
+      expect(focused[index]).not.toContain(theme.selection!(selected))
       expect(unfocused[index]).toContain(theme.dim(selected))
-      expect(unfocused[index]).not.toContain(theme.selection!(selected))
+      expect(unfocused[index]).not.toContain(bold(theme.accent(selected)))
       expect(unfocused.map(stripAnsi)).toEqual(focused.map(stripAnsi))
       expect(runtime.state).toEqual(state)
       expect(events).toEqual([])

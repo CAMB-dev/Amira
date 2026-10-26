@@ -63,7 +63,7 @@ import { fileList } from "./file-index.ts"
 import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
-import { headerContextTokens, headerLine } from "./header.ts"
+import { headerContextTokens, headerLimit, headerLine } from "./header.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { PromptHistory } from "./prompt-history.ts"
@@ -200,7 +200,7 @@ async function runFullscreen(
             title: state().title,
             cost: opts.status.snapshot().find((i) => i.id === "cost")?.text,
             used: headerContextTokens(state().contextTokens, agent),
-            limit: state().model.contextWindow,
+            ...headerLimit(state().model.contextWindow, agent?.model),
           },
       width,
       ctx,

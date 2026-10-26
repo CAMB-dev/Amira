@@ -35,6 +35,37 @@ export function setClockPreference(preference: ClockPreference): () => void {
   }
 }
 
+type ClockSetting = "auto" | "12h" | "24h" | undefined
+
+/** The clock before the running interactive session applied tui.clock; "auto" goes back to it. */
+let runBase: typeof clock | undefined
+
+function useClockSetting(setting: ClockSetting): void {
+  // A forced 12-hour clock reads as the English interface does ("8:19 PM"), whatever the locale.
+  if (setting === "12h") clock = createLocalClock({ locale: "en-US", hourCycle: "h12" })
+  else if (setting === "24h") clock = createLocalClock({ hourCycle: "h23" })
+  else clock = runBase ?? clock
+}
+
+/**
+ * Applies the tui.clock setting for one interactive run: "12h" ("8:19 PM") and "24h" ("20:19")
+ * force the hour cycle; "auto" (the default) leaves the system locale's clock alone.
+ */
+export function applyClockSetting(setting: ClockSetting): () => void {
+  const previous = clock
+  runBase = previous
+  useClockSetting(setting)
+  return () => {
+    clock = previous
+    runBase = undefined
+  }
+}
+
+/** Reloaded settings (/reload) change the running session's clock; outside a run it is ignored. */
+export function reloadClockSetting(setting: ClockSetting): void {
+  if (runBase) useClockSetting(setting)
+}
+
 /** Display times use the local timezone and the selected locale's hour cycle. */
 export function localClock(at: number): string {
   return clock(at)

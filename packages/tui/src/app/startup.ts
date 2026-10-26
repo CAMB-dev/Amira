@@ -13,6 +13,7 @@ import {
   type UiRequests,
 } from "@amira/core"
 import type { EditorImage, InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
+import { applyClockSetting } from "../clock.ts"
 import type { ViewSource } from "../extension-view.ts"
 import type { FileSource } from "../file-index.ts"
 import { glyphs } from "../glyphs.ts"
@@ -152,9 +153,11 @@ export async function withFrontend<T>(
 ): Promise<T> {
   if (!opts.frontend && !opts.agent) throw new Error("Interactive UI requires a frontend or local agent")
   const frontend = opts.frontend ?? createLocalAgentPort({ agent: opts.agent!, commands: opts.commands })
+  const restoreClock = applyClockSetting(opts.settings?.clock)
   try {
     return await run({ ...opts, frontend })
   } finally {
+    restoreClock()
     if (!opts.frontend) await frontend.detach()
   }
 }

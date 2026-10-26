@@ -281,7 +281,8 @@ test("input cursor clicks respect graphemes, wide cells, wrapped and scrolled ro
     { initial: "Aé界👩‍💻Z", shown: "Aé界", offset: 3, expected: "AéX界👩‍💻Z" },
     { initial: "Aé界👩‍💻Z", shown: "Aé界", offset: 6, expected: "Aé界👩‍💻XZ" },
     { initial: "first\nsecond", shown: "second", offset: 2, expected: "first\nseXcond" },
-    { initial: "abcdefghiJKLMN", shown: "JKLMN", offset: 1, expected: "abcdefghiJXKLMN", width: 12 },
+    // 14 columns leave the padded frame's editor eight text cells, so the text wraps after "h".
+    { initial: "abcdefghiJKLMN", shown: "JKLMN", offset: 1, expected: "abcdefghiJXKLMN", width: 14 },
     {
       initial: "first\nsecond\nthird\nfourth",
       shown: "third",

@@ -231,6 +231,12 @@ function reconcile(
   host.changed()
 }
 
+/** Bold accent over a row; segments that set their own colour keep it, then the accent resumes. */
+function selectedRow(line: string, theme: Theme): string {
+  const [open = "", close = ""] = theme.accent("\0").split("\0")
+  return bold(theme.accent(open && close ? line.replaceAll(close, close + open) : line))
+}
+
 /** Paint only viewport rows for trees/tables; layouts compose already-clipped child rectangles. */
 export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect.height): string[] {
   const { node, rect } = plan
@@ -245,8 +251,9 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
   const dim = themeToken(theme, "dim") ?? theme.border
   const focusColor = host.focused ? theme.accent : dim
   const marker = focused ? focusColor(`${glyphs.pointer} `) : "  "
-  const selection = (line: string) =>
-    host.focused ? (theme.selection?.(line) ?? line) : dim(stripColors(line))
+  // The selected row reads like a host picker's: the accent cursor and bold accent text, its
+  // own coloured segments (status badges) kept; without the focus it dims.
+  const selection = (line: string) => (host.focused ? selectedRow(line, theme) : dim(stripColors(line)))
   let out: string[] = []
   if (from > 0 && ["bar", "progress", "rule", "input", "button", "spacer"].includes(node.type))
     return Array<string>(h).fill(" ".repeat(w))

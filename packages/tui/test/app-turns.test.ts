@@ -44,7 +44,8 @@ test("a conversation: user message, tool call and reply end up in the transcript
   await shows("The file has three lines.")
   await idle()
   const text = all()
-  expect(text).toMatch(new RegExp(`^› what is in a\\.ts\\? {37}${TIMESTAMP}$`, "m"))
+  // The user band's clock keeps a two-cell inset from the band's edge.
+  expect(text).toMatch(new RegExp(`^› what is in a\\.ts\\? {35}${TIMESTAMP}$`, "m"))
   expect(text).toMatch(
     new RegExp(`^└ read a\\.ts {2}✓ contents of a\\.ts \\(\\+2 lines\\) {13}${TIMESTAMP}$`, "m"),
   )
@@ -59,7 +60,7 @@ test("a conversation: user message, tool call and reply end up in the transcript
         "  @ files · \\? keys",
         "",
         "",
-        `› what is in a\\.ts\\? {37}${TIMESTAMP}`,
+        `› what is in a\\.ts\\? {35}${TIMESTAMP}`,
         "",
         "",
         `└ read a\\.ts  ✓ contents of a\\.ts \\(\\+2 lines\\) {13}${TIMESTAMP}`,

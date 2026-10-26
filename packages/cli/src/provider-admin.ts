@@ -244,6 +244,7 @@ export function createProviderAdmin(opts: ProviderAdminOptions): ProviderAdmin {
         id: m.id,
         ...(m.name ? { name: m.name } : {}),
         contextWindow: resolved.contextWindow,
+        ...(resolved.contextWindowSource ? { contextWindowSource: resolved.contextWindowSource } : {}),
         maxOutput: resolved.maxOutput,
         ...(resolved.cost ? { cost: { input: resolved.cost.input, output: resolved.cost.output } } : {}),
         inCatalog: c !== undefined,

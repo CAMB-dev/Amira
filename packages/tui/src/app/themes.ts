@@ -13,6 +13,7 @@ import {
   type Theme,
   type ThemeVariant,
 } from "@amira/tui-kit"
+import { reloadClockSetting } from "../clock.ts"
 import { type Glyphs, glyphs, setGlyphs } from "../glyphs.ts"
 import { type Keybindings, keyLabel } from "../keybindings.ts"
 import type { OverlayManager } from "./overlays.ts"
@@ -77,6 +78,8 @@ export class RuntimeThemes {
       this.select(this.selection.name, this.selection.themeVariant)
     })
     this.offSettings = this.opts.subscribeThemeSettings?.((settings) => {
+      // The clock is presentation too: a reloaded tui.clock applies at once.
+      reloadClockSetting(settings?.clock)
       this.cancelPicker?.()
       this.shimmer = settings?.shimmer
       this.select(settings?.theme ?? "auto", settings?.themeVariant ?? "auto")

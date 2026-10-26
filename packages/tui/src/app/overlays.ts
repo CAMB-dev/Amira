@@ -154,9 +154,13 @@ export class OverlayManager {
     )
   }
 
-  /** Only the foreground question replaces its duplicate turn and tool activity. */
+  /**
+   * The foreground question or tool approval replaces the duplicate "waiting for you" activity
+   * row: the dialog itself is the static waiting state. Only ask_user also hides its tool row.
+   */
   get askDialogVisible(): boolean {
-    return !this.hasFullscreen && this.dialogs[0]?.request.kind === "ask"
+    const request = this.dialogs[0]?.request
+    return !this.hasFullscreen && (request?.kind === "ask" || request?.source === "approval")
   }
 
   /** Without focus reports, only permission and question dialogs warrant an alert. */

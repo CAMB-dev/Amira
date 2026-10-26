@@ -712,9 +712,15 @@ export class UiRequests {
           | undefined
         return typeof answer === "string" ? { option: answer } : answer
       },
-      confirm: async (title, message, opts) => {
-        const request = { kind: "confirm" as const, title, ...(message !== undefined ? { message } : {}) }
-        const answer = await this.ask(request, o(opts))
+      confirm: async (title, message, opts = {}) => {
+        const { tone, ...rest } = opts
+        const request = {
+          kind: "confirm" as const,
+          title,
+          ...(message !== undefined ? { message } : {}),
+          ...(tone === "warning" ? { tone } : {}),
+        }
+        const answer = await this.ask(request, o(rest))
         return answer === undefined ? undefined : answer === true || answer === "always"
       },
       input: (title, opts = {}) => {

@@ -485,9 +485,10 @@ test("the right-aligned model stays below the plain border; workspace, cost and 
           .find((r) => r.startsWith("╰")),
       ).toBe(`╰${"─".repeat(cols - 2)}╯`)
       const header = {
-        100: `  ⎇ feat/x*  /work/proj${" ".repeat(55)}$0.042  ·  109K / 128K`,
-        44: "  ⎇ feat/x*  …/proj   $0.042  ·  109K / 128K",
-        34: "  ⎇ feat/x… $0.042  ·  109K / 128K",
+        100: `  ⎇ feat/x*  /work/proj${" ".repeat(53)}$0.042  ·  109K / 128K`,
+        44: "  ⎇ feat/x*  …/proj $0.042  ·  109K / 128K",
+        // Right items keep a two-cell inset from the edge, so narrow headers cut the branch sooner.
+        34: "  ⎇ feat… $0.042  ·  109K / 128K",
         12: " 109K / 128K",
       }[cols]!
       const rows = live().split("\n")

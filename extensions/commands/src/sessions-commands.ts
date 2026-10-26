@@ -114,7 +114,11 @@ export function resumeCommand(): CommandDefinition {
         }
         const chosen = idOf(picked.option)
         if (picked.key === "d") {
-          if (await ctx.ui.confirm("Delete this session?", picked.option, { signal: ctx.signal })) {
+          const sure = await ctx.ui.confirm("Delete this session?", picked.option, {
+            signal: ctx.signal,
+            tone: "warning",
+          })
+          if (sure) {
             await ctx.session.deleteSession!(chosen)
             ctx.print(`Deleted session ${chosen}.`)
           } else ctx.print(`Kept session ${chosen}.`)

@@ -34,14 +34,14 @@ for (const mode of ["fullscreen"] as const) {
             await waitFor(() => app.live().includes("enter choose"), "dialog footer")
             const title = app.screen.lines.findIndex((row) => row.includes("Model"))
             expect(title).toBeGreaterThanOrEqual(0)
-            expect(app.screen.lines[title + 1]).toMatch(/› ?1 first/)
+            expect(app.screen.lines[title + 1]).toMatch(/› ?1 {1,2}first/)
             const footer = app.screen.lines.findIndex((row) => row.includes("enter choose"))
             expect(footer).toBeGreaterThan(title + 1)
             expect(app.screen.lines[footer]).toContain("esc cancel")
             app.terminal.send("\x1b[B")
-            await waitFor(() => /› ?2 second/.test(app.live()), "second selected")
+            await waitFor(() => /› ?2 {1,2}second/.test(app.live()), "second selected")
             expect(app.screen.lines[title]).toContain("Model")
-            expect(app.screen.lines[title + 1]).toMatch(/› ?2 second/)
+            expect(app.screen.lines[title + 1]).toMatch(/› ?2 {1,2}second/)
             expect(app.screen.lines[footer]).toContain("enter choose")
             if (mode === "fullscreen") {
               // Three essential rows fit; status and activity must not displace them.

@@ -1360,13 +1360,13 @@ test("a main-session dialog shows as a banner in the viewer, rings once, and is 
   expect(s.host.ui.pending).toHaveLength(1)
   s.terminal.send("\x15\x1b[9;5u")
   s.terminal.send(ESC)
-  await waitFor(() => s.view().includes("Allow bash? (approval)"), "the main dialog")
+  await waitFor(() => s.view().includes("╭─ Allow bash? ─"), "the main dialog")
   expect(s.screen.altSwitches).toEqual([true])
   expect(s.screen.mainText).toBe("")
   s.terminal.send("\x1b[B\r")
   expect(await answer).toBe(true)
   // Answered: the dialog is gone and leaves no echo.
-  await waitFor(() => !s.view().includes("Allow bash? (approval)"), "the dialog gone")
+  await waitFor(() => !s.view().includes("╭─ Allow bash? ─"), "the dialog gone")
   s.terminal.send("\x03")
   await s.exited
 })
@@ -1384,10 +1384,11 @@ test("/agents picks a sub-agent and opens its live view; p adds its transcript a
   s.terminal.send("go\r")
   await s.idle()
   s.terminal.send("/agents\r")
-  await waitFor(() => s.view().includes("╭ Sub-agents"), "the picker")
+  await waitFor(() => s.view().includes("╭─ Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
   expect(s.view()).not.toContain("Open the live view")
-  expect(s.view()).toMatch(/│›1 ✓ done {4}Check explorer · explorer · s_\w+ · \d/)
+  // The padded frame cuts the 60-column row after the session id.
+  expect(s.view()).toMatch(/│ › 1 {2}✓ done {4}Check explorer · explorer · s_\w+ ·/)
   s.terminal.send("1")
   await waitFor(() => s.view().includes("task: task for the explorer"), "the viewer drawn")
   // p closes the viewer and appends a snapshot; normal-screen printout waits for quit.

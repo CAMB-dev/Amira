@@ -1,10 +1,10 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`width-100 fullscreen running turn matches the chosen prototype details 1`] = `
-"  ⎇ main*  ~/dev/Amira  ·  Status bar layout                                   $0.42  ·  124K / 200K
+"  ⎇ main*  ~/dev/Amira  ·  Status bar layout                                 $0.42  ·  124K / 200K
 
 
-› Make the status bar clearer.                                                               8:19 PM
+› Make the status bar clearer.                                                             8:19 PM
 
 
 ∴ Thought for 4.2s                                                                           8:19 PM

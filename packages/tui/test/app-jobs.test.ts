@@ -93,8 +93,8 @@ for (const mode of ["fullscreen"] as const) {
     })
     terminal.send("/jobs\r")
     await shows("Background jobs")
-    await waitFor(() => live().includes("1 job1 · running 0s · npm run dev"), "the list")
-    expect(live()).toContain("2 job2 · running 0s · tsc --watch")
+    await waitFor(() => live().includes("1  job1 · running 0s · npm run dev"), "the list")
+    expect(live()).toContain("2  job2 · running 0s · tsc --watch")
     expect(live()).toContain("VITE ready in 300 ms")
     expect(live()).toMatch(/x stop/)
     // x on the highlighted (first) job stops it.
@@ -107,7 +107,7 @@ for (const mode of ["fullscreen"] as const) {
 
     // Enter on the second job opens the view with its output, which follows as it grows.
     terminal.send("/jobs\r")
-    await waitFor(() => live().includes("2 job2 · running"), "the list again")
+    await waitFor(() => live().includes("2  job2 · running"), "the list again")
     terminal.send("\x1b[B")
     terminal.send("\r")
     await waitFor(() => live().includes("job2 · tsc --watch"), "the view")

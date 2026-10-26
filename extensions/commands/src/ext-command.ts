@@ -440,6 +440,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
             action === "Remove" &&
             !(await ctx.ui.confirm(`Remove ${item.name} from ${item.scope} scope?`, undefined, {
               signal: ctx.signal,
+              tone: "warning",
             }))
           )
             return

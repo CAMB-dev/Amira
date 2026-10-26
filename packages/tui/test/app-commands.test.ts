@@ -161,7 +161,7 @@ for (const mode of ["fullscreen"] as const) {
       )
       s.terminal.send("\x1b[27u\x1b[27u")
       await waitFor(() => s.live().includes("Rewind the conversation"), "rewind picker")
-      expect(s.live()).toContain("│›1 /swarm goal")
+      expect(s.live()).toContain("│ › 1  /swarm goal")
       s.terminal.send("\x1b[27u")
       // A later, unrelated message with the same display must not lose its own echo.
       await s.agent.prompt(userMessage("another prompt", { text: "/swarm goal" }))

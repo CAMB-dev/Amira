@@ -205,6 +205,7 @@ VS Code 自己处理 Ctrl+F、Ctrl+Home、Ctrl+End 和 Ctrl+↑↓（它们在 V
 | `tui.title` | `true` | 设置终端标题；会话有标题时为 `Amira · <folder> · <session title> ⎇ <branch>`，运行期间显示 `●`，退出时恢复旧标题。标题栏使用系统字体，输入框状态不使用部分终端字体缺少的 `⎇` |
 | `tui.progress` | `true` | 运行时显示终端标签或任务栏进度，对话框等待时显示暂停状态；使用 OSC 9;4，支持终端包括 Windows Terminal、ConEmu、VS Code、Ghostty |
 | `tui.bell` | `true` | 终端在后台时，轮次结束或对话框打开会响铃；无法报告焦点的终端中，只在持续至少 15 秒的轮次之后响铃 |
+| `tui.clock` | `"auto"` | 时间戳的小时制：`"auto"` 跟随系统区域设置；`"12h"`（`8:19 PM`）和 `"24h"`（`20:19`）强制使用其一 |
 | `tui.reflow` | `"auto"` | 已弃用并忽略；全屏模式会按当前终端宽度重新绘制对话 |
 | `tui.submitWhileWorking` | `"steer"` | `"steer"` 让 Enter 引导当前轮次，`"queue"` 让 Enter 排队；排队键始终执行另一种行为。提示行同步更新，slash 命令始终立即执行 |
 | `tui.images` | `"auto"` | 安装可选的 [`images`](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/images/README.md) 扩展后（`amira ext install images`；它读取本地文件，也能下载 http(s) 图片，沿用 web_fetch 的内网访问防护，单张最大 10 MB），在终端中绘制回复里独占一行的图片：`"auto"` 在终端声明支持时绘制，例如 Windows Terminal 1.22+（Sixel）、开启 `terminal.integrated.enableImages` 的 VS Code、iTerm2、WezTerm、kitty、Ghostty；`"on"` 始终绘制；`"off"` 从不绘制。其他情况下，以及图片加载失败或超过 3 秒时，显示为 `🖼` 加替代文本，并链接到图片 |

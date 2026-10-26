@@ -1,10 +1,10 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`walkthrough frame at 100 columns 1`] = `
-"  ⎇ main  ~/dev/Amira  ·  Fixing add Bug                                                  31K / 200K
+"  ⎇ main  ~/dev/Amira  ·  Fixing add Bug                                                31K / 200K  
 
                                                                                                     
-› Fix add and check the project.                                                             8:09 PM
+› Fix add and check the project.                                                           8:09 PM  
                                                                                                     
 
 ∴ Thought for 4.2s
@@ -28,10 +28,10 @@ exports[`walkthrough frame at 100 columns 1`] = `
 `;
 
 exports[`walkthrough frame at 50 columns 1`] = `
-"  ⎇ main  ~/dev/Amira                   31K / 200K
+"  ⎇ main  ~/dev/Amira                 31K / 200K  
 
                                                   
-› Fix add and check the project.           8:09 PM
+› Fix add and check the project.         8:09 PM  
                                                   
 
 ∴ Thought for 4.2s

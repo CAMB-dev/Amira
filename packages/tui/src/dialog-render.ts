@@ -113,17 +113,16 @@ export class DialogTargets {
     ctx: RenderContext,
     border: StyleFn,
     maxRows: number,
-    padded = false,
   ): { rows: string[]; kept: string[] } {
     const room = Math.max(0, maxRows - 2)
-    const compact = width < (padded ? 6 : 5) || maxRows < 4
+    const compact = width < 6 || maxRows < 4
     // Match the frame's clipping, including the one-row fallback which shows only the hint.
     const kept = compact
       ? [title, ...body].slice(-Math.max(1, maxRows))
       : body.length <= room
         ? body
         : [...body.slice(0, room - 1), body.at(-1)!]
-    const rows = dialogFrame(title, body, width, ctx, border, maxRows, padded)
+    const rows = dialogFrame(title, body, width, ctx, border, maxRows)
     const start = Math.max(0, body.length + 1 - Math.max(1, maxRows))
     // Map body rows through exactly the same clipping as dialogFrame; borders and headings
     // never become targets, even in the bare fallback at very small terminal sizes.
@@ -142,11 +141,10 @@ export class DialogTargets {
         const x = target.x === undefined ? left : target.x + (compact ? 0 : 2)
         const end = target.width === undefined ? right : x + target.width
         if (x >= right || end <= left) continue
+        // Text columns shift by the border and its padding cell.
         this.#rows.set(
           target.id,
-          padded && !compact && target.column !== undefined
-            ? { ...target, column: target.column + 2 }
-            : target,
+          !compact && target.column !== undefined ? { ...target, column: target.column + 2 } : target,
         )
         this.#hits.add(target.id, {
           x: Math.max(left, x),
@@ -205,11 +203,11 @@ export function renderDialogInput(
       before.length + row,
       secret
         ? { id: "secret", index: -1, column: visibleWidth(`${glyphs.pointer} `) }
-        : { id: `editor:${row}`, index: -1, row },
+        : { id: `editor:${row}`, index: -1, row, column: 0 },
     )
   }
   const out = [...before, ...body, ...blank]
-  out.push(targets.footer(out.length, hints, Math.max(1, width - 2), ctx.theme))
+  out.push(targets.footer(out.length, hints, width, ctx.theme))
   return out
 }
 

@@ -21,7 +21,8 @@ import { fileDiff } from "./diff.ts"
 import type { EditParams } from "./edit.ts"
 import type { GlobParams } from "./glob.ts"
 import type { GrepParams } from "./grep.ts"
-import { jobListPresenter, jobOutputPresenter, jobStopPresenter } from "./jobs-ui.ts"
+import { endText } from "./jobs.ts"
+import { jobListPresenter, jobOutputPresenter, jobStopPresenter, liveJobInfo } from "./jobs-ui.ts"
 import { monitorPresenter } from "./monitor.ts"
 import type { OutputReadParams } from "./output-read.ts"
 import type { ReadParams } from "./read.ts"
@@ -231,7 +232,13 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJ
   result(call) {
     const job = detailsOf<BackgroundJobDetails>(call, "jobId")
     if (job) {
-      if (job.status === "running" || job.status === "starting") return `started ${job.jobId}`
+      const live = liveJobInfo(job.jobId)
+      if (job.status === "running" || job.status === "starting") {
+        // Started, then ended while the session watched: say how it ended.
+        if (live && live.status !== "running" && live.status !== "starting")
+          return `${job.jobId} ${endText(live)}`
+        return `started ${job.jobId}`
+      }
       if (job.status === "failed") return `${job.jobId} failed to start`
       return `${job.jobId} ended at once · exit ${job.exitCode ?? "killed"}`
     }
@@ -246,6 +253,18 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJ
     // Success is the rule: only another exit code is worth saying.
     if (code === 0) return lines ? plural(lines, "line") : "no output"
     return `exit ${code}${printed}`
+  },
+  /**
+   * A background start goes on while its job runs: the frontend badges it as working until the
+   * job ends, then done or failed. A job this process does not run keeps the plain success mark.
+   */
+  outcome(call) {
+    const job = detailsOf<BackgroundJobDetails>(call, "jobId")
+    const live = job && liveJobInfo(job.jobId)
+    if (!live) return undefined
+    if (live.status === "running" || live.status === "starting") return "working"
+    if (live.status === "stopped") return "done"
+    return live.status === "failed" || live.exitCode !== 0 ? "failed" : "done"
   },
   body(call, { detail, outputLines: tail = SHELL_TAIL_LINES }) {
     const job = detailsOf<BackgroundJobDetails>(call, "jobId")

@@ -11,7 +11,7 @@ import { rememberMessageTime } from "../src/format.ts"
 import { runningBoundary } from "../src/fullscreen/running-boundary.ts"
 import { createFullscreenView } from "../src/fullscreen-view.ts"
 import { glyphs, setGlyphs } from "../src/glyphs.ts"
-import { headerLine } from "../src/header.ts"
+import { headerLimit, headerLine } from "../src/header.ts"
 import { InputBox } from "../src/input-box.ts"
 import { defaultKeys, Keybindings } from "../src/keybindings.ts"
 import { ReplyRenderers } from "../src/markdown-nodes.ts"
@@ -32,10 +32,20 @@ const env: BlockEnv = {
   nodes: new Map(),
 }
 
+test("a guessed (built-in default) context limit reads 128K? in the muted limit", () => {
+  const ctx = { theme, color: true, rows: 24 }
+  const info = { cwd: "~/dev/Amira", used: 16000, ...headerLimit(128000, { contextWindowSource: "default" }) }
+  const row = headerLine(info, 100, ctx)
+  expect(stripAnsi(row)).toEndWith("16K / 128K?  ")
+  expect(row).toContain(theme.muted(" / 128K?"))
+  expect(headerLimit(128000, { contextWindowSource: "catalog" })).toEqual({ limit: 128000 })
+  expect(headerLimit(128000, undefined)).toEqual({ limit: 128000 })
+})
+
 test("header context uses uppercase units and preserves the million decimal", () => {
   const ctx = { theme, color: true, rows: 24 }
   const row = headerLine({ cwd: "~/dev/Amira", used: 16000, limit: 1000000 }, 100, ctx)
-  expect(stripAnsi(row)).toEndWith("16K / 1.0M")
+  expect(stripAnsi(row)).toEndWith("16K / 1.0M  ")
   expect(visibleWidth(row)).toBe(100)
   expect(row).toContain(theme.fg2("16K"))
   expect(row).toContain(theme.muted(" / 1.0M"))

@@ -198,11 +198,18 @@ test("fetching models uses the typed key and says what the catalog knows", async
     {
       id: "deepseek-chat",
       contextWindow: 128000,
+      contextWindowSource: "catalog",
       maxOutput: 8192,
       cost: { input: 0.27, output: 1.1 },
       inCatalog: true,
     },
-    { id: "deepseek-new", contextWindow: 64000, maxOutput: 8192, inCatalog: false },
+    {
+      id: "deepseek-new",
+      contextWindow: 64000,
+      contextWindowSource: "settings",
+      maxOutput: 8192,
+      inCatalog: false,
+    },
   ])
   expect(models.map(modelNote)).toEqual([
     "deepseek-chat (128k context, $0.27/$1.1 per M)",
@@ -234,6 +241,7 @@ test("saving writes settings and auth.json, and the provider works at once", asy
     {
       id: "deepseek-chat",
       contextWindow: 128000,
+      contextWindowSource: "catalog",
       maxOutput: 8192,
       cost: { input: 0.27, output: 1.1 },
       inCatalog: true,

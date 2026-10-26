@@ -76,7 +76,8 @@ type UiRequestData =
    * "this session for bash (policy)", so the user knows how far it reaches. `other` offers a
    * free-text choice (answered with `{ other: text }`) meaning no, and what to do instead. A
    * client that knows neither may still answer a boolean. `preview` shows what is asked
-   * about as a tool presents it (a command, a diff), under the message.
+   * about as a tool presents it (a command, a diff), under the message. `tone: "warning"`
+   * marks a destructive question (deleting something); frontends draw it in their warning colour.
    */
   | {
       kind: "confirm"
@@ -85,6 +86,7 @@ type UiRequestData =
       always?: boolean | string
       other?: boolean
       preview?: ToolLine[]
+      tone?: "warning"
     }
   /** `secret` masks what is typed; the answer is never echoed, persisted or sent in ui.resolved. */
   | { kind: "input"; title: string; placeholder?: string; initial?: string; secret?: boolean }
@@ -288,7 +290,12 @@ export interface UiApi {
       >
     },
   ): Promise<SelectChoice | undefined>
-  confirm(title: string, message?: string, opts?: UiRequestOptions): Promise<boolean | undefined>
+  /** `tone: "warning"` marks a destructive question, drawn in the frontend's warning colour. */
+  confirm(
+    title: string,
+    message?: string,
+    opts?: UiRequestOptions & { tone?: "warning" },
+  ): Promise<boolean | undefined>
   input(
     title: string,
     opts?: UiRequestOptions & { placeholder?: string; initial?: string; secret?: boolean },

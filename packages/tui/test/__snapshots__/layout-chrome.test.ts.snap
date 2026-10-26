@@ -1,10 +1,10 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
-"  ⎇ main*  ~/dev/Amira  ·  remember last model                                 $0.42  ·  124K / 200K
+"  ⎇ main*  ~/dev/Amira  ·  remember last model                               $0.42  ·  124K / 200K  
 
                                                                                                     
-› The status bar feels cramped, can you make it clearer?                                     8:19 PM
+› The status bar feels cramped, can you make it clearer?                                   8:19 PM  
                                                                                                     
 
 ∴ Thought for 4.2s  ctrl+o to expand
@@ -23,10 +23,10 @@ exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
 `;
 
 exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
-"  ⎇ main*  ~/dev/Amira       $0.42  ·  124K / 200K
+"  ⎇ main*  ~/dev/Amira     $0.42  ·  124K / 200K  
 
                                                   
-› The status bar feels cramped, can you    8:19 PM
+› The status bar feels cramped, can you  8:19 PM  
   make it clearer?                                
                                                   
 
