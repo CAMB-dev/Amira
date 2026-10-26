@@ -2,7 +2,7 @@
 import type { AnyEvent, TuiSettings } from "@amira/api"
 import { DEFAULT_TUI_MODE } from "@amira/api"
 import { type Agent, amiraPath, createLocalAgentPort, listSessions, SessionStore } from "@amira/core"
-import { loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
+import { contentGeometry, loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import { ProcessTerminal } from "@amira/tui-kit"
 import { consoleCodePage } from "@amira/tui-kit/console-code-page"
 import { parseCliArgs, USAGE, UsageError } from "./args.ts"
@@ -333,8 +333,12 @@ async function run(argv: string[]): Promise<number> {
       mode: args.mode ?? config.settings.tui?.mode ?? DEFAULT_TUI_MODE,
       runningJobs: () => host.backgroundJobs.running().length,
     }).finally(() => frontend.detach())
+    const columns = process.stdout.columns || 80
     process.stdout.write(
-      exitNote(agentRef ?? agent, running(), args.cwd, host.backgroundJobs.running().length),
+      exitNote(agentRef ?? agent, running(), args.cwd, host.backgroundJobs.running().length, {
+        columns,
+        margin: contentGeometry(columns, 0, config.settings.tui ?? {}).left,
+      }),
     )
     return code
   } finally {

@@ -22,10 +22,10 @@ export function dockKeyHelp(keys: Keybindings): KeyHelp[] {
     { keys: keys.label("scroll.bottom") ?? "", description: "Follow new dock output" },
     { keys: "Wheel over dock", description: "Scroll only the dock under the pointer" },
     {
-      keys: `Tab${keys.label("view.focus") ? ` (${keys.label("view.focus")} if the view needs Tab)` : ""}`,
+      keys: `tab${keys.label("view.focus") ? ` (${keys.label("view.focus")} if the view needs Tab)` : ""}`,
       description: "Focus a selectable dock or return to the input",
     },
-    { keys: "Esc", description: "Focus a selectable dock when the input is empty; otherwise close it" },
+    { keys: "esc", description: "Focus a selectable dock when the input is empty; otherwise close it" },
   ].filter((key) => key.keys.length > 0)
 }
 

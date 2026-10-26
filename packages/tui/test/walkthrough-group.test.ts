@@ -171,7 +171,7 @@ for (const mode of ["fullscreen"] as const) {
         })
       view.render()
       expect(text()).toMatch(
-        /^└ ⠋ in the background\n {2}└ ⠋ workflow demo · 2 working · 0 tok · Explore · 0\/2 agents$/m,
+        /^└ ⠋ in the background\n {2}└ ⠋ working workflow demo · 2 working · 0 tok · Explore · 0\/2 agents$/m,
       )
       expect(text().match(/workflow demo/g)).toHaveLength(1)
       group.agents = { total: 2, working: 0, queued: 0, idle: 2, ended: 0 }
@@ -220,7 +220,7 @@ test("fullscreen: compact failed and idle-only groups never acquire successful r
     const idle = { ...group, agents: { ...group.agents, working: 0, idle: 1 } }
     event("group.update", { group: idle })
     view.render()
-    expect(text()).toMatch(/^└ ○ in the background\n {2}└ ○ workflow · 1 idle · 0 tok$/m)
+    expect(text()).toMatch(/^└ ○ in the background\n {2}└ ○ idle {4}workflow · 1 idle · 0 tok$/m)
     event("subagent.end", {
       childSessionId: "member",
       status: "error",
@@ -237,7 +237,7 @@ test("fullscreen: compact failed and idle-only groups never acquire successful r
       },
     })
     view.render()
-    expect(text()).toMatch(/^└ ✗ in the background\n {2}└ ✗ workflow · 1 failed · 0 tok$/m)
+    expect(text()).toMatch(/^└ ✗ in the background\n {2}└ ✗ failed {2}workflow · 1 failed · 0 tok$/m)
     expect(text()).not.toContain("1/1 done")
   } finally {
     view.stop()

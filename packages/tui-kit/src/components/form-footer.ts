@@ -113,13 +113,21 @@ export function renderFormFooter(
   out.push(truncateToWidth(row.trimEnd(), width))
   const hintWidth = Math.max(0, width - state.hintInset)
   const sep = separator(ctx)
-  const shortcuts = `^S save${state.actions.some((f) => f.def.shortcut === "ctrl+t") ? ` ${sep} ^T test` : ""}${state.preview ? ` ${sep} ^P preview` : ""} ${sep} Esc back`
+  // Key labels are lower-case everywhere, as keyLabel spells them ("ctrl+s", "esc").
+  const ctrl = (name: string) => keyLabel({ name, ctrl: true })
+  const tab = keyLabel({ name: "tab" })
+  const enter = keyLabel({ name: "enter" })
+  const shortcutsWith = (preview: boolean) =>
+    `${ctrl("s")} save${state.actions.some((f) => f.def.shortcut === "ctrl+t") ? ` ${sep} ${ctrl("t")} test` : ""}${preview && state.preview ? ` ${sep} ${ctrl("p")} preview` : ""} ${sep} ${keyLabel({ name: "escape" })} back`
+  const shortcuts = shortcutsWith(true)
   const hint = state.card
     ? ([
-        `${chrome.arrowUp}${chrome.arrowDown}/Tab move ${sep} ${chrome.arrowLeft}${chrome.arrowRight} adjust ${sep} Enter edit ${sep} ${shortcuts}`,
-        `${chrome.arrowUp}${chrome.arrowDown}/Tab ${sep} ${chrome.arrowLeft}${chrome.arrowRight} ${sep} Enter ${sep} ${shortcuts}`,
+        `${chrome.arrowUp}${chrome.arrowDown}/${tab} move ${sep} ${chrome.arrowLeft}${chrome.arrowRight} adjust ${sep} ${enter} edit ${sep} ${shortcuts}`,
+        `${chrome.arrowUp}${chrome.arrowDown}/${tab} ${sep} ${chrome.arrowLeft}${chrome.arrowRight} ${sep} ${enter} ${sep} ${shortcuts}`,
         shortcuts,
-      ].find((variant) => visibleWidth(variant) <= hintWidth) ?? shortcuts)
+        // The preview section has its own row to open it; its shortcut goes first.
+        shortcutsWith(false),
+      ].find((variant) => visibleWidth(variant) <= hintWidth) ?? shortcutsWith(false))
     : formHint(ctx, state.focus, state.field)
   const hintRow = (line: string) => " ".repeat(state.hintInset) + theme.muted(line)
   if (!state.card && state.field?.def.type === "multiselect" && width >= 40 && ctx.rows >= 10) {
@@ -141,7 +149,7 @@ function formHint(ctx: RenderContext, focus: string, f: FormFieldState | undefin
   const horizontal = pair(arrows.arrowLeft, arrows.arrowRight)
   const common = `${tab}/${vertical} move ${sep} ${save} save ${sep} ${esc} cancel`
   if (focus === PREVIEW)
-    return `${vertical}/PgUp/PgDn scroll preview ${sep} ${tab} move ${sep} ${save} save ${sep} ${esc} cancel`
+    return `${vertical}/${keyLabel({ name: "pageup" })}/${keyLabel({ name: "pagedown" })} scroll preview ${sep} ${tab} move ${sep} ${save} save ${sep} ${esc} cancel`
   if (!f)
     return focus.startsWith("\0section:")
       ? `${enter}/${space} expand or collapse ${sep} ${horizontal} open/close ${sep} ${common}`

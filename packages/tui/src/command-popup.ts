@@ -8,7 +8,7 @@ import {
   type RenderContext,
   truncateToWidth,
 } from "@amira/tui-kit"
-import { glyphs, viewEllipsis } from "./glyphs.ts"
+import { viewEllipsis } from "./glyphs.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { pickerRows } from "./picker.ts"
 
@@ -260,7 +260,7 @@ export class CommandPopup implements Component {
       // for text that goes on after the name ("$100 is the price"): that is a message.
       if (!r.command && /^\S+$/.test(r.text.trim())) {
         const what = this.sigil === "$" ? "skill" : "command"
-        return [muted(truncateToWidth(`  no ${what} matches ${r.text.trim()}`, width, glyphs.more))]
+        return [muted(truncateToWidth(`  no ${what} matches ${r.text.trim()}`, width, viewEllipsis()))]
       }
       // No candidates for the arguments: show how the command is used instead.
       const info = this.source.list().find((c) => c.name === r.command)

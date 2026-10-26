@@ -4,7 +4,7 @@ import { type AgentPort, type CommandHost, type CommandRunOptions, frontendIdent
 import { type RenderContext, Spinner } from "@amira/tui-kit"
 import { bindLocalCommandContext } from "../../../core/src/frontend/operations.ts"
 import { userText } from "../format.ts"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { ACTIONS, type Action, type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { activityRow } from "./activity-row.ts"
 import { dockKeyHelp } from "./dock.ts"
@@ -152,7 +152,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
         focusConversation: options.focusConversation,
         unfocusConversation: options.unfocusConversation,
         keys: keyHelp,
-        glyphs: () => ({ separator: glyphs.separator, more: glyphs.more }),
+        glyphs: () => ({ separator: glyphs.separator, more: viewEllipsis() }),
         signal: abort.signal,
         ...origin,
         onSend: (text, sendOptions) => {
@@ -183,7 +183,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
               line,
               invocationId,
               keys: keyHelp(),
-              glyphs: { separator: glyphs.separator, more: glyphs.more },
+              glyphs: { separator: glyphs.separator, more: viewEllipsis() },
             },
             { signal: abort.signal, sessionGeneration: generation },
           )

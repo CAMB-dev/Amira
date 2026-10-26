@@ -11,7 +11,7 @@ import {
   visibleWidth,
 } from "@amira/tui-kit"
 import { dialogFrame } from "./dialog-frame.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { fitHint, type HintItem } from "./hint.ts"
 
 export type DialogHints = ((HintItem & { key?: KeyEvent }) | false | "" | null | undefined)[]
@@ -218,7 +218,7 @@ export function fitTitle(title: string[], rows: number): string[] {
   if (rows <= 0) return []
   if (title.length <= rows) return title
   const kept = title.slice(0, Math.max(1, rows))
-  kept[kept.length - 1] = `${kept[kept.length - 1]}${glyphs.more}`
+  kept[kept.length - 1] = `${kept[kept.length - 1]}${viewEllipsis()}`
   return kept
 }
 
@@ -227,7 +227,7 @@ export function cutEnd(lines: string[], rows: number, theme: Theme): string[] {
   if (lines.length <= rows) return lines
   if (rows <= 0) return []
   const kept = lines.slice(0, rows)
-  kept[rows - 1] = `${kept[rows - 1]}${theme.muted(` ${glyphs.more}`)}`
+  kept[rows - 1] = `${kept[rows - 1]}${theme.muted(` ${viewEllipsis()}`)}`
   return kept
 }
 
@@ -240,13 +240,13 @@ export function cutMiddle(lines: string[], rows: number, theme: Theme, width: nu
   if (rows <= 0) return []
   if (rows === 2) {
     // Keep both ends even when a standalone omission row would consume the tail.
-    const marker = theme.muted(`${glyphs.more} ${lines.length - 2} more lines ${glyphs.more}`)
-    const head = truncateToWidth(lines[0]!, Math.max(1, width - visibleWidth(marker) - 1), glyphs.more)
+    const marker = theme.muted(`${viewEllipsis()} ${lines.length - 2} more lines ${viewEllipsis()}`)
+    const head = truncateToWidth(lines[0]!, Math.max(1, width - visibleWidth(marker) - 1), viewEllipsis())
     return [`${head} ${marker}`, lines.at(-1)!]
   }
   const keep = rows - 1
   const head = Math.ceil(keep / 2)
   const tail = keep - head
-  const marker = theme.muted(`${glyphs.more} ${lines.length - keep} more lines ${glyphs.more}`)
+  const marker = theme.muted(`${viewEllipsis()} ${lines.length - keep} more lines ${viewEllipsis()}`)
   return [...lines.slice(0, head), marker, ...lines.slice(lines.length - tail)]
 }

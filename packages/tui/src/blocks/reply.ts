@@ -14,7 +14,7 @@ import {
 } from "@amira/tui-kit"
 import { expandTabs } from "../diff-view.ts"
 import { replyRows, stampRows, timestampIn, timestampRoom } from "../format.ts"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { apiNode, imageFallback, nodeRows, type ReplyRenderers } from "../markdown-nodes.ts"
 import { ReplyAlternatives } from "../reply-alternatives.ts"
 import { type CopyRow, sliceCells } from "../text-selection.ts"
@@ -69,7 +69,7 @@ export function foldMarkdown(source: string, folded: boolean): { text: string; f
             out.splice(
               fence.start + FOLDED_CODE_KEEP,
               body - FOLDED_CODE_KEEP,
-              `${glyphs.more} ${body - FOLDED_CODE_KEEP} more lines`,
+              `${viewEllipsis()} ${body - FOLDED_CODE_KEEP} more lines`,
             )
         }
         fence = undefined

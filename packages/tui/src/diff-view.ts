@@ -13,7 +13,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { type Range, wordDiff } from "./word-diff.ts"
 
 const SIGNS: Partial<Record<ToolLine["kind"], string>> = {
@@ -129,9 +129,9 @@ export function renderToolLines(
 ): string[] {
   // Views pass their own decorations; they can be wider than the legacy one-cell marker, and
   // both the last kept wrap row and the gap must reserve their real display width. Callers
-  // that pass nothing keep the historical glyphs and one-cell reservation.
-  const marker = view?.ellipsis ?? glyphs.more
-  const reserve = view === undefined ? 1 : textWidth(view.ellipsis)
+  // that pass nothing get the host cut marker (three periods in ASCII mode).
+  const marker = view?.ellipsis ?? viewEllipsis()
+  const reserve = textWidth(marker)
   const gap = view?.gap ?? HUNK_GAP
   const isView = view !== undefined
   const numbered = lines.filter((l) => l.lineNo !== undefined)
@@ -183,7 +183,9 @@ export function renderToolLines(
     // A file's header starts at the edge, above the numbers of its lines; other lines (a note
     // such as "… 12 more lines") line up with the text of the diff lines around them.
     const header = l.kind === "muted" && FILE_HEADER.test(text)
-    const no = header ? "" : `${gutter ? `${" ".repeat(gutter)} ` : ""}${signed ? "  " : ""}`
+    // File content keeps its line numbers in the gutter, as diff lines do.
+    const number = l.lineNo === undefined ? " ".repeat(gutter) : String(l.lineNo).padStart(gutter)
+    const no = header ? "" : `${gutter ? `${number} ` : ""}${signed ? "  " : ""}`
     const prefix = `${indent}${no}`
     const row = truncateToWidth(`${prefix}${text}`, width, marker)
     const style = header ? (themeToken(theme, "path") ?? theme.muted) : styleOf(l.kind, theme)
@@ -473,7 +475,7 @@ export class DiffView implements Component {
     const shown = this.lines.length > this.maxLines ? this.lines.slice(0, this.maxLines) : this.lines
     const out = renderToolLines(shown, ctx.theme, width)
     if (shown.length < this.lines.length) {
-      out.push(ctx.theme.muted(`${glyphs.more} ${plural(this.lines.length - shown.length, "more line")}`))
+      out.push(ctx.theme.muted(`${viewEllipsis()} ${plural(this.lines.length - shown.length, "more line")}`))
     }
     return out
   }

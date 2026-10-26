@@ -77,8 +77,34 @@ function setup({
     Array.from({ length: rows - 4 }, (_, i) => `${i}: ${"transcript ".repeat(12)}`.slice(0, columns)),
   )
   view.start()
-  return { view, screen, dimmed, moveCard: (row: number) => (cardRow = row) }
+  const resize = (c: number, r: number) => {
+    screen.resize(c, r)
+    terminal.setSize(c, r)
+  }
+  return { view, screen, dimmed, resize, moveCard: (row: number) => (cardRow = row) }
 }
+
+test("a resize draws the backdrop again at the new size, never the old layout cut by the card", async () => {
+  const { view, screen, resize } = setup()
+  try {
+    view.openOverlay()
+    view.renderOverlay()
+    const old = [...screen.lines]
+    resize(140, 36)
+    await Bun.sleep(30)
+    view.renderOverlay()
+    const covered = [...screen.lines]
+    view.closeOverlay()
+    // Around the card, the rows are the transcript as it is drawn at 140x36 now.
+    const fresh = [...screen.lines]
+    expect(covered).not.toEqual(old)
+
+    for (const [i, row] of covered.entries()) if (i !== 10) expect(row).toBe(fresh[i]!)
+    expect(covered[10]).toContain("card")
+  } finally {
+    view.stop()
+  }
+})
 
 test("card preserves the last transcript frame above, below and on both sides, without its caret", () => {
   const { view, screen, dimmed, moveCard } = setup()

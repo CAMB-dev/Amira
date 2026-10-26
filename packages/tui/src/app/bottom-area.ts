@@ -1,4 +1,5 @@
 // Owns bottom-area layout: panels, activity, pending messages, input, status and hints.
+import { AGENT_STATUS_BADGES } from "@amira/api"
 import type { Agent, AgentPort, PanelRegistry, StatusRegistry } from "@amira/core"
 import {
   bold,
@@ -6,22 +7,24 @@ import {
   type InputEvent,
   type MouseInput,
   type RenderContext,
-  type Spinner,
+  Spinner,
   type Theme,
   translateMouse,
   truncateToWidth,
 } from "@amira/tui-kit"
 import type { CommandPopup } from "../command-popup.ts"
 import type { Dialog } from "../dialog.ts"
-import { renderToolLines } from "../diff-view.ts"
 import type { FilePicker } from "../file-picker.ts"
-import { glyphs } from "../glyphs.ts"
+import { chromeText, glyphs, viewEllipsis } from "../glyphs.ts"
+import { CONTENT_INSET } from "../grid.ts"
 import { fitHint } from "../hint.ts"
 import type { HistorySearch } from "../history-search.ts"
 import { InputBox } from "../input-box.ts"
 import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
+import { badgeSymbol, spinnerFrameAt, statusBadge } from "../status-badge.ts"
 import { type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
+import { renderViewLines } from "../view-lines.ts"
 import type { TurnActivity } from "./activity.ts"
 import type { CommandRunner } from "./command-runner.ts"
 import type { DockedView } from "./dock.ts"
@@ -54,13 +57,14 @@ export interface BottomAreaDeps {
   /** Command activity survived the same final viewport budget. */
   commandVisible?: (visible: boolean) => void
   themePreview?: () => boolean
-  view: () => Pick<TranscriptView, "runningTools" | "capturing">
+  /** Its requestRender redraws soon: a working badge's spinner keeps turning with it. */
+  view: () => Pick<TranscriptView, "runningTools" | "capturing" | "requestRender">
   noticeStrip: () => NoticeStrip
   dialogs: () => readonly Dialog[]
   askDialogVisible?: () => boolean
   steering: () => readonly string[]
   queued: () => readonly Outgoing[]
-  hintNote: () => { text: string; until: number } | undefined
+  hintNote: () => { text: string; until: number; key?: string } | undefined
   commandActivity: () => Pick<CommandRunner, "spinner" | "render" | "hasCancellable">
   canRewind: () => boolean
   status: StatusRegistry
@@ -95,6 +99,28 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     if (filePicker.visible)
       return { lines: (w, ctx, maxRows) => filePicker.render(w, ctx, maxRows), hint: fileHint }
     return undefined
+  }
+  /** A redraw a working badge asked for, so its spinner turns while nothing else draws. */
+  let badgeTick: ReturnType<typeof setTimeout> | undefined
+  const spinNext = () => {
+    if (badgeTick !== undefined) return
+    badgeTick = setTimeout(() => {
+      badgeTick = undefined
+      deps.view().requestRender()
+    }, Spinner.INTERVAL_MS)
+  }
+  /**
+   * Extension status text in the host's glyphs: field separators follow the theme, and a
+   * leading working badge symbol turns as the shared spinner.
+   */
+  const statusText = (item: StatusEntry): StatusEntry => {
+    let text = item.text.replaceAll(" · ", ` ${glyphs.separator} `)
+    const working = `${AGENT_STATUS_BADGES.working.symbol} `
+    if (text.startsWith(working)) {
+      spinNext()
+      text = `${badgeSymbol("working", spinnerFrameAt(Date.now()))} ${text.slice(working.length)}`
+    }
+    return text === item.text ? item : { ...item, text }
   }
   const newlineKey = keys.label("newline", reaches)
   const queueKey = keys.label("queue")
@@ -132,7 +158,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const fastRequested = agent?.fastMode ?? state?.fastMode?.requested
     const fastApplied = agent?.fastModeApplied ?? state?.fastMode?.applied
     return [
-      ...items.filter((i) => i.id !== "model"),
+      ...items.filter((i) => i.id !== "model").map(statusText),
       {
         id: "model",
         align: "right",
@@ -190,22 +216,38 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let overlayListWidth = 0
   let overlayListInset = 0
 
-  /** The panels' rows; unfolded, a blank row sets each panel apart from the one before. */
-  const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) =>
-    (deps.panels?.size && deps.agent()
-      ? deps.panels.snapshot({
-          width,
-          now: Date.now(),
-          spinner: deps.commandActivity().spinner,
-          sessionId: deps.agent()!.sessionId,
-          data: deps.agent()!.data,
-          collapsed,
-        })
-      : []
+  /**
+   * The panels' rows on the transcript's content column, beside the input box's text;
+   * unfolded, a blank row sets each panel apart from the one before.
+   */
+  const panelLines = (width: number, ctx: RenderContext, collapsed: boolean) => {
+    const inset = inputBox.framed(width) ? CONTENT_INSET : ""
+    const room = Math.max(1, width - inset.length)
+    const now = Date.now()
+    let spinning = false
+    const rows = (
+      deps.panels?.size && deps.agent()
+        ? deps.panels.snapshot({
+            width: room,
+            now,
+            spinner: deps.commandActivity().spinner,
+            statusBadge: (state, options) => {
+              if (state === "working") spinning = true
+              return statusBadge(state, spinnerFrameAt(now), options)
+            },
+            glyphs: { separator: glyphs.separator, more: viewEllipsis() },
+            sessionId: deps.agent()!.sessionId,
+            data: deps.agent()!.data,
+            collapsed,
+          })
+        : []
     )
-      .map((p) => renderToolLines(p.lines, ctx.theme, width))
+      .map((p) => renderViewLines(p.lines, ctx.theme, room).map((row) => inset + row))
       .filter((rows) => rows.length > 0)
       .flatMap((rows, i) => (i > 0 && !collapsed ? ["", ...rows] : rows))
+    if (spinning) spinNext()
+    return rows
+  }
 
   let activityRows: string[] = []
   let dockRoom = 0
@@ -253,7 +295,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       ...deps
         .noticeStrip()
         .render(ctx.theme)
-        .map((l) => truncateToWidth(l, width, "…")),
+        .map((l) => truncateToWidth(l, width, viewEllipsis())),
       ...pendingMessageRows(
         [
           ...deps.steering().map((text) => ({ label: "steering", text })),
@@ -274,9 +316,12 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         askDialogVisible: deps.askDialogVisible?.(),
         preview: deps.themePreview?.(),
         spinner,
-        stop: deps.dock?.()
-          ? `${keyLabel({ name: "escape" })} close dock`
-          : `${keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
+        // While a dialog has the keys, its own footer says what Esc does there.
+        stop: deps.dialogs().length
+          ? ""
+          : deps.dock?.()
+            ? `${keyLabel({ name: "escape" })} close dock`
+            : `${keys.label("interrupt") ?? keyLabel({ name: "escape" })} stop`,
       })
       return activityRows
     }),
@@ -327,7 +372,14 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       if (!showHint || deps.dialogs()[0] || inputList()) return []
       const hintNote = deps.hintNote()
       if (hintNote && Date.now() < hintNote.until) {
-        return [`  ${ctx.theme.muted(truncateToWidth(hintNote.text, Math.max(1, width - 2), glyphs.more))}`]
+        const text = truncateToWidth(chromeText(hintNote.text), Math.max(1, width - 2), viewEllipsis())
+        // A key the note names is bold, as in the key hints it stands in for.
+        const at = hintNote.key ? text.indexOf(hintNote.key) : -1
+        return [
+          at < 0
+            ? `  ${ctx.theme.muted(text)}`
+            : `  ${ctx.theme.muted(text.slice(0, at))}${bold(ctx.theme.fg2(hintNote.key!))}${ctx.theme.muted(text.slice(at + hintNote.key!.length))}`,
+        ]
       }
       const focusHint = deps.focusHint?.(ctx.theme, Math.max(1, width - 2))
       if (focusHint) return [`  ${focusHint}`]

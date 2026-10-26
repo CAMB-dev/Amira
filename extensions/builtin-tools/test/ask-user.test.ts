@@ -114,6 +114,8 @@ test("declined and unavailable details still expose offered questions at full de
     expect(askUserPresenter.result!(view)).toContain(
       "declined" in outcome ? "declined" : "nobody could answer",
     )
+    // No answer came: the row's mark is not a success check.
+    expect(askUserPresenter.outcome!(view)).toBe("interrupted")
   }
   const legacy: ToolCallView<AskUserParams, AskUserDetails> = {
     args: { questions: QUESTIONS },

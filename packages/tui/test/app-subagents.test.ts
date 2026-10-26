@@ -110,7 +110,7 @@ test("with sub-agents running, Esc says they go on, and quitting takes a second 
   })
   terminal.send("\x03")
   await waitFor(
-    () => live().includes("1 sub-agent still running — ctrl+c again to stop them and quit"),
+    () => live().includes("1 sub-agent still running — ctrl+c again to stop it and quit"),
     "the warning",
   )
   await Bun.sleep(50)
@@ -427,7 +427,7 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   await idle()
   await waitFor(
     () =>
-      /^└ flow {2}✓ Started in the background +\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Explore · 0\/3 agents\n/m.test(
+      /^└ flow {2}✓ Started in the background +\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working workflow demo · 3 working · \S+ tok · Explore · 0\/3 agents\n/m.test(
         live(),
       ),
     "one line for the group",
@@ -435,7 +435,7 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   expect(live()).not.toContain("Scan api")
   group!.setStatus("Verify · 2/3 agents")
   await waitFor(
-    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Verify · 2\/3 agents/.test(live()),
+    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working workflow demo · 3 working · \S+ tok · Verify · 2\/3 agents/.test(live()),
     "the new status",
   )
   release()
@@ -490,7 +490,7 @@ for (const mode of ["fullscreen"] as const) {
       await s.shows("Started group")
       await waitFor(
         () =>
-          /^└ ([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) in the background\n {2}└ \1 workflow demo · 1 working · \S+ tok · Explore · 0\/1 agents$/m.test(
+          /^└ ([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) in the background\n {2}└ \1 working workflow demo · 1 working · \S+ tok · Explore · 0\/1 agents$/m.test(
             s.live(),
           ),
         "the background tree",
@@ -506,7 +506,7 @@ for (const mode of ["fullscreen"] as const) {
       await s.bus.flush()
       await waitFor(
         () =>
-          /^└ ✓ in the background\n {2}└ ✓ workflow demo · 1\/1 done · 0 tok · Explore · 0\/1 agents$/m.test(
+          /^└ ✓ in the background\n {2}└ ✓ done {4}workflow demo · 1\/1 done · 0 tok · Explore · 0\/1 agents$/m.test(
             s.live(),
           ),
         "the ended background tree",

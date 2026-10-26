@@ -1,5 +1,6 @@
 import path from "node:path"
 import {
+  AGENT_STATUS_BADGES,
   defineExtension,
   formatTokens,
   hasUnpricedSearch,
@@ -185,9 +186,10 @@ export default defineExtension((api) => {
         monitors ? plural(monitors, "monitor") : "",
       ]
         .filter(Boolean)
-        .join(" | ")
+        .join(" · ")
+      // The host turns a leading working symbol into its spinner (and its ASCII frames).
       const active = live.length + running > 0
-      return counts ? `${active ? "* " : ""}${counts}` : ""
+      return counts ? `${active ? `${AGENT_STATUS_BADGES.working.symbol} ` : ""}${counts}` : ""
     },
   })
   api.registerStatusItem({

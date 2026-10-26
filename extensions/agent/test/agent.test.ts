@@ -661,7 +661,7 @@ test(
     await bus.flush()
     const [notice] = notices(root)
     const [head, kept] = notice!.shown.split("\n")
-    expect(head).toMatch(/^Do x · coder · \d+s · \d+ tok · provider exploded$/)
+    expect(head).toMatch(/^Do x · coder · \d+(?:\.\d)?s · \d+ tok · provider exploded$/)
     expect(notice?.display.notices?.[0]?.status).toBe("failed")
     expect(notice?.display.notices?.[1]?.status).toBeUndefined()
     expect(kept).toMatch(/^ {2}changes kept: 1 file · .+\.diff$/)
@@ -958,9 +958,9 @@ test("by default sub-agents run in the background and their result wakes the idl
   await bus.flush()
   const [notice] = notices(root)
   expect(notice?.display.notices).toEqual([
-    { status: "done", text: expect.stringMatching(/^Do look · explorer · \d+s · \d+ tok$/) },
+    { status: "done", text: expect.stringMatching(/^Do look · explorer · \d+(?:\.\d)?s · \d+ tok$/) },
   ])
-  expect(notice?.shown).toMatch(/^Do look · explorer · \d+s · \d+ tok$/)
+  expect(notice?.shown).toMatch(/^Do look · explorer · \d+(?:\.\d)?s · \d+ tok$/)
   expect(notice?.text).toContain("the user did not write this message")
   expect(notice?.text).toContain(`## Do look · explorer · ${childId} · done`)
   expect(notice?.text).toContain("found it in a.ts")
@@ -994,10 +994,12 @@ test("a background sub-agent that failed says why in its notice line", async () 
   expect(notices(root)[0]?.display.notices).toEqual([
     {
       status: "failed",
-      text: expect.stringMatching(/^Do look · explorer · \d+s · \d+ tok · HTTP 429: slow down$/),
+      text: expect.stringMatching(/^Do look · explorer · \d+(?:\.\d)?s · \d+ tok · HTTP 429: slow down$/),
     },
   ])
-  expect(notices(root)[0]?.shown).toMatch(/^Do look · explorer · \d+s · \d+ tok · HTTP 429: slow down$/)
+  expect(notices(root)[0]?.shown).toMatch(
+    /^Do look · explorer · \d+(?:\.\d)?s · \d+ tok · HTTP 429: slow down$/,
+  )
 })
 
 test("a background sub-agent the user stopped does not wake the commander; its report waits", async () => {
@@ -1123,7 +1125,7 @@ test.each(["maxTurns", "graceful stop", "empty note"] as const)(
       await until(() => replied(root, "noted graceful ending"))
       await bus.flush()
       expect(notices(root)[0]?.display.notices).toEqual([
-        { status: "stopped", text: expect.stringMatching(/^Do look · explorer · \d+s · \d+ tok/) },
+        { status: "stopped", text: expect.stringMatching(/^Do look · explorer · \d+(?:\.\d)?s · \d+ tok/) },
       ])
     } finally {
       tree.spawn = spawn

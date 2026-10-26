@@ -582,6 +582,11 @@ export class OverlayManager {
   }
 
   /** A picker owned by the TUI, sharing focus and the waiting-form lifecycle with extension dialogs. */
+  /** The echo a local picker leaves, as answered ui dialogs do: "Choose a theme › amira". */
+  echoLocalDialog(dialog: Dialog, answer: DialogAnswer): void {
+    this.deps.view().dialogEcho((width) => dialogEchoLines(dialog.request, answer, this.deps.theme, width))
+  }
+
   openLocalDialog(dialog: Dialog): () => void {
     this.dialogs.push(dialog)
     this.waitingChanged("opened")

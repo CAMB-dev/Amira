@@ -1,21 +1,26 @@
 import { truncateToWidth } from "@amira/tui-kit"
-import { LinesBlock, ToolBlock } from "../blocks.ts"
+import { type BlockEnv, LinesBlock, ToolBlock } from "../blocks.ts"
 import { glyphs } from "../glyphs.ts"
 import type { TranscriptPane } from "../transcript-pane.ts"
 
 /** Transient transcript chrome: never stored, printed on exit, or copied as content. */
 export function runningBoundary(pane: TranscriptPane) {
-  const rule = new LinesBlock(
-    "notice",
-    (width, theme) => [truncateToWidth(theme.muted(`  ${glyphs.rule.repeat(3)}`), width)],
-    "",
-  )
+  /** The running call the rule introduces; a hidden one (a question asked) takes no rule. */
+  let running: ToolBlock | undefined
+  const rule = new (class extends LinesBlock {
+    override lines(env: BlockEnv): string[] {
+      return running?.hidden(env) ? [] : super.lines(env)
+    }
+    override cacheVersion(env: BlockEnv): number | string {
+      return running?.hidden(env) ? `${this.version}:hidden` : this.version
+    }
+  })("notice", (width, theme) => [truncateToWidth(theme.muted(`  ${glyphs.rule.repeat(3)}`), width)], "")
   rule.copyRows = (plain) => plain.map((text) => ({ from: text.length, to: text.length }))
   const clear = () => pane.remove(rule)
   return {
     clear,
     update(calls: readonly ToolBlock[]) {
-      const running = calls.find((b) => b.started && !b.end)
+      running = calls.find((b) => b.started && !b.end)
       if (!running) return clear()
       const before = pane.blocks
         .slice(0, running.index)

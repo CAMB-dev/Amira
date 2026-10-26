@@ -117,7 +117,8 @@ test("with providers but no model picked, a message says to pick one and stays i
 
 test("a banner wider than the terminal wraps at a word, not where the terminal cuts it", async () => {
   const { terminal, all, exited } = await setup([], { cols: 24 })
-  expect(all()).toContain("Amira · mock/m1 ·\n  /work/proj")
+  // Too narrow for the cwd after the model: it gets a row of its own, no "·" left dangling.
+  expect(all()).toContain("Amira · mock/m1\n  /work/proj")
   terminal.send("\x03")
   expect(await exited).toBe(0)
 })
@@ -488,8 +489,11 @@ test("the activity label names the most specific activity", () => {
     "compacting on the server",
   )
   const retry = { attempt: 2, maxRetries: 3, status: 429, kind: "rate", at: Date.now() + 5500 }
-  expect(activityLabel({ ...base, running: ["bash"], retry })).toBe("retrying in 6s (2/3) · 429")
-  expect(retryLabel({ ...retry, status: undefined, at: 0 }, 1000)).toBe("retrying in 0s (2/3) · rate")
+  expect(activityLabel({ ...base, running: ["bash"], retry })).toBe(
+    "rate limited (429) · retrying in 6s · 2/3",
+  )
+  expect(retryLabel({ ...retry, status: 503 }, retry.at - 1000)).toBe("HTTP 503 · retrying in 1s · 2/3")
+  expect(retryLabel({ ...retry, status: undefined, at: 0 }, 1000)).toBe("rate · retrying in 0s · 2/3")
   expect(activityLabel({ ...base, preparing: "write", waiting: true })).toBe("waiting for you")
   expect(activityLabel({ ...base, thinking: true, retrying: "retrying (2/3)" })).toBe("retrying (2/3)")
 })
@@ -515,10 +519,18 @@ test("while a failed request waits to be sent again, the activity line says so",
     { cols: 100 },
   )
   terminal.send("hi\r")
-  await waitFor(() => activity("Retrying in 1s \\(1/3\\) · 429", false).test(live()), "the retry line")
+  // A countdown, not an ongoing activity: no ellipsis, and only the turn's clock on the right.
+  await waitFor(
+    () =>
+      new RegExp(
+        `^${SPINNER} Rate limited \\(429\\) · retrying in 1s · 1/3 +${ELAPSED} {3}esc stop$`,
+        "m",
+      ).test(live()),
+    "the retry line",
+  )
   await shows("got through")
   await idle()
-  expect(live()).not.toContain("Retrying")
+  expect(live()).not.toContain("retrying")
   terminal.send("\x03")
   await exited
 })

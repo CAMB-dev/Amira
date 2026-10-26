@@ -3,7 +3,7 @@ import type { ToolLine, ViewLine, ViewSegment } from "@amira/api"
 import { type Theme, themeToken, truncateToWidth } from "@amira/tui-kit"
 import { renderToolLines, terminalText, type ViewMarkers } from "./diff-view.ts"
 import { userLines } from "./format.ts"
-import { asciiGlyphs, viewEllipsis, viewGap, viewSeparator } from "./glyphs.ts"
+import { asciiGlyphs, chromeText, viewEllipsis, viewGap, viewSeparator } from "./glyphs.ts"
 import { animationText } from "./view-animation.ts"
 
 const CHIP_TOKENS = {
@@ -33,7 +33,8 @@ export function segmentText(parts: ViewSegment[], theme: Theme): string {
   const ascii = asciiGlyphs()
   return parts
     .map((part) => {
-      const text = animationText(part, terminalText(part.text))
+      // Extension-composed chrome: separators and cut marks follow the glyph set (ASCII stays ASCII).
+      const text = animationText(part, terminalText(chromeText(part.text)))
       if (part.kind !== "chip") return theme[part.kind](text)
       const tone = part.tone ?? "neutral"
       // Font-limited themes keep label ends inside ASCII, where half blocks and thin bars

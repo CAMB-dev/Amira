@@ -12,7 +12,8 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { dockKeyHelp } from "./app/dock.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
+import { fitHint } from "./hint.ts"
 import {
   ACTIONS,
   type Action,
@@ -86,7 +87,7 @@ export class KeyReference implements Component {
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
     const head = [
-      truncateToWidth(`  ${bold(theme.text("Keys"))}`, width, glyphs.more),
+      truncateToWidth(`  ${bold(theme.text("Keys"))}`, width, viewEllipsis()),
       ...wrapText(
         "To change a key, map the action name after its description to keys in keybindings.json, in Amira's home folder (~/.amira unless AMIRA_HOME says otherwise).",
         Math.max(1, width - 2),
@@ -129,7 +130,7 @@ export class KeyReference implements Component {
     for (const g of groups) {
       if (out.length) out.push("")
       out.push(
-        `  ${(themeToken(theme, "heading") ?? theme.text)(bold(truncateToWidth(g.title, Math.max(1, width - 2), glyphs.more)))}`,
+        `  ${(themeToken(theme, "heading") ?? theme.text)(bold(truncateToWidth(g.title, Math.max(1, width - 2), viewEllipsis())))}`,
       )
       for (const r of g.rows) {
         const keyLines = r.keys ? wrapText(r.keys, keysWidth) : ["not bound"]
@@ -139,7 +140,7 @@ export class KeyReference implements Component {
           const k = keyLines[i] ?? ""
           const pad = " ".repeat(Math.max(0, keysWidth - visibleWidth(k)))
           const line = `  ${style(k)}${pad}  ${theme.muted(textLines[i] ?? "")}`
-          out.push(truncateToWidth(line, width, glyphs.more))
+          out.push(truncateToWidth(line, width, viewEllipsis()))
         }
       }
     }
@@ -160,9 +161,15 @@ export class KeyReference implements Component {
     const move = [glyphs.arrowUp, glyphs.arrowDown].join(
       glyphs.arrowUp.length === 1 && glyphs.arrowDown.length === 1 ? "" : "/",
     )
-    const hint = [...where, `${move} ${scroll} scroll`, `${keyLabel({ name: "escape" })} close`].join(
-      ` ${glyphs.separator} `,
+    // Narrow, whole items give way, the scroll keys first, so "esc close" stays.
+    const hint = fitHint(
+      [
+        ...where.map((text) => ({ text, priority: 2 })),
+        { text: `${move} ${scroll} scroll`, priority: 1 },
+        { text: `${keyLabel({ name: "escape" })} close`, priority: 4 },
+      ],
+      Math.max(1, width - 2),
     )
-    return `  ${theme.muted(truncateToWidth(hint, Math.max(1, width - 2), glyphs.more))}`
+    return `  ${theme.muted(hint)}`
   }
 }

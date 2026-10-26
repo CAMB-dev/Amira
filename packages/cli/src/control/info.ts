@@ -120,9 +120,10 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
     expectNotice: () => ctx.agent().expectNotice(),
     models: () => {
       const m = ctx.agent().model
-      // NO_MODEL is no choice to offer.
+      // NO_MODEL is no choice to offer. The order stays put when the model changes: the
+      // current one is added at the end only when no provider lists it.
       const current = isNoModel(m) ? [] : [`${m.provider}/${m.id}`]
-      return [...new Set([...current, ...ctx.ai.knownModels()])]
+      return [...new Set([...ctx.ai.knownModels(), ...current])]
     },
     setModel: (ref) => {
       ctx.idle("switch models")

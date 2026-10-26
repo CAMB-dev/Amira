@@ -253,9 +253,10 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJ
     if (call.result.isError || detail === "full") return out
     // A command that worked shows the end of what it printed, as it did while it ran.
     if (detail !== "summary" || tail <= 0) return []
-    while (out.length && !out.at(-1)!.text.trim()) out.pop()
-    if (out.length <= tail) return out
-    return [{ kind: "muted", text: `… ${plural(out.length - tail, "earlier line")}` }, ...out.slice(-tail)]
+    // The tail is the last lines that say something: blank ones would take its few rows.
+    const said = out.filter((line) => line.text.trim())
+    if (said.length <= tail) return said
+    return [{ kind: "muted", text: `… ${plural(said.length - tail, "earlier line")}` }, ...said.slice(-tail)]
   },
 }
 

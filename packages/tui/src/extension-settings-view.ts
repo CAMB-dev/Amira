@@ -27,7 +27,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { styledExtensionStatusBadge } from "./extension-status.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { imageFallback, nodeRows } from "./markdown-nodes.ts"
 
 export type ExtensionSettingsRequest = Extract<EventMap["ui.request"], { kind: "extension-settings" }>
@@ -408,7 +408,7 @@ export class ExtensionSettingsView implements Component {
     const title = truncateToWidth(
       `${bold(theme.accent(this.#backend.request.title))}${badge ? ` ${badge}` : ""}`,
       room,
-      glyphs.more,
+      viewEllipsis(),
     )
     // Short terminals keep the action keys and a focused control before optional preview/description.
     const footerRows = footer.slice(0, Math.max(1, Math.min(footer.length, height - 2)))
@@ -436,7 +436,7 @@ export class ExtensionSettingsView implements Component {
         truncateToWidth(
           `${this.#scope === "user" ? inverse(theme.accent("[ user ]")) : theme.muted("  user  ")}  ${this.#scope === "project" ? inverse(theme.accent("[ project ]")) : theme.muted("  project  ")}`,
           room,
-          glyphs.more,
+          viewEllipsis(),
         ),
       )
       if (!this.#saving) {
@@ -446,7 +446,7 @@ export class ExtensionSettingsView implements Component {
         ] as const) {
           // Do not turn a truncation marker into a scope button.
           const visible = visibleWidth(body.at(-1)!)
-          const limit = room < 21 ? Math.max(0, room - visibleWidth(glyphs.more)) : visible
+          const limit = room < 21 ? Math.max(0, room - visibleWidth(viewEllipsis())) : visible
           addBodyTarget({
             id: `scope:${scope}`,
             rect: { x, y: body.length - 1, width: Math.min(targetWidth, limit - x), height: 1 },
@@ -489,7 +489,7 @@ export class ExtensionSettingsView implements Component {
           truncateToWidth(
             theme.muted(`${waiting.length} dialogs wait: ${waiting.join(", ")}`),
             room,
-            glyphs.more,
+            viewEllipsis(),
           ),
         )
     }
@@ -549,10 +549,10 @@ export class ExtensionSettingsView implements Component {
     }
     const inline = visibleWidth(label) + 2 + visibleWidth(control) <= width
     const lines = inline
-      ? [truncateToWidth(`${labelStyle(label)}  ${control}`, width, glyphs.more)]
+      ? [truncateToWidth(`${labelStyle(label)}  ${control}`, width, viewEllipsis())]
       : [
-          truncateToWidth(labelStyle(label), width, glyphs.more),
-          truncateToWidth(`  ${control}`, width, glyphs.more),
+          truncateToWidth(labelStyle(label), width, viewEllipsis()),
+          truncateToWidth(`  ${control}`, width, viewEllipsis()),
         ]
     const x = inline ? visibleWidth(label) + 2 : 2
     const y = inline ? 0 : 1
@@ -564,7 +564,7 @@ export class ExtensionSettingsView implements Component {
       },
     ]
     const controlWidth = visibleWidth(control)
-    const limit = x + controlWidth <= width ? width : Math.max(0, width - visibleWidth(glyphs.more))
+    const limit = x + controlWidth <= width ? width : Math.max(0, width - visibleWidth(viewEllipsis()))
     const add = (id: string, column: number, size: number, action: SettingsMouseAction) => {
       const shown = Math.min(size, limit - column)
       if (shown > 0)
@@ -635,7 +635,7 @@ export class ExtensionSettingsView implements Component {
           truncateToWidth(
             this.#previewError ? `preview: ${this.#previewError}` : this.#previewRunning ? "previewing" : "",
             width,
-            glyphs.more,
+            viewEllipsis(),
           ),
         ),
       ]
@@ -645,7 +645,7 @@ export class ExtensionSettingsView implements Component {
         truncateToWidth(
           nodeRows(result.segments.slice(0, 900), ctx.theme, width, true).join(""),
           width,
-          glyphs.more,
+          viewEllipsis(),
         ),
       ]
     const fallback = () => imageFallback(result, [], ctx.theme, width).slice(0, budget)

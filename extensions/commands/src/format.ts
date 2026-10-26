@@ -41,7 +41,7 @@ export function windowLabel(tokens: number, source: ContextWindowSource | undefi
   if (source === "settings") return `${size} (your settings)`
   if (source === "provider") return `${size} (reported by the provider)`
   if (source === "catalog") return `${size} (from the model catalog)`
-  if (source === "default") return `${size} (default guess — set contextWindow for this model)`
+  if (source === "default") return `${size} (default guess; set contextWindow for this model)`
   return size
 }
 

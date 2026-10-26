@@ -1,4 +1,7 @@
 import {
+  AGENT_STATUS_BADGES,
+  type AgentStatusState,
+  agentStatusState,
   type BackgroundJobInfo,
   type BackgroundJobRegistry,
   type CommandContext,
@@ -7,10 +10,13 @@ import {
   type ExtensionAPI,
   formatElapsed,
   type PanelDefinition,
+  type PanelLine,
+  type PanelRenderOptions,
   plural,
   type SessionControl,
   type SubagentInfo,
   subagentTranscriptText,
+  type ViewSegment,
 } from "@amira/api"
 import { STOP_GRACE_MS } from "./jobs.ts"
 import { JOB_VIEW, jobsCommand, lastLine } from "./jobs-ui.ts"
@@ -18,8 +24,11 @@ import { JOB_VIEW, jobsCommand, lastLine } from "./jobs-ui.ts"
 interface Task {
   kind: "job" | "monitor" | "agent"
   id: string
-  state: BackgroundJobInfo["status"] | SubagentInfo["status"]
+  /** How the shared status badge shows it. */
+  state: AgentStatusState
   startedAt?: number
+  /** Set once it has ended, so its time stops there. */
+  endedAt?: number
   label: string
   last: string
 }
@@ -53,7 +62,7 @@ function tasks(
     ...registry.running().map((job) => ({
       kind: jobKind(job),
       id: job.id,
-      state: job.status,
+      state: "working" as const,
       startedAt: job.startedAt,
       label: oneLine(typeof job.meta.description === "string" ? job.meta.description : job.command),
       last: lastLine(registry, job.id),
@@ -64,7 +73,7 @@ function tasks(
       .map((agent) => ({
         kind: "agent" as const,
         id: agent.id,
-        state: agent.status,
+        state: agentStatusState(agent),
         startedAt: agent.startedAt,
         label: oneLine(agent.title || agent.task),
         last:
@@ -76,14 +85,69 @@ function tasks(
   ]
 }
 
-function taskRow(task: Task, now: number, width = 160): string {
-  const state = task.kind === "agent" ? ` ${task.state}` : ""
-  const time =
-    task.startedAt === undefined ? (state ? "" : " queued") : ` ${formatElapsed(now - task.startedAt)}`
-  const head = `${task.kind} ${task.id}${state}${time} | `
-  const room = Math.max(0, width - head.length)
-  const label = clip(task.label, task.last ? Math.floor(room / 2) : room, "...")
-  return clip(`${head}${label}${task.last ? ` | ${oneLine(task.last)}` : ""}`, width, "...")
+/** The task's name in lists: its id, and what it is when that is not a plain job. */
+const taskName = (task: Task) => (task.kind === "monitor" ? `${task.id} monitor` : task.id)
+const taskTime = (task: Task, now: number) =>
+  task.startedAt === undefined ? "" : formatElapsed((task.endedAt ?? now) - task.startedAt)
+
+/** A task that left the live list while it was still shown: its final state and end time. */
+function endedTask(task: Task, registry: BackgroundJobRegistry, session: SessionControl, now: number): Task {
+  if (task.kind === "agent") {
+    const agent = session.subagents().find((agent) => agent.id === task.id)
+    if (!agent) return { ...task, state: "stopped", endedAt: now }
+    const state = agentStatusState(agent)
+    const startedAt = agent.startedAt ?? task.startedAt
+    const endedAt =
+      startedAt !== undefined && agent.durationMs !== undefined ? startedAt + agent.durationMs : now
+    return {
+      ...task,
+      state: state === "working" || state === "queued" ? "stopped" : state,
+      startedAt,
+      endedAt,
+    }
+  }
+  const job = registry.get(task.id)
+  const state: AgentStatusState =
+    job?.status === "exited"
+      ? job.exitCode === 0
+        ? "done"
+        : "failed"
+      : job?.status === "failed"
+        ? "failed"
+        : "stopped"
+  return { ...task, state, endedAt: job?.endedAt ?? now }
+}
+
+/** "job1 · 7s · bun run dev --watch", as the /tasks picker and completions show a task. */
+function taskRow(task: Task, now: number, separator = "·"): string {
+  return [taskName(task), taskTime(task, now), task.label].filter(Boolean).join(` ${separator} `)
+}
+
+/**
+ * A panel row: the shared status badge, then name, elapsed time, label and last output line,
+ * the name and time padded so every row's columns line up.
+ */
+function taskSegments(
+  task: Task,
+  opts: PanelRenderOptions,
+  columns: { name: number; time: number },
+): ViewSegment[] {
+  const separator = ` ${opts.glyphs?.separator ?? "·"} `
+  const badge = AGENT_STATUS_BADGES[task.state]
+  const head: ViewSegment[] = [
+    ...(opts.statusBadge?.(task.state, { pad: true }) ?? [{ kind: badge.role, text: badge.label.padEnd(7) }]),
+    { kind: "muted", text: ` ${taskName(task).padEnd(columns.name)}${separator}` },
+    { kind: "muted", text: `${taskTime(task, opts.now).padStart(columns.time)}${separator}` },
+  ]
+  // Badge, name and time are one cell per character.
+  const room = Math.max(0, opts.width - head.reduce((n, part) => n + part.text.length, 0))
+  const last = oneLine(task.last)
+  const label = clip(task.label, last ? Math.max(8, Math.floor(room / 2)) : room, opts.glyphs?.more ?? "…")
+  return [
+    ...head,
+    { kind: "text", text: label },
+    ...(last ? [{ kind: "muted" as const, text: `${separator}${last}` }] : []),
+  ]
 }
 
 /** Jobs, monitors and live sub-agents share one foldable live panel. */
@@ -95,24 +159,31 @@ export function tasksPanel(
   return {
     id: "background-jobs",
     order: 10,
-    render({ width, now, collapsed }) {
+    render(opts) {
       const live = tasks(registry, session(), streams)
       if (!live.length) return []
-      const counts = ["running", "starting", "queued", "idle", "paused"]
+      const counts = (Object.keys(AGENT_STATUS_BADGES) as AgentStatusState[])
         .map((state) => {
           const count = live.filter((task) => task.state === state).length
-          return count ? `${count} ${state}` : ""
+          return count ? `${count} ${AGENT_STATUS_BADGES[state].label}` : ""
         })
         .filter(Boolean)
-      const lines = [
+      const separator = ` ${opts.glyphs?.separator ?? "·"} `
+      const lines: PanelLine[] = [
         {
-          kind: "muted" as const,
-          text: [plural(live.length, "background task"), ...counts, "/tasks to see or stop"].join(" | "),
+          kind: "muted",
+          text: [plural(live.length, "background task"), ...counts, "/tasks to see or stop"].join(separator),
         },
       ]
-      return collapsed
-        ? lines
-        : [...lines, ...live.map((task) => ({ kind: "text" as const, text: taskRow(task, now, width) }))]
+      if (opts.collapsed) return lines
+      const columns = {
+        name: Math.max(...live.map((task) => taskName(task).length)),
+        time: Math.max(...live.map((task) => taskTime(task, opts.now).length)),
+      }
+      return [
+        ...lines,
+        ...live.map((task) => ({ kind: "segments" as const, parts: taskSegments(task, opts, columns) })),
+      ]
     },
   }
 }
@@ -152,7 +223,7 @@ export function tasksCommand(registry: BackgroundJobRegistry): CommandDefinition
         const action = /^(stop|view)\s/.exec(prefix)?.[1]
         const candidates = live.map((task) => ({
           value: `${action ? `${action} ` : ""}${task.id}`,
-          description: taskRow(task, Date.now()),
+          description: `${AGENT_STATUS_BADGES[task.state].label} · ${taskRow(task, Date.now())}`,
         }))
         if (action === "stop" && live.length)
           candidates.push({ value: "stop all", description: "Stop every live task" })
@@ -193,11 +264,33 @@ export function tasksCommand(registry: BackgroundJobRegistry): CommandDefinition
         return show(task, registry, ctx)
       }
       if (!live.length) return ctx.print("No live background tasks. /jobs and /agents show completed work.")
-      const rows = live.map((task) => taskRow(task, Date.now()))
-      if (ctx.frontend === "print") return ctx.print(rows.join("\n"))
+      const separator = () => ctx.glyphs?.().separator ?? "·"
+      const rows = live.map((task) => taskRow(task, Date.now(), separator()))
+      const ended: (Task | undefined)[] = []
+      if (ctx.frontend === "print")
+        return ctx.print(
+          live.map((task, i) => `${AGENT_STATUS_BADGES[task.state].label} ${rows[i]}`).join("\n"),
+        )
       const pick = await ctx.ui.choose("Background tasks", rows, {
         sections: [{ at: 0, choose: ctx.openView ? "open" : "print", keys: [{ key: "x", label: "stop" }] }],
-        descriptions: live.map((task) => task.last),
+        optionStatuses: live.map((task) => task.state),
+        descriptions: live.map((task) => oneLine(task.last)),
+        // The same tasks in the same order: only their times, states and last lines move on.
+        // One that ends keeps its row with its final state and its time stopped at the end.
+        live: () => {
+          const now = new Map(tasks(registry, ctx.session).map((task) => [task.id, task]))
+          const shown = live.map((task, i) => {
+            const current = now.get(task.id)
+            if (current) return current
+            ended[i] ??= endedTask(task, registry, ctx.session, Date.now())
+            return ended[i]
+          })
+          return {
+            optionLabels: shown.map((task) => taskRow(task, Date.now(), separator())),
+            optionStatuses: shown.map((task) => task.state),
+            descriptions: shown.map((task) => oneLine(task.last)),
+          }
+        },
         signal: ctx.signal,
       })
       if (!pick) return

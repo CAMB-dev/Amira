@@ -26,7 +26,7 @@ import {
 import { terminalText } from "./diff-view.ts"
 import { oneLine, viewReplyRows, wrapViewLines } from "./extension-view-rendering.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
-import { fitViewHint } from "./hint.ts"
+import { fitViewHint, styleHint } from "./hint.ts"
 import {
   keyLabel as bindingLabel,
   defaultKeybindings,
@@ -259,9 +259,10 @@ export class ExtensionViewer implements Component {
             text: this.#keyBar(theme, Math.max(1, width - toggle.length - 11)),
             priority: 1,
           },
-        toggle && { text: `${toggle} ${glyphs.arrowRight} input`, priority: 10 },
+        toggle && { text: styleHint(`${toggle} ${glyphs.goesTo} input`, theme), priority: 10 },
       ],
       width,
+      theme.muted(` ${glyphs.separator} `),
     )
   }
 
@@ -807,7 +808,7 @@ export class ExtensionViewer implements Component {
   #keyBar(theme: Theme, width: number): string {
     if (this.#opts.placement === "dock" && !this.focused) {
       const follow = this.#keys.label("scroll.bottom")
-      return theme.muted(
+      return styleHint(
         fitViewHint(
           [
             !this.#ui && { text: scrollPosition(this.scroll), priority: 2 },
@@ -816,10 +817,11 @@ export class ExtensionViewer implements Component {
               priority: 3,
             },
             follow && { text: `${follow} follow`, priority: 3 },
-            { text: "Esc close dock", priority: 5 },
+            { text: `${bindingLabel({ name: "escape" })} close dock`, priority: 5 },
           ],
           width,
         ),
+        theme,
       )
     }
     if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, viewEllipsis()))
@@ -834,7 +836,7 @@ export class ExtensionViewer implements Component {
     if (this.#view.hostKeys === "minimal")
       return theme.muted(truncateToWidth(this.#backHint(), width, viewEllipsis()))
     if (this.#ui)
-      return theme.muted(
+      return styleHint(
         fitViewHint(
           [
             ...keyHints(this.#view.keys ?? []),
@@ -858,6 +860,7 @@ export class ExtensionViewer implements Component {
           ],
           width,
         ),
+        theme,
       )
     const scroll = this.scroll
     const p = scroll.position
@@ -871,7 +874,7 @@ export class ExtensionViewer implements Component {
       ],
       width,
     )
-    return theme.muted(hint)
+    return styleHint(hint, theme)
   }
 
   /** Runs a part of the view's code; a throw is reported (once in a row) and gives undefined. */

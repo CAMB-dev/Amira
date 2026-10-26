@@ -27,7 +27,7 @@ import {
 } from "./dialog-render.ts"
 import { parseUnifiedDiff, renderToolLines } from "./diff-view.ts"
 import { styledExtensionLabel } from "./extension-status.ts"
-import { glyphs } from "./glyphs.ts"
+import { chromeText, glyphs, viewEllipsis } from "./glyphs.ts"
 import type { HintItem } from "./hint.ts"
 import { type Action, defaultKeybindings, type Keybindings, keyLabel } from "./keybindings.ts"
 import { styledStatusBadge } from "./status-badge.ts"
@@ -42,7 +42,7 @@ export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | SelectChoice |
 /** Options of a list shown at once; longer lists scroll with the selection. */
 const MAX_OPTIONS = 10
 
-const otherLabel = () => `Other${glyphs.more}`
+const otherLabel = () => `Other${viewEllipsis("…")}`
 
 /** One choice of a list: what it reads and what choosing it answers. */
 interface Choice {
@@ -132,6 +132,12 @@ export class Dialog implements Component {
       header?: (theme: Theme) => string
       footer?: HintItem[]
       handleInput?: (event: InputEvent) => boolean
+      /** What Enter does now, in the footer, when a local picker's Enter means more than choose. */
+      choose?: () => string
+      /** What Esc does, in the footer, e.g. "restore" for a picker that previews. */
+      cancel?: string
+      /** False while another control of a local picker has the focus: the list shows no cursor. */
+      listFocused?: () => boolean
     } = {},
   ) {
     this.#request = request
@@ -390,14 +396,20 @@ export class Dialog implements Component {
             truncateToWidth(
               `${this.#page + 1}/${this.#pages.length}${page.header ? ` ${glyphs.separator} ${page.header}` : ""}`,
               width,
-              glyphs.more,
+              viewEllipsis(),
             ),
           )
         : undefined
     // At the four-row minimum, the selected answer and hint take precedence over the filter.
     const filter =
       this.#filter && this.#bodyBudget >= 3
-        ? [truncateToWidth(`${theme.muted("filter:")} ${this.#filter}`, Math.max(1, width - 2), glyphs.more)]
+        ? [
+            truncateToWidth(
+              `${theme.muted("filter:")} ${this.#filter}`,
+              Math.max(1, width - 2),
+              viewEllipsis(),
+            ),
+          ]
         : []
     const fit: Fit = {
       blanks: ask && (indicator || title.length) ? 3 : 2,
@@ -469,9 +481,11 @@ export class Dialog implements Component {
     const shown = Math.min(fit.options, choices.length)
     const start = Math.min(Math.max(0, page.selected - shown + 1), Math.max(0, choices.length - shown))
     const digits = this.#digits
+    // The highlight is the cursor: with the focus elsewhere, the list shows none.
+    const focused = this.selection.listFocused?.() ?? true
     const items = choices.slice(start, start + shown).map((c, j) => {
       const i = start + j
-      const selected = i === page.selected
+      const selected = i === page.selected && focused
       const marker = selected ? theme.accent(glyphs.choice) : " "
       const digit = digits ? `${theme.muted(String(i + 1))}${this.request.kind === "ask" ? "  " : " "}` : ""
       const box = page.multi ? `${page.checked.has(i) ? glyphs.checked : glyphs.unchecked} ` : ""
@@ -482,13 +496,16 @@ export class Dialog implements Component {
       const badge = status ? `${styledStatusBadge(status, theme, this.#spinner.glyph, { pad: true })} ` : ""
       const lead = `${marker} ${digit}${box}`
       // An option numbered as its digit ("1. explorer", for frontends without digits) shows once.
-      const display =
+      // Host and extension pickers compose their rows; questions keep the model's words.
+      const chrome = this.request.kind === "ask" ? (text: string) => text : chromeText
+      const display = chrome(
         this.request.kind === "select" && c.index !== undefined
           ? (this.request.optionLabels?.[c.index] ?? c.label)
-          : c.label
+          : c.label,
+      )
       const label = digits && display.startsWith(`${i + 1}. `) ? display.slice(`${i + 1}. `.length) : display
       const typed = c.other && page.other ? `${label} ${theme.muted(JSON.stringify(page.other))}` : label
-      const description = fit.descriptions ? (c.description?.replace(/\s+/g, " ").trim() ?? "") : ""
+      const description = fit.descriptions ? chrome(c.description?.replace(/\s+/g, " ").trim() ?? "") : ""
       return { c, i, selected, lead, badge, typed, description, status }
     })
     // Descriptions line up in a column after the labels when every one fits there; else each
@@ -502,11 +519,14 @@ export class Dialog implements Component {
       this.request.kind !== "ask" &&
       (fit.inlineDescriptions ||
         (!(this.request.kind === "select" && this.request.searchTexts) &&
-          described.every((it) => column + 2 + visibleWidth(it.description) <= width)))
+          described.every((it) => column + 3 + visibleWidth(it.description) <= width)))
     const rows: string[] = []
+    // A cut row keeps one free cell before the right border, as the ask frame's padding does.
+    const cut = this.request.kind === "ask" ? width : Math.max(1, width - 1)
     for (const { c, i, selected, lead, badge, typed, description, status } of items) {
       const heading = this.#heading(c)
-      if (heading && fit.headings) rows.push(truncateToWidth(`  ${theme.muted(heading)}`, width, glyphs.more))
+      if (heading && fit.headings)
+        rows.push(truncateToWidth(`  ${theme.muted(heading)}`, width, viewEllipsis()))
       const leadWidth = visibleWidth(lead)
       const id = `choice:${this.#page}:${c.index ?? i}`
       const target = { id, index: i, ...(c.other ? { column: leadWidth } : {}) }
@@ -527,12 +547,12 @@ export class Dialog implements Component {
       const head = `${lead}${badge}${styledExtensionLabel(typed, extensionStatus, theme, selected)}`
       const optionRow = rows.length
       if (!description) {
-        rows.push(truncateToWidth(head, width, glyphs.more))
+        rows.push(truncateToWidth(head, cut, viewEllipsis()))
       } else if (inline) {
         const pad = " ".repeat(Math.max(0, column - visibleWidth(head)))
-        rows.push(truncateToWidth(`${head}${pad}  ${theme.muted(description)}`, width, glyphs.more))
+        rows.push(truncateToWidth(`${head}${pad}  ${theme.muted(description)}`, cut, viewEllipsis()))
       } else {
-        rows.push(truncateToWidth(head, width, glyphs.more))
+        rows.push(truncateToWidth(head, cut, viewEllipsis()))
         const indentWidth = Math.min(width - 1, leadWidth + (this.request.kind === "ask" ? 2 : 0))
         const indent = " ".repeat(indentWidth)
         for (const l of wrapText(description, Math.max(1, width - indentWidth)))
@@ -552,12 +572,13 @@ export class Dialog implements Component {
     const r = this.request
     const sourceLabel = r.sourceLabel ?? r.source
     const from = sourceLabel ? theme.muted(` (${sourceLabel})`) : ""
-    const question = this.#current?.question ?? r.title
+    const asked = this.#current?.question ?? r.title
+    const question = r.kind === "ask" ? asked : chromeText(asked)
     const title = wrapText(`${bold(theme.text(question))}${from}`, Math.max(1, width))
     const header = this.selection.header?.(theme)
     if (header) {
       const marked = stripAnsi(header).startsWith(`${glyphs.choice} `)
-      title.push(truncateToWidth(header, width + (marked ? 2 : 0), glyphs.more))
+      title.push(truncateToWidth(header, width + (marked ? 2 : 0), viewEllipsis()))
     }
     return title
   }
@@ -582,9 +603,14 @@ export class Dialog implements Component {
     // Of several questions, Enter goes on to the next one not answered, until the last.
     const more = this.#pages.some((p) => p !== page && !p.answer)
     const section = this.#section(this.#choices()[page.selected])
-    const choose = more ? "next" : page.multi ? "submit" : (section?.choose ?? "choose")
+    const choose = more
+      ? "next"
+      : page.multi
+        ? "submit"
+        : (section?.choose ?? this.selection.choose?.() ?? "choose")
     // An approval's Esc denies the call (and stops the turn); a later question's goes back one.
-    const cancel = this.#page > 0 ? "back" : r.source === "approval" ? "deny" : "cancel"
+    const cancel =
+      this.#page > 0 ? "back" : r.source === "approval" ? "deny" : (this.selection.cancel ?? "cancel")
     return [
       this.#pages.length > 1 && questions && { text: `${questions} question`, priority: 4 },
       move && { text: `${move} ${picking ? "select" : "move"}`, priority: picking ? 5 : 2 },

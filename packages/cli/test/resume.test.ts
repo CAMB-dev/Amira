@@ -216,6 +216,9 @@ test("quitting says how to continue the session, then a blank line before the sh
   // Nothing to continue: nothing; the UI's own last blank line sets the shell's prompt apart.
   expect(exitNote({ session: { id: "s_new" }, messages: [] }, 0, here)).toBe("")
   expect(exitNote({ session: undefined, messages: [1] }, 0, here)).toBe("")
+  // With the screen's margin: on the content column, wrapped at a word to the content width.
+  const narrow = exitNote({ session: { id: "s_old" }, messages: [1] }, 0, here, 0, { columns: 30, margin: 3 })
+  expect(narrow).toBe("   Continue this session\n   with amira -r s_old.\n\n")
 })
 
 test(

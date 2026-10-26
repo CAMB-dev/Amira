@@ -7,7 +7,7 @@ import {
   truncateToWidth,
 } from "@amira/tui-kit"
 import { renderToolLines, type ToolLayoutLine } from "./diff-view.ts"
-import { glyphs } from "./glyphs.ts"
+import { viewEllipsis } from "./glyphs.ts"
 
 /** Where replies' nodes get rendered by extensions (D88): the host's MarkdownRendererRegistry. */
 export interface MarkdownRenderSource {
@@ -147,7 +147,7 @@ export function nodeRows(lines: ToolLayoutLine[], theme: Theme, width: number, s
       return renderToolLines([l], theme, width)
     const text = segments
       ? stripAnsi(l.text)
-      : truncateToWidth(stripAnsi(l.text).replace(/\s+$/, ""), Math.max(1, width), glyphs.more)
+      : truncateToWidth(stripAnsi(l.text).replace(/\s+$/, ""), Math.max(1, width), viewEllipsis())
     switch (l.kind) {
       case "muted":
       case "diff-context":

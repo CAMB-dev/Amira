@@ -9,7 +9,7 @@ import {
 } from "@amira/api"
 import { stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { agentCountsMark, agentCountsText, timestampIn } from "../format.ts"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { markerPrefix } from "../grid.ts"
 import { childrenOf, isActive, type SubagentNode, subagentCounts, subtree, treeRows } from "../subagents.ts"
 import { type CopyRow, chromeRows, sliceCells } from "../text-selection.ts"
@@ -124,22 +124,25 @@ export class ToolBlock extends Block {
     return this.folding ?? env.detail
   }
 
+  /** A question being asked shows as its dialog, not as a running call. */
+  hidden(env: Pick<BlockEnv, "askDialogVisible">): boolean {
+    return !this.end && this.name === "ask_user" && !!env.askDialogVisible
+  }
+
   override cacheVersion(env: BlockEnv): number | string {
-    return !this.end && this.name === "ask_user" && env.askDialogVisible
-      ? `${this.version}:ask-dialog`
-      : this.version
+    return this.hidden(env) ? `${this.version}:ask-dialog` : this.version
   }
 
   lines(env: BlockEnv): string[] {
     const tree = this.tree(env.nodes)
     this.running = this.started && (!this.end || tree.some(isActive))
-    if (!this.started || (!this.end && this.name === "ask_user" && env.askDialogVisible)) return []
+    if (!this.started || this.hidden(env)) return []
     const presenter = env.presenters?.get(this.name)
     const { theme, width, now } = env
     const continuation = treeContinuation(theme, this.last)
     const treeWidth = Math.max(0, width - visibleWidth(continuation))
     const nested = (rows: string[]) =>
-      rows.map((row) => truncateToWidth(`${continuation}${row}`, width, glyphs.more))
+      rows.map((row) => truncateToWidth(`${continuation}${row}`, width, viewEllipsis()))
     const record = rowRecorder()
     if (!this.end) {
       const call = {
@@ -181,7 +184,7 @@ export class ToolBlock extends Block {
         truncateToWidth(
           `${markerPrefix(theme.muted(glyphs.treeLast))}${agentCountsMark(counts, theme, env.spinner)} ${theme.muted(text)}`,
           treeWidth,
-          glyphs.more,
+          viewEllipsis(),
         ),
       ]
     } else {

@@ -10,7 +10,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { userLines, userText } from "../format.ts"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { CONTENT_INSET, contentRoom } from "../grid.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { TranscriptView } from "../view.ts"
@@ -649,14 +649,20 @@ export function pendingMessageRows(
     const shown = rows.slice(0, PENDING_ROWS)
     if (rows.length > PENDING_ROWS) {
       const last = shown.length - 1
-      shown[last] = truncateToWidth(`${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`, room, glyphs.more)
+      shown[last] = truncateToWidth(
+        `${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`,
+        room,
+        viewEllipsis(),
+      )
     }
     for (const row of shown)
-      out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(row)}`, width, glyphs.more))
+      out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(row)}`, width, viewEllipsis()))
   }
   const more = items.length - PENDING_SHOWN
   if (more > 0)
-    out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(`+${more} more waiting`)}`, width, glyphs.more))
+    out.push(
+      truncateToWidth(`${CONTENT_INSET}${theme.muted(`+${more} more waiting`)}`, width, viewEllipsis()),
+    )
   return out
 }
 
@@ -729,13 +735,13 @@ export function createNoticeStrip(options: { theme: Theme; requestRender: () => 
       const retry =
         noticeRetryAt === undefined
           ? ""
-          : ` · retry in ${Math.max(0, Math.ceil((noticeRetryAt - Date.now()) / 1000))}s`
+          : ` ${glyphs.separator} retry in ${Math.max(0, Math.ceil((noticeRetryAt - Date.now()) / 1000))}s`
       const lines = pendingNotices.length
         ? pendingNotices.flatMap((message) => userLines(theme, message))
         : noticeRetryAt !== undefined
           ? [`${theme.accent(glyphs.subagent)}${theme.muted(" sub-agents' results")}`]
           : []
-      return lines.map((line) => `${line}${theme.muted(` · pending${retry}`)}`)
+      return lines.map((line) => `${line}${theme.muted(` ${glyphs.separator} pending${retry}`)}`)
     },
     dispose() {
       setRetry(undefined)

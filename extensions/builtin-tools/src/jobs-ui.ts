@@ -1,3 +1,5 @@
+import { homedir } from "node:os"
+import { sep } from "node:path"
 import type { BackgroundJobInfo as JobInfo, BackgroundJobRegistry as JobRegistry } from "@amira/api"
 import {
   type BackgroundJobDetails,
@@ -5,6 +7,7 @@ import {
   type CommandContext,
   type CommandDefinition,
   clip,
+  clipMiddle,
   type ExtensionAPI,
   formatElapsed,
   hostBackgroundJobs,
@@ -18,6 +21,7 @@ import {
 } from "@amira/api"
 import {
   configureJobs,
+  endReported,
   endText,
   type JobOutputParams,
   type JobStopParams,
@@ -88,15 +92,24 @@ function outputLines(registry: JobRegistry, id: string, max: number): ToolLine[]
   ]
 }
 
+/** A path for one row: the home directory as ~, the middle cut when it is still too long. */
+function shortPath(path: string, cells: number, more: string): string {
+  const home = homedir()
+  const short =
+    home && (path === home || path.startsWith(`${home}${sep}`)) ? `~${path.slice(home.length)}` : path
+  return clipMiddle(short, Math.max(1, cells), more)
+}
+
 /** The job's facts under the view's title: its state, process, working directory and log. */
-function headerLines(job: JobInfo, now: number): ToolLine[] {
+function headerLines(job: JobInfo, now: number, width = Number.POSITIVE_INFINITY, more = "…"): ToolLine[] {
   const pid = job.pid !== undefined ? ` · pid ${job.pid}` : ""
   return [
     {
       kind: isLive(job) ? "accent" : job.status === "exited" && job.exitCode === 0 ? "success" : "warning",
       text: `${jobState(job, now)}${pid}`,
     },
-    { kind: "muted", text: `in ${job.cwd}` },
+    // One row: "in" stays with its directory instead of wrapping onto a row of its own.
+    { kind: "muted", text: `in ${shortPath(job.cwd, width - 3, more)}` },
     ...(job.logPath ? [{ kind: "muted" as const, text: `log: ${job.logPath}` }] : []),
   ]
 }
@@ -112,7 +125,9 @@ export function jobView(registry: JobRegistry): ViewDefinition<{ id: string }> {
     header: ({ id }, opts) => {
       const job = registry.get(id)
       if (job && isLive(job)) opts.requestRefresh?.(1000)
-      return job ? headerLines(job, opts.now) : [{ kind: "muted", text: "This job is no longer kept." }]
+      return job
+        ? headerLines(job, opts.now, opts.width, opts.glyphs?.more)
+        : [{ kind: "muted", text: "This job is no longer kept." }]
     },
     render: ({ id }) => (registry.get(id) ? outputLines(registry, id, VIEW_LINES) : []),
     keys: [
@@ -262,7 +277,8 @@ const outputBody = (text: string, detail: string, max = 3): ToolLine[] => {
 }
 
 export const jobOutputPresenter: ToolPresenter<JobOutputParams, BackgroundJobDetails> = {
-  verbs: { past: "Read", running: "Reading" },
+  // Not "Read": a job's output is checked, not a file read, and is never grouped with reads.
+  verbs: { past: "Checked", running: "Checking" },
   summary: (args) => `${str(args.job_id)}${args.wait_for ? ` · wait for /${str(args.wait_for)}/` : ""}`,
   result(call) {
     const d = jobDetails<BackgroundJobDetails>(call.result, "jobId")
@@ -315,7 +331,8 @@ export function registerJobs(api: ExtensionAPI, registry: JobRegistry = hostBack
         if (now - lastOutputRender < OUTPUT_RENDER_MS) return
         lastOutputRender = now
       }
-      if (type === "end" && !job.stopRequested) {
+      // A job a session started reports its end in that session's notice: only once.
+      if (type === "end" && !job.stopRequested && !endReported(job)) {
         const failed = job.status === "failed" || job.exitCode !== 0
         api.notify(`Background job ${job.id} ${endText(job)}: ${job.command}`, failed ? "warning" : "info")
       }

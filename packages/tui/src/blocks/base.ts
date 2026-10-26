@@ -9,7 +9,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { messageTimestamp, timestampIn, userBandPaddingIn, userLines, userText } from "../format.ts"
-import { glyphs } from "../glyphs.ts"
+import { viewEllipsis } from "../glyphs.ts"
 import { MARKER_WIDTH } from "../grid.ts"
 import type { ReplyRenderers } from "../markdown-nodes.ts"
 import type { SpawnGroups, SubagentNode } from "../subagents.ts"
@@ -92,7 +92,7 @@ export function setImageFallback(
     rows.set(
       at + i,
       " ".repeat(image.col) +
-        truncateToWidth(text[i]! + (i ? "" : note), Math.max(1, width - image.col), glyphs.more),
+        truncateToWidth(text[i]! + (i ? "" : note), Math.max(1, width - image.col), viewEllipsis()),
     )
 }
 

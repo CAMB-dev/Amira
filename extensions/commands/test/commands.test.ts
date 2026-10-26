@@ -435,12 +435,12 @@ test("/status right at startup waits briefly for the git facts", async () => {
 test("/model switches with an argument and asks without one", async () => {
   const { run, host, asked } = await setup({}, ["openai/gpt-5", undefined])
   expect((await run("/model deepseek/deepseek-pro")).text).toBe("Model: deepseek/deepseek-pro")
-  // Picked in the TUI: the picker's echo says what was chosen, so nothing is printed again.
-  expect((await run("/model")).text).toBe("")
+  // Picked, it says the model it came to, as a typed /model does.
+  expect((await run("/model")).text).toBe("Model: openai/gpt-5")
   expect((await run("/status")).text).toContain("openai/gpt-5")
   expect(asked[0]).toContain("deepseek/deepseek-flash | deepseek/deepseek-pro | openai/gpt-5")
-  // Cancelling the picker keeps the model and says how to pick one.
-  expect((await run("/model")).text).toContain("Model: openai/gpt-5. Pass one")
+  // Cancelling the picker keeps the model; in the TUI its own echo says it was cancelled.
+  expect((await run("/model")).text).toBe("")
   expect((await run("/model nonsense")).ok).toBe(false)
   const done = await host.complete("/model pro")
   expect(done.candidates.map((c) => c.value)).toEqual(["deepseek/deepseek-pro"])
@@ -702,11 +702,25 @@ test("/thinking picker can select default and reports the result outside the TUI
 test("/model interactive selection asks for effort using the newly selected model's capability", async () => {
   const session = thinkingControl("high", false)
   const { run, requests } = await setup(session.control, ["openai/gpt-5", "max"])
-  expect(await run("/model")).toMatchObject({ ok: true, text: "" })
+  expect(await run("/model")).toMatchObject({ ok: true, text: "Model: openai/gpt-5" })
   expect(requests).toHaveLength(2)
   expect(requests[1]).toMatchObject({ kind: "select", title: "Thinking effort", initial: "high (current)" })
   expect(session.info().model).toEqual({ provider: "openai", model: "gpt-5" })
   expect(session.changes).toEqual(["max"])
+})
+
+test("/model opens on the current model and marks it, in the order the models are listed", async () => {
+  const session = thinkingControl("high", false)
+  const models = ["openai/gpt-5", `${session.info().model.provider}/${session.info().model.model}`]
+  const { run, requests } = await setup({ ...session.control, models: () => models }, [undefined])
+  await run("/model")
+  expect(requests[0]).toMatchObject({
+    kind: "select",
+    title: "Choose a model",
+    options: models,
+    initial: models[1],
+    descriptions: ["", "current"],
+  })
 })
 
 test("/model cancellation never opens the effort step", async () => {
@@ -768,8 +782,9 @@ test("/model without a model or anything to pick says what to do", async () => {
   const unlisted = await setup({ info, models: () => [] })
   expect((await unlisted.run("/model")).error).toContain("No models to pick from")
   const some = await setup({ info }, [undefined])
-  expect((await some.run("/model")).text).toBe("Model: (no model). Pass one to switch: /model provider/model")
-  expect(some.asked[0]).toContain("Model (now (no model))")
+  // Cancelled in the TUI, the picker's own echo says so.
+  expect((await some.run("/model")).text).toBe("")
+  expect(some.asked[0]).toContain("Choose a model")
   expect((await some.run("/status")).text).toContain("(no model)")
 })
 
@@ -836,7 +851,7 @@ test("/status says where the context window came from, and when it is only a gue
     return (await run("/status")).text.split("\n").find((l) => l.startsWith("Window"))
   }
   expect(await windowRow(128_000, "default")).toMatch(
-    /^Window\s+128k \(default guess — set contextWindow for this model\)$/,
+    /^Window\s+128k \(default guess; set contextWindow for this model\)$/,
   )
   expect(await windowRow(1_050_000, "catalog")).toMatch(/^Window\s+1\.1M \(from the model catalog\)$/)
   expect(await windowRow(256_000, "settings")).toMatch(/^Window\s+256k \(your settings\)$/)
@@ -974,16 +989,16 @@ test("/clear starts a new session; /resume switches, or asks among the other ses
     expect.stringMatching(/^Started a new session \(s\d+\)\.$/),
   ])
   expect((await run("/resume abc")).text).toBe("")
-  // The picker leaves out the current session (now abc); cancelling lists the recent ones.
+  // The picker leaves out the current session (now abc); cancelled, its echo says so.
   const listed = await run("/resume")
-  expect(asked[0]).toContain("s1  just now  2 msgs  current")
-  expect(asked[0]).toContain("old  3h ago  8 msgs  fix the build")
-  expect(listed.text).toContain("Recent sessions:")
+  expect(asked[0]).toContain("s1 · just now · 2 msgs · current")
+  expect(asked[0]).toContain("old · 3h ago · 8 msgs · fix the build")
+  expect(listed.text).toBe("")
   expect(calls).toEqual(["newSession", "newSession", "resume abc"])
 })
 
 test("/resume with a picked session resumes its id", async () => {
-  const { run, calls } = await setup({}, ["old  3h ago  8 msgs  fix the build"])
+  const { run, calls } = await setup({}, ["old · 3h ago · 8 msgs · fix the build"])
   expect((await run("/resume")).text).toBe("")
   expect(calls).toEqual(["resume old"])
 })
@@ -1023,6 +1038,8 @@ for (const confirmed of [true, false]) {
     expect(asked[1]).toBe("Delete this session?")
     expect(removed).toEqual(confirmed ? ["old"] : [])
     expect(requests[0].searchTexts).toEqual([old.searchText])
+    // The label shows the title, so the first message adds something under it.
+    expect(requests[0].descriptions).toEqual(["hello"])
     expect(requests[0].sections[0].keys).toEqual([{ key: "d", label: "delete" }])
   })
 }
@@ -1430,7 +1447,7 @@ test("formatting helpers", () => {
   ).toBe("名前  x\nabc   y")
   expect(ago(0, 90_000)).toBe("1m ago")
   expect(sessionLabel({ id: "x", updatedAt: 0, firstUserText: "  a\n b ", messageCount: 3 }, 30_000)).toBe(
-    "x  just now  3 msgs  a b",
+    "x · just now · 3 msgs · a b",
   )
 })
 

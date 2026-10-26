@@ -1,5 +1,5 @@
 import { type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 
 /** Rows of items shown at once; the list scrolls to keep the selection visible. */
 export const PICKER_ROWS = 8
@@ -43,14 +43,14 @@ export function pickerRows(
   const lines = shown.map((r, i) => {
     onRow?.(start + i, i)
     const label =
-      described && visibleWidth(r.label) > col ? truncateToWidth(r.label, col, glyphs.more) : r.label
+      described && visibleWidth(r.label) > col ? truncateToWidth(r.label, col, viewEllipsis()) : r.label
     const pad = r.description ? " ".repeat(Math.max(0, col - visibleWidth(label))) : ""
     const desc = r.description ? `  ${theme.muted(r.description)}` : ""
     const line =
       start + i === selected
         ? `${theme.accent(glyphs.choice)} ${theme.accent(label)}${pad}${desc}`
         : `  ${label}${pad}${desc}`
-    return truncateToWidth(line, width, glyphs.more)
+    return truncateToWidth(line, width, viewEllipsis())
   })
   if (n > count && roomRows > lines.length) lines.push(theme.muted(`  ${at + 1}/${n}`))
   return lines

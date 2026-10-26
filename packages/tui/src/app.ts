@@ -63,7 +63,7 @@ import { fileList } from "./file-index.ts"
 import { compactionNotice } from "./format.ts"
 import { createFullscreenView } from "./fullscreen-view.ts"
 import { glyphs } from "./glyphs.ts"
-import { headerLine } from "./header.ts"
+import { headerContextTokens, headerLine } from "./header.ts"
 import { defaultKeys, Keybindings, type KeySpec, keyLabel } from "./keybindings.ts"
 import { ReplyRenderers } from "./markdown-nodes.ts"
 import { PromptHistory } from "./prompt-history.ts"
@@ -199,7 +199,7 @@ async function runFullscreen(
               : {}),
             title: state().title,
             cost: opts.status.snapshot().find((i) => i.id === "cost")?.text,
-            used: state().contextTokens,
+            used: headerContextTokens(state().contextTokens, agent),
             limit: state().model.contextWindow,
           },
       width,
@@ -676,7 +676,7 @@ async function runFullscreen(
     if (detachesOnQuit(opts.frontend) || (!n && !jobs) || Date.now() < quitArmedUntil) return quit()
     quitArmedUntil = Date.now() + HINT_NOTE_MS
     const key = keys.label(action) ?? keyLabel({ name: "c", ctrl: true })
-    showNote(quitWarning(n, jobs, key))
+    showNote(quitWarning(n, jobs, key), key)
   }
   /** Follows the session a command switched to (/clear, /resume), from a boundary naming it. */
   function followAgent(next: Agent) {
@@ -876,7 +876,7 @@ async function runFullscreen(
     suggestion.attachLocal(opts.agent)
     opts.onReady?.()
     reader.start()
-    view.banner((theme) => interactiveBanner(theme, state().model, tildePath(state().cwd, env)))
+    view.banner((theme, width) => interactiveBanner(theme, state().model, tildePath(state().cwd, env), width))
     startupDirections(view, keys, !!commands || !agent)
     if (state().resumed) sessions.show(state().sessionId, false)
     if (remoteEvents) remoteEvents.reset()

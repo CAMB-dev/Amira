@@ -652,12 +652,11 @@ export class Editor implements Component {
       const starts = [0]
       let s = 0
       while (text.length - s > max) {
-        // A space right after a full row: the words fit exactly, the next row starts with it.
+        // The row breaks after its last space, also when the words fill it exactly: a row
+        // starting with the space after them would sit a cell right of the others.
         let next = s + max
-        if (text[next] !== " ") {
-          const space = text.lastIndexOf(" ", next - 1)
-          if (space >= s) next = space + 1
-        }
+        const space = text.lastIndexOf(" ", next - 1)
+        if (space >= s) next = space + 1
         starts.push(next)
         s = next
       }
@@ -681,8 +680,9 @@ export class Editor implements Component {
       const g = gs[i]!
       const w = this.cellWidth(g, used)
       if (used + w > max && pos > rowStart) {
-        // Inside a word, go back to after the row's last space and start the next row there.
-        if (breakAt !== -1 && breakPos > rowStart && !isSpace(g)) {
+        // Go back to after the row's last space and start the next row there, also when the
+        // words fill the row exactly (a row never starts with the space after them).
+        if (breakAt !== -1 && breakPos > rowStart) {
           i = breakAt
           pos = breakPos
         }

@@ -35,12 +35,18 @@ export function userApprover(ui: UiRequests, opts: ApproverOptions = {}): Approv
     if (allowed.has(key)) return { approved: true, by: "rule" }
     if (ui.unavailable) return { approved: false, reason: `nobody can approve it (${ui.unavailable})` }
     const preview = approvalPreview(request.args, opts.presenters?.get(request.name))
-    // "Don't ask again" covers this tool asked about for this reason; the message says so.
-    const scope = `"Don't ask again" covers ${request.name} asked about for: ${request.reason}`
+    // "Don't ask again" covers this tool asked about for this reason; the message says so
+    // without repeating the reason, which is right above it.
+    const scope = `"Don't ask again" covers ${request.name} for this reason, this session.`
     const sub = opts.tree?.subagent(request.sessionId)
+    const permission = request.permission ? permissionLine(request.permission) : undefined
+    // A reason that already names the mode makes the bare mode line a repeat.
+    const repeated =
+      permission === `Permission mode "${request.permission?.mode}".` &&
+      request.reason.startsWith(`mode "${request.permission?.mode}"`)
     const head = [
       ...(sub ? [`Asked by the sub-agent "${sub.info.title}" (${sub.info.id}).`] : []),
-      ...(request.permission ? [permissionLine(request.permission)] : []),
+      ...(permission && !repeated ? [permission] : []),
       request.reason,
     ].join("\n")
     const message = preview ? `${head}\n${scope}` : `${head}\n${rawArgs(request.args)}\n${scope}`

@@ -48,13 +48,21 @@ async function setup(admin: ExtensionAdmin, extra: Partial<SessionControl> = {})
   })
   jest.advanceTimersByTime(0)
   const rows = () =>
-    host.panels.snapshot({
-      width: 120,
-      now: Date.now(),
-      spinner: runner.spinner,
-      sessionId,
-      collapsed: false,
-    })
+    host.panels
+      .snapshot({
+        width: 120,
+        now: Date.now(),
+        spinner: runner.spinner,
+        sessionId,
+        collapsed: false,
+      })
+      .map((p) => ({
+        ...p,
+        lines: p.lines.map((l) => ({
+          ...l,
+          text: "text" in l ? l.text : l.parts.map((part) => part.text).join(""),
+        })),
+      }))
   return { host, runner, rows, output, renders: () => renders, switchSession: () => (sessionId = "s2") }
 }
 

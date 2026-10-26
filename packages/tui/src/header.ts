@@ -1,7 +1,24 @@
+import type { Agent } from "@amira/core"
 import { bold, compose, type RenderContext, themeToken, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { compactTokens } from "./format.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { displayTitle } from "./title.ts"
+
+/**
+ * The context size the header shows. Right after a compaction no reply has told it yet: the
+ * compaction's own estimate stands in, rather than 0, until the next reply does.
+ */
+export function headerContextTokens(
+  known: number | undefined,
+  agent: Pick<Agent, "messages" | "compactionInfo"> | undefined,
+): number | undefined {
+  if (known !== undefined || !agent) return known
+  for (const m of agent.messages) {
+    const after = agent.compactionInfo(m)?.tokensAfter
+    if (after !== undefined) return after
+  }
+  return undefined
+}
 
 /** Already-known workspace and session facts: rendering never probes git. */
 export interface HeaderInfo {
@@ -37,7 +54,7 @@ export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext):
   const divider = theme.dim(`  ${glyphs.separator}  `)
   let right = cost ? cost + divider + context : context
   if (visibleWidth(right) > width - 2) right = context
-  if (visibleWidth(right) >= width) return truncateToWidth(right, width, glyphs.more)
+  if (visibleWidth(right) >= width) return truncateToWidth(right, width, viewEllipsis())
   const room = Math.max(0, width - visibleWidth(right) - 3)
   const branch = info.branch
     ? `${theme.muted(`${glyphs.branch} ${info.branch}`)}${info.dirty ? theme.warning("*") : ""}  `
@@ -52,8 +69,8 @@ export function headerLine(info: HeaderInfo, width: number, ctx: RenderContext):
     const tail = info.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? info.cwd
     left =
       cwdRoom >= 4
-        ? branch + path(truncateToWidth(`${glyphs.more}/${tail}`, cwdRoom, glyphs.more))
-        : truncateToWidth(branch || cwd, room, glyphs.more)
+        ? branch + path(truncateToWidth(`${viewEllipsis()}/${tail}`, cwdRoom, viewEllipsis()))
+        : truncateToWidth(branch || cwd, room, viewEllipsis())
   }
   if (visibleWidth(left) === 0) left = ""
   return (

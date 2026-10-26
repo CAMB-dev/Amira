@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import {
   type CommandContext,
   type Message,
+  type PanelLine,
   type SessionControl,
   type SubagentInfo,
   subagentTranscriptText,
@@ -25,6 +26,10 @@ function agent(id: string, status: SubagentInfo["status"] = "running"): Subagent
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   }
 }
+
+/** A panel row as plain text, its segments joined. */
+const rowText = (line: PanelLine) =>
+  line.kind === "segments" ? line.parts.map((part) => part.text).join("") : line.text
 
 function fixture() {
   const registry = new JobRegistry({
@@ -76,22 +81,56 @@ test("tasks panel combines jobs, monitors and active agents, folds and clips row
   const { registry, session } = fixture()
   const panel = tasksPanel(registry, () => session)
   const options = { width: 100, now: Date.now(), sessionId: "root", collapsed: false }
-  const rows = panel.render(options).map((l) => l.text)
+  const rows = panel.render(options).map(rowText)
   expect(rows).toHaveLength(6)
-  expect(rows[0]).toBe("5 background tasks | 3 running | 1 idle | 1 paused | /tasks to see or stop")
-  expect(rows[1]).toMatch(/^job job1 0s \| npm run dev \| ready$/)
-  expect(rows[2]).toMatch(/^monitor job2 0s \| Watch build \| ready$/)
-  expect(rows[3]).toMatch(/^agent child running 2s \| Build the feature \| Tests pass$/)
+  expect(rows[0]).toBe("5 background tasks · 3 working · 1 idle · 1 paused · /tasks to see or stop")
+  // Badge, name and time columns line up across jobs, monitors and agents.
+  expect(rows[1]).toBe("working job1         · 0s · npm run dev · ready")
+  expect(rows[2]).toBe("working job2 monitor · 0s · Watch build · ready")
+  expect(rows[3]).toBe("working child        · 2s · Build the feature · Tests pass")
+  expect(rows[4]).toBe("idle    idle         · 2s · Build the feature · Tests pass")
   expect(panel.render({ ...options, collapsed: true })).toHaveLength(1)
-  for (const row of panel.render({ ...options, width: 32 }).slice(1))
-    expect(row.text.length).toBeLessThanOrEqual(32)
+})
+
+test("tasks panel rows use the host badge, separator and cut marker", () => {
+  const { registry, session } = fixture()
+  const badges: string[] = []
+  const rows = tasksPanel(registry, () => session).render({
+    width: 40,
+    now: Date.now(),
+    sessionId: "root",
+    collapsed: false,
+    glyphs: { separator: ".", more: "..." },
+    statusBadge: (state, options) => {
+      badges.push(`${state}${options?.pad ? " padded" : ""}`)
+      return [{ kind: "accent", text: `* ${state.padEnd(7)}` }]
+    },
+  })
+  expect(rows[0]).toEqual({
+    kind: "muted",
+    text: "5 background tasks . 3 working . 1 idle . 1 paused . /tasks to see or stop",
+  })
+  expect(badges).toEqual([
+    "working padded",
+    "working padded",
+    "working padded",
+    "idle padded",
+    "paused padded",
+  ])
+  const job = rows[1]!
+  expect(job.kind).toBe("segments")
+  if (job.kind !== "segments") return
+  expect(job.parts[0]).toEqual({ kind: "accent", text: "* working" })
+  expect(job.parts[1]).toEqual({ kind: "muted", text: " job1         . " })
+  // The label gives up half of what is left to the last output line, cut with the host marker.
+  expect(rowText(rows[3]!)).toBe("* working child        . 2s . Build... . Tests pass")
 })
 
 test("/tasks lists, opens existing views, and prints output when a view is unavailable", async () => {
   const f = fixture()
   const command = tasksCommand(f.registry)
   await command.run("list", f.ctx)
-  expect(f.output[0]).toContain("monitor job2")
+  expect(f.output[0]).toContain("working job2 monitor · 0s · Watch build")
   expect(f.output[0]).not.toContain("finished")
   const ctx = {
     ...f.ctx,
@@ -171,6 +210,49 @@ test("/tasks fallback keeps tool-only transcripts, results and fork boundaries",
   }
 })
 
+test("/tasks picker rows of tasks that end while it is open show the final state and stop their time", async () => {
+  const f = fixture()
+  type Live = () => { optionLabels: string[]; optionStatuses: string[] }
+  let live: Live | undefined
+  let close: (value: undefined) => void = () => {}
+  const ctx = {
+    ...f.ctx,
+    frontend: "tui",
+    ui: {
+      choose: (_title: string, _rows: string[], options: { live: Live }) => {
+        live = options.live
+        return new Promise((resolve) => (close = resolve))
+      },
+    },
+  } as unknown as CommandContext
+  const picking = tasksCommand(f.registry).run("", ctx)
+  await waitFor(() => live !== undefined, "picker")
+  expect(live!().optionStatuses).toEqual(["working", "working", "working", "idle", "paused"])
+  // job2 is stopped and the child agent fails after 1.4 s; job1 keeps running.
+  await f.registry.stop("job2", 0)
+  const child = agent("child", "error")
+  child.durationMs = 1400
+  const agents = f.session.subagents()
+  f.session.subagents = () => agents.map((a) => (a.id === "child" ? child : a))
+  const later = Date.now() + 5000
+  const realNow = Date.now
+  Date.now = () => later
+  try {
+    const shown = live!()
+    expect(shown.optionStatuses).toEqual(["working", "stopped", "failed", "idle", "paused"])
+    expect(shown.optionLabels[2]).toBe("child · 1s · Build the feature")
+    const stoppedAt = shown.optionLabels[1]
+    Date.now = () => later + 3000
+    // An ended row is frozen; a live one keeps counting.
+    expect(live!().optionLabels[1]).toBe(stoppedAt)
+    expect(live!().optionLabels[0]).toBe("job1 · 8s · npm run dev")
+  } finally {
+    Date.now = realNow
+  }
+  close(undefined)
+  await picking
+})
+
 test("/tasks shows idle and paused states without counting them as running, and targets both", async () => {
   const f = fixture()
   const command = tasksCommand(f.registry)
@@ -181,10 +263,10 @@ test("/tasks shows idle and paused states without counting them as running, and 
       sessionId: "root",
       collapsed: false,
     })
-    .map((row) => row.text)
-  expect(rows[0]).toBe("5 background tasks | 3 running | 1 idle | 1 paused | /tasks to see or stop")
-  expect(rows.join("\n")).toContain("agent idle idle 2s")
-  expect(rows.join("\n")).toContain("agent paused paused 2s")
+    .map(rowText)
+  expect(rows[0]).toBe("5 background tasks · 3 working · 1 idle · 1 paused · /tasks to see or stop")
+  expect(rows.join("\n")).toContain("idle    idle         · 2s")
+  expect(rows.join("\n")).toContain("paused  paused       · 2s")
   expect(command.args!.complete!("view ", f.ctx)).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ value: "view idle" }),
@@ -238,9 +320,9 @@ test("/tasks keeps idle and paused agents visible with no running work", async (
       sessionId: "root",
       collapsed: false,
     })
-    .map((row) => row.text)
-  expect(rows[0]).toBe("2 background tasks | 1 idle | 1 paused | /tasks to see or stop")
-  expect(rows.join("\n")).not.toContain("running")
+    .map(rowText)
+  expect(rows[0]).toBe("2 background tasks · 1 idle · 1 paused · /tasks to see or stop")
+  expect(rows.join("\n")).not.toContain("working")
   await tasksCommand(f.registry).run("stop idle", f.ctx)
   expect(f.output.at(-1)).toBe("Stopped idle.")
   await tasksCommand(f.registry).run("stop paused", f.ctx)
@@ -295,11 +377,11 @@ test("unified tasks panel, folding, job/agent views and stop-all", async () => {
   try {
     app.host.setSessionControl(f.session, () => app.agent)
     app.bus.emit("ui.render", {}, { sessionId: app.agent.sessionId })
-    await waitFor(() => app.live().includes("5 background tasks | 3 running"), "combined panel")
-    expect(app.live()).toContain("monitor job2")
-    expect(app.live()).toContain("agent child running")
-    expect(app.live()).toContain("agent idle idle")
-    expect(app.live()).toContain("agent paused paused")
+    await waitFor(() => app.live().includes("5 background tasks · 3 working"), "combined panel")
+    expect(app.live()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working job2 monitor · +0s · Watch build/)
+    expect(app.live()).toMatch(/working child +· 2s/)
+    expect(app.live()).toMatch(/○ idle +idle +· 2s/)
+    expect(app.live()).toMatch(/‖ paused +paused +· 2s/)
     app.bus.emit(
       "message.delta",
       { kind: "text", text: "Streaming progress" },
@@ -307,11 +389,11 @@ test("unified tasks panel, folding, job/agent views and stop-all", async () => {
     )
     await waitFor(() => app.live().includes("Streaming progress"), "streaming agent preview")
     app.terminal.send("\x14")
-    await waitFor(() => !app.live().includes("monitor job2"), "folded panel")
-    expect(app.live()).toContain("5 background tasks | 3 running")
+    await waitFor(() => !app.live().includes("job2 monitor"), "folded panel")
+    expect(app.live()).toContain("5 background tasks · 3 working")
     app.terminal.send("/tasks\r")
     await waitFor(
-      () => app.live().includes("Background tasks") && app.live().includes("monitor job2"),
+      () => app.live().includes("Background tasks") && app.live().includes("job2 monitor · 0s · Watch build"),
       "combined picker",
     )
     app.terminal.send("\x1b[B\r")
@@ -335,7 +417,7 @@ test("unified tasks panel, folding, job/agent views and stop-all", async () => {
     await waitFor(() => !app.live().includes("Implement it"), "closed paused agent view")
     app.terminal.send("/tasks stop all\r")
     await app.shows("Stopped 5 background tasks.")
-    await waitFor(() => !app.live().includes("5 background tasks | 3 running"), "hidden tasks panel")
+    await waitFor(() => !app.live().includes("5 background tasks · 3 working"), "hidden tasks panel")
     expect(f.registry.running()).toHaveLength(0)
     expect(f.stopped).toEqual(["child", "idle", "paused"])
     expect(app.screen.altSwitches).toEqual([true])

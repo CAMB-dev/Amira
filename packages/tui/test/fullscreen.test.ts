@@ -615,14 +615,14 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await waitFor(
     () =>
       new RegExp(
-        `└ flow {2}✓ Started in the background +${blockClock("tool")}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \\S+ tok · Explore · 0/3 agents`,
+        `└ flow {2}✓ Started in the background +${blockClock("tool")}\\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working workflow demo · 3 working · \\S+ tok · Explore · 0/3 agents`,
       ).test(view()),
     "one line for the group under its call",
   )
   expect(view()).not.toContain("Scan api")
   group!.setStatus("Verify · 2/3 agents")
   await waitFor(
-    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Verify · 2\/3 agents/.test(view()),
+    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working workflow demo · 3 working · \S+ tok · Verify · 2\/3 agents/.test(view()),
     "the new status",
   )
   release()
@@ -632,7 +632,7 @@ test("a compact spawn group is one line under its call, with its owner's status,
   await waitFor(
     () =>
       !/Scan (api|core|tui)/.test(view()) &&
-      /^ {2}└ ✓ workflow demo · 3\/3 done · \S+ tok · Verify · 2\/3 agents$/m.test(view()),
+      /^ {2}└ ✓ done {4}workflow demo · 3\/3 done · \S+ tok · Verify · 2\/3 agents$/m.test(view()),
     "ended",
   )
   terminal.send("\x03")
@@ -670,7 +670,7 @@ test("the members of a group a command started share one block: a compact group 
     group.spawn({ role: "explorer", title, prompt: `step ${title}` }),
   )
   await waitFor(
-    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] workflow demo · 3 working · \S+ tok · Answer · 0\/3 agents/.test(view()),
+    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working workflow demo · 3 working · \S+ tok · Answer · 0\/3 agents/.test(view()),
     "the compact group",
   )
   await bus.flush()
@@ -1232,7 +1232,10 @@ test("a selected row of background sub-agents opens the viewer on them with →"
   })
   const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
   const kid = group.spawn({ role: "explorer", title: "Scan api", prompt: "scan" })
-  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] workflow demo ·/.test(view()), "the compact group")
+  await waitFor(
+    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] (?:working |done {4})workflow demo ·/.test(view()),
+    "the compact group",
+  )
   await bus.flush()
   terminal.send(CTRL_UP)
   await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")
@@ -1256,7 +1259,10 @@ test("opening a child without the agent extension prints that its live view is u
   expect(host.commands.get("agents")).toBeUndefined()
   const group = tree!.createGroup(agent, { name: "workflow demo", compact: true })
   const kid = group.spawn({ role: "explorer", title: "Scan api", prompt: "scan" })
-  await waitFor(() => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] workflow demo ·/.test(view()), "the compact group")
+  await waitFor(
+    () => /└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✓] (?:working |done {4})workflow demo ·/.test(view()),
+    "the compact group",
+  )
   await bus.flush()
   terminal.send(CTRL_UP)
   await waitFor(() => /background sub-agents \d+ of \d+ · .*→ sub-agent/.test(view()), "the row selected")

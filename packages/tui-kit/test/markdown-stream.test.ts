@@ -917,3 +917,15 @@ test("a reply cut off inside a span is styled as the same text rendered whole", 
   }
   expect(md("some **bold te")).toEqual(["some **bold te"])
 })
+
+test("a diff block colors added and removed lines as diffs do, its headers muted", async () => {
+  const { highlightLine } = await import("../src/markdown/highlight.ts")
+  const styles = markdownStyles(defaultTheme)
+  const style = (line: string) => highlightLine("diff", line, styles)[0]?.style
+  expect(style("+ new")).toBe(styles.diffAdd)
+  expect(style("- old")).toBe(styles.diffRemove)
+  expect(style("@@ -1 +1 @@")).toBe(styles.comment)
+  expect(style("--- a/x.ts")).toBe(styles.comment)
+  expect(style("  same")).toBeUndefined()
+  expect(highlightLine("patch", "+x", styles)[0]?.style).toBe(styles.diffAdd)
+})

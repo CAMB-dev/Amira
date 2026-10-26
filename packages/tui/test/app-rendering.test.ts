@@ -337,7 +337,8 @@ test("live panels sit above the input in fullscreen, fold with Ctrl+T and follow
     })
     await waitFor(() => live().includes("› test it"), `${mode}: the panel`)
     const rows = live().split("\n")
-    const panelRow = rows.findIndex((r) => r.startsWith("Todos 1/3"))
+    // On the content column, as the input box text and the key hint.
+    const panelRow = rows.findIndex((r) => r.startsWith("  Todos 1/3"))
     const boxRow = rows.findIndex((r) => r.startsWith("╭"))
     expect(panelRow).toBeGreaterThan(-1)
     // The panel, then a blank line, then the input box.
@@ -386,9 +387,9 @@ test("live panels give way on a short screen: folded, then cut, the input box al
     const rows = live().split("\n")
     // Folded to its header, since the whole list does not fit; the input box and hints stay.
     expect(live()).not.toContain("step 1")
-    const panel = rows.indexOf("Todos 0/9")
+    const panel = rows.indexOf("  Todos 0/9")
     const top = rows.findIndex((r) => r.startsWith("╭"))
-    expect(rows.slice(panel, top)).toEqual(mode === "fullscreen" ? ["Todos 0/9"] : ["Todos 0/9", ""])
+    expect(rows.slice(panel, top)).toEqual(mode === "fullscreen" ? ["  Todos 0/9"] : ["  Todos 0/9", ""])
     expect(rows.some((r) => r.startsWith("╰"))).toBe(true)
     expect(rows).toContain("  shift+tab mode  ·  ctrl+o detail  ·  ? keys")
     terminal.send("\x04")
@@ -707,7 +708,7 @@ test("commands get the common keys as bound now, for /help; the transcript's onl
       "esc=Cancel a command or stop the turn; twice in a row, rewind to an earlier message",
     )
     expect(all()).toContain("?=Every key and what it does")
-    expect(all()).toContain("Esc=Focus a selectable dock when the input is empty; otherwise close it")
+    expect(all()).toContain("esc=Focus a selectable dock when the input is empty; otherwise close it")
     if (mode === "fullscreen") expect(all()).toContain("ctrl+f=Find text in the transcript")
     else expect(all()).not.toContain("Find text in the transcript")
     terminal.send("\x03")

@@ -22,7 +22,7 @@ function child(id: string, status: SubagentInfo["status"]): SubagentInfo {
   }
 }
 
-test("running task counts are live, ASCII-safe, semantic, overridable and hidden at zero", async () => {
+test("running task counts are live, in host glyphs, semantic, overridable and hidden at zero", async () => {
   const registry = new JobRegistry({
     start(_spec, emit) {
       emit({ type: "spawned", pid: 7, contained: true })
@@ -60,8 +60,7 @@ test("running task counts are live, ASCII-safe, semantic, overridable and hidden
     expect(await host.load(statusExtension, "builtin:status")).toBe(true)
     expect(item()?.text).toBe("1 idle agent")
     agents = [...agents, child("paused", "paused")]
-    expect(item()?.text).toBe("1 idle agent | 1 paused agent")
-    expect(item()?.text).toMatch(/^[\x20-\x7e]+$/)
+    expect(item()?.text).toBe("1 idle agent · 1 paused agent")
     const jobsRendered = rendered()
     registry.start({ command: "ordinary", argv: [], cwd: "/work" })
     registry.start({ command: "explicit", kind: "job", argv: [], cwd: "/work" })
@@ -69,7 +68,7 @@ test("running task counts are live, ASCII-safe, semantic, overridable and hidden
     await jobsRendered
     await bus.flush()
     expect(item()).toMatchObject({
-      text: "* 2 jobs | 1 idle agent | 1 paused agent | 1 monitor",
+      text: "⠋ 2 jobs · 1 idle agent · 1 paused agent · 1 monitor",
       tone: "accent",
       priority: 5,
     })
@@ -83,16 +82,15 @@ test("running task counts are live, ASCII-safe, semantic, overridable and hidden
     await agentsRendered
     await bus.flush()
     expect(item()?.text).toBe(
-      "* 2 jobs | 1 agent | 1 queued agent | 1 idle agent | 1 paused agent | 1 monitor",
+      "⠋ 2 jobs · 1 agent · 1 queued agent · 1 idle agent · 1 paused agent · 1 monitor",
     )
-    expect(item()?.text).toMatch(/^[\x20-\x7e]+$/)
     await host.load((api) => {
       api.registerStatusItem({ id: "tasks", override: true, tone: "warning", text: () => "custom tasks" })
     }, "user")
     expect(item()).toMatchObject({ text: "custom tasks", tone: "warning" })
     host.unload("user")
     expect(item()?.text).toBe(
-      "* 2 jobs | 1 agent | 1 queued agent | 1 idle agent | 1 paused agent | 1 monitor",
+      "⠋ 2 jobs · 1 agent · 1 queued agent · 1 idle agent · 1 paused agent · 1 monitor",
     )
     await registry.stopAll()
     agents = [child("paused", "paused")]

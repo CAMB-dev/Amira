@@ -11,10 +11,14 @@ export function ago(ms: number, now = Date.now()): string {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
-/** How a stored session reads in a picker: "<id>  3m ago  12 msgs  first words". */
+/** How a stored session reads in a picker: "<id> · 3m ago · 12 msgs · first words". */
 export function sessionLabel(s: StoredSessionInfo, now = Date.now()): string {
-  return `${s.id}  ${ago(s.updatedAt, now)}  ${s.messageCount} msgs  ${oneLine(s.title || s.firstUserText || "(empty)", 50)}`
+  return `${s.id} · ${ago(s.updatedAt, now)} · ${s.messageCount} msgs · ${oneLine(s.title || s.firstUserText || "(empty)", 50)}`
 }
+
+/** The first message under a session's label, only when the label shows a title instead. */
+const firstMessage = (s: StoredSessionInfo) =>
+  s.title && oneLine(s.title, 50) !== oneLine(s.firstUserText, 50) ? oneLine(s.firstUserText, 100) : ""
 
 /** The first word of a picker label, which is the id it stands for. */
 const idOf = (label: string) => label.split(/\s/, 1)[0]!
@@ -93,17 +97,19 @@ export function resumeCommand(): CommandDefinition {
                 keys: ctx.session.deleteSession ? [{ key: "d", label: "delete" }] : [],
               },
             ],
-            descriptions: sessions.map((s) => oneLine(s.firstUserText, 100)),
+            descriptions: sessions.map(firstMessage),
             searchTexts: sessions.map((s) => s.searchText ?? s.firstUserText),
           },
         )
         if (!picked) {
-          ctx.print(
-            `Recent sessions:\n${sessions
-              .slice(0, 10)
-              .map((s) => sessionLabel(s, now))
-              .join("\n")}`,
-          )
+          // The TUI's picker leaves its own cancelled echo.
+          if (ctx.frontend !== "tui")
+            ctx.print(
+              `Recent sessions:\n${sessions
+                .slice(0, 10)
+                .map((s) => sessionLabel(s, now))
+                .join("\n")}`,
+            )
           return
         }
         const chosen = idOf(picked.option)
@@ -111,7 +117,7 @@ export function resumeCommand(): CommandDefinition {
           if (await ctx.ui.confirm("Delete this session?", picked.option, { signal: ctx.signal })) {
             await ctx.session.deleteSession!(chosen)
             ctx.print(`Deleted session ${chosen}.`)
-          }
+          } else ctx.print(`Kept session ${chosen}.`)
           continue
         }
         id = chosen

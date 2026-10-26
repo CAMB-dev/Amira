@@ -8,7 +8,7 @@ import {
 } from "@amira/tui-kit"
 import type { Block, BlockEnv } from "../blocks/base.ts"
 import { copyToClipboard } from "../clipboard.ts"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { fitHint } from "../hint.ts"
 import type { Keybindings } from "../keybindings.ts"
 import { isActive } from "../subagents.ts"
@@ -67,7 +67,7 @@ export function createFindSelect(deps: FindSelectDeps) {
     const room = Math.max(4, width - visibleWidth(head) - visibleWidth(hint) - 2)
     const input = findInput.render(room, theme, { focused: true, placeholder: "text in the transcript" })
     const pad = " ".repeat(Math.max(1, room - visibleWidth(input) + 2))
-    return truncateToWidth(`${head}${input}${pad}${theme.muted(hint)}`, width, glyphs.more)
+    return truncateToWidth(`${head}${input}${pad}${theme.muted(hint)}`, width, viewEllipsis())
   }
 
   /** The blocks a selection moves over (those with rows), and where `b` is among them. */

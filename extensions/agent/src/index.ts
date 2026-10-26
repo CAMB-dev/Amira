@@ -2,7 +2,7 @@ import {
   agentStatusState,
   defineExtension,
   type ExtensionAPI,
-  formatElapsed,
+  formatDuration,
   type PendingNotice,
   plural,
   type SubagentResult,
@@ -88,7 +88,7 @@ function noticeMessage(jobs: Pick<Job, "role" | "title" | "done" | "result" | "k
             ? shorten(r.note, 100)
             : "stopped"
           : "")
-    const head = `${j.title} · ${j.role} · ${formatElapsed(r.durationMs)} · ${tokens} tok${why ? ` · ${why}` : ""}`
+    const head = `${j.title} · ${j.role} · ${formatDuration(r.durationMs)} · ${tokens} tok${why ? ` · ${why}` : ""}`
     const kept = j.kept
       ? [
           {

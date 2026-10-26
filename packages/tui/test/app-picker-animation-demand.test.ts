@@ -51,7 +51,8 @@ for (const mode of ["fullscreen"] as const) {
           { sessionId: app.agent.sessionId },
         )
         await waitFor(() => app.live().includes(`${state.padEnd(7)} Selected child`), state)
-        expect(activeCount()).toBe(state === "working" ? 1 : 0)
+        // Working: the spinner cadence and the live clock that keeps its elapsed time ticking.
+        expect(activeCount()).toBe(state === "working" ? 2 : 0)
         if (state === "working") {
           const first = app.live()
           await waitFor(() => app.live() !== first, "animated picker frame")

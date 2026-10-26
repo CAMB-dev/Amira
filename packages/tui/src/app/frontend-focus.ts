@@ -2,6 +2,7 @@ import type { AnyEvent, Message } from "@amira/api"
 import { type AgentPort, frontendIdentity } from "@amira/core"
 import { type Editor, type EditorPart, truncateToWidth } from "@amira/tui-kit"
 import { restoreEditorState } from "../../../tui-kit/src/internal/editor-state.ts"
+import { chromeText, viewEllipsis } from "../glyphs.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { PromptHistory } from "../prompt-history.ts"
 import { PromptHistory as History } from "../prompt-history.ts"
@@ -350,9 +351,9 @@ export function createFrontendFocus(
     indicator: (width: number) =>
       current
         ? truncateToWidth(
-            `${current.snapshot.name.replace(/\p{Cc}/gu, " ")} · ${deps.returnKey()} main`,
+            chromeText(`${current.snapshot.name.replace(/\p{Cc}/gu, " ")} · ${deps.returnKey()} main`),
             width,
-            "…",
+            viewEllipsis("…"),
           )
         : native.indicator(width),
     guardCommand,

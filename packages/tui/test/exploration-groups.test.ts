@@ -241,7 +241,7 @@ test("fold disclosure follows the ASCII theme and measures custom glyph widths",
       { verb: "Read", target: "a.ts" },
       { verb: "Read", target: "a.ts" },
     ]
-    expect(stripAnsi(exploredLine(monoTheme, actions, 100))).toBe("|-Read 2 files  >")
+    expect(stripAnsi(exploredLine(monoTheme, actions, 100))).toBe("| Read 2 files  >")
     setGlyphs({ folded: "[+]" })
     const narrow = exploredLine(defaultTheme, actions, 23)
     expect(narrow).toContain(defaultTheme.muted("[+]"))

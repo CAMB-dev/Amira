@@ -374,7 +374,7 @@ test.if(hasBash)(
 )
 
 test.if(hasBash)(
-  "a job that ends on its own: the user gets a notice, the model a waking message",
+  "a job that ends on its own: one notice, the waking message, with the failed badge",
   async () => {
     const delivered: Delivered[] = []
     const api = fakeApi()
@@ -389,12 +389,15 @@ test.if(hasBash)(
     const text = (delivered[0]!.message.content[0] as { text: string }).text
     expect(text).toStartWith(`Background job ${jobId} (${bun} late-fail.js) exited with code 4.`)
     expect(text).toContain("boom")
-    expect(delivered[0]!.message.display).toMatchObject({ origin: "job" })
-    await waitUntil(() => api.notices.length > 0, "the user's notice", 20_000)
-    expect(api.notices[0]).toEqual({
-      text: `Background job ${jobId} exited with code 4: ${bun} late-fail.js`,
-      level: "warning",
+    // One notice per end: the session's, with the shared failed badge; the host adds none.
+    expect(delivered[0]!.message.display).toMatchObject({
+      origin: "job",
+      notices: [
+        { status: "failed", text: expect.stringContaining(`Background job ${jobId} · exited with code 4`) },
+      ],
     })
+    await waitUntil(() => backgroundJobs.get(jobId)?.status === "exited", "the job's end", 20_000)
+    expect(api.notices).toEqual([])
   },
   SPAWN_TEST_TIMEOUT_MS,
 )

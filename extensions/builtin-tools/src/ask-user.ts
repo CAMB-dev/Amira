@@ -160,6 +160,11 @@ export const askUserPresenter: ToolPresenter<AskUserParams, AskUserDetails> = {
     if (o.answers.length === 1) return `${answerText(o.answers[0]!)}${by}`
     return `${o.answers.length} answers${by}`
   },
+  /** Declined, or nobody could answer: no answer came, which is not a success. */
+  outcome(call) {
+    const o = detailsOf(call)?.outcome
+    return o && ("declined" in o || "unavailable" in o) ? "interrupted" : undefined
+  },
   body(call, { detail }) {
     const d = detailsOf(call)
     if (detail === "full") {

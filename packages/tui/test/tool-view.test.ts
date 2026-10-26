@@ -38,6 +38,41 @@ const show = (
 
 const numbered = (n: number) => Array.from({ length: n }, (_, i) => `out ${i + 1}`).join("\n")
 
+test("a background qualifier is muted after the command; a job id is styled as a target", () => {
+  const bash = builtinPresenters.bash
+  const head = finishedToolLines(
+    theme,
+    bash,
+    { name: "bash", args: { command: "bun run dev", background: true }, result: textResult("ok") },
+    "summary",
+    80,
+  )[0]!
+  expect(head).toContain(`${theme.command("bun run dev")}${theme.muted(" · background")}`)
+  const job = finishedToolLines(
+    theme,
+    builtinPresenters.job_output,
+    { name: "job_output", args: { job_id: "job1", wait_for: "GET" }, result: textResult("ok") },
+    "summary",
+    80,
+  )[0]!
+  expect(stripAnsi(job)).toContain("Checked job1 · wait for /GET/")
+  expect(job).toContain(`${theme.path("job1")}${theme.muted(" · wait for /GET/")}`)
+})
+
+test("a presenter's outcome replaces the success mark of a call that did not fail", () => {
+  const call: FinishedCall = { name: "ask", args: {}, result: textResult("declined") }
+  const mark = (outcome?: "done" | "interrupted" | "failed") =>
+    finishedToolLines(theme, { outcome: () => outcome }, call, "summary", 60)[0]!
+  expect(mark()).toContain(theme.success(`${glyphs.toolDone} declined`))
+  expect(mark("interrupted")).toContain(theme.muted(`${glyphs.toolInterrupted} declined`))
+  expect(mark("failed")).toContain(theme.error(`${glyphs.toolFailed} declined`))
+  // A call that failed stays failed, whatever its presenter says.
+  const failed = { ...call, result: textResult("boom", true) }
+  expect(stripAnsi(finishedToolLines(theme, { outcome: () => "done" }, failed, "summary", 60)[0]!)).toContain(
+    `${glyphs.toolFailed} boom`,
+  )
+})
+
 test("built-in heads use bold text verbs while targets keep their semantic tokens", () => {
   for (const [name, args, past, running, target, style] of [
     ["read", { path: "a.ts" }, "Read", "Reading", "a.ts", theme.path],
@@ -199,7 +234,7 @@ test("outcomes remain explicit in NO_COLOR, 16-color and monochrome themes, incl
         }
         expect(render({ ...call, result: textResult("partial", true), interrupted: true })).toEqual([
           `${markerPrefix(glyphs.treeBranch)}t  ${glyphs.toolInterrupted} interrupted`,
-          `${glyphs.treeBranch.length === 1 ? "│ " : "| "}partial`,
+          `${glyphs.treePipe} partial`,
         ])
       }
     }
@@ -345,7 +380,7 @@ test("a failure shows its output under the result, its start and end when it is 
   expect(show(undefined, call, "full")).toHaveLength(22)
 })
 
-test("ASCII views mark omitted tool-body lines with three periods; transcripts keep the theme marker", () => {
+test("ASCII views mark omitted tool-body lines with three periods, as transcripts do", () => {
   const before = { ...glyphs }
   const body = Array.from({ length: 25 }, (_, i) => ({
     kind: "text" as const,
@@ -363,9 +398,9 @@ test("ASCII views mark omitted tool-body lines with three periods; transcripts k
     // A body row cut to the width is exactly 40 cells and ends with three periods.
     expect(visibleWidth(view[1]!)).toBe(40)
     expect(plainView[1]).toEndWith("...")
-    // Transcript callers keep the theme's own one-cell marker.
+    // Transcripts mark omitted text the same way: a lone period would read as punctuation.
     expect(finishedToolLines(theme, presenter, call, "summary", 40).map(stripAnsi)).toContain(
-      "| . 6 more lines",
+      "| ... 6 more lines",
     )
 
     // In Unicode the view marker is the theme marker, so view and transcript rows are identical.

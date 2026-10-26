@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { annotations, inspectRun, parseJUnit, runCiTests, type TestRun, warning } from "./ci-test"
-import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnWork } from "./spawn-test"
+import { SPAWN_EVENT_TIMEOUT_MS, SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnWork } from "./spawn-test"
 
 // Bun 1.4.2 --parallel=3: file suites contain recursive describe suites; their
 // counters include descendants. Failures are children, not attributes of testcase.
@@ -534,9 +534,11 @@ for (const scenario of [
           stdout: "pipe",
           stderr: "pipe",
         })
+        // Two nested test runs (the retry) in a row: await the fixture's own exit.
         const [stdout, stderr, code] = await waitForSpawnWork(
           `CI retry fixture: ${scenario}`,
           Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+          SPAWN_EVENT_TIMEOUT_MS,
         )
         expect(code, stdout + stderr).toBe(recovered || scenario === "snapshot pass" ? 0 : 1)
         const summary = readFileSync(join(dir, "summary.txt"), "utf8")

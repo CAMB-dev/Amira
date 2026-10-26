@@ -45,7 +45,8 @@ export function dialogEchoLines(
     const key =
       answer.key &&
       sectionOf(r.sections, r.options.indexOf(answer.option))?.keys?.find((k) => k.key === answer.key)
-    return line(r.title, key ? `${answer.option} ${glyphs.separator} ${key.label}` : answer.option)
+    // A key's verb comes first, so the echo reads as what was asked for ("delete s_1"), not as done.
+    return line(r.title, key ? `${key.label} ${answer.option}` : answer.option)
   }
   if (r.kind === "input" && r.secret) return line(r.title, "(hidden)")
   if (r.kind === "input" && answer === "") return line(r.title, "(empty)")

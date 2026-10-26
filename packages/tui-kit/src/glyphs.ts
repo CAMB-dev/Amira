@@ -7,6 +7,8 @@ export interface ChromeGlyphs {
   arrowDown: string
   arrowLeft: string
   arrowRight: string
+  /** "Goes to", as in "tab → input"; kept apart from the arrow keys' names. */
+  goesTo: string
   disclosureOpen: string
   disclosureClosed: string
   optionSelected: string
@@ -24,6 +26,7 @@ const unicodeChrome: ChromeGlyphs = {
   arrowDown: "↓",
   arrowLeft: "←",
   arrowRight: "→",
+  goesTo: "→",
   disclosureOpen: "▾",
   disclosureClosed: "▸",
   optionSelected: "●",
@@ -41,6 +44,7 @@ const asciiChrome: ChromeGlyphs = {
   arrowDown: "down",
   arrowLeft: "left",
   arrowRight: "right",
+  goesTo: "->",
   disclosureOpen: "v",
   disclosureClosed: ">",
   optionSelected: "*",

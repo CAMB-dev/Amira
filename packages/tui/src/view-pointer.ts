@@ -1,6 +1,6 @@
 import { HitRegions, stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { oneLine } from "./extension-view-rendering.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 
 export function confirmationText(question: string, yesLabel = "yes", noLabel = "cancels") {
   const prefix = `${oneLine(question)} `
@@ -31,7 +31,7 @@ export class ViewPromptHits extends HitRegions {
       add("yes", 2 + confirm.yes, 2 + confirm.no - visibleWidth(` ${glyphs.separator} `))
       add("no", 2 + confirm.no, width)
     } else if (title !== undefined) {
-      const label = truncateToWidth(`${title} `, Math.max(1, Math.floor((width - 2) / 2)), glyphs.more)
+      const label = truncateToWidth(`${title} `, Math.max(1, Math.floor((width - 2) / 2)), viewEllipsis())
       add("input", 2 + visibleWidth(label), width)
     }
   }

@@ -440,7 +440,7 @@ test("form cuts follow the render context's marker, never a global one", () => {
       "⚠️ 2 dialogs wait behin…",
       "Checking before saving…",
       "› [ Save ]    [ Cancel ]",
-      "^S save · Esc back",
+      "ctrl+s save · esc back",
     ])
 
     // A context marker reaches every cut, the notice and status rows included.
@@ -452,7 +452,7 @@ test("form cuts follow the render context's marker, never a global one", () => {
       "⚠️ 2 dialogs wait behin~",
       "Checking before saving…",
       "› [ Save ]    [ Cancel ]",
-      "^S save · Esc back",
+      "ctrl+s save · esc back",
     ])
 
     // A custom global marker never overrides the context's own: these rows stay byte-identical.
@@ -466,7 +466,7 @@ test("form cuts follow the render context's marker, never a global one", () => {
       "⚠️ 2 dialogs wa…",
       "Checking before…",
       "› [ Save ]    [ ",
-      "^S save · Esc b…",
+      "ctrl+s save · e…",
     ])
     // In a narrow context, the context's marker still ends the cut notice and status.
     setGlyphs()
@@ -478,7 +478,7 @@ test("form cuts follow the render context's marker, never a global one", () => {
       "⚠️ 2 dialogs wa~",
       "Checking before~",
       "› [ Save ]    [ ",
-      "^S save · Esc b~",
+      "ctrl+s save · e~",
     ])
   } finally {
     setGlyphs(before)

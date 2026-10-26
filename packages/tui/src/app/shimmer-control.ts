@@ -47,7 +47,8 @@ export function shimmerColorChoices(
 }
 
 export class ShimmerControl {
-  focus: "list" | "appearance" | "shimmer" = "appearance"
+  /** The picker opens on the current theme; Tab moves into the appearance and shimmer controls. */
+  focus: "list" | "appearance" | "shimmer" = "list"
   customizing = false
   private knob = 0
   private colorChoice: string | undefined
@@ -220,12 +221,12 @@ export class ShimmerControl {
     ]
     const rows = KNOBS.map((key, index) => {
       const text = `${key}: ${values[index]}`
-      return index === this.knob
-        ? `${theme.accent(glyphs.choice)} ${theme.text(text)}`
-        : `  ${theme.muted(text)}`
+      return index === this.knob ? theme.accent(`${glyphs.choice} ${text}`) : `  ${theme.muted(text)}`
     })
-    // Reserve title, interior hint and bottom edge before choosing the visible knob window.
-    const room = Math.max(1, maxRows - 3)
+    // Reserve title, interior hint and bottom edge before choosing the visible knob window,
+    // then the blank rows that set the knobs apart from title and hint, as other dialogs have.
+    const spaced = maxRows - 3 - KNOBS.length >= 2
+    const room = Math.max(1, maxRows - 3 - (spaced ? 2 : 0))
     const start = Math.max(0, Math.min(this.knob, rows.length - room))
     const choose = this.deps.keys.label("dialog.choose")?.toLowerCase()
     const cancel = this.deps.keys.label("dialog.cancel")?.toLowerCase()
@@ -233,13 +234,18 @@ export class ShimmerControl {
       `${this.deps.keys.pairLabel("dialog.up", "dialog.down")?.toLowerCase() ?? "up/down"} knob`,
       `${keyLabel({ name: "left" })}/${keyLabel({ name: "right" })} change`,
       choose && `${choose} back`,
-      cancel && `${cancel} restores`,
+      cancel && `${cancel} restore`,
     ]
       .filter(Boolean)
       .join(` ${glyphs.separator} `)
     return dialogFrame(
       bold(theme.text("Customize shimmer")),
-      [...rows.slice(start, start + room), theme.muted(hint)],
+      [
+        ...(spaced ? [""] : []),
+        ...rows.slice(start, start + room),
+        ...(spaced ? [""] : []),
+        theme.muted(hint),
+      ],
       width,
       ctx,
       theme.accent,

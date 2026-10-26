@@ -1,6 +1,6 @@
 import { agentStatusState, type MessageDisplay } from "@amira/api"
 import { type Theme, truncateToWidth, visibleWidth, wrapText } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { CONTENT_INSET, contentRoom } from "./grid.ts"
 import { styledStatusBadge } from "./status-badge.ts"
 
@@ -41,7 +41,7 @@ export function messageNoticeLines(
       : text.split("\n")
     return rows.map((row, i) => {
       const line = `${i === 0 && badge ? `${badge} ` : CONTENT_INSET}${theme.muted(row)}`
-      return Number.isFinite(width) ? truncateToWidth(line, Math.max(0, width), glyphs.more) : line
+      return Number.isFinite(width) ? truncateToWidth(line, Math.max(0, width), viewEllipsis()) : line
     })
   })
 }

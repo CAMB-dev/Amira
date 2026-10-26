@@ -230,7 +230,7 @@ for (const mode of ["fullscreen"] as const) {
       s.terminal.send("z")
       await waitFor(() => s.live().includes("│ › z"), "caret and editor active")
       s.terminal.send("\x1b[27u")
-      await waitFor(() => !s.live().includes("Esc close dock"), "empty dock closes")
+      await waitFor(() => !s.live().includes("esc close dock"), "empty dock closes")
       expect(s.live()).toContain("│ › z")
     } finally {
       s.terminal.send("\x03")

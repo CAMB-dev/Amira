@@ -26,7 +26,7 @@ for (const follow of [["ctrl+alt+b"], []]) {
     try {
       s.terminal.send("/dock\r")
       await waitFor(() => s.live().includes("Key help dock"), "dock footer")
-      const footer = s.screen.lines.find((line) => line.includes("Esc close dock"))!
+      const footer = s.screen.lines.find((line) => line.includes("scroll dock"))!
       if (follow.length) expect(footer).toContain("ctrl+alt+b follow")
       else expect(footer).not.toMatch(/\bfollow\b/)
       expect(footer).not.toContain("End follow")
