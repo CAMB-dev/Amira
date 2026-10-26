@@ -106,6 +106,7 @@ const defaults = {
   arrowDown: chrome.arrowDown,
   arrowLeft: chrome.arrowLeft,
   arrowRight: chrome.arrowRight,
+  goesTo: chrome.goesTo,
   rangeSeparator: chrome.rangeSeparator,
 } as const
 
@@ -144,6 +145,18 @@ export function viewSeparator(): string {
   return asciiGlyphs() ? "." : "·"
 }
 
+/**
+ * Host-composed chrome text (labels, descriptions, summaries, often from extensions) in the
+ * active glyph set: the " · " field separator becomes the theme's, and in ASCII mode an
+ * ellipsis becomes three periods and a dash a hyphen. Not for user or model content.
+ */
+export function chromeText(text: string): string {
+  const separated = glyphs.separator === "·" ? text : text.replaceAll(" · ", ` ${glyphs.separator} `)
+  return asciiGlyphs()
+    ? separated.replaceAll("…", "...").replaceAll(" — ", " - ").replaceAll("—", "-")
+    : separated
+}
+
 /** Definitions are validated by the core registry; absent keys always reset to the defaults. */
 export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
   const profile = chromeGlyphs(overrides)
@@ -152,6 +165,7 @@ export function setGlyphs(overrides: Partial<Glyphs> = {}): void {
     arrowDown: profile.arrowDown,
     arrowLeft: profile.arrowLeft,
     arrowRight: profile.arrowRight,
+    goesTo: profile.goesTo,
     rangeSeparator: profile.rangeSeparator,
   }
   for (const key of Object.keys(defaults) as (keyof Glyphs)[]) {

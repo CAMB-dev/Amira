@@ -217,13 +217,13 @@ test("ascii supplies every flat glyph key, only ASCII, and exact supported cell 
     const fallback = Array.isArray(defaults) ? defaults : [defaults]
     for (const [index, glyph] of values.entries()) {
       expect([...glyph].every((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) <= 126)).toBe(true)
-      if (key === "treeBranch" || key === "treeLast") expect(textCells(glyph)).toBe(2)
-      else if (key === "warning") expect(textCells(glyph)).toBe(1)
+      // One-cell tree arms leave the same gap before the verb as the Unicode ones.
+      if (key === "warning") expect(textCells(glyph)).toBe(1)
       else expect(textCells(glyph)).toBe(textCells(fallback[Math.min(index, fallback.length - 1)]!))
     }
   }
-  expect(theme.glyphs?.treeBranch).toBe("|-")
-  expect(theme.glyphs?.treeLast).toBe("`-")
+  expect(theme.glyphs?.treeBranch).toBe("|")
+  expect(theme.glyphs?.treeLast).toBe("`")
   expect(theme.glyphs?.treePipe).toBe("|")
   expect(theme.glyphs?.toolDone).toBe("v")
   expect(theme.glyphs?.toolFailed).toBe("x")

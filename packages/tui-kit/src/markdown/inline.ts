@@ -15,6 +15,9 @@ export type MarkdownStyles = Record<MarkdownToken, StyleFn> & {
   path?: StyleFn
   codeBg?: StyleFn
   surfaceMuted?: StyleFn
+  /** Added and removed lines of a ```diff block; the theme's success and error colors. */
+  diffAdd?: StyleFn
+  diffRemove?: StyleFn
 }
 
 /** The Markdown tokens of a theme, with `markdownTheme` filling in the ones it lacks. */
@@ -27,6 +30,8 @@ export function markdownStyles(theme: Theme): MarkdownStyles {
   if (theme.path) out.path = theme.path
   if (theme.codeBg) out.codeBg = theme.codeBg
   if (theme.surfaceMuted) out.surfaceMuted = theme.surfaceMuted
+  out.diffAdd = theme.success
+  out.diffRemove = theme.error
   return out
 }
 

@@ -4,12 +4,14 @@ import {
   type CommandDefinition,
   DIALECT_NOTES,
   draftFromValues,
+  modelLabel,
   type ProviderAdmin,
   type ProviderFormInitial,
   providerFormSpec,
   providerVendorInitial,
 } from "@amira/api"
 import { table } from "./format.ts"
+import { pickModel } from "./model-command.ts"
 import { ProviderConnectionTests } from "./provider-tests.ts"
 
 const USAGE = "usage: /provider [add [<vendor|protocol>] | edit <id> | remove <id> | key <id>]"
@@ -161,8 +163,10 @@ async function manage(
       ctx.print(`No models configured; add one with /provider edit ${id}.`)
       return
     }
-    const model = await ctx.ui.select(`Model from ${id}`, models, { signal: ctx.signal })
-    if (model) ctx.session.setModel(model)
+    const model = await pickModel(ctx, `Model from ${id}`, models)
+    if (!model) return
+    ctx.session.setModel(model)
+    ctx.print(`Model: ${modelLabel(ctx.session.info().model)}`)
     return
   }
   if (action === "Edit") {
@@ -182,7 +186,12 @@ async function testConnection(ctx: CommandContext, id: string, a: ProviderAdmin)
     ctx.print(`No models configured; add one with /provider edit ${id} before testing.`)
     return
   }
-  const model = await ctx.ui.select(`Test connection for ${id}`, draft.models, { signal: ctx.signal })
+  // Open on the model in use when it comes from this provider.
+  const current = ctx.session.info().model
+  const model = await ctx.ui.select(`Test connection for ${id}`, draft.models, {
+    ...(current.provider === id && draft.models.includes(current.model) ? { initial: current.model } : {}),
+    signal: ctx.signal,
+  })
   if (!model) return
   const cost = a.describeModels(draft, [model])[0]?.cost
   const free = cost !== undefined && cost.input === 0 && cost.output === 0

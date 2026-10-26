@@ -30,7 +30,10 @@ export interface StatusItem {
   tone?: StatusTone | (() => StatusTone | undefined)
   /** Must be true to replace an item with the same id registered earlier (e.g. a built-in one). */
   override?: boolean
-  /** Returning undefined or "" hides the item. */
+  /**
+   * Returning undefined or "" hides the item. Frontends draw " · " in their separator glyph,
+   * and a leading AGENT_STATUS_BADGES.working.symbol and space as their working spinner.
+   */
   text(): string | undefined
 }
 
@@ -273,7 +276,8 @@ export interface UiApi {
       /** Package lifecycle badges aligned with options, rendered with the host theme. */
       optionExtensionStatuses?: (ExtensionStatusMetadata | undefined)[]
       /**
-       * Host-only presentation, read initially and on host events until the choice closes.
+       * Host-only presentation, read initially, on host events and every second until the choice
+       * closes (so elapsed times tick).
        * Options stay fixed. Changed presentation re-emits ui.request with the same requestId;
        * clients update the existing picker without resetting selection, filter or scroll.
        * This callback never crosses the event/transport boundary.

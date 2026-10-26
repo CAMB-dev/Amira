@@ -1,13 +1,14 @@
 // Owns interactive terminal selection and fullscreen lifecycle cleanup.
 import {
+  clipMiddle,
   DEFAULT_TUI_BELL,
   DEFAULT_TUI_PROGRESS,
   DEFAULT_TUI_TITLE,
   modelLabel,
   type TuiSettings,
 } from "@amira/api"
-import { ProcessTerminal, type Terminal, type Theme } from "@amira/tui-kit"
-import { glyphs } from "../glyphs.ts"
+import { ProcessTerminal, type Terminal, type Theme, visibleWidth } from "@amira/tui-kit"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { TerminalStatus } from "../terminal-status.ts"
 
 export function createTerminalStatus(
@@ -27,13 +28,22 @@ export function createTerminalStatus(
   )
 }
 
-/** The brand is interactive accent; a working-directory reference is not. */
+/**
+ * The brand is interactive accent; a working-directory reference is not. A cwd that does not
+ * fit after the model goes on a row of its own, cut in its middle, so no separator is left at
+ * a row's end and no path breaks mid-segment.
+ */
 export function interactiveBanner(
   theme: Theme,
   model: { provider: string; id: string },
   cwd: string,
+  width = Number.POSITIVE_INFINITY,
 ): string {
-  return `${theme.accent("Amira")} ${theme.muted(`${glyphs.separator} ${modelLabel({ provider: model.provider, model: model.id })} ${glyphs.separator} `)}${theme.path(cwd)}`
+  const head = `Amira ${glyphs.separator} ${modelLabel({ provider: model.provider, model: model.id })}`
+  const brand = `${theme.accent("Amira")} ${theme.muted(head.slice("Amira ".length))}`
+  if (visibleWidth(`${head} ${glyphs.separator} ${cwd}`) <= width)
+    return `${brand}${theme.muted(` ${glyphs.separator} `)}${theme.path(cwd)}`
+  return `${brand}\n${theme.path(clipMiddle(cwd, Math.max(1, width), viewEllipsis()))}`
 }
 
 /**

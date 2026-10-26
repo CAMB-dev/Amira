@@ -283,9 +283,9 @@ test("inline Fetch shares the Models row, status, mouse targets and bounded butt
   lines = view()
   const models = lines.findIndex((line) => line.includes("selected 0/1"))
   expect(lines[models + 1]).toContain("asking the provider")
-  expect(lines.join("\n")).toContain("Esc stops it")
+  expect(lines.join("\n")).toContain("esc stops it")
   form.handleInput(key("left"))
-  expect(view().join("\n")).toContain("Focus Fetch, then Esc to stop")
+  expect(view().join("\n")).toContain("Focus Fetch, then esc to stop")
   form.handleInput(key("right"))
   form.setActionState("fetch", { running: false, text: "1 model listed", tone: "success" })
   expect(view()[models + 1]).toContain("1 model listed")
@@ -350,15 +350,15 @@ test("running Test guidance follows action focus and Escape still closes a dropd
   form.setActionState("probe", { running: true, text: "checking the connection" })
   expect(events).toEqual(["probe"])
   expect(form.focused).toBe("vendor")
-  expect(view().join("\n")).not.toContain("Esc stops it")
-  expect(view().join("\n")).toContain("Focus Test, then Esc to stop")
+  expect(view().join("\n")).not.toContain("esc stops it")
+  expect(view().join("\n")).toContain("Focus Test, then esc to stop")
   form.setActionState("probe", { running: true, text: "checking the connection ".repeat(8) })
   expect(
     form
       .render(80, { ...plain, rows: 24 })
       .map(stripAnsi)
       .join("\n"),
-  ).toContain("Focus Test, then Esc to stop")
+  ).toContain("Focus Test, then esc to stop")
   form.handleInput(key("escape"))
   expect(form.confirmingCancel).toBe(false)
   expect(stopped).toEqual([])
@@ -368,7 +368,7 @@ test("running Test guidance follows action focus and Escape still closes a dropd
   form.handleInput(key("n"))
   form.handleInput(key("tab"))
   expect(form.focused).toBe("probe")
-  expect(view().join("\n")).toContain("Esc stops it")
+  expect(view().join("\n")).toContain("esc stops it")
   form.handleInput(key("escape"))
   expect(stopped).toEqual(["probe"])
   expect(form.confirmingCancel).toBe(false)
@@ -398,7 +398,7 @@ test.each(["All", "None"])("Escape on filtered %s clears the model filter before
   }
 })
 
-test("80x24 card hints keep save, test, preview and Escape guidance on one complete line", () => {
+test("card hints keep save, test, preview and Escape guidance on one complete line; narrow, preview goes first", () => {
   const { form } = make({
     fields: [
       { id: "name", type: "text", label: "Name" },
@@ -409,11 +409,12 @@ test("80x24 card hints keep save, test, preview and Escape guidance on one compl
     const hints = new Set<string>()
     for (let i = 0; i < 4; i++) {
       const lines = form.render(width, { ...plain, rows: 24 }).map(stripAnsi)
-      const hint = lines.find((line) => line.includes("^S save"))!
+      const hint = lines.find((line) => line.includes("ctrl+s save"))!
       expect(hint).toBeDefined()
-      expect(hint).toContain("^T test")
-      expect(hint).toContain("^P preview")
-      expect(hint).toContain("Esc back")
+      expect(hint).toContain("ctrl+t test")
+      if (width === 80) expect(hint).toContain("ctrl+p preview")
+      else expect(hint).not.toContain("preview")
+      expect(hint).toContain("esc back")
       expect(hint).not.toContain("…")
       hints.add(hint)
       form.handleInput(key("tab"))

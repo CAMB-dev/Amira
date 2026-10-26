@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import { findSession, listSessions, SessionStore, type SessionSummary } from "@amira/core"
+import { wrapText } from "@amira/tui-kit"
 import { UsageError } from "./args.ts"
 
 export interface StoreChoice {
@@ -61,6 +62,7 @@ export function exitNote(
   running: number,
   cwd: string,
   jobs = 0,
+  layout?: { columns: number; margin: number },
 ): string {
   const lines: string[] = []
   if (running)
@@ -80,5 +82,14 @@ export function exitNote(
         : `Continue this session with amira -r ${s.id}.`,
     )
   }
-  return lines.length ? `${lines.join("\n")}\n\n` : ""
+  if (!lines.length) return ""
+  // On the transcript's content column, wrapped to it, as the margins cover the exit printout.
+  const rows = layout
+    ? lines.flatMap((line) =>
+        wrapText(line, Math.max(20, layout.columns - 2 * layout.margin)).map(
+          (row) => `${" ".repeat(layout.margin)}${row}`,
+        ),
+      )
+    : lines
+  return `${rows.join("\n")}\n\n`
 }

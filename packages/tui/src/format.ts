@@ -24,7 +24,7 @@ import {
   wrapText,
 } from "@amira/tui-kit"
 import { localClock } from "./clock.ts"
-import { glyphs } from "./glyphs.ts"
+import { asciiGlyphs, glyphs, viewEllipsis } from "./glyphs.ts"
 import { CONTENT_INSET, contentRoom, MARKER_WIDTH, markerPrefix } from "./grid.ts"
 import { messageNoticeLines } from "./message-notice.ts"
 import { styledStatusBadge } from "./status-badge.ts"
@@ -161,7 +161,7 @@ export function userLines(
   if (rows.length > maxTextRows) {
     rows = rows.slice(0, maxTextRows)
     const last = rows.length - 1
-    rows[last] = truncateToWidth(rows[last]! + glyphs.more, last === 0 ? firstRoom : room, glyphs.more)
+    rows[last] = truncateToWidth(rows[last]! + viewEllipsis(), last === 0 ? firstRoom : room, viewEllipsis())
   }
   const lines = rows.map((l, i) => {
     const prompt = theme.accent(i === 0 ? glyphs.user : " ")
@@ -245,7 +245,7 @@ export function reasoningLines(
     body && !opts.expanded && opts.expandKey ? `  ${theme.muted(`${opts.expandKey} to expand`)}` : ""
   const head = `${markerPrefix(thinking(glyphs.thought))}${thinking(opts.thinking ? "Thinking" : `Thought${time}`)}${hint}`
   const lines = stampRows(
-    [truncateToWidth(head, Math.max(1, timestampRoom(width, opts.timestamp)), glyphs.more)],
+    [truncateToWidth(head, Math.max(1, timestampRoom(width, opts.timestamp)), viewEllipsis())],
     theme,
     width,
     opts.timestamp,
@@ -394,7 +394,7 @@ export function treeLayout(list: { depth: number }[], _closeTop = true): { inden
  */
 function fitTitle(title: string, rest: string, room: number): string {
   const left = room - visibleWidth(rest)
-  return left >= Math.min(3, visibleWidth(title)) ? truncateToWidth(title, left, glyphs.more) : title
+  return left >= Math.min(3, visibleWidth(title)) ? truncateToWidth(title, left, viewEllipsis()) : title
 }
 
 const defaultSpinner = new Spinner().glyph
@@ -431,12 +431,12 @@ export function subagentRows(
   const rest = ` ${s} ${sub.role}${stats}`
   const title = fitTitle(oneLine(sub.title), rest, width - visibleWidth(lead))
   const head = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark} ${title}${theme.muted(rest)}`
-  const rows = [truncateToWidth(head, width, glyphs.more)]
+  const rows = [truncateToWidth(head, width, viewEllipsis())]
   if (state === "working" && sub.activity) {
     const summary = clip(oneLine(sub.activity.summary), ACTIVITY_CHARS)
     const tree = `${indent}${treeRail(!last)}${treeArm(true)}`
     const tool = `${theme.muted(tree)}${treeGap(true)}${theme.accent(spinner)} ${theme.fg2(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
-    rows.push(truncateToWidth(tool, width, glyphs.more))
+    rows.push(truncateToWidth(tool, width, viewEllipsis()))
   }
   return rows
 }
@@ -466,7 +466,7 @@ export function subagentEndLine(
   const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark} `
   const title = fitTitle(oneLine(sub.title), ` ${s} ${stats}`, width - visibleWidth(lead))
   const line = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark} ${title} ${theme.muted(`${s} ${stats}`)}`
-  return truncateToWidth(line, width, glyphs.more)
+  return truncateToWidth(line, width, viewEllipsis())
 }
 
 /** Shared presentation counts, including terminal members whose exact outcome is unknown. */
@@ -507,7 +507,7 @@ export function spawnGroupCounts(group: SpawnGroupInfo): AgentCounts {
 
 /** Only working members animate; success requires every member to have actually finished. */
 export function agentCountsMark(counts: AgentCounts, theme: Theme, spinner = defaultSpinner): string {
-  if (counts.working) return theme.accent(spinner)
+  if (counts.working) return theme.accent(asciiGlyphs() ? Spinner.ascii(spinner) : spinner)
   if (counts.paused) return theme.warning(glyphs.statusPaused)
   if (counts.queued) return theme.dim(glyphs.statusQueued)
   const terminal = counts.done + counts.failed + counts.stopped
@@ -530,6 +530,17 @@ export function agentCountsText(counts: AgentCounts, doneFraction = false): stri
     .join(` ${glyphs.separator} `)
 }
 
+/** The state a group's badge shows: live work first, then any failure, then how it ended. */
+function groupState(counts: AgentCounts): AgentStatusState {
+  if (counts.working) return "working"
+  if (counts.paused) return "paused"
+  if (counts.queued) return "queued"
+  if (counts.idle || counts.ended) return "idle"
+  if (counts.failed) return "failed"
+  if (counts.stopped) return "stopped"
+  return counts.done ? "done" : "idle"
+}
+
 /** A compact group's aggregate mark is successful only when every member finished successfully. */
 export function spawnGroupMark(group: SpawnGroupInfo, theme: Theme, spinner = defaultSpinner): string {
   return agentCountsMark(spawnGroupCounts(group), theme, spinner)
@@ -549,13 +560,23 @@ export function spawnGroupRow(
   spinner = defaultSpinner,
 ): string {
   const s = glyphs.separator
-  const states = agentCountsText(spawnGroupCounts(group), true)
+  const tally = spawnGroupCounts(group)
+  const states = agentCountsText(tally, true)
   const counts = [states, `${compactTokens(group.tokens)} tok`].filter(Boolean).join(` ${s} `)
-  const status = group.status ? oneLine(group.status) : undefined
+  const name = oneLine(group.name)
+  // A status that repeats the name or a count ("1 queued") adds nothing: its other facts stay.
+  const shown = new Set(counts.split(` ${s} `))
+  const status = group.status
+    ? oneLine(group.status)
+        .split(/ [·.] /)
+        .filter((part) => part !== name && !name.endsWith(` ${part}`) && !shown.has(part))
+        .join(` ${s} `)
+    : ""
   const about = status ? `${counts} ${s} ${status}` : counts
-  const mark = spawnGroupMark(group, theme, spinner)
-  const line = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${mark} ${oneLine(group.name)} ${theme.muted(`${s} ${about}`)}`
-  return truncateToWidth(line, width, glyphs.more)
+  // The members' shared badge, symbol and label, for the state most of them are in now.
+  const badge = styledStatusBadge(groupState(tally), theme, spinner, { pad: true })
+  const line = `${theme.muted(`${indent}${treeArm(last)}`)}${treeGap(last)}${badge} ${name} ${theme.muted(`${s} ${about}`)}`
+  return truncateToWidth(line, width, viewEllipsis())
 }
 
 /** Whether `list[i]` (a depth-first list) has no later sibling: nothing after it at its depth before its parent's level ends. */

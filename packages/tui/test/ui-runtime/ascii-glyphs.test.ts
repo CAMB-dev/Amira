@@ -246,15 +246,18 @@ test("ASCII view hints cut with three periods and keep their exact width", () =>
       viewer.focused = focused
       const hint = viewer.focusHint(plain.theme, 8)
       expect(hint).not.toMatch(/[^\p{ASCII}]/u)
-      expect(hint).toBe("tab r...")
+      // The "goes to" connector is not the right arrow key's name.
+      expect(stripAnsi(hint)).toBe("tab -...")
       expect(visibleWidth(hint)).toBe(8)
     }
 
-    // The same cuts in Unicode mode are byte-identical to the rows the view drew before.
+    // The same cuts in Unicode mode keep the arrow and the true ellipsis; the key is bold.
     setGlyphs()
     for (const focused of [false, true]) {
       viewer.focused = focused
-      expect(viewer.focusHint(plain.theme, 8)).toBe(focused ? "tab → i…" : "tab → v…")
+      const hint = viewer.focusHint(plain.theme, 8)
+      expect(stripAnsi(hint)).toBe(focused ? "tab → i…" : "tab → v…")
+      expect(hint).toStartWith("\x1b[1mtab")
     }
   } finally {
     viewer.dispose()
@@ -425,7 +428,7 @@ test("ASCII views separate batched non-exploration tool labels with an ASCII sep
     }
     const rows = viewRows(definition, 60)
     expect(rows.join("\n")).not.toMatch(/[^\p{ASCII}]/u)
-    expect(rows.map((row) => stripAnsi(row)).join("\n")).toContain("|-other src/a.ts . limit=20")
+    expect(rows.map((row) => stripAnsi(row)).join("\n")).toContain("| other src/a.ts . limit=20")
     expect(rows.every((row) => visibleWidth(row) <= 60)).toBe(true)
   } finally {
     setGlyphs(before)
@@ -499,7 +502,7 @@ test("ASCII views end cut tool heads with three periods", () => {
     }
     const rows = viewRows(definition, 12)
     expect(rows.join("\n")).not.toMatch(/[^\p{ASCII}]/u)
-    expect(stripAnsi(rows[0]!)).toBe("|-other a...")
+    expect(stripAnsi(rows[0]!)).toBe("| other a...")
     expect(visibleWidth(rows[0]!)).toBe(12)
   } finally {
     setGlyphs(before)
@@ -605,7 +608,7 @@ test("ASCII views cut a folded exploration row with three periods", () => {
     setGlyphs(ascii.glyphs)
     const rows = viewRows(explorationView(2), 12)
     expect(rows.join("\n")).not.toMatch(/[^\p{ASCII}]/u)
-    expect(stripAnsi(rows[0]!)).toBe("|-Read...  >")
+    expect(stripAnsi(rows[0]!)).toBe("| Read...  >")
     expect(visibleWidth(rows[0]!)).toBe(12)
   } finally {
     setGlyphs(before)

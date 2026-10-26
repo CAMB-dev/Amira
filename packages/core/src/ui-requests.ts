@@ -36,20 +36,10 @@ import { checkAskAnswers } from "./ask-answers.ts"
 import type { EventBus } from "./event-bus.ts"
 import type { UiResponseAck } from "./frontend/form-backend.ts"
 import { InputSuggestions } from "./input-suggestions.ts"
+import { type SelectLive, selectPresentation, watchLiveSelect } from "./live-select.ts"
 import { captureUiRequest, releaseUiRequestOwner } from "./ui-request-capture.ts"
 
 type Value = UiAnswer[keyof UiAnswer]
-type SelectLive = NonNullable<Parameters<UiApi["choose"]>[2]["live"]>
-
-/** Only display data leaves the host; option strings remain the answer identities. */
-function selectPresentation(live: SelectLive) {
-  const { optionLabels, optionStatuses, descriptions } = live()
-  return {
-    ...(optionLabels ? { optionLabels: [...optionLabels] } : {}),
-    ...(optionStatuses ? { optionStatuses: [...optionStatuses] } : {}),
-    ...(descriptions ? { descriptions: [...descriptions] } : {}),
-  }
-}
 
 /** Host-only settings callbacks. Drafts never replace the extension's effective settings. */
 export interface ExtensionSettingsBackend {
@@ -317,17 +307,10 @@ export class UiRequests {
       })
       this.inputSuggestions.invalidate()
       if (!this.#pending.has(requestId)) return
-      if (live && event.kind === "select") {
-        let previous = JSON.stringify(presentation)
-        unsubscribe = this.#bus.subscribe((e) => {
-          // Presentation updates must not feed back into themselves or reopen closed choices.
-          if (e.type.startsWith("ui.")) return
+      if (live && event.kind === "select" && presentation)
+        unsubscribe = watchLiveSelect(this.#bus, live, presentation, (next) => {
           const pending = this.#pending.get(requestId)
           if (!pending) return
-          const next = selectPresentation(live)
-          const serialized = JSON.stringify(next)
-          if (serialized === previous) return
-          previous = serialized
           pending.request = {
             ...event,
             optionLabels: next.optionLabels,
@@ -336,7 +319,6 @@ export class UiRequests {
           }
           this.#bus.emit("ui.request", pending.request, { sessionId })
         })
-      }
       captureUiRequest(this, event, this.#bus)
       this.#bus.emit("ui.request", event, { sessionId })
     })

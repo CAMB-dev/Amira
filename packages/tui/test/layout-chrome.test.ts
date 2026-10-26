@@ -242,9 +242,10 @@ test("current step clocks restart for repeated compactions and retry attempts", 
     activity.setRetry(retry())
     activity.render(100, plain, options)
     now += 1000
-    expect(activity.render(100, plain, options)[0]).toContain("Retrying in 5s (1/3) · rate… 1.0s")
+    // A retry's countdown is its clock: no step clock and no ellipsis after it.
+    expect(activity.render(100, plain, options)[0]).toMatch(/Rate · retrying in 5s · 1\/3 +1s/)
     activity.setRetry({ ...retry(), attempt: 2 })
-    expect(activity.render(100, plain, options)[0]).toContain("Retrying in 6s (2/3) · rate… 0s")
+    expect(activity.render(100, plain, options)[0]).toMatch(/Rate · retrying in 6s · 2\/3 +1s/)
   } finally {
     clock.mockRestore()
   }

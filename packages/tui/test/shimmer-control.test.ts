@@ -30,8 +30,25 @@ function control(override?: ShimmerEffect, definition?: ThemeDefinition) {
       ]),
     changed: (value) => changes.push(value),
   })
+  // The picker opens on the list; these tests start on the controls, as after one Tab.
+  shimmer.handleInput(key("tab"))
   return { shimmer, changes }
 }
+
+test("the picker opens with the focus on the list; Tab moves into the controls", () => {
+  const shimmer = new ShimmerControl(undefined, {
+    keys: defaultKeybindings(),
+    definition: () => undefined,
+    variant: () => "dark",
+    colors: () => [],
+    changed: () => {},
+  })
+  expect(shimmer.focus).toBe("list")
+  expect(stripAnsi(shimmer.header("auto", plain.theme))).toStartWith("Appearance:")
+  expect(shimmer.handleInput(key("right"))).toBe(false)
+  shimmer.handleInput(key("tab"))
+  expect(shimmer.focus).toBe("appearance")
+})
 
 test("Tab switches focus without changing appearance or shimmer; preset arrows wrap", () => {
   const { shimmer, changes } = control()
@@ -110,8 +127,12 @@ test("knob edits stay sparse and inherit the theme; panel Enter returns to Shimm
   shimmer.handleInput(key("enter"))
   expect(shimmer.customizing).toBe(true)
   expect(shimmer.render(100, plain, 10).join("\n")).toContain(
-    "↑↓ knob · ←/→ change · enter back · esc restores",
+    "↑↓ knob · ←/→ change · enter back · esc restore",
   )
+  // With the rows for them, blank rows set the knobs apart from the title and the hint.
+  const roomy = shimmer.render(100, plain, 12).map((row) => stripAnsi(row).slice(1, -1).trim())
+  expect(roomy.slice(1, 3)).toEqual(["", "›style: wave"])
+  expect(roomy.slice(-3, -1)).toEqual(["", "↑↓ knob · ←/→ change · enter back · esc restore"])
   shimmer.handleInput(key("down"))
   shimmer.handleInput(key("right"))
   expect(shimmer.override).toEqual({ width: 12 })

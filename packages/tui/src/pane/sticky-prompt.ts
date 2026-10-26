@@ -1,7 +1,7 @@
 import { themeToken, truncateToWidth, visibleWidth, wrapText } from "@amira/tui-kit"
 import { type Block, type BlockEnv, LinesBlock } from "../blocks/base.ts"
 import { bandRows, timestampRoom, timestampRow, userBandPaddingIn } from "../format.ts"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import type { PaneRow } from "../transcript-pane.ts"
 
 /** The prompt whose real band has reached the viewport's top edge. */
@@ -65,17 +65,17 @@ export function stickyPromptLine(block: LinesBlock, env: BlockEnv): string {
   const first = text.split(/\r\n?|\n/, 1)[0] ?? ""
   // User rows use wrapText too: it normalizes tabs and discards unsafe terminal controls.
   const preview =
-    (wrapText(first, Number.POSITIVE_INFINITY)[0] ?? "") + (first.length < text.length ? glyphs.more : "")
+    (wrapText(first, Number.POSITIVE_INFINITY)[0] ?? "") + (first.length < text.length ? viewEllipsis() : "")
   const head = `${theme.accent(glyphs.user)} `
   const bg = themeToken(theme, "userBg")
   const room = Math.max(0, timestampRoom(width, block.timestamp) - visibleWidth(head))
   const clockTheme =
     bg && bg(" ") !== " " ? { ...theme, muted: themeToken(theme, "surfaceMuted") ?? theme.muted } : theme
   const row = timestampRow(
-    head + truncateToWidth(preview, room, glyphs.more),
+    head + truncateToWidth(preview, room, viewEllipsis()),
     clockTheme,
     width,
     block.timestamp,
   )
-  return bg ? bandRows([row], width, bg)[0]! : truncateToWidth(row, width, glyphs.more)
+  return bg ? bandRows([row], width, bg)[0]! : truncateToWidth(row, width, viewEllipsis())
 }

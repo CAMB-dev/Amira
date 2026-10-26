@@ -136,10 +136,10 @@ test.skipIf(ptyUnavailable())(
       for (const name of names)
         await request(name, { command: "wait", text: "ui-walk/main", timeout: 10_000 })
       await request(names[0]!, { command: "keys", keys: ["text:/model", "enter"] })
-      await request(names[0]!, { command: "wait", text: "Model (now", timeout: 10_000 })
+      await request(names[0]!, { command: "wait", text: "Choose a model", timeout: 10_000 })
       await request(names[0]!, { command: "keys", keys: ["esc"] })
       const closedBy = performance.now() + 10_000
-      while ((await (await request(names[0]!, { command: "text" })).text()).includes("╭ Model (now")) {
+      while ((await (await request(names[0]!, { command: "text" })).text()).includes("╭ Choose a model")) {
         if (performance.now() >= closedBy) throw new Error("Model picker did not close after Escape")
         await Bun.sleep(25)
       }

@@ -208,7 +208,7 @@ test("visible asks suppress only the waiting status, not compaction or retry act
   expect(activity.render(100, plain, options)[0]).toContain("Compacting the conversation…")
   activity.endCompaction()
   activity.setRetry({ attempt: 1, maxRetries: 3, kind: "rate", at: Date.now() + 60_000 })
-  expect(activity.render(100, plain, options)[0]).toContain("Retrying in 60s")
+  expect(activity.render(100, plain, options)[0]).toContain("Rate · retrying in 60s")
   activity.setRetry(undefined)
   expect(activity.render(100, plain, options)).toEqual([])
   expect(activity.render(100, plain, { ...options, askDialogVisible: false })[0]).toContain(

@@ -44,14 +44,43 @@ test("a collapsed panel keeps its first line; a long one is cut with a count", (
   expect(cut.at(-1)).toEqual({ kind: "muted", text: `… ${20 - PANEL_MAX_LINES + 1} more` })
 })
 
+test("segment rows keep known parts, sanitized; the cut marker follows the host glyphs", () => {
+  const r = new PanelRegistry()
+  r.register({
+    id: "badges",
+    render: () => [
+      {
+        kind: "segments",
+        parts: [
+          { kind: "success", text: "✓ done\n" },
+          { kind: "chip", text: "x", tone: "loud" },
+          { kind: "bogus", text: "dropped" },
+          { kind: "muted" },
+        ],
+      } as never,
+      { kind: "segments", parts: [] },
+      ...Array.from({ length: 20 }, (_, i) => ({ kind: "text" as const, text: `l${i}` })),
+    ],
+  })
+  const lines = r.snapshot(opts({ glyphs: { separator: ".", more: "..." } }))[0]!.lines
+  expect(lines[0]).toEqual({
+    kind: "segments",
+    parts: [
+      { kind: "success", text: "✓ done " },
+      { kind: "chip", text: "x" },
+    ],
+  })
+  expect(lines.at(-1)).toEqual({ kind: "muted", text: `... ${21 - PANEL_MAX_LINES + 1} more` })
+})
+
 test("an id holds a stack: override replaces, removing restores; a taken id is refused", () => {
   const r = new PanelRegistry()
   const offA = r.register({ id: "p", render: () => [{ kind: "text", text: "first" }] })
   expect(() => r.register({ id: "p", render: () => [] })).toThrow(/already registered/)
   const offB = r.register({ id: "p", override: true, render: () => [{ kind: "text", text: "second" }] })
-  expect(r.snapshot(opts())[0]!.lines[0]!.text).toBe("second")
+  expect(r.snapshot(opts())[0]!.lines[0]).toEqual({ kind: "text", text: "second" })
   offB()
-  expect(r.snapshot(opts())[0]!.lines[0]!.text).toBe("first")
+  expect(r.snapshot(opts())[0]!.lines[0]).toEqual({ kind: "text", text: "first" })
   offA()
   expect(r.size).toBe(0)
 })

@@ -8,7 +8,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 
 /**
  * One item of the status: what extensions registered, or the UI's own (the input's hidden
@@ -66,7 +66,8 @@ function fitItems(
   if (kept.length === 1 && !measure()) {
     // Cut, when a few characters are left to read; else left out.
     const cells = room(kept[0]!)
-    if (cells >= MIN_CUT) kept[0] = { ...kept[0]!, text: truncateToWidth(kept[0]!.text, cells, glyphs.more) }
+    if (cells >= MIN_CUT)
+      kept[0] = { ...kept[0]!, text: truncateToWidth(kept[0]!.text, cells, viewEllipsis()) }
     else kept.length = 0
   }
   return { left: kept.filter((i) => i.align === "left"), right: kept.filter((i) => i.align === "right") }

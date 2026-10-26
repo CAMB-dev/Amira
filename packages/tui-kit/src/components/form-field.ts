@@ -97,10 +97,11 @@ export function renderFormField(
     const x = Math.max(0, card ? column : column - 2)
     const y = out.length
     const options: FormFieldHit[] = []
+    // In a card, one cell stays free before its right border, as the controls' padding leaves.
     const lines = renderFormList(
       f,
       rows,
-      room + (card ? 0 : 2),
+      card ? Math.max(1, room - 1) : room + 2,
       ctx,
       on,
       boxes,
@@ -187,7 +188,8 @@ export function renderFormField(
       const total = lists.total
       const rows = lists.checklist
       const count = `selected ${checked.length}/${total}${f.filter ? ` ${separator(ctx)} ${rows.length} shown` : ""}`
-      first(theme.muted(count))
+      // In a card, on the values' edge: the controls there start their text one cell in.
+      first(`${card && edge ? " " : ""}${theme.muted(count)}`)
       const appendButton = (text: string, hit: Pick<FormFieldHit, "kind" | "value" | "focus">) => {
         let y = out.length - 1
         let x = visibleWidth(out[y]!) + 1
@@ -282,7 +284,7 @@ export function renderFormField(
   }
 }
 
-export function formActionStopHint(field: FormFieldView, focused: boolean, escLabel = "Esc"): string {
+export function formActionStopHint(field: FormFieldView, focused: boolean, escLabel = "esc"): string {
   return focused
     ? `${escLabel} stops it`
     : `Focus ${field.buttonLabel ?? field.label}, then ${escLabel} to stop`

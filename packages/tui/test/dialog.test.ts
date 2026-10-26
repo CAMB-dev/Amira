@@ -872,6 +872,6 @@ test("a filtered sectioned list has no headings; the echo names the key's label"
   expect(rows().join("\n")).not.toContain("Kept worktrees")
   const r = sectioned().dialog.request
   expect(dialogEchoLines(r, { option: "1. Fix the parser · coder", key: "p" }, plain.theme)).toEqual([
-    "  \u001b[1mSub-agents\u001b[22m › 1. Fix the parser · coder · print",
+    "  \u001b[1mSub-agents\u001b[22m › print 1. Fix the parser · coder",
   ])
 })

@@ -102,6 +102,22 @@ const ALIASES: Record<string, string> = {
 
 const TOKEN = /[A-Za-z_$][\w$]*|\d[\w.]*|\s+|./gy
 
+/** A unified diff's line by its first character: added, removed, a hunk header, or context. */
+function diffLine(line: string, styles: MarkdownStyles, skip: number): Run[] {
+  if (line.length <= skip) return []
+  const text = line.slice(skip)
+  const style = /^(\+\+\+|---)( |$)/.test(line)
+    ? styles.comment
+    : line.startsWith("+")
+      ? (styles.diffAdd ?? styles.string)
+      : line.startsWith("-")
+        ? (styles.diffRemove ?? styles.number)
+        : line.startsWith("@@")
+          ? styles.comment
+          : undefined
+  return style ? [{ text, src: skip, style, carry: "", cuttable: true }] : [plain(text, skip)]
+}
+
 /**
  * Colors one line of code: keywords, literals, numbers, strings and line comments. It knows a
  * handful of languages and nothing that spans lines (a string or comment is closed at the end
@@ -111,6 +127,7 @@ const TOKEN = /[A-Za-z_$][\w$]*|\d[\w.]*|\s+|./gy
  * line was cut in (an open quote, a comment's start), so the rest is colored as it was.
  */
 export function highlightLine(lang: string, line: string, styles: MarkdownStyles, skip = 0): Run[] {
+  if (/^(diff|patch)$/i.test(lang)) return diffLine(line, styles, skip)
   const name = ALIASES[lang.toLowerCase()]
   const language = name ? LANGUAGES[name] : undefined
   if (!language || line.length <= skip) return line.length <= skip ? [] : [plain(line.slice(skip), skip)]

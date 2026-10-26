@@ -6,6 +6,12 @@
  */
 export const SPAWN_TEST_TIMEOUT_MS = 180_000
 export const SPAWN_WAIT_TIMEOUT_MS = 30_000
+/**
+ * For awaiting the real end of a fixture that spawns several processes in a row (a job's
+ * tree, a nested test run): its own end is the event, so only the test's hang guard bounds
+ * it, less room for the awaited cleanup. A fixed 30s stage budget fails under full-suite load.
+ */
+export const SPAWN_EVENT_TIMEOUT_MS = SPAWN_TEST_TIMEOUT_MS - SPAWN_WAIT_TIMEOUT_MS
 
 type Child = Pick<Bun.Subprocess, "pid" | "exitCode" | "exited">
 

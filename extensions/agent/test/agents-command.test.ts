@@ -398,7 +398,7 @@ test("/agents lists the sub-agents; where the frontend has no live view, it prin
   const options = request.kind === "select" ? request.options : []
   // Numbered like /agents <n>, and in that position, so a digit in the dialog picks the same one.
   expect(options[0]).toMatch(
-    /^1\. Fix the bug · coder · s_\w+ · \d+s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
+    /^1\. Fix the bug · coder · s_\w+ · \d+(?:\.\d)?s · 1\.2k tok · \$0\.0021 · fix the bug in a\.ts$/,
   )
   expect(options[1]).toMatch(/^2\. {3}Find its uses · explorer · s_\w+ · /)
   expect(options).toHaveLength(2)
@@ -407,7 +407,7 @@ test("/agents lists the sub-agents; where the frontend has no live view, it prin
   const { text, ok } = await picking
   expect(ok).toBe(true)
   const lines = text.split("\n")
-  expect(lines[0]).toMatch(/^◆ ✓ done Fix the bug · coder · s_\w+ · \d+s · 1\.2k tok · \$0\.0021$/)
+  expect(lines[0]).toMatch(/^◆ ✓ done Fix the bug · coder · s_\w+ · \d+(?:\.\d)?s · 1\.2k tok · \$0\.0021$/)
   expect(lines.slice(1)).toEqual([
     "  › fix the bug",
     "    in a.ts",
@@ -418,7 +418,7 @@ test("/agents lists the sub-agents; where the frontend has no live view, it prin
     "",
     expect.stringMatching(/^ {2}└ agent {2}✓ ## Find its uses · explorer · s_\w+ · done/),
     expect.stringMatching(
-      /^ {5}◆ ✓ done Find its uses · explorer · s_\w+ · \d+s · 0 tok · where is it used$/,
+      /^ {5}◆ ✓ done Find its uses · explorer · s_\w+ · \d+(?:\.\d)?s · 0 tok · where is it used$/,
     ),
     "",
     "  Fixed the bug.",
@@ -504,7 +504,7 @@ test("a running sub-agent shows its transcript so far", async () => {
   }
   const { text } = await run("/agents 1")
   expect(text.split("\n")).toEqual([
-    expect.stringMatching(/^◆ ⠋ working Do look · agent · s_\w+ · \d+s · 0 tok$/),
+    expect.stringMatching(/^◆ ⠋ working Do look · agent · s_\w+ · \d+(?:\.\d)?s · 0 tok$/),
     "  › look",
     "",
     "  Checking.",
@@ -859,7 +859,7 @@ test("plain summaries and transcript headings use static badges before titles an
     ["aborted", "‖ stopped"],
   ] as const) {
     const agent = { ...info, status }
-    const details = `Fix parser · coder · s_badges${status === "queued" ? "" : " · 12s"} · 120 tok · $0.0012`
+    const details = `Fix parser · coder · s_badges${status === "queued" ? "" : " · 12.0s"} · 120 tok · $0.0012`
     expect(subagentSummary(agent, 0)).toBe(`${badge} ${details} · repair it`)
     expect(subagentTranscriptText(agent, [], [], 0).split("\n")[0]).toBe(`◆ ${badge} ${details}`)
   }
@@ -871,7 +871,9 @@ test("/agents print mode keeps numbering and static badges without opening a sel
   const result = await commands.run("/agents", { frontend: "print" })
   expect(result.ok).toBe(true)
   const lines = result.output.join("\n").split("\n")
-  expect(lines[0]).toMatch(/^1\. ✓ done {4}Fix the bug · coder · s_\w+ · \d+s · 1\.2k tok · \$0\.0021 · /)
+  expect(lines[0]).toMatch(
+    /^1\. ✓ done {4}Fix the bug · coder · s_\w+ · \d+(?:\.\d)?s · 1\.2k tok · \$0\.0021 · /,
+  )
   expect(lines[1]).toMatch(/^2\. {3}✓ done {4}Find its uses · explorer · s_\w+ · /)
   expect(host.ui.pending).toEqual([])
 })

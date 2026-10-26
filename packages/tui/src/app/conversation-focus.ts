@@ -11,6 +11,7 @@ import {
   sendConversation,
 } from "../../../core/src/session-routing.ts"
 import { restoreEditorState } from "../../../tui-kit/src/internal/editor-state.ts"
+import { chromeText, viewEllipsis } from "../glyphs.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import { PromptHistory } from "../prompt-history.ts"
 import type { TranscriptView } from "../view.ts"
@@ -174,9 +175,11 @@ export class ConversationFocus {
     const tail = `${status}${pending}`
     const name = this.current.conversation.name.replace(/\p{Cc}/gu, " ")
     return truncateToWidth(
-      `${truncateToWidth(name, Math.max(8, width - tail.length - 3), "…")} · ${tail}`,
+      chromeText(
+        `${truncateToWidth(name, Math.max(8, width - tail.length - 3), viewEllipsis("…"))} · ${tail}`,
+      ),
       width,
-      "…",
+      viewEllipsis("…"),
     )
   }
 

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  SPAWN_EVENT_TIMEOUT_MS,
   SPAWN_TEST_TIMEOUT_MS,
   SPAWN_WAIT_TIMEOUT_MS,
   waitForSpawnCondition,
@@ -85,10 +86,10 @@ function alive(pid: number): boolean {
   }
 }
 
-/** The pids a tree.ts run wrote, once all three are up. */
+/** The pids a tree.ts run wrote, once all three are up (three Bun starts in a row). */
 async function treePids(file: string): Promise<number[]> {
   const read = () => (existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean) : [])
-  await waitUntil(() => read().length >= 3, "the process tree to start", SPAWN_WAIT_TIMEOUT_MS)
+  await waitUntil(() => read().length >= 3, "the process tree to start", SPAWN_EVENT_TIMEOUT_MS)
   return read().map(Number)
 }
 
@@ -256,7 +257,8 @@ test(
       if (n >= 3) { clearInterval(t); process.exit(7) }
     }, 20)`
     const job = backgroundJobs.start({ command: "crash", argv: script(code), cwd })
-    const done = await backgroundJobs.waitFor(job.id, { timeoutMs: 30_000 })
+    // The main process exits only once its three-process tree is up: await that end itself.
+    const done = await backgroundJobs.waitFor(job.id, { timeoutMs: SPAWN_EVENT_TIMEOUT_MS })
     expect(done.reason).toBe("exit")
     expect(backgroundJobs.get(job.id)).toMatchObject({ status: "exited", exitCode: 7 })
     await expectAllGone(await treePids(pidFile))
@@ -344,7 +346,8 @@ for (const how of ["exit", "crash", ...(process.platform === "win32" ? [] : ["si
     `Amira ending (${how}) leaves no process of a job behind`,
     async () => {
       const { child, pidFile } = await runHost(how)
-      await waitForSpawnExit(child, "job host")
+      // The host ends only once its job's tree is up: await its own exit, not a stage budget.
+      await waitForSpawnExit(child, "job host", SPAWN_EVENT_TIMEOUT_MS)
       const pids = await treePids(pidFile)
       await expectAllGone(pids)
     },

@@ -26,7 +26,7 @@ import {
   timestampRow,
   userLines,
 } from "./format.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { replyCitations, serverToolCall } from "./server-tools.ts"
 import {
   explorationOf,
@@ -259,7 +259,7 @@ export function sessionBoundary(theme: Theme, s: SessionBoundary, width: number)
   const label = s.resumed ? `resumed${id}${when}` : `new session${id}`
   const head = `${glyphs.rule.repeat(2)} `
   const room = Math.max(1, width - visibleWidth(head) - 3)
-  const text = truncateToWidth(label, room, glyphs.more)
+  const text = truncateToWidth(label, room, viewEllipsis())
   const tail = glyphs.rule.repeat(Math.max(2, width - visibleWidth(head) - visibleWidth(text) - 1))
   return theme.muted(truncateToWidth(`${head}${text} ${tail}`, Math.max(1, width), ""))
 }
@@ -299,7 +299,7 @@ export function summaryLines(
   const head = truncateToWidth(
     `${theme.accent(folded ? "▸" : "▾")} ${theme.muted(title)}`,
     width,
-    glyphs.more,
+    viewEllipsis(),
   )
   if (folded) return [head]
   const native = info?.native
@@ -321,7 +321,7 @@ export function summaryLines(
       hyperlinks,
     })
     const detail = facts.length
-      ? [truncateToWidth(`${indent}${theme.muted(facts.join(" · "))}`, width, glyphs.more)]
+      ? [truncateToWidth(`${indent}${theme.muted(facts.join(" · "))}`, width, viewEllipsis())]
       : []
     return [head, ...detail, "", ...replyRows(body)]
   }
@@ -330,7 +330,7 @@ export function summaryLines(
         truncateToWidth(
           `${" ".repeat(visibleWidth(glyphs.assistant))}${theme.muted(facts.join(" · "))}`,
           width,
-          glyphs.more,
+          viewEllipsis(),
         ),
       ]
     : []

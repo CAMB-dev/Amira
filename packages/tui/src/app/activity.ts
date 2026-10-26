@@ -12,11 +12,15 @@ export interface RetryState {
   at: number
 }
 
-/** "retrying in 6s (2/3) · 429": the wait for a failed model request to be sent again. */
+/**
+ * "rate limited (429) · retrying in 6s · 2/3": why a failed model request waits, then when it
+ * is sent again. A countdown, so the activity row shows it without its ongoing ellipsis.
+ */
 export function retryLabel(r: RetryState, now = Date.now()): string {
   const secs = Math.max(0, Math.ceil((r.at - now) / 1000))
-  const why = r.status !== undefined ? String(r.status) : r.kind
-  return `retrying in ${secs}s (${r.attempt}/${r.maxRetries}) ${glyphs.separator} ${why}`
+  const why = r.status === 429 ? "rate limited (429)" : r.status !== undefined ? `HTTP ${r.status}` : r.kind
+  const sep = ` ${glyphs.separator} `
+  return `${why}${sep}retrying in ${secs}s${sep}${r.attempt}/${r.maxRetries}`
 }
 
 /**
@@ -286,7 +290,6 @@ export function createTurnActivity(): TurnActivity {
             {
               label: "responding",
               spinner: options.spinner.glyph,
-              stepMs: 0,
               turnMs: 0,
               tokens: 0,
               rate: 0,
@@ -319,7 +322,9 @@ export function createTurnActivity(): TurnActivity {
       }
       if (options.askDialogVisible && label === "waiting for you") return []
       const turnMs = now - (working ? turnStartedAt : compactStartedAt)
-      const stepMs = now - stepStartedAt
+      // A retry's countdown is its own clock: the row keeps only the turn's.
+      const counting = !!retry && retry.at > now
+      const stepMs = counting ? undefined : now - stepStartedAt
       const tokens = turnTokens + estimateTokens(streamedChars)
       const rate = streamedChars
         ? estimateTokens(streamedChars) / Math.max(0.001, (now - messageStartedAt) / 1000)
@@ -330,6 +335,7 @@ export function createTurnActivity(): TurnActivity {
             label,
             spinner: options.spinner.glyph,
             stepMs,
+            ongoing: !counting,
             turnMs,
             tokens,
             rate,

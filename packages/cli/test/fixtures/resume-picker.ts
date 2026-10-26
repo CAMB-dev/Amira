@@ -42,7 +42,8 @@ mock.module("@amira/tui", () => ({
     )
     terminal.send(process.env.TEST_PICKER_KEY!)
     if (mode === "slash") {
-      await waitFor(() => terminal.output.includes("Recent sessions:"), 5000)
+      // The picker leaves its own cancelled echo.
+      await waitFor(() => terminal.output.includes("cancelled"), 5000)
       if (settled || opts.commands!.agent !== opts.agent)
         throw new Error("cancelling /resume changed the active session")
       terminal.send("/quit\r")

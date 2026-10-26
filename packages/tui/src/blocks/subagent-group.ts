@@ -1,5 +1,5 @@
 import { truncateToWidth, visibleWidth } from "@amira/tui-kit"
-import { glyphs } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { markerPrefix } from "../grid.ts"
 import {
   backgroundLabel,
@@ -71,9 +71,9 @@ export class SubagentGroupBlock extends Block {
     const mark = subagentGroupMark(list, env.groups, theme, env.spinner)
     const head = `${markerPrefix(tree)}${mark} ${theme.muted(backgroundLabel(env.groups, roots))}`
     return [
-      truncateToWidth(head, width, glyphs.more),
+      truncateToWidth(head, width, viewEllipsis()),
       ...treeRows(list, env.now, treeWidth, theme, env.groups, true, env.spinner).map((row) =>
-        truncateToWidth(continuation + row, width, glyphs.more),
+        truncateToWidth(continuation + row, width, viewEllipsis()),
       ),
     ]
   }

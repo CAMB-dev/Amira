@@ -912,7 +912,7 @@ test("the top-level session asks the user to approve; dismissing denies and stop
   })
   // Without a presenter the arguments show as they are, with what "don't ask again" covers.
   expect(asked[0]).toBe(
-    `Allow bash? | policy\n{"command":"rm x"}\n"Don't ask again" covers bash asked about for: policy`,
+    `Allow bash? | policy\n{"command":"rm x"}\n"Don't ask again" covers bash for this reason, this session.`,
   )
   // An interrupted turn cancels the question: that is no dismissal.
   const stop = new AbortController()
@@ -949,7 +949,7 @@ test("an approval shows what the call would do as its tool presents it", async (
   const request = { sessionId: "s", toolCallId: "t", name: "bash", args: { command: "make" }, reason: "p" }
   await approve(request, new AbortController().signal)
   expect(asked[0]).toMatchObject({
-    message: `p\n"Don't ask again" covers bash asked about for: p`,
+    message: `p\n"Don't ask again" covers bash for this reason, this session.`,
     preview: [{ kind: "code", text: "make" }],
     always: true,
   })
@@ -1089,7 +1089,8 @@ test("a permission question says which rule or mode asked, and which sub-agent",
   expect(asked[0]).toStartWith(
     'Asked by the sub-agent "Fix tests" (child).\nPermission rule ["git","push"] says ask (user settings, s.json).',
   )
-  expect(asked[1]).toStartWith('Permission mode "edits".\nmode "edits": shell commands ask first')
+  // The reason names the mode already: it is said once.
+  expect(asked[1]).toStartWith('mode "edits": shell commands ask first\n')
 })
 
 test("print mode refuses what would ask, saying why; auto mode runs it as before", async () => {

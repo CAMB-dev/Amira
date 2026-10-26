@@ -223,6 +223,7 @@ export class RuntimeThemes {
           name = undefined
         }
         this.isPreviewing = false
+        deps.overlays.echoLocalDialog(dialog, name)
         if (name === undefined) {
           this.shimmer = previousShimmer
           if (registryVersion === this.registryVersion) this.restore(previous)
@@ -254,13 +255,7 @@ export class RuntimeThemes {
         {
           kind: "select",
           requestId: "tui-theme",
-          title: `Choose a theme (${[
-            "arrows preview",
-            deps.keys.label("dialog.choose") && `${deps.keys.label("dialog.choose")!.toLowerCase()} applies`,
-            deps.keys.label("dialog.cancel") && `${deps.keys.label("dialog.cancel")!.toLowerCase()} restores`,
-          ]
-            .filter(Boolean)
-            .join(", ")})`,
+          title: "Choose a theme",
           initial: previous.name,
           options: entries.map((entry) => entry.name),
           descriptions: entries.map(
@@ -292,13 +287,11 @@ export class RuntimeThemes {
               },
               priority: 5,
             },
-            {
-              get text() {
-                return `${deps.keys.label("dialog.choose")?.toLowerCase() ?? "enter"} ${shimmer.opensCustomize ? "customize" : "apply"}`
-              },
-              priority: 4,
-            },
           ],
+          // Arrows preview; Enter applies (or opens the shimmer knobs), Esc restores.
+          choose: () => (shimmer.opensCustomize ? "customize" : "apply"),
+          cancel: "restore",
+          listFocused: () => shimmer.focus === "list",
           header: (theme) => shimmer.header(themeVariant, theme),
           handleInput: (event) => {
             if (shimmer.handleInput(event)) return true

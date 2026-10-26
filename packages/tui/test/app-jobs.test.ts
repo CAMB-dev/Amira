@@ -45,25 +45,27 @@ for (const mode of ["fullscreen"] as const) {
         extensions: [(api) => registerJobs(api, jobs.registry)],
       })
       await waitFor(
-        () => live().includes("2 background tasks | 2 running | /tasks to see or stop"),
+        () => live().includes("2 background tasks · 2 working · /tasks to see or stop"),
         "the panel",
       )
       const lines = screenLines(live())
-      const head = lines.findIndex((l) => l.includes("2 background tasks | 2 running"))
+      const head = lines.findIndex((l) => l.includes("2 background tasks · 2 working"))
       const rows = lines.slice(head + 1, head + 3)
-      expect(rows[0]).toStartWith("job job1 0s | npm run dev | Local: http://localhost:5173/")
-      expect(rows[1]).toStartWith("job job2 0s | bun test --watch")
+      // On the content column, beside the input's text, under the summary.
+      expect(lines[head]!.indexOf("2 background")).toBe(rows[0]!.search(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/))
+      expect(rows[0]!.trim()).toMatch(/^. working job1 · 0s · npm run dev · Local: http:\/\/localho/)
+      expect(rows[1]!.trim()).toMatch(/^. working job2 · 0s · bun test --watch/)
       // Long rows are cut to the width, never wrapped; the id and time come first.
       for (const row of rows) expect(row.length).toBeLessThanOrEqual(cols)
       // Narrow, the command gives way first, so the last line of output still shows.
-      expect(rows[1]).toContain("| 12 pass")
-      if (cols === 60) expect(rows[1]).toContain("...")
+      expect(rows[1]).toContain("· 12 pass")
+      if (cols === 60) expect(rows[1]).toContain("…")
       // The panel sits above the input box.
       expect(head).toBeLessThan(lines.findIndex((l) => l.startsWith("╭")))
       // Folded (Ctrl+T), only the summary stays.
       terminal.send("\x14")
-      await waitFor(() => !live().includes("job job1"), "the folded panel")
-      expect(live()).toContain("2 background tasks | 2 running | /tasks to see or stop")
+      await waitFor(() => !live().includes("working job1"), "the folded panel")
+      expect(live()).toContain("2 background tasks · 2 working · /tasks to see or stop")
       // Stopped jobs leave the panel; with none running it goes.
       await jobs.registry.stopAll()
       await waitFor(() => !live().includes("background task"), "the panel to go")

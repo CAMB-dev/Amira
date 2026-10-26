@@ -98,7 +98,29 @@ function noticeSnippet(text: string, maxBytes: number): string {
     .replace(/\uFFFD$/, "")}…`
 }
 
-function jobEndNotice(ends: JobEnd[]): { text: string; display: string } {
+/** How a job's end reads on the shared status badge. */
+function endStatus(job: BackgroundJobInfo): "done" | "failed" | "stopped" {
+  if (job.status === "stopped") return "stopped"
+  return job.status === "failed" || job.exitCode !== 0 ? "failed" : "done"
+}
+
+/**
+ * Ends a session's notice reports, so the host does not report them a second time. Keyed by
+ * the end event's job snapshot, which every listener of that event shares; ids repeat across
+ * registries.
+ */
+const reported = new WeakSet<BackgroundJobInfo>()
+
+/** Whether a session's waking notice reports this ended job (the end event's snapshot). */
+export function endReported(job: BackgroundJobInfo): boolean {
+  return reported.has(job)
+}
+
+function jobEndNotice(ends: JobEnd[]): {
+  text: string
+  display: string
+  notices: { text: string; status: "done" | "failed" | "stopped" }[]
+} {
   const prefixes = ends.map(({ job }) => `Background job ${job.id}`)
   const requiredBytes =
     prefixes.reduce((bytes, prefix) => bytes + Buffer.byteLength(prefix), 0) +
@@ -131,6 +153,11 @@ function jobEndNotice(ends: JobEnd[]): { text: string; display: string } {
       ends.length === 1
         ? noticeSnippet(`Background job ${first.id} ${endText(first)}: ${first.command}`, 512)
         : summaries.join("\n"),
+    // One badge row per job, as background sub-agents' results show.
+    notices: ends.map(({ job }) => ({
+      text: noticeSnippet(`Background job ${job.id} · ${endText(job)} · ${job.command}`, 512),
+      status: endStatus(job),
+    })),
   }
 }
 
@@ -140,11 +167,11 @@ function jobEndNotice(ends: JobEnd[]): { text: string; display: string } {
  */
 export function watchJobEnds(registry: BackgroundJobRegistry): () => void {
   const batches = new CompletionBatches<JobEnd>((ends) => {
-    const { text, display } = jobEndNotice(ends)
+    const { text, display, notices } = jobEndNotice(ends)
     return {
       role: "user",
       content: [{ type: "text", text }],
-      display: { text: display, origin: "job" },
+      display: { text: display, origin: "job", notices },
     }
   })
   const off = registry.subscribe(({ type, job }) => {
@@ -154,6 +181,7 @@ export function watchJobEnds(registry: BackgroundJobRegistry): () => void {
     // Capture suppression here: a deferred check would run after watch() releases the job.
     if (!session || job.stopRequested || jobIsWatched(job.id)) return
     const end = { job, tail: registry.tail(job.id, 2000).trimEnd() }
+    reported.add(job)
     // Reserve before scheduling so print sees the batch and handovers retain its lease.
     batches.add(session.sessionId, end, () => session.expectNotice?.())
   })

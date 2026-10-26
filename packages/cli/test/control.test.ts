@@ -365,7 +365,8 @@ test("the /model list and completions do not offer models from a borrowed catalo
     catalogId: "llmgateway",
     models: [{ id: "gpt-fast" }],
   })
-  expect(host.control.models()).toEqual(["mock/m", "my-gateway/gpt-fast"])
+  // Listed models keep their order; the current one, listed by no provider, comes last.
+  expect(host.control.models()).toEqual(["my-gateway/gpt-fast", "mock/m"])
   const completions = await host.complete("/model my-gateway/")
   expect(completions.candidates.map((c) => c.value)).toEqual(["my-gateway/gpt-fast"])
   host.control.setModel("my-gateway/gpt-fast")

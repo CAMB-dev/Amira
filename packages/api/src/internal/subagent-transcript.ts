@@ -1,6 +1,6 @@
 import type { Message, ToolCallBlock, ToolResultMessage } from "@amira/ai"
 import { agentStatusState, type SubagentInfo } from "../commands.ts"
-import { clip, formatElapsed, formatTokens, plural } from "../format.ts"
+import { clip, formatDuration, formatElapsed, formatTokens, plural } from "../format.ts"
 import { AGENT_STATUS_BADGES, DEFAULT_THEME_GLYPHS as glyphs } from "../themes.ts"
 
 /** `text` on one line, cut to `max` terminal cells. */
@@ -8,10 +8,13 @@ function oneLine(text: string, max: number, more: string = glyphs.more): string 
   return clip(text.replace(/\s+/g, " ").trim(), max, more)
 }
 
-/** How long it has run (or ran), e.g. "12s" or "3m 05s"; "queued" before it starts. */
+/**
+ * How long it has run, in whole seconds while it runs ("12s", "3m 05s"), or how long it ran,
+ * to a tenth of a second ("3.7s"), as the transcript tree says it; "queued" before it starts.
+ */
 export function elapsed(info: SubagentInfo, now: number): string {
-  const ms = info.durationMs ?? (info.startedAt !== undefined ? now - info.startedAt : undefined)
-  return ms === undefined ? "queued" : formatElapsed(ms)
+  if (info.durationMs !== undefined) return formatDuration(info.durationMs)
+  return info.startedAt === undefined ? "queued" : formatElapsed(now - info.startedAt)
 }
 
 /** Tokens, and the cost when the model's prices are known. */

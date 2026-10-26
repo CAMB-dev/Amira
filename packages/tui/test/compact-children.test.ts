@@ -159,7 +159,7 @@ test("a core-backed paused compact group publishes a static paused row rather th
     )
     expect(stripAnsi(rows[0]!)).toContain("1 paused")
     expect(stripAnsi(rows[0]!)).not.toContain("1 working")
-    expect(rows[0]).toContain(defaultTheme.warning(glyphs.statusPaused))
+    expect(rows[0]).toContain(defaultTheme.warning(`${glyphs.statusPaused} paused `))
     expect(rows[0]).not.toContain(defaultTheme.accent("⠋"))
   } finally {
     group.end()
@@ -192,7 +192,8 @@ test("compact group roots and counts retain outcomes after finished background n
   const rows = block.lines(current).map(stripAnsi)
   expect(rows).toHaveLength(2)
   expect(rows[0]).toBe("└ ○ in the background")
-  expect(rows[1]).toBe("  └ ○ workflow · 3/4 done · 1 failed · 0 tok")
+  // A failure among them is what its badge says, never success.
+  expect(rows[1]).toBe("  └ ✗ failed  workflow · 3/4 done · 1 failed · 0 tok")
   const owningTool = new ToolBlock("call", "agent", {}, "main")
   owningTool.end = { result: textResult("done") }
   owningTool.folding = "collapsed"
@@ -204,7 +205,7 @@ test("compact group roots and counts retain outcomes after finished background n
   for (const width of [20, 35, 100]) {
     const narrow = block.lines({ ...current, width }).map(stripAnsi)
     expect(narrow).toHaveLength(2)
-    expect(narrow[1]).toContain("○ workflow")
+    expect(narrow[1]).toContain("✗ failed")
     expect(narrow.every((row) => visibleWidth(row) <= width)).toBe(true)
   }
   group.outcomes = { done: 0, failed: 4, stopped: 0 }

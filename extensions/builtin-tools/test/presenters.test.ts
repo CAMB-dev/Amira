@@ -47,7 +47,7 @@ test("every built-in presenter keeps its finished and running verbs next to its 
     glob: ["Found", "Finding"],
     output_read: ["Read", "Reading"],
     ask_user: ["Asked", "Asking"],
-    job_output: ["Read", "Reading"],
+    job_output: ["Checked", "Checking"],
     job_stop: ["Stopped", "Stopping"],
     job_list: ["Listed", "Listing"],
     monitor: ["Monitored", "Starting monitor"],

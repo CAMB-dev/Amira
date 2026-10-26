@@ -118,7 +118,7 @@ describe("opt-in form card", () => {
         return { lines, left }
       }
       const { lines, left } = checkBorders()
-      const hint = target(lines, width >= 80 ? "↑↓/Tab" : "^S save")
+      const hint = target(lines, width >= 80 ? "↑↓/tab" : "ctrl+s save")
       const button = target(lines, "[ Test ]")
       expect(hint.x).toBe(button.x)
       expect(hint.x).toBe(left + 3)

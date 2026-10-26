@@ -24,6 +24,7 @@ import type {
 } from "@amira/tui-kit"
 import { truncateToWidth } from "@amira/tui-kit"
 import type { DisplayHistory } from "./display-history.ts"
+import { chromeText } from "./glyphs.ts"
 import type { SessionBoundary } from "./history.ts"
 import type { Keybindings } from "./keybindings.ts"
 import type { ReplyRenderers } from "./markdown-nodes.ts"
@@ -40,7 +41,7 @@ export class View implements Component {
 
 /** Focus labels are presentation chrome, never session identifiers. */
 export function activationBoundary(label: string, width: number, theme: Theme): string[] {
-  return [theme.muted(truncateToWidth(label.replace(/\p{Cc}/gu, " "), Math.max(1, width), ""))]
+  return [theme.muted(truncateToWidth(chromeText(label.replace(/\p{Cc}/gu, " ")), Math.max(1, width), ""))]
 }
 
 /** How a tool call ended, as the controller hands it over. */
@@ -138,7 +139,8 @@ export interface TranscriptView {
   /** Leaves the terminal with the conversation in its normal screen; the UI is quitting. */
   stop(): void
 
-  banner(line: string | ((theme: Theme) => string)): void
+  /** A function also gets the columns its rows have, to fit itself to them. */
+  banner(line: string | ((theme: Theme, width: number) => string)): void
   user(message: UserMessage): void
   replyDelta(text: string): void
   /**

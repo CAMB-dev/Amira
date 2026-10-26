@@ -90,6 +90,7 @@ test("the public TUI exports stay stable", async () => {
     "HISTORY_LIMIT",
     "Keybindings",
     "PromptHistory",
+    "contentGeometry",
     "defaultKeys",
     "fallbackPresenter",
     "finishedToolLines",

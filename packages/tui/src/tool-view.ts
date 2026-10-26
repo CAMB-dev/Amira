@@ -19,6 +19,7 @@ import {
 } from "@amira/api"
 import {
   bold,
+  Spinner,
   type StyleFn,
   stripAnsi,
   type Theme,
@@ -29,7 +30,7 @@ import {
 } from "@amira/tui-kit"
 import { renderToolLines, type ToolLayoutLine, terminalText, type ViewMarkers } from "./diff-view.ts"
 import { formatDuration, formatElapsed, stampRows, summarizeArgs, timestampRoom } from "./format.ts"
-import { asciiGlyphs, glyphs, viewSeparator } from "./glyphs.ts"
+import { asciiGlyphs, chromeText, glyphs, viewEllipsis, viewSeparator } from "./glyphs.ts"
 import { CONTENT_INSET, MARKER_WIDTH, markerPrefix } from "./grid.ts"
 
 /** Where the TUI finds the presenter of a tool; the core's ToolRendererRegistry is one. */
@@ -213,7 +214,7 @@ function fallbackResult(call: ToolCallView, separator = "·"): string {
 }
 
 /** How a tool no presenter knows is shown: the arguments, the first line of the result and the rest. */
-export const fallbackPresenter: Required<Omit<ToolPresenter, "explore" | "verbs">> = {
+export const fallbackPresenter: Required<Omit<ToolPresenter, "explore" | "verbs" | "outcome">> = {
   summary: (args) => summarizeArgs(args),
   result: (call) => fallbackResult(call),
   body: (call, { detail }) => {
@@ -262,7 +263,7 @@ export function relativePaths(
 }
 
 /** The marker a view clips with: its own when it has one, else the configured one. */
-const cutMarker = (opts: Pick<ToolViewOptions, "markers">): string => opts.markers?.ellipsis ?? glyphs.more
+const cutMarker = (opts: Pick<ToolViewOptions, "markers">): string => opts.markers?.ellipsis ?? viewEllipsis()
 
 /** The head of a call after its name, on one line, paths under the working directory relative. */
 export function callSummary(
@@ -274,7 +275,8 @@ export function callSummary(
   const s = attempt(presenter?.summary && (() => presenter.summary!(args)), () =>
     summarizeArgs(args, 80, separator, ellipsis),
   )
-  return relativePaths(oneLine(s))
+  // Presenters compose with " · " and "…": in the active glyph set, so ASCII stays ASCII.
+  return relativePaths(chromeText(oneLine(s)))
 }
 
 function oneLine(s: string): string {
@@ -295,10 +297,27 @@ function nameLabel(theme: Theme, name: string, style: (s: string) => string): st
 
 /** The argument's semantic role, without coloring a tool's plain-text presenter output. */
 function summaryStyle(theme: Theme, args: Record<string, unknown>): StyleFn {
-  if (typeof args.command === "string") return themeToken(theme, "command") ?? theme.text
+  if (typeof args.command === "string") return qualified(themeToken(theme, "command") ?? theme.text, theme)
   if (["path", "file_path", "filePath"].some((key) => typeof args[key] === "string"))
     return themeToken(theme, "path") ?? theme.text
+  // A background job is a target, as a path is.
+  if (typeof args.job_id === "string") return qualified(themeToken(theme, "path") ?? theme.text, theme)
   return theme.text
+}
+
+/**
+ * The target in its own style and the qualifiers after it ("· background", "· wait for /x/")
+ * muted, so they do not read as part of the command or id.
+ */
+function qualified(style: StyleFn, theme: Theme): StyleFn {
+  const sep = ` ${glyphs.separator} `
+  return (text: string) => {
+    const at = text.lastIndexOf(sep)
+    const tail = at < 0 ? "" : text.slice(at + sep.length)
+    return /^(background|wait for \/.*\/?)$/.test(tail)
+      ? `${style(text.slice(0, at))}${theme.muted(text.slice(at))}`
+      : style(text)
+  }
 }
 
 /**
@@ -334,14 +353,14 @@ function headLine(
   const style = opts.muted ? theme.muted : (opts.summaryStyle ?? theme.text)
   const text = shown ? ` ${style(shown)}` : ""
   const left = `${markerPrefix(bullet)}${label}${text}`
-  const more = opts.cut ?? glyphs.more
+  const more = opts.cut ?? viewEllipsis()
   if (!fitsRight) return truncateToWidth(left, width, more)
   const cut = truncateToWidth(left, width - reserved, more)
   return `${cut}${" ".repeat(Math.max(2, width - visibleWidth(cut) - visibleWidth(right)))}${right}`
 }
 
 /** "… 3 more lines", said the same way everywhere a body is cut. Views pass their own marker. */
-export function moreLines(n: number, marker = glyphs.more): string {
+export function moreLines(n: number, marker = viewEllipsis()): string {
   return `${marker} ${plural(n, "more line")}`
 }
 
@@ -350,7 +369,7 @@ export function cutBody(
   body: ToolLine[],
   detail: ToolDetailLevel,
   failed: boolean,
-  marker = glyphs.more,
+  marker = viewEllipsis(),
 ): ToolLine[] {
   if (detail === "collapsed") return []
   if (detail === "full") return body
@@ -382,7 +401,7 @@ function callView(call: FinishedCall): ToolCallView {
 function presentedResult(presenter: ToolPresenter | undefined, view: ToolCallView, separator = "·"): string {
   const result =
     attempt(presenter?.result && (() => presenter.result!(view)), () => fallbackResult(view, separator)) ?? ""
-  return stripAnsi(String(result)).split(/\r?\n/).map(oneLine).join("\n").trim()
+  return chromeText(stripAnsi(String(result)).split(/\r?\n/).map(oneLine).join("\n").trim())
 }
 
 function outcomeMark(outcome: Outcome): string {
@@ -443,8 +462,13 @@ export function finishedToolLines(
   opts: ToolViewOptions = {},
 ): string[] {
   const outcome = outcomeOf(call)
-  const mark = outcomeMark(outcome)
   const view = callView(call)
+  // A call that worked can still say it did not do its work, or that part of it failed.
+  const shown: Outcome =
+    outcome === "done"
+      ? attempt(presenter?.outcome && (() => presenter.outcome!(view)), () => "done")
+      : outcome
+  const mark = outcomeMark(shown)
   const summary = callSummary(presenter, call.args, opts.separator, opts.ellipsis)
   const ran = outcome === "done" || outcome === "failed"
   // Interrupted while it ran (not before it started): what it printed so far still shows.
@@ -479,7 +503,7 @@ export function finishedToolLines(
         : `interrupted ${glyphs.separator} ${said}`
   } else if (!ran) result = lines(view.text).join("\n") || outcome
   else result = presentedResult(presenter, view, opts.separator)
-  const style = outcome === "done" ? theme.success : outcome === "failed" ? theme.error : theme.muted
+  const style = shown === "done" ? theme.success : shown === "failed" ? theme.error : theme.muted
   const approval =
     call.approval === "user"
       ? ` ${glyphs.separator} allowed by you`
@@ -514,7 +538,8 @@ export function finishedToolLines(
     // A one-line output the result line already says (e.g. "Aborted by the user …") is not
     // said twice.
     body = body.flatMap(({ text, marker, description, ...line }) => {
-      const rows = text.split(/\r?\n/)
+      // A presenter's own notes ("… 2 earlier lines") are chrome; output stays as printed.
+      const rows = (line.kind === "muted" ? chromeText(text) : text).split(/\r?\n/)
       const effectiveWrap = line.wrap || description !== undefined
       const hangingIndent = marker ? visibleWidth(`${glyphs[marker]} `) : 0
       return rows.map((text, i) => ({
@@ -538,13 +563,13 @@ export function finishedToolLines(
       body = []
   }
 
-  const diffOutcome = outcome === "done" && typeof call.args.command !== "string" && DIFF_COUNTS.test(result)
+  const diffOutcome = shown === "done" && typeof call.args.command !== "string" && DIFF_COUNTS.test(result)
   const marked = diffOutcome
     ? withoutMark(result, mark)
     : hasMark(result, mark)
       ? result
       : `${mark}${result ? ` ${result}` : ""}`
-  const resultText = `${outcome === "done" ? diffResult(marked, theme) : style(marked)}${theme.muted(time)}`
+  const resultText = `${shown === "done" ? diffResult(marked, theme) : style(marked)}${theme.muted(time)}`
   // A compact result may share the head even when output follows. Diff/output rows and
   // multiline/expanded results retain their rails below; callers insert child rows at 1.
   if (
@@ -588,7 +613,7 @@ export function finishedToolLines(
     onRow,
     opts.markers,
   )
-  const cut = opts.markers?.ellipsis ?? glyphs.more
+  const cut = opts.markers?.ellipsis ?? viewEllipsis()
   for (const line of bodyRows) out.push(truncateToWidth(`${continuation}${line}`, width, cut))
   return stampRows(out, theme, width, opts.timestamp)
 }
@@ -614,7 +639,7 @@ export function runningToolLines(
   const right = theme.muted(formatElapsed(now - call.startedAt))
   const head = headLine(
     theme,
-    theme.accent(spinner),
+    theme.accent(asciiGlyphs() ? Spinner.ascii(spinner) : spinner),
     call.name,
     summary,
     timestampRoom(width, opts.timestamp),

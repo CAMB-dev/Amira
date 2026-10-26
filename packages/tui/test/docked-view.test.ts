@@ -16,7 +16,7 @@ test("dock caps reserve the input, default to forty percent, and respect the fiv
   expect(dockHeight(30, 30, 8)).toBe(8)
   expect(dockHeight(30, 0)).toBe(0)
   expect(
-    dockKeyHelp(new Keybindings(defaultKeys({ vscode: false }))).find((key) => key.keys === "Esc")
+    dockKeyHelp(new Keybindings(defaultKeys({ vscode: false }))).find((key) => key.keys === "esc")
       ?.description,
   ).toBe("Focus a selectable dock when the input is empty; otherwise close it")
 })
@@ -206,7 +206,7 @@ for (const mode of ["fullscreen"] as const) {
       s.terminal.send("/dock\r")
       await waitFor(() => s.live().includes("ROW-39"), "dock following last row")
       expect(rendersMarkdown).toBe(true)
-      expect(s.live()).toContain("Esc close dock")
+      expect(s.live()).toContain("follow · esc close dock")
       const title = s.screen.lines.find((line) => line.includes("Side question"))!
       expect(title).toStartWith("   ")
       const row = s.screen.lines.findIndex((line) => line.includes("ROW-39"))

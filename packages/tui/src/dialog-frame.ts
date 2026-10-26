@@ -6,7 +6,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 
 /** Shared typing frame: an intact perimeter, an interior marker gutter and a separate footer. */
 export function dialogFrame(
@@ -25,7 +25,7 @@ export function dialogFrame(
   }
   if (padded) {
     const inner = Math.max(1, width - 4)
-    const label = truncateToWidth(title, Math.max(0, width - 6), glyphs.more)
+    const label = truncateToWidth(title, Math.max(0, width - 6), viewEllipsis())
     const top =
       border(`${glyphs.boxTopLeft}${glyphs.rule} `) +
       label +
@@ -36,14 +36,14 @@ export function dialogFrame(
     return [
       top,
       ...kept.map((line) => {
-        const fit = closeStyles(truncateToWidth(line, inner, glyphs.more))
+        const fit = closeStyles(truncateToWidth(line, inner, viewEllipsis()))
         return `${border(side)} ${fit}${" ".repeat(Math.max(0, inner - visibleWidth(fit)))} ${border(side)}`
       }),
       border(`${glyphs.boxBottomLeft}${glyphs.rule.repeat(width - 2)}${glyphs.boxBottomRight}`),
     ]
   }
   const inner = Math.max(1, width - 3)
-  const label = truncateToWidth(title, inner, glyphs.more)
+  const label = truncateToWidth(title, inner, viewEllipsis())
   const top =
     border(`${glyphs.boxTopLeft} `) +
     label +
@@ -60,7 +60,7 @@ export function dialogFrame(
     const content = marked ? omitCells(line, 1, 1) : plain.startsWith("  ") ? omitCells(line, 0, 2) : line
     const prefix = marked ? "" : " "
     const cells = inner + (marked ? 1 : 0)
-    const fit = closeStyles(truncateToWidth(content, cells, glyphs.more))
+    const fit = closeStyles(truncateToWidth(content, cells, viewEllipsis()))
     return border(side) + prefix + fit + " ".repeat(Math.max(0, cells - visibleWidth(fit))) + border(side)
   })
   return [

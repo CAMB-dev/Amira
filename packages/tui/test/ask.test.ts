@@ -459,7 +459,8 @@ test(
     })
     s.terminal.send("clean up\r")
     await waitFor(() => s.dialog().length > 0, "the approval")
-    expect(s.live()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s {3}esc stop$/m)
+    // The dialog has the keys: its own footer says what Esc does, so the row offers no stop.
+    expect(s.live()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Waiting for you… \d+s +\d+s$/m)
     s.terminal.send(ESC)
     await s.idle()
     expect(s.host.ui.pending).toEqual([])

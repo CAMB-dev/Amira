@@ -35,7 +35,7 @@ import { historyBlocks } from "./fullscreen/history-blocks.ts"
 import { createMouse } from "./fullscreen/mouse.ts"
 import { runningBoundary } from "./fullscreen/running-boundary.ts"
 import { createSubagentBlocks } from "./fullscreen/subagent-blocks.ts"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { CONTENT_INSET, contentRoom } from "./grid.ts"
 import { sessionBoundary } from "./history.ts"
 import { contentGeometry, insetLines, marginView } from "./margins.ts"
@@ -228,21 +228,36 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
             ? theme.accent(`  ${glyphs.arrowDown} new output ${glyphs.separator} ${rowsBelow}${endHint()}`)
             : theme.muted(`  ${glyphs.arrowDown} ${rowsBelow}${endHint()}`),
           width,
-          glyphs.more,
+          viewEllipsis(),
         )
     return [...header, ...rows, below, ...bar, ...bottom]
   })
   const margined = marginView(content, host.settings)
   // Cache the terminal frame after transcript margins; only cards bypass those margins.
-  // Streaming and overlay redraws cannot move the frozen backdrop.
+  // Streaming and overlay redraws cannot move the frozen backdrop; a resize draws it again at
+  // the new size, so it never shows the old layout cut by the card.
   let backdrop: string[] = []
+  let backdropSize = ""
+  const freeze = (frame: string[], width: number, rows: number) => {
+    backdrop = frame.map((line) => line.replaceAll(CURSOR_MARKER, ""))
+    backdropSize = `${width}x${rows}`
+  }
   const root = new View((width, ctx) => {
     if (!overlay) {
       const frame = margined.render(width, ctx)
-      backdrop = frame.map((line) => line.replaceAll(CURSOR_MARKER, ""))
+      freeze(frame, width, ctx.rows)
       return frame
     }
     if (!host.overlayCard?.(width, ctx) || width < 60 || ctx.rows < 20) return margined.render(width, ctx)
+    if (backdropSize !== `${width}x${ctx.rows}`) {
+      // The transcript as it would be drawn uncovered, at this size.
+      overlay = false
+      try {
+        freeze(margined.render(width, ctx), width, ctx.rows)
+      } finally {
+        overlay = true
+      }
+    }
     const rows = host.overlay.render(width, ctx)
     const cardWidth = Math.min(width - 8, 88)
     const left = Math.floor((width - cardWidth) / 2)
@@ -441,7 +456,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     banner: (line) =>
       add(
         new LinesBlock("banner", (width, t) =>
-          wrapText(typeof line === "function" ? line(t) : line, contentRoom(width)).map(
+          wrapText(typeof line === "function" ? line(t, contentRoom(width)) : line, contentRoom(width)).map(
             (row) => CONTENT_INSET + row,
           ),
         ),

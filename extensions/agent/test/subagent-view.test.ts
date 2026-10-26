@@ -504,7 +504,7 @@ test("working, queued, idle, paused, finished, failed and stopped children retai
   expect(s.render()).toContain("⊘ stopped: turn limit")
   s.list[0]!.status = "done"
   s.list[0]!.durationMs = 2100
-  expect(s.render().split("\n")[0]).toStartWith("‖ stopped Child a · 2s · ")
+  expect(s.render().split("\n")[0]).toStartWith("‖ stopped Child a · 2.1s · ")
   expect(s.definition.render(s.data, { width: 80, now: 6500 }).at(-1)).toEqual({
     kind: "warning",
     text: "⊘ stopped: turn limit",
@@ -517,7 +517,7 @@ test("working, queued, idle, paused, finished, failed and stopped children retai
   })
   delete s.list[0]!.note
   expect(s.render()).toContain("── done ──")
-  expect(s.render().split("\n")[0]).toStartWith("✓ done Child a · 2s · ")
+  expect(s.render().split("\n")[0]).toStartWith("✓ done Child a · 2.1s · ")
   s.data.sessionId = "missing"
   expect(s.render()).toContain("No sub-agent missing in this session.")
 })
@@ -1118,7 +1118,7 @@ test("/agents view shows a running sub-agent live; main-session output returns a
   await waitFor(() => s.view().includes("task: task for the explorer"), "the viewer")
   await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the transcript")
   const lines = s.screen.lines
-  expect(lines[0]).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Check explorer · \d+s · 1\.5k tok · .+ 1 of 1$/)
+  expect(lines[0]).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Check explorer · \d+(?:\.\d)?s · 1\.5k tok · .+ 1 of 1$/)
   expect(lines[1]).toBe("  task: task for the explorer")
   // Shared transcript rendering: one gap, closed tool groups, and inset reply text.
   expect(lines.slice(3, 13)).toEqual([
@@ -1188,7 +1188,7 @@ test("elapsed time redraws every second while no child event arrives", async () 
   const firstFrame = spin()
   await waitFor(() => spin() !== firstFrame, "the overlay spinner frame", 400)
   await waitFor(() => elapsed() !== before, "the elapsed tick", 2500)
-  expect(s.screen.lines[0]).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Check explorer · \d+s/)
+  expect(s.screen.lines[0]).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Check explorer · \d+(?:\.\d)?s/)
   s.release()
   await s.idle()
   s.terminal.send(ESC)
@@ -1387,7 +1387,7 @@ test("/agents picks a sub-agent and opens its live view; p adds its transcript a
   await waitFor(() => s.view().includes("╭ Sub-agents"), "the picker")
   // The digit in front is the option's own number, shown once.
   expect(s.view()).not.toContain("Open the live view")
-  expect(s.view()).toMatch(/│›1 ✓ done {4}Check explorer · explorer · s_\w+ · \d+s/)
+  expect(s.view()).toMatch(/│›1 ✓ done {4}Check explorer · explorer · s_\w+ · \d/)
   s.terminal.send("1")
   await waitFor(() => s.view().includes("task: task for the explorer"), "the viewer drawn")
   // p closes the viewer and appends a snapshot; normal-screen printout waits for quit.
@@ -1395,7 +1395,7 @@ test("/agents picks a sub-agent and opens its live view; p adds its transcript a
   await waitForMain(s)
   await waitFor(() => s.view().includes("└ read b.ts  ✓ contents"), "the transcript")
   const expectTranscript = (text: string) => {
-    expect(text).toMatch(/◆ ✓ done Check explorer · explorer · s_\w+ · \d+s/)
+    expect(text).toMatch(/◆ ✓ done Check explorer · explorer · s_\w+ · \d/)
     expect(text).toContain("› task for the explorer")
     expect(text).toContain("└ read b.ts  ✓ contents of b.ts (+2 lines)")
     expect(text.lastIndexOf("b.ts is fine")).toBeGreaterThan(text.indexOf("└ read b.ts"))
