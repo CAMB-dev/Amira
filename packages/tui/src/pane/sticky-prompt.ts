@@ -1,6 +1,6 @@
 import { themeToken, truncateToWidth, visibleWidth, wrapText } from "@amira/tui-kit"
 import { type Block, type BlockEnv, LinesBlock } from "../blocks/base.ts"
-import { bandClockEdge, bandRows, timestampRoom, timestampRow, userBandPaddingIn } from "../format.ts"
+import { bandRows, timestampRoom, timestampRow, userBandPaddingIn } from "../format.ts"
 import { glyphs, viewEllipsis } from "../glyphs.ts"
 import type { PaneRow } from "../transcript-pane.ts"
 
@@ -69,14 +69,13 @@ export function stickyPromptLine(block: LinesBlock, env: BlockEnv): string {
   const head = `${theme.accent(glyphs.user)} `
   const bg = themeToken(theme, "userBg")
   const painted = !!bg && bg(" ") !== " "
-  // The band's clock keeps the same inset as the message band it pins.
-  const clockEdge = bandClockEdge(width, block.timestamp, painted)
-  const room = Math.max(0, timestampRoom(clockEdge, block.timestamp) - visibleWidth(head))
+  // The band's clock keeps the shared clock edge, as the message band it pins does.
+  const room = Math.max(0, timestampRoom(width, block.timestamp) - visibleWidth(head))
   const clockTheme = painted ? { ...theme, muted: themeToken(theme, "surfaceMuted") ?? theme.muted } : theme
   const row = timestampRow(
     head + truncateToWidth(preview, room, viewEllipsis()),
     clockTheme,
-    clockEdge,
+    width,
     block.timestamp,
   )
   return bg ? bandRows([row], width, bg)[0]! : truncateToWidth(row, width, viewEllipsis())

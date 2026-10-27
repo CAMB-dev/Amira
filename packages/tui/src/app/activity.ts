@@ -93,8 +93,8 @@ export interface ActivityClock {
 export interface TurnActivityRenderOptions {
   running: readonly string[]
   waiting: boolean
-  /** The foreground ask dialog makes its waiting row redundant. */
-  askDialogVisible?: boolean
+  /** A foreground dialog makes the waiting row redundant. */
+  dialogVisible?: boolean
   spinner: Spinner
   stop?: string
   /** The theme picker keeps the same status-row animation alive while idle. */
@@ -320,7 +320,7 @@ export function createTurnActivity(): TurnActivity {
         stepKind = kind
         stepStartedAt = now
       }
-      if (options.askDialogVisible && label === "waiting for you") return []
+      if (options.dialogVisible && label === "waiting for you") return []
       const turnMs = now - (working ? turnStartedAt : compactStartedAt)
       // A retry's countdown is its own clock: the row keeps only the turn's.
       const counting = !!retry && retry.at > now

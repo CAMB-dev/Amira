@@ -193,7 +193,7 @@ test("timestamp space belongs to just the first rendered row in live, printed an
     const reply = new ReplyBlock(text, streaming, false, at)
     for (const lines of [reply.lines(env(width)), reply.printLines(env(width))]) {
       const rows = lines.map(stripAnsi)
-      expect(rows[0]).toStartWith(`  ${"x".repeat(width - clockCells - 4)}`)
+      expect(rows[0]).toStartWith(`  ${"x".repeat(width - clockCells - 6)}  ${clock}`)
       expect(rows[1]).toBe(`  ${"x".repeat(28)}`)
       expect(rows).toContain(`  ${"z".repeat(26)}  `)
       expect(rows).toContain(" ".repeat(width))
@@ -246,7 +246,7 @@ for (const mode of ["fullscreen"] as const) {
       app.terminal.send("go\r")
       await app.idle()
       const rows = app.all().split("\n")
-      expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(30 - clockCells - 4)}  ${clock}`)
+      expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(30 - clockCells - 6)}  ${clock}`)
       expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(28)}`)
       // VirtualScreen.text trims cell padding; the direct block oracle above keeps exact fills.
       const codeTop = rows.indexOf(`${" ".repeat(27)}txt`)
@@ -421,7 +421,8 @@ test("timestamp decoration preserves oversized extension rows", () => {
   const extension = "x".repeat(100)
   expect(timestampRow(extension, defaultTheme, 80, at)).toBe(extension)
   expect(timestampRoom(80, undefined)).toBe(80)
-  expect(timestampRoom(80, at)).toBe(80 - clockCells - 2)
+  // Two cells before the clock, and the clock two cells in from the edge.
+  expect(timestampRoom(80, at)).toBe(80 - clockCells - 4)
 })
 
 test("transcript and pane keep one blank between blocks and none between adjacent tool rows", () => {

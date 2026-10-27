@@ -126,3 +126,17 @@ test("hidden footer releases its cell even with a page title and waiting banners
     expect(narrow.render(1, 4).every((line) => visibleWidth(line) <= 4)).toBe(true)
   }
 })
+
+test('a focused view with hostKeys "none" hints only the route back to input', () => {
+  for (const legacy of [false, true]) {
+    const none = host("none", legacy)
+    expect(none.viewer.focused).toBe(true)
+    expect(stripAnsi(none.viewer.focusHint(monoTheme, 100))).toBe("tab → input")
+    // The other modes keep their host keys in front of the route back.
+    for (const mode of ["full", "minimal"] as const) {
+      const hint = stripAnsi(host(mode, legacy).viewer.focusHint(monoTheme, 100))
+      expect(hint).toEndWith("tab → input")
+      expect(hint).not.toBe("tab → input")
+    }
+  }
+})

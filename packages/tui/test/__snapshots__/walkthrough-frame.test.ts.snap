@@ -9,7 +9,7 @@ exports[`walkthrough frame at 100 columns 1`] = `
 
 ∴ Thought for 4.2s
 
-  Here is the corrected function:                                                            8:09 PM
+  Here is the corrected function:                                                          8:09 PM
 
                                                                                                   ts
   export function add(left: number, right: number): number {                                        
@@ -36,7 +36,7 @@ exports[`walkthrough frame at 50 columns 1`] = `
 
 ∴ Thought for 4.2s
 
-  Here is the corrected function:          8:09 PM
+  Here is the corrected function:        8:09 PM
 
                                                 ts
   export function add(left: number, right: number)

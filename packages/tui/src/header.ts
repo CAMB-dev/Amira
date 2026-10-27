@@ -1,7 +1,7 @@
 import type { ContextWindowSource } from "@amira/ai"
 import type { Agent } from "@amira/core"
 import { bold, compose, type RenderContext, themeToken, truncateToWidth, visibleWidth } from "@amira/tui-kit"
-import { compactTokens } from "./format.ts"
+import { CLOCK_INSET, compactTokens } from "./format.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { displayTitle } from "./title.ts"
 
@@ -59,7 +59,8 @@ export function contextStyle(ctx: RenderContext, used: number, limit?: number) {
  * items end two cells in from the edge, as the left ones start two cells in.
  */
 export function headerLine(info: HeaderInfo, frameWidth: number, ctx: RenderContext): string {
-  const inset = frameWidth >= 20 ? 2 : 0
+  // The same right edge as every transcript clock.
+  const inset = frameWidth >= 20 ? CLOCK_INSET : 0
   return headerItems(info, frameWidth - inset, ctx) + " ".repeat(inset)
 }
 

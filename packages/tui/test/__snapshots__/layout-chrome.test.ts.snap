@@ -9,7 +9,7 @@ exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
 
 ∴ Thought for 4.2s  ctrl+o to expand
 
-  # Status bar layout                                                                        8:19 PM
+  # Status bar layout                                                                      8:19 PM
   The header now carries context and cost.
 
 ├ Edited packages/tui/src/status-bar.ts  +12 / -3
@@ -32,7 +32,7 @@ exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
 
 ∴ Thought for 4.2s  ctrl+o to expand
 
-  # Status bar layout                      8:19 PM
+  # Status bar layout                    8:19 PM
   The header now carries context and cost.
 
 ├ Edited packages/tui/src/status-bar.ts  +12 / -3

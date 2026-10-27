@@ -257,7 +257,7 @@ test("fullscreen reserves the header gap, overlays below the fixed header gap an
     view.replyEnd([])
     view.render()
     expect(screen.lines[0]).toBe(" Amira · project")
-    expect(screen.lines[2]).toBe(`› Fix the transcript…${" ".repeat(79 - clockCells)}${clock}`)
+    expect(screen.lines[2]).toBe(`› Fix the transcript…${" ".repeat(77 - clockCells)}${clock}`)
     const tail = screen.lines.slice(3, 10)
     view.handleInput(key("up", { shift: true }))
     view.render()
@@ -277,7 +277,7 @@ test("fullscreen reserves the header gap, overlays below the fixed header gap an
     view.render()
     expect(screen.lines[1]).toBe("")
     // Jumping to the real compact-entry row must not replace it with the preview.
-    expect(screen.lines[2]).toBe(`› Fix the transcript${" ".repeat(80 - clockCells)}${clock}`)
+    expect(screen.lines[2]).toBe(`› Fix the transcript${" ".repeat(78 - clockCells)}${clock}`)
     expect(screen.lines.filter((row) => row.includes("Fix the transcript"))).toHaveLength(1)
     expect(screen.lines[3]).toContain("Keep every row reachable")
     expect(terminal.output).not.toContain("\x1b]52;")
@@ -304,7 +304,8 @@ test("sticky previews sanitize controls and tabs just like user rows, and honor 
     expect(row).not.toContain("…")
     const long = stickyPromptLine(userBlock(message("long".repeat(30))), { ...env, width: 30 })
     expect(stripAnsi(long)).toEndWith(`.  ${clock}`)
-    expect(visibleWidth(long)).toBe(30)
+    // An unpainted row ends at the shared clock edge, two cells in.
+    expect(visibleWidth(long)).toBe(28)
   } finally {
     setGlyphs(previous)
   }
@@ -337,7 +338,7 @@ test("fullscreen without a header reserves no slot and never draws an offscreen 
     view.replyEnd([])
     view.handleInput(key("home"))
     view.render()
-    expect(screen.lines[0]).toBe(`› No header${" ".repeat(89 - clockCells)}${clock}`)
+    expect(screen.lines[0]).toBe(`› No header${" ".repeat(87 - clockCells)}${clock}`)
     view.handleInput(key("end"))
     view.render()
     expect(screen.lines.slice(0, 10).filter((row) => row.includes("Result"))).toHaveLength(5)

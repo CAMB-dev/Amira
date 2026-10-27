@@ -408,6 +408,8 @@ function taskTitle(opts: ViewRenderOptions): ViewLine {
 
 Pass the complete info/result to `agentStatusState(agent)`, not just `agent.status`, so early-end notes are retained. Its exported `AgentStatusSource` type also accepts legacy state strings and transcript nodes. The shared mapper interprets `done` plus any defined early-end `note` (including an empty string) as `stopped`, and an active user pause as `paused`, never `working`; it does not change lifecycle result contracts. For aligned extension rows, call `opts.statusBadge?.(agentStatusState(agent), { pad: true })`. Named imports of the mapper or table require a host build that exports them. The optional helper only protects calls on frontends where it is absent; it does not make missing named imports compatible. Extensions supporting older host builds should use a namespace import and feature detection, as below. These capabilities arrived in API 0.1.48; feature detection is still recommended.
 
+A clean `ChildSession.stop(reason)` of a persistent child sets `reason` as that note, so the child shows as stopped. When a parent ends a child whose work is finished (for example a team winding down after its task), it calls `stop(reason, { finished: true })`: the result is `done` with no note, and status badges, agent trees and group outcomes count it as done. Hosts without the option ignore the second argument and show such a child as stopped.
+
 ```ts
 import * as amira from "@amira/api"
 

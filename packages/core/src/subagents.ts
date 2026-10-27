@@ -693,19 +693,17 @@ export class AgentTree {
     this.#finish(child, { status: "aborted", error: reason, steps: 0, durationMs: 0 })
   }
 
-  /** Ends a persistent child cleanly: at once while idle or queued, after its running turn otherwise. */
-  stopChild(child: Child, reason: string): void {
+  /** Ends a persistent child cleanly (now if idle or queued); a `finished` one gets no stopped note. */
+  stopChild(child: Child, reason: string, finished = false): void {
     if (!child.persistent || !this.#live.has(child.id) || child.abortReason || child.stopReason) return
     // A paused one runs its turn to the end first: it is working again, and screens hear so.
     if (child.resume()) this.#admission.admit()
     child.stopReason = reason
+    child.stopFinished = finished
     scopeAdmission(this).closeParent(child.id)
-    if (child.started) {
-      child.waiting?.()
-      return
-    }
+    if (child.started) return void child.waiting?.()
     this.#admission.dequeue(child)
-    child.note = reason
+    if (!finished) child.note = reason
     this.#finish(child, { status: "done", steps: 0, durationMs: 0 })
   }
 
@@ -811,7 +809,7 @@ export class AgentTree {
           status = "error"
           error = `it did not return a valid result after ${spec.strikes} attempt${spec.strikes === 1 ? "" : "s"}${spec.problem ? `: ${spec.problem}` : ""}`
         }
-        if (status === "done" && child.stopReason) child.note = child.stopReason
+        if (status === "done" && child.stopReason && !child.stopFinished) child.note = child.stopReason
       }
     } catch (err) {
       status = "error"

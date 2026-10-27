@@ -569,6 +569,26 @@ test("a confirm takes always and other text only when it offers them", async () 
   expect(await api).toBe(true)
 })
 
+test("the api's confirm passes a warning tone through to the request, and only that tone", async () => {
+  const { ui, next } = setup()
+  const warned = ui.api().confirm("Delete the worktree?", "3 files changed", { tone: "warning" })
+  const request = (await next()).data
+  expect(request).toMatchObject({ kind: "confirm", title: "Delete the worktree?", tone: "warning" })
+  ui.respond(request.requestId, true)
+  expect(await warned).toBe(true)
+  const plain = ui.api().confirm("Continue?")
+  const second = (await next()).data
+  expect("tone" in second).toBe(false)
+  ui.respond(second.requestId, false)
+  expect(await plain).toBe(false)
+  // An unknown tone from an untyped caller is dropped rather than forwarded.
+  const odd = ui.api().confirm("Go?", undefined, { tone: "loud" as "warning" })
+  const third = (await next()).data
+  expect("tone" in third).toBe(false)
+  ui.respond(third.requestId, true)
+  await odd
+})
+
 test("live form transport keeps callbacks and secrets on the host and checks direct responses before saving", async () => {
   const { ui, next, events, bus } = setup()
   let checks = 0

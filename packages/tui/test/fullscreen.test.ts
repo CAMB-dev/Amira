@@ -326,12 +326,12 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   const clockRows = screen.lines.filter((row) => row.endsWith(userClock) || row.endsWith(clock))
   expect(clockRows).toHaveLength(2)
   const userHead = "› what is in a.ts?"
-  // The user band's clock sits two cells in from the band's edge (screen rows are trimmed).
+  // The user band's and the tool row's clocks share one edge two cells in (screen rows are trimmed).
   expect(clockRows[0]).toBe(
     `${userHead}${" ".repeat(58 - visibleWidth(userHead) - visibleWidth(userClock))}${userClock}`,
   )
   const toolHead = "└ read a.ts  ✓ contents of a.ts (+2 lines)"
-  expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(60 - visibleWidth(toolHead) - clockCells)}${clock}`)
+  expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(58 - visibleWidth(toolHead) - clockCells)}${clock}`)
   expect(screen.lines[0]).toMatch(/^ {2}\/work\/proj +0 \/ 128K$/)
   expect(screen.lines[1]).toBe("")
   expect(screen.lines.at(-3)).toBe(`╰${"─".repeat(58)}╯`)
@@ -1298,7 +1298,7 @@ test("a resize reflows the whole transcript to the new width", async () => {
   const clock = blockClock("assistant")
   const clockCells = visibleWidth(clock)
   const first = clockCells === 5 ? "  word0 word1 word2 word3 word4" : "  word0 word1 word2 word3"
-  expect(replyRows[0]).toBe(`${first}${" ".repeat(40 - visibleWidth(first) - clockCells)}${clock}`)
+  expect(replyRows[0]).toBe(`${first}${" ".repeat(38 - visibleWidth(first) - clockCells)}${clock}`)
   // A: the first row reserves the clock and two-cell gap; continuations use all 38 content cells.
   expect(replyRows.map(withoutClocks)).toEqual(
     clockCells === 5

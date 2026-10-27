@@ -52,6 +52,8 @@ export class Child implements ChildSession {
   abortReason: string | undefined
   /** Set once a persistent child was asked to end cleanly: why. */
   stopReason: string | undefined
+  /** Its clean end was asked for as finished work: it ends done, without a stopped note. */
+  stopFinished = false
   /** Why it ended early without failing, e.g. its turn limit. */
   note: string | undefined
   /** Given a place to run (it starts a microtask later). */
@@ -167,8 +169,8 @@ export class Child implements ChildSession {
     this.tree.abortChild(this, reason)
   }
 
-  stop(reason = "stopped"): void {
-    this.tree.stopChild(this, reason)
+  stop(reason = "stopped", opts: { finished?: boolean } = {}): void {
+    this.tree.stopChild(this, reason, opts.finished)
   }
 
   /** User controls are independent of an extension's own message-holding policy. */

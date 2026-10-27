@@ -214,7 +214,7 @@ VS Code は Ctrl+F、Ctrl+Home、Ctrl+End、Ctrl+↑↓ を自身の端末操作
 | `tui.title` | `true` | セッションタイトルがある場合、端末タイトルを `Amira · <folder> · <session title> ⎇ <branch>` に設定し、ターン実行中は `●` を付けます。終了時に前のタイトルへ戻します。タイトルバーはシステムのフォントで描画するため `⎇` を安全に使えますが、入力欄の枠内の状態表示では省きます（Cascadia Code と Mono にこの文字がありません） |
 | `tui.progress` | `true` | ターン実行中はタブとタスクバーに処理中の表示を出し、ダイアログの回答待ちは一時停止の表示にします（OSC 9;4：Windows Terminal、ConEmu、VS Code、Ghostty） |
 | `tui.bell` | `true` | 端末がバックグラウンドにあるとき、ターン終了やダイアログ開始でベルを鳴らします。端末がフォーカスを通知しない場合は、15 秒以上のターンの後だけ鳴らします |
-| `tui.clock` | `"auto"` | タイムスタンプの時間表記です。`"auto"` はシステムのロケールに従い、`"12h"`（`8:19 PM`）と `"24h"`（`20:19`）はそれぞれに固定します |
+| `tui.clock` | `"auto"` | タイムスタンプの時間表記です。`"auto"` はシステムのロケールに従い、`"12h"`（`8:19 PM`、常に英語の表記）と `"24h"`（`20:19`）はそれぞれに固定します |
 | `tui.reflow` | `"auto"` | 非推奨で無視されます。全画面モードは現在の端末の幅で会話を描画し直します |
 | `tui.submitWhileWorking` | `"steer"` | ターン実行中の `submit`（Enter）の動作です。`"steer"` は実行中のターンへメッセージを送り、`"queue"` はターン後に送ります。`queue` キーはもう一方を行い、ヒント行に示します（`Enter queue · Ctrl+Q steer`）。スラッシュコマンドはどちらでも直ちに実行します |
 | `tui.images` | `"auto"` | 任意の [`images`](https://github.com/CAMB-dev/amira-extensions/tree/main/extensions/images/README.md) 拡張機能をインストールすると、回答内で独立した行にある画像を描画します（`amira ext install images`。ローカルファイルと、web_fetch のプライベートネットワーク保護を適用した http(s) URL を最大 10 MB まで読みます）。`"auto"` は端末が対応を通知した場合に表示します。Windows Terminal 1.22+（Sixel）、`terminal.integrated.enableImages` を有効にした VS Code、iTerm2、WezTerm、kitty、Ghostty が対象です。`"on"` は常に表示し、`"off"` は表示しません。それ以外の場合、画像処理が失敗した場合、または 3 秒を超えた場合は、画像へのリンク付きの `🖼` と代替テキストを表示します |

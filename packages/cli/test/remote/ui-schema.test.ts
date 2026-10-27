@@ -29,6 +29,7 @@ const requests = {
     always: "Read tools",
     other: true,
     preview: [{ kind: "text", text: "Preview", lineNo: 1, marker: "unchecked", wrap: true }],
+    tone: "warning",
   },
   input: {
     kind: "input",
@@ -123,6 +124,16 @@ for (const [kind, request] of Object.entries(requests)) {
       expect(() => validateRemoteDto("uiRequest", invalid)).toThrow()
   })
 }
+
+test("a confirm's tone crosses the remote schema only as warning", () => {
+  const dto = { ...requests.confirm, source: "fixture", sessionId: "s1" }
+  // The round trip above carries it; without one the confirm is still valid.
+  validateRemoteDto("uiRequest", dto)
+  const { tone: _tone, ...untoned } = dto
+  validateRemoteDto("uiRequest", untoned)
+  for (const tone of ["error", "default", 1])
+    expect(() => validateRemoteDto("uiRequest", { ...dto, tone })).toThrow()
+})
 
 test("extension lifecycle metadata stays optional, typed and closed in both UI placements", () => {
   for (const extensionStatus of [

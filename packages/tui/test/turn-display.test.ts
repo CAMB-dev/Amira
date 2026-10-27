@@ -133,7 +133,8 @@ for (const mode of ["fullscreen"] as const) {
           .split("\n")
           .find((row) => row.includes(localClock(shownAt)))!
         expect(head).toContain(first === "reasoning" ? "Thinking" : first === "tool" ? "read" : "First text.")
-        expect(visibleWidth(head)).toBe(100)
+        // The clock ends two cells in, at the shared clock edge.
+        expect(visibleWidth(head)).toBe(98)
         clock.mockReturnValue(shownAt + 180_000)
         if (first === "tool") view.toolEnd("call", { result: { content: [], isError: false }, durationMs: 1 })
         view.replyDelta("Later text.")
@@ -199,7 +200,7 @@ for (const mode of ["fullscreen"] as const) {
       const rows = text().split("\n")
       const head = rows.find((row) => row.includes("Thinking"))!
       expect(head).toEndWith(localClock(at))
-      expect(visibleWidth(head)).toBe(40)
+      expect(visibleWidth(head)).toBe(38)
       expect(rows).toContain(`  ${"x".repeat(38)}`)
       view.replyDelta("y".repeat(38))
       view.replyEnd([])

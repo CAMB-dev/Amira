@@ -44,10 +44,10 @@ test("a conversation: user message, tool call and reply end up in the transcript
   await shows("The file has three lines.")
   await idle()
   const text = all()
-  // The user band's clock keeps a two-cell inset from the band's edge.
+  // Clocks share one right edge, two cells in: the user band's and the tool row's.
   expect(text).toMatch(new RegExp(`^› what is in a\\.ts\\? {35}${TIMESTAMP}$`, "m"))
   expect(text).toMatch(
-    new RegExp(`^└ read a\\.ts {2}✓ contents of a\\.ts \\(\\+2 lines\\) {13}${TIMESTAMP}$`, "m"),
+    new RegExp(`^└ read a\\.ts {2}✓ contents of a\\.ts \\(\\+2 lines\\) {11}${TIMESTAMP}$`, "m"),
   )
   expect(text.indexOf("└ read")).toBeLessThan(text.indexOf("The file has three lines."))
   // One blank line between blocks, and the reply indented so it reads apart from the rest. The
@@ -63,7 +63,7 @@ test("a conversation: user message, tool call and reply end up in the transcript
         `› what is in a\\.ts\\? {35}${TIMESTAMP}`,
         "",
         "",
-        `└ read a\\.ts  ✓ contents of a\\.ts \\(\\+2 lines\\) {13}${TIMESTAMP}`,
+        `└ read a\\.ts  ✓ contents of a\\.ts \\(\\+2 lines\\) {11}${TIMESTAMP}`,
         "",
         "  The file has three lines\\.",
         "",
