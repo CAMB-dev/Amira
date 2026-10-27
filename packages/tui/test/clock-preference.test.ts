@@ -12,7 +12,8 @@ for (const cycle of ["h11", "h12", "h23", "h24"] as const) {
     try {
       const twelve = cycle === "h11" || cycle === "h12"
       expect(localClock(at)).toBe(twelve ? "8:09 PM" : "20:09")
-      expect(timestampRoom(30, at)).toBe(twelve ? 21 : 23)
+      // The clock ends two cells in, at the shared clock edge.
+      expect(timestampRoom(30, at)).toBe(twelve ? 19 : 21)
       const midnight = new Date(2026, 9, 10, 0, 4).getTime()
       expect(localClock(midnight)).toBe(twelve ? "12:04 AM" : "00:04")
     } finally {
@@ -55,9 +56,9 @@ test("24-hour clocks reserve five cells and preserve the full wrapped content", 
       30,
       at,
     ).map(stripAnsi)
-    expect(timestampRoom(30, at)).toBe(23)
-    expect(rows).toEqual([`› ${"x".repeat(21)}  20:09`, `  ${"x".repeat(19)}`])
-    expect(rows.map(visibleWidth)).toEqual([30, 21])
+    expect(timestampRoom(30, at)).toBe(21)
+    expect(rows).toEqual([`› ${"x".repeat(19)}  20:09`, `  ${"x".repeat(21)}`])
+    expect(rows.map(visibleWidth)).toEqual([28, 23])
   } finally {
     restore()
   }
@@ -74,9 +75,9 @@ test("12:45 PM reserves its actual cells plus the two-cell clock gap", () => {
       noon,
     ).map(stripAnsi)
     expect(localClock(noon)).toBe("12:45 PM")
-    expect(timestampRoom(30, noon)).toBe(20)
-    expect(rows).toEqual([`› ${"x".repeat(18)}  12:45 PM`, `  ${"x".repeat(22)}`])
-    expect(rows.map(visibleWidth)).toEqual([30, 24])
+    expect(timestampRoom(30, noon)).toBe(18)
+    expect(rows).toEqual([`› ${"x".repeat(16)}  12:45 PM`, `  ${"x".repeat(24)}`])
+    expect(rows.map(visibleWidth)).toEqual([28, 26])
     expect(timestampRoom(15, noon)).toBe(15)
     expect(timestampRoom(30, undefined)).toBe(30)
     expect(timestampRoom(Infinity, noon)).toBe(Infinity)

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
+import { agentStatusState } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { Child } from "../src/subagents/child.ts"
 import { AgentTree } from "../src/subagents.ts"
@@ -118,3 +119,29 @@ for (const ephemeral of [false, true]) {
     expect(() => group.spawn({ prompt: "late grouped child" })).toThrow(/ended/)
   })
 }
+
+test("a persistent child stopped as finished ends done with no stopped note, before or after it started", async () => {
+  const { tree, root } = fixture()
+  const group = tree.createGroup(root, { name: "team" })
+  const ran = group.spawn({ prompt: "do the work", persistent: true })
+  await idle(ran)
+  const unstarted = group.spawn({ prompt: "not needed after all", persistent: true })
+  unstarted.stop("wound down", { finished: true })
+  ran.stop("wound down", { finished: true })
+  const plain = group.spawn({ prompt: "cut short", persistent: true })
+  await idle(plain)
+  plain.stop("wound down")
+  for (const child of [ran, unstarted]) {
+    const result = await child.result()
+    expect(result.status).toBe("done")
+    expect(result.note).toBeUndefined()
+    const info = tree.subagent(child.id)!.info
+    expect(info.note).toBeUndefined()
+    expect(agentStatusState(info)).toBe("done")
+  }
+  // Without the option a clean stop still says why, and screens show it as stopped.
+  expect((await plain.result()).note).toBe("wound down")
+  expect(agentStatusState(tree.subagent(plain.id)!.info)).toBe("stopped")
+  group.end()
+  expect((await group.ended()).outcomes).toEqual({ done: 2, failed: 0, stopped: 1 })
+})

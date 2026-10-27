@@ -218,7 +218,7 @@ async function runFullscreen(
     view: () => view,
     noticeStrip: () => noticeStrip,
     dialogs: () => overlays.dialogs,
-    askDialogVisible: () => overlays.askDialogVisible,
+    dialogWait: () => overlays,
     dock: () => overlays.dock,
     renderDock: (width, ctx, available) => overlays.renderDock(width, ctx, available),
     focusHint: (theme, width) => overlays.focusHint(theme, width),

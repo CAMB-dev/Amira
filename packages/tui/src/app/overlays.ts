@@ -106,6 +106,8 @@ export class OverlayManager {
   private form: FormView | ExtensionSettingsView | undefined
   /** Pending requests retain their actual editors while their conversation is hidden. */
   private readonly requestDialogs = new Map<string, Dialog>()
+  /** Request dialogs that arrived while a slash command was running, so most likely its own. */
+  private readonly commandDialogs = new WeakSet<Dialog>()
   /** Responses outlive resolved presentation, but never a session change or disposal. */
   private readonly dialogResponses = new Map<Dialog, { visible: boolean }>()
   private readonly requestForms = new Map<
@@ -154,13 +156,32 @@ export class OverlayManager {
     )
   }
 
-  /**
-   * The foreground question or tool approval replaces the duplicate "waiting for you" activity
-   * row: the dialog itself is the static waiting state. Only ask_user also hides its tool row.
-   */
+  /** The foreground question or tool approval; ask_user hides its own tool row behind it. */
   get askDialogVisible(): boolean {
     const request = this.dialogs[0]?.request
     return !this.hasFullscreen && (request?.kind === "ask" || request?.source === "approval")
+  }
+
+  /**
+   * Whether the turn waits on this dialog: a question, an approval or another request (an
+   * extension's confirm or select from a tool). Local pickers (/theme) and the requests a running
+   * slash command opened (/model) do not stop the turn, which keeps its own activity row.
+   */
+  private waitsForUser(dialog: Dialog): boolean {
+    const request = dialog.request
+    if (this.requestDialogs.get(request.requestId) !== dialog) return false
+    return request.kind === "ask" || request.source === "approval" || !this.commandDialogs.has(dialog)
+  }
+
+  /** Any dialog the turn waits on: the activity row then reads "waiting for you". */
+  get turnWaiting(): boolean {
+    return this.dialogs.some((dialog) => this.waitsForUser(dialog))
+  }
+
+  /** A foreground dialog the turn waits on is itself the waiting state, replacing that row. */
+  get waitingDialogVisible(): boolean {
+    const dialog = this.dialogs[0]
+    return !this.hasFullscreen && !!dialog && this.waitsForUser(dialog)
   }
 
   /** Without focus reports, only permission and question dialogs warrant an alert. */
@@ -640,6 +661,7 @@ export class OverlayManager {
         this.deps.keys,
       )
     if (existing) existing.update(data)
+    else if (this.deps.commandActivity?.().animationActive) this.commandDialogs.add(dialog)
     this.requestDialogs.set(data.requestId, dialog)
     this.dialogs.push(dialog)
     const response = this.dialogResponses.get(dialog)

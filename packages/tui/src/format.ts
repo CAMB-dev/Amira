@@ -79,20 +79,23 @@ export function messageTimestamp(message: object): number | undefined {
   return typeof at === "number" && Number.isFinite(at) ? at : storedClocks.get(message)
 }
 
-/** A painted user band keeps its clock two cells in from its edge, as its text starts two cells in. */
-const BAND_CLOCK_INSET = 2
+/**
+ * Every clock (header, user band, sticky prompt, reply and tool rows) ends two cells in from
+ * the right edge, as transcript text starts two cells in, so they all share one right edge.
+ */
+export const CLOCK_INSET = 2
 
-/** Where a user band's clock ends: two cells in on a painted band that shows one, else the edge. */
-export function bandClockEdge(width: number, at: number | undefined, painted: boolean): number {
-  const edge = width - BAND_CLOCK_INSET
-  return painted && timestampRoom(edge, at) !== edge ? edge : width
+/** Whether a row `width` cells wide shows the clock for `at`. */
+function showsClock(width: number, at: number | undefined): at is number {
+  return at !== undefined && Number.isFinite(width) && width - CLOCK_INSET >= 16
 }
 
-/** Leave two cells between content and the clock; align clocks with the shared right edge. */
+/**
+ * Room for content before a row's clock: two cells between content and the clock, which ends
+ * at the shared clock edge. Without a clock the row keeps its full width.
+ */
 export function timestampRoom(width: number, at: number | undefined): number {
-  return at !== undefined && Number.isFinite(width) && width >= 16
-    ? width - visibleWidth(localClock(at)) - 2
-    : width
+  return showsClock(width, at) ? width - CLOCK_INSET - visibleWidth(localClock(at)) - 2 : width
 }
 
 interface TimestampDecoration {
@@ -126,10 +129,10 @@ export function timestampRow(
   at: number | undefined,
   record?: (stamp: TimestampDecoration) => void,
 ): string {
-  if (timestampRoom(width, at) === width || at === undefined) return row
+  if (!showsClock(width, at)) return row
   const text = localClock(at)
   const cells = visibleWidth(text)
-  const gap = width - visibleWidth(row) - cells
+  const gap = width - CLOCK_INSET - visibleWidth(row) - cells
   if (gap < 2) return row
   record?.({ line: 0, text, width: gap + cells, to: visibleWidth(row.trimEnd()) })
   return `${row}${" ".repeat(gap)}${theme.muted(text)}`
@@ -165,9 +168,8 @@ export function userLines(
   const painted = !!bg && bg(" ") !== " "
   // The band bleeds to the edges; its prompt occupies the marker gutter and its text starts two cells in.
   const inset = MARKER_WIDTH
-  const clockEdge = bandClockEdge(width, at, painted)
   const room = Math.max(1, width - inset)
-  const firstRoom = Math.max(1, timestampRoom(clockEdge, at) - inset)
+  const firstRoom = Math.max(1, timestampRoom(width, at) - inset)
   let rows = Number.isFinite(width) ? wrapText(text, room, firstRoom) : text.split("\n")
   if (rows.length > maxTextRows) {
     rows = rows.slice(0, maxTextRows)
@@ -193,7 +195,7 @@ export function userLines(
     userBandPadding.set(lines, 1)
   }
   // Clocks on painted bands are readable secondary text, not dim structural chrome.
-  stampRows(lines, userBandPaddingIn(lines) ? { ...theme, muted } : theme, clockEdge, at)
+  stampRows(lines, userBandPaddingIn(lines) ? { ...theme, muted } : theme, width, at)
   return bg ? bandRows(lines, width, bg) : lines
 }
 

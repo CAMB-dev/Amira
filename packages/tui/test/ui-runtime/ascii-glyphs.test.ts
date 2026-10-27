@@ -190,6 +190,46 @@ test("ASCII chips keep their tone colors and stay distinguishable", () => {
   }
 })
 
+test("ASCII views and panels draw user and model text as given, never rewriting its · or …", () => {
+  const before = { ...glyphs }
+  try {
+    setGlyphs(ascii.glyphs)
+    const said = "结果 ↑↓ · ▸… — 好"
+    const content: UiNode = {
+      type: "column",
+      children: [
+        { node: { type: "text", lines: [{ kind: "segments", parts: [{ kind: "text", text: said }] }] } },
+        { node: { type: "tree", id: "t", items: [{ key: "a", row: [{ kind: "muted", text: said }] }] } },
+        { node: { type: "bar", left: [{ kind: "accent", text: said }] } },
+      ],
+    }
+    const rows = renderNode(content, 40, 3).map((row) => stripAnsi(row).trimEnd())
+    expect(rows[0]).toBe(said)
+    expect(rows[1]).toBe(`>   ${said}`)
+    expect(rows[2]).toBe(said)
+    // Panels share the path: a segment row and a plain row both keep the text.
+    const panel = renderViewLines(
+      [
+        { kind: "segments", parts: [{ kind: "text", text: said }] },
+        { kind: "text", text: said },
+      ],
+      defaultTheme,
+      40,
+    ).map((row) => stripAnsi(row).trimEnd())
+    expect(panel).toEqual([said, said])
+    // A host cut of that text is still ASCII chrome.
+    expect(stripAnsi(segmentText([{ kind: "text", text: said }], defaultTheme))).toBe(said)
+    const cut = renderViewLines(
+      [{ kind: "segments", parts: [{ kind: "text", text: `${said} ${said}` }] }],
+      defaultTheme,
+      16,
+    )
+    expect(stripAnsi(cut[0]!)).toEndWith("...")
+  } finally {
+    setGlyphs(before)
+  }
+})
+
 /** A narrow fullscreen prompt, whose label and empty-input placeholder both cut. */
 function promptFrame(): string[] {
   const definition: ViewDefinition = {

@@ -61,7 +61,8 @@ export interface BottomAreaDeps {
   view: () => Pick<TranscriptView, "runningTools" | "capturing" | "requestRender">
   noticeStrip: () => NoticeStrip
   dialogs: () => readonly Dialog[]
-  askDialogVisible?: () => boolean
+  /** Whether the turn waits on an open dialog (else: any dialog), and whether that one is foreground. */
+  dialogWait?: () => { readonly turnWaiting: boolean; readonly waitingDialogVisible: boolean }
   steering: () => readonly string[]
   queued: () => readonly Outgoing[]
   hintNote: () => { text: string; until: number; key?: string } | undefined
@@ -312,8 +313,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     new View((width, ctx) => {
       activityRows = deps.activity().render(width, ctx, {
         running: deps.view().runningTools,
-        waiting: deps.dialogs().length > 0 && !deps.themePreview?.(),
-        askDialogVisible: deps.askDialogVisible?.(),
+        waiting: (deps.dialogWait?.().turnWaiting ?? deps.dialogs().length > 0) && !deps.themePreview?.(),
+        dialogVisible: deps.dialogWait?.().waitingDialogVisible,
         preview: deps.themePreview?.(),
         spinner,
         // While a dialog has the keys, its own footer says what Esc does there.

@@ -174,10 +174,12 @@ export interface ChildSession {
   abort(reason?: string): void
   /**
    * Ends a persistent child cleanly: at once when it is idle or waiting for a place to run,
-   * after its running turn otherwise. Its result says done, with `reason` as its note. Does
-   * nothing to other children, which end after their one turn anyway.
+   * after its running turn otherwise. Its result says done, with `reason` as its note, so
+   * screens show it as stopped. With `finished`, the caller ends a child whose work is done
+   * (e.g. a team wound down after its task): the result says done with no note, and screens
+   * show it as done. Does nothing to other children, which end after their one turn anyway.
    */
-  stop(reason?: string): void
+  stop(reason?: string, opts?: { finished?: boolean }): void
   /**
    * Sends a message to a persistent child: it joins the running turn before its next model
    * call, or starts the next turn of an idle child (once there is a place for it to run).

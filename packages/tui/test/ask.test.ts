@@ -386,9 +386,9 @@ for (const mode of MODES) {
       await s.shows("b")
       await s.idle()
       // The echo wraps like any line: the answer follows the question.
-      expect(s.all()).toMatch(new RegExp(`^└ Asked 你想用哪…个功能？ {2}${TIMESTAMP}\\n {2}✓ 修补$`, "m"))
+      expect(s.all()).toMatch(new RegExp(`^└ Asked 你想用哪…功能？ {2}${TIMESTAMP}\\n {2}✓ 修补$`, "m"))
       expect(s.all()).toMatch(
-        new RegExp(`^└ Asked Which ap… prefer\\? {2}${TIMESTAMP}\\n {2}✓ Rewrite \\(Recommended\\)$`, "m"),
+        new RegExp(`^└ Asked Which a…prefer\\? {2}${TIMESTAMP}\\n {2}✓ Rewrite \\(Recommended\\)$`, "m"),
       )
       s.terminal.send("\x03")
       await s.exited

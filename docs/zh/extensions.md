@@ -389,6 +389,8 @@ function taskTitle(opts: ViewRenderOptions): ViewLine {
 
 请将完整的 info/result 传给 `agentStatusState(agent)`，而不只是 `agent.status`，以保留提前结束的备注。导出的 `AgentStatusSource` 类型也支持旧状态字符串和对话树节点。共用映射把 `done` 加任何已定义的提前结束 `note`（包括空字符串）解释为 `stopped`；用户暂停中的活动轮次解释为 `paused`，不会显示为 `working`。这不会改变生命周期结果的契约。扩展中需要对齐的行可调用 `opts.statusBadge?.(agentStatusState(agent), { pad: true })`。按名称导入该函数或显示表，需要宿主构建已导出它们。可选辅助函数只保护前端缺少该方法时的调用，不会让缺少命名导出的旧宿主能够加载这些导入。若要支持旧版宿主构建，请使用下例的命名空间导入和功能检测。这些能力自 API 0.1.48 起提供；仍建议做功能检测。
 
+对 persistent 子 agent 调用 `ChildSession.stop(reason)` 正常结束时，`reason` 会成为它的备注，因此显示为 stopped。父 agent 结束一个已完成工作的子 agent 时（例如团队在任务完成后收尾），可调用 `stop(reason, { finished: true })`：结果为 `done` 且没有备注，状态标记、agent 树和组的结果统计都把它算作 done。不支持该选项的宿主会忽略第二个参数，仍把它显示为 stopped。
+
 ```ts
 import * as amira from "@amira/api"
 

@@ -382,6 +382,8 @@ function taskTitle(opts: ViewRenderOptions): ViewLine {
 
 早期終了の note を保持するため、`agent.status` だけでなく info/result 全体を `agentStatusState(agent)` に渡してください。エクスポートされた `AgentStatusSource` 型は、従来の状態文字列と会話ツリーのノードにも対応します。共通のマッパーは `done` と定義済みの早期終了 `note`（空文字列も含む）を `stopped` と解釈し、実行中のユーザーによる一時停止は `paused` と表示して `working` には数えません。ライフサイクルの結果契約は変更しません。拡張機能で行を揃える場合は `opts.statusBadge?.(agentStatusState(agent), { pad: true })` を呼びます。この関数やテーブルの名前付きインポートには、それらをエクスポートするホストビルドが必要です。任意のヘルパーはメソッドがないフロントエンドでの呼び出しを保護するだけで、存在しない名前付きインポートを互換にするものではありません。古いホストビルドもサポートする場合は、下例の名前空間インポートと機能検出を使ってください。これらの機能は API 0.1.48 から利用できます。引き続き機能検出を推奨します。
 
+永続的な子を `ChildSession.stop(reason)` で正常に終了すると、`reason` がその note になり、stopped と表示されます。作業を終えた子を親が終了する場合（たとえばタスク完了後にチームを解散するとき）は `stop(reason, { finished: true })` を呼びます。結果は note のない `done` になり、状態バッジ、エージェントツリー、グループの結果集計でも done として数えます。このオプションのないホストは第 2 引数を無視し、その子を stopped と表示します。
+
 ```ts
 import * as amira from "@amira/api"
 

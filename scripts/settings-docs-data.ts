@@ -982,9 +982,9 @@ export const annotations: Record<string, Annotation> = {
   },
   "tui.clock": {
     default: documentedDefault("tui.clock"),
-    en: 'Timestamp hour cycle: `"auto"` follows the system locale, `"12h"` forces 12-hour time (`8:19 PM`) and `"24h"` forces 24-hour time (`20:19`).',
-    zh: '时间戳的小时制：`"auto"` 跟随系统区域设置，`"12h"` 强制 12 小时制（`8:19 PM`），`"24h"` 强制 24 小时制（`20:19`），与英文界面一致。',
-    ja: 'タイムスタンプの時間表記です。`"auto"` はシステムのロケールに従い、`"12h"` は 12 時間表記（`8:19 PM`）、`"24h"` は 24 時間表記（`20:19`）に固定します（英語の UI に合わせた表記）。',
+    en: 'Timestamp hour cycle: `"auto"` follows the system locale, `"12h"` forces 12-hour time (`8:19 PM`) and `"24h"` forces 24-hour time (`20:19`). `"12h"` always uses English wording, whatever the locale.',
+    zh: '时间戳的小时制：`"auto"` 跟随系统区域设置，`"12h"` 强制 12 小时制（`8:19 PM`），`"24h"` 强制 24 小时制（`20:19`）。`"12h"` 始终使用与英文界面一致的写法，不随区域设置变化。',
+    ja: 'タイムスタンプの時間表記です。`"auto"` はシステムのロケールに従い、`"12h"` は 12 時間表記（`8:19 PM`）、`"24h"` は 24 時間表記（`20:19`）に固定します。`"12h"` はロケールにかかわらず、常に英語の UI と同じ表記になります。',
   },
   "tui.reflow": {
     default: documentedDefault("tui.reflow"),
