@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -318,4 +319,32 @@ export class DaemonDiscovery {
       if (!missing(error)) throw error
     }
   }
+}
+
+/** Published daemons of this OS user, oldest key first. Callers still prove each process identity. */
+export function listDaemonWorkspaces(options: DiscoveryOptions): DaemonMetadata[] {
+  const stable = path.join(options.tmpDir, `amira-${options.uid}-workspaces`)
+  let keys: string[]
+  try {
+    keys = readdirSync(stable).filter((key) => /^[a-f0-9]{24}$/.test(key))
+  } catch (error) {
+    if (missing(error)) return []
+    throw error
+  }
+  const found: DaemonMetadata[] = []
+  for (const key of keys.sort()) {
+    try {
+      const file = path.join(stable, key, "daemon.json")
+      if (lstatSync(file).size > 8192) continue
+      const { workspace } = JSON.parse(readFileSync(file, "utf8")) as { workspace?: unknown }
+      if (typeof workspace !== "string") continue
+      // The workspace's own discovery re-derives the key and applies every ownership/privacy check.
+      const discovery = new DaemonDiscovery(workspace, options)
+      const meta = path.basename(discovery.ownershipDirectory) === key ? discovery.read() : undefined
+      if (meta) found.push(meta)
+    } catch {
+      // Unreadable, foreign, stale or moved workspaces are simply not listed.
+    }
+  }
+  return found
 }

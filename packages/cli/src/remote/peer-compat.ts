@@ -1,34 +1,38 @@
 import { REMOTE_FRAME_SCHEMAS, validateRemoteFrame } from "../remote-schema.ts"
 import { RemoteError } from "./errors.ts"
-import { CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY, type RemoteJson, type RemoteMessage } from "./protocol.ts"
+import { REMOTE_GATED_VALUES, type RemoteJson, type RemoteMessage } from "./protocol.ts"
 import { matches, type Schema } from "./schema/base.ts"
 
+type Gate = (typeof REMOTE_GATED_VALUES)[number]
+
 /** Walk only schema-owned DTO fields, never opaque tool args, signatures or user details. */
-function omitProviderSource(value: RemoteJson, schema: Schema): void {
+function omitGated(value: RemoteJson, schema: Schema, gates: readonly Gate[]): void {
   const alternatives = schema.oneOf ?? schema.anyOf
   if (alternatives) {
     const selected = alternatives.find((branch) => matches(value, branch))
-    if (selected) omitProviderSource(value, selected)
+    if (selected) omitGated(value, selected, gates)
     return
   }
   if (Array.isArray(value)) {
-    if (schema.items) for (const item of value) omitProviderSource(item, schema.items)
+    if (schema.items) for (const item of value) omitGated(item, schema.items, gates)
   } else if (value !== null && typeof value === "object") {
-    if (schema.properties?.contextWindowSource && value.contextWindowSource === "provider")
-      delete value.contextWindowSource
+    for (const gate of gates)
+      if (schema.properties?.[gate.property] && value[gate.property] === gate.value)
+        delete value[gate.property]
     for (const [key, item] of Object.entries(value)) {
       const property = schema.properties?.[key] ?? schema.additionalProperties
-      if (property) omitProviderSource(item, property)
+      if (property) omitGated(item, property, gates)
     }
   }
 }
 
-/** Downgrade the optional enum for v1 peers without losing actual limits or changing retained data. */
+/** Downgrade optional gated values for v1 peers without losing actual limits or changing retained data. */
 export function remoteMessageForPeer(message: RemoteMessage, capabilities: readonly string[]): RemoteMessage {
-  if (capabilities.includes(CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY)) return message
+  const gates = REMOTE_GATED_VALUES.filter((gate) => !capabilities.includes(gate.capability))
+  if (!gates.length) return message
   // Validate/copy before inspecting: getters, toJSON hooks and unknown fields must still fail closed.
   const frame = validateRemoteFrame(message, { outgoing: true })
   if (frame.kind === "chunk") throw new RemoteError("invalid_frame", "Cannot send a nested chunk")
-  omitProviderSource(frame as unknown as RemoteJson, REMOTE_FRAME_SCHEMAS[frame.kind])
+  omitGated(frame as unknown as RemoteJson, REMOTE_FRAME_SCHEMAS[frame.kind], gates)
   return frame
 }

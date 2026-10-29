@@ -4,6 +4,7 @@ import { RemoteDecoder } from "./codec.ts"
 import { RemoteError, RemoteReplyError } from "./errors.ts"
 import { remoteMessageForPeer } from "./peer-compat.ts"
 import {
+  remoteOperationChannel as operationChannel,
   REMOTE_LIMITS,
   type RemoteCancel,
   type RemoteChannel,
@@ -16,11 +17,6 @@ import {
 } from "./protocol.ts"
 import { matches, id as operationId } from "./schema/base.ts"
 import { RemoteWriter } from "./writer.ts"
-
-function operationChannel(op: RemoteOperation): RemoteChannel {
-  if (op === "model.open" || op === "model.stream" || op === "model.compact") return "model"
-  return /^(?:files|images|artifacts|uploads)\./.test(op) ? "files" : "control"
-}
 
 export interface RemoteIO {
   input: AsyncIterable<Uint8Array>

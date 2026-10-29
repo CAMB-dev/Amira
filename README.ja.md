@@ -47,6 +47,7 @@ CLI パッケージはグローバルな `amira` コマンドを提供します�
 - [プロバイダーと API キー](docs/ja/providers.md)
 - [日常の使い方、セッション、自動化](docs/ja/usage.md)
 - [SSH リモートワークスペース](docs/ja/remote-workspaces.md)
+- [独自クライアント向けのフロントエンドプロトコル](docs/ja/protocol.md)
 - [サブエージェントと worktree](docs/ja/subagents.md)
 - [拡張機能の使い方と作成方法](docs/ja/extensions.md)
 - [キー割り当て](docs/ja/keybindings.md)

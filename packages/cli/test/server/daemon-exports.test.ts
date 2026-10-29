@@ -35,6 +35,7 @@ test("daemon modules expose only host adapters, not extension API or wire state"
       ],
       "discovery": [
         "DaemonDiscovery",
+        "listDaemonWorkspaces",
       ],
       "endpoint": [
         "assertDaemonPeer",
