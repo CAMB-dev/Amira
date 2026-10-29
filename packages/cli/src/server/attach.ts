@@ -1,5 +1,6 @@
 import { encodeRemoteMessage } from "../remote/codec.ts"
 import type { RemoteIO } from "../remote/connection.ts"
+import { RemoteError } from "../remote/errors.ts"
 import { REMOTE_LIMITS, type RemoteRelease } from "../remote/protocol.ts"
 import { validateRemoteFrame } from "../remote-schema.ts"
 import { openWorkspaceDaemon } from "./daemon.ts"
@@ -7,6 +8,31 @@ import type { DaemonDiscovery } from "./discovery.ts"
 import { daemonAttachFault } from "./errors.ts"
 import type { DaemonPlatform } from "./platform.ts"
 import { privateMessage, readPrivatePrelude } from "./private-ipc.ts"
+
+/** A refused hello keeps its handshake code; any later failure is sanitized by daemonAttachFault. */
+class HelloError extends Error {
+  readonly fault: { code: string; message: string }
+  constructor(incompatible: boolean) {
+    super("Invalid attach hello")
+    this.fault = incompatible
+      ? { code: "incompatible_protocol", message: "Unsupported remote protocol version" }
+      : { code: "invalid_frame", message: "Invalid remote handshake" }
+  }
+}
+
+async function readHello(io: RemoteIO) {
+  const { value, tail } = await readPrivatePrelude(io, REMOTE_LIMITS.lineBytes).catch((error) => {
+    throw error instanceof SyntaxError ? new HelloError(false) : error
+  })
+  let hello: ReturnType<typeof validateRemoteFrame>
+  try {
+    hello = validateRemoteFrame(value)
+  } catch (error) {
+    throw new HelloError(error instanceof RemoteError && error.code === "incompatible_protocol")
+  }
+  if (hello.kind !== "hello") throw new HelloError(false)
+  return { hello, tail }
+}
 
 /** Copies one bounded chunk at a time and awaits each write. EOF/EPIPE closes only the relay. */
 export async function relayBytes(frontend: RemoteIO, daemon: RemoteIO): Promise<void> {
@@ -30,9 +56,7 @@ export async function attachWorkspace(options: {
   let daemon: RemoteIO | undefined
   let relaying = false
   try {
-    const { value, tail } = await readPrivatePrelude(options.io, REMOTE_LIMITS.lineBytes)
-    const hello = validateRemoteFrame(value)
-    if (hello.kind !== "hello") throw new Error("Expected attach hello")
+    const { hello, tail } = await readHello(options.io)
     const discovery = options.discovery(hello.workspace)
     const ready = await openWorkspaceDaemon({ ...options, discovery })
     daemon = ready.io
@@ -49,7 +73,7 @@ export async function attachWorkspace(options: {
       for (const bytes of encodeRemoteMessage({
         v: 1,
         kind: "reject",
-        error: daemonAttachFault(error),
+        error: error instanceof HelloError ? error.fault : daemonAttachFault(error),
       }))
         await options.io.write(bytes)
     } catch {}

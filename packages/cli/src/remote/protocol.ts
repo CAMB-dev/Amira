@@ -19,6 +19,14 @@ export type ModelFramePayload =
 export const REMOTE_PROTOCOL_VERSION = 1
 /** Peer understands the optional endpoint-reported context-window source in model/session DTOs. */
 export const CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY = "context-window-source.provider"
+/** Optional DTO values sent only to peers that advertised the capability; others see the field omitted. */
+export const REMOTE_GATED_VALUES = [
+  {
+    capability: CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY,
+    property: "contextWindowSource",
+    value: "provider",
+  },
+] as const
 
 export type RemoteJson = null | boolean | number | string | RemoteJson[] | { [key: string]: RemoteJson }
 export type RemoteChannel = "control" | "model" | "files"
@@ -95,6 +103,15 @@ export const REMOTE_OPERATIONS = [
   "model.open",
 ] as const
 export type RemoteOperation = (typeof REMOTE_OPERATIONS)[number]
+
+export function remoteOperationChannel(op: RemoteOperation): RemoteChannel {
+  if (op === "model.open" || op === "model.stream" || op === "model.compact") return "model"
+  return /^(?:files|images|artifacts|uploads)\./.test(op) ? "files" : "control"
+}
+/** The documented frontend surface (docs/protocol.md). Model brokering and the files channel are internal. */
+export const REMOTE_FRONTEND_OPERATIONS = REMOTE_OPERATIONS.filter(
+  (op) => remoteOperationChannel(op) === "control" && !op.startsWith("proxy."),
+)
 
 export interface RemoteRelease {
   version: string
