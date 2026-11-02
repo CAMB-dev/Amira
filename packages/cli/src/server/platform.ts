@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process"
-import { closeSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { createConnection, createServer, type Socket } from "node:net"
 import type { RemoteIO } from "../remote/connection.ts"
 import { openDaemonLog } from "./daemon-log.ts"
+import { spawnDetachedDaemon } from "./daemon-spawn.ts"
 import type { DaemonDiscovery } from "./discovery.ts"
 import { readLinuxPeer } from "./linux-peer.ts"
 import { assertDaemonPeer, type DaemonEndpoint } from "./socket-endpoint.ts"
@@ -14,7 +14,15 @@ export interface DaemonPlatform {
   processIdentity(pid: number): string | undefined
   spawn(discovery: DaemonDiscovery): Promise<void>
   connect(endpoint: DaemonEndpoint): Promise<RemoteIO>
-  listen(socket: string, accept: (io: RemoteIO) => void): Promise<{ close(): Promise<void> }>
+  /**
+   * `nonce` keys a platform's connection proof where the OS cannot name the peer (Windows).
+   * `endpoint` is set when the platform had to listen elsewhere; daemon.json records it.
+   */
+  listen(
+    socket: string,
+    accept: (io: RemoteIO) => void,
+    nonce: string,
+  ): Promise<{ close(): Promise<void>; endpoint?: string }>
 }
 
 export function socketIO(socket: Socket): RemoteIO {
@@ -59,31 +67,7 @@ export class LinuxDaemonPlatform implements DaemonPlatform {
     discovery.validateSocketDirectory()
     // Startup diagnostics are fixed-size; daemon mode replaces both writers with a capped sink.
     const log = openDaemonLog(`${discovery.directory}/daemon.log`)
-    try {
-      const child = spawn(
-        this.command[0]!,
-        [
-          ...this.command.slice(1),
-          "daemon",
-          "--cwd",
-          discovery.workspace,
-          ...(this.modelMode === "remote-key" ? ["--remote-key"] : []),
-        ],
-        {
-          detached: true,
-          stdio: ["ignore", log, log],
-          windowsHide: true,
-          env: process.env,
-        },
-      )
-      await new Promise<void>((resolve, reject) => {
-        child.once("error", reject)
-        child.once("spawn", resolve)
-      })
-      child.unref()
-    } finally {
-      closeSync(log)
-    }
+    await spawnDetachedDaemon(this.command, this.modelMode, discovery.workspace, log)
   }
 
   async connect(endpoint: DaemonEndpoint): Promise<RemoteIO> {

@@ -35,7 +35,7 @@ export function discoveryFixture(
     home,
     runtimeDir,
     tmpDir: root,
-    uid: 1,
+    principal: "1",
     checkPrivate,
     checkSocket(file: string) {
       checkPrivate(file, false)
