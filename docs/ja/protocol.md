@@ -21,7 +21,7 @@
 クライアントを計画する前に読んでください。これはワイヤーフォーマットではなく、現在の daemon の性質です。
 
 - **daemon は Linux でのみ動きます。**`amira remote add` がインストールするサーバー（glibc Linux、x64 または ARM64）がそれです。Windows と macOS にはローカルの daemon がありません。端末 UI は自分のプロセス内でエージェントを動かすため、これらの OS の GUI は SSH 経由で Linux のワークスペースにしか接続できません。
-- **ワークスペースごとにコントローラーは 1 つです。**daemon が同時に受け入れる接続中フロントエンドは 1 つだけです。あるクライアントがコントローラーを保持している間（および切断後最大 30 秒間）、他のクライアントは `controller_busy` で拒否されます。GUI と端末 UI を同じワークスペースに同時に接続することはできず、読み取り専用のビューアーもありません。
+- **ワークスペースごとにコントローラー 1 つと、最大 8 つのビューアー。**daemon が同時に受け入れるコントローラーは 1 つだけです。あるクライアントがコントローラーを保持している間（および切断後最大 30 秒間）、他のコントローラーは `controller_busy` で拒否されます。他のクライアントは読み取り専用のビューアーとして接続するか、明示的に制御を引き継げます（[コントローラーとビューアー](#コントローラーとビューアー)を参照）。ビューアーが daemon を起動することはなく、daemon を動かし続ける理由にもなりません。
 - **モデルの経路。**デフォルトの local-proxy モードで起動した daemon（`welcome.capabilities` に `model.proxy`）は、端末クライアントが内部の model チャネルでモデル呼び出しを処理するのを待ちます。サードパーティのクライアントにはそれができず、ターンは最大 `remote.proxyReconnectTimeoutMs` 待ったあと失敗します。リモートの認証情報を使う daemon（`model.remote-key`）、つまり `amira-server attach --remote-key` で起動した daemon に接続してください。
 - **変更記録。**daemon は、再試行したリクエストが二重に実行されないよう変更操作を記録します（[再試行と変更記録](#再試行と変更記録)を参照）。同時に保持する変更操作は最大 128 個で、その params と結果は合計最大 32 MiB です。実行中のものと、完了後最大 10 分間のものが含まれます。いっぱいになると、最も古い完了済みの結果が早めに破棄されます。実行中の変更操作だけで埋まっているときに限り、新しい変更操作は `limit_exceeded` で失敗します。また、1 つの接続でリクエスト id を 65,536 個使うと、daemon はその接続を `limit_exceeded` で閉じます。
 
@@ -76,7 +76,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `resume` | 任意。再接続のため、以前の `welcome` の `daemonEpoch`、`after`（最後に適用したイベントの `seq`）、`controllerToken`。 |
 | `snapshot` | 任意。`true` にすると、再開時でも `reset` スナップショットを要求します。 |
 
-`welcome` は、サーバーの `release`、正規の `workspace` とその `workspaceId`、`daemonEpoch`、`controllerGeneration`、`sessionGeneration`、再接続用の `controllerToken`（秘密にしてください）、同じ `limits`、サーバーの `capabilities` を返します。
+`welcome` は、サーバーの `release`、正規の `workspace` とその `workspaceId`、`daemonEpoch`、`controllerGeneration`、`sessionGeneration`、再接続用の `controllerToken`（秘密にしてください）、同じ `limits`、サーバーの `capabilities`、そしてロール文字列を送ったクライアントにはその接続の `role`（`controller` または `viewer`）を返します。
 
 | ケイパビリティ | 意味 |
 | --- | --- |
@@ -86,10 +86,26 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `files`、`images` | 内部の files チャネル。 |
 | `model.remote-key` / `model.proxy` | daemon がどこでモデル呼び出しを行うか（[現在の制限](#現在の制限)を参照）。 |
 | `context-window-source.provider` | クライアントのケイパビリティでもあります。[バージョンと互換性](#バージョンと互換性)を参照。 |
+| `attach.roles` | 接続のロール。クライアントが下記のロール文字列のいずれかを送った場合にだけ含まれます。 |
 
 バージョンのネゴシエーションはありません。`v` が異なる `hello` は `reject` のコード `incompatible_protocol` で拒否され、別のプロトコルバージョンで動作中の daemon に接続した場合も同様です。クライアントは `welcome.v` が `1` であることを確認し、そうでなければ接続を閉じなければなりません。
 
-`reject` のコード：`controller_busy`、`incompatible_protocol`、`incompatible_build`、`invalid_frame`（中継が 5 秒以内に `hello` を受け取れなかった場合も）、`invalid_workspace`、`workspace_busy`、`unsupported_capability`、`permission_denied`（再接続用の認証情報の期限切れや、変更記録が忘れた `clientId` など）、`startup_failed`、`limit_exceeded`、`disconnected`、`cancelled`、`unsupported_operation`、`operation_failed`。この一覧は拡張されることがあり、知らないコードは `operation_failed` として扱ってください。`reject` の後、接続は閉じられます。
+**接続の意図。**ロールを理解するクライアントは、`hello.capabilities` に次の文字列のいずれかを加えます。どれも `attach.roles` を含意します。送るのは 1 つだけにしてください。複数ある場合は `attach.take` が `attach.role.viewer` より、`attach.role.viewer` が `attach.role.auto` より優先されます。
+
+| 文字列 | 結果 |
+| --- | --- |
+| `attach.roles` | ロールがない場合と同じく、コントローラーになるか `controller_busy` です。クライアントは `welcome.role`、`attachment` フレーム、`not_controller`、`welcome` の後の最後の `reject` も理解します。 |
+| `attach.role.viewer` | ビューアー。この `clientId` の現在のコントローラートークンを持つ `resume` を付けると、リースもすぐに終わり、30 秒の予約は残りません。コントローラーはこうして制御を返します。 |
+| `attach.role.auto` | ワークスペースが空いていて hello に `resume` がない場合、または `resume` がこのクライアント自身のリースを再開する場合はコントローラー、それ以外はビューアーです。拒否された再開が新しいコントローラーになることはありません。 |
+| `attach.take` | すぐに制御を引き継ぎます（[制御の引き継ぎ](#制御の引き継ぎ)を参照）。ユーザーが明示的に操作したときだけ送ってください。 |
+
+これらの文字列がなければ、ハンドシェイクはロールが導入される前とまったく同じに動作し、クライアントが `welcome.role` や `attachment` フレームを受け取ることはありません。
+
+`clientId` ごとに有効な接続は最大 1 つです。hello が受け入れられると、同じ `clientId` の古い接続は閉じられます。拒否された hello（`controller_busy` など）は何も閉じません。個別に接続するウィンドウごとに別の `clientId` を使ってください。
+
+ロール導入前の daemon はこれらの文字列を無視します。その場合ビューアーの意図はコントローラーとして接続するか `controller_busy` になり、`welcome.capabilities` に `attach.roles` はありません。ビューアーを接続する前に `amira-server list` で daemon の `release` を確認してください。見るだけのつもりのクライアントがそれでもコントローラーになった場合は、閉じるたびにワークスペースが 30 秒予約されるため、ユーザーが閉じるまで接続したまま変更操作を送らないでください。
+
+`reject` のコード：`controller_busy`、`incompatible_protocol`、`incompatible_build`、`invalid_frame`（中継が 5 秒以内に `hello` を受け取れなかった場合も）、`invalid_workspace`、`workspace_busy`、`unsupported_capability`、`permission_denied`（再接続用の認証情報の期限切れや、変更記録が忘れた `clientId` など）、`startup_failed`、`limit_exceeded`、`disconnected`、`cancelled`、`unsupported_operation`、`operation_failed`、そして `controller_taken`（[制御の引き継ぎ](#制御の引き継ぎ)を参照）。`workspace_busy` は、今スナップショットを読み込み中のビューアーが多すぎるという意味の場合もあります。少し待って再試行してください。`limit_exceeded` は、ワークスペースにすでに 8 つのビューアーがいるという意味の場合もあります。この一覧は拡張されることがあり、知らないコードは `operation_failed` として扱ってください。`reject` の後、接続は閉じられます。`welcome` の後に `reject` を受け取りうるのは、ロール文字列を送ったクライアントだけです。
 
 ## リクエストとレスポンス
 
@@ -126,6 +142,9 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 5. **変更操作の `limit_exceeded` は、それが実行されなかったことを意味します。**
 6. **id は引き続き一意**（`clientId` と `daemonEpoch` ごと）でなければなりません。UUID か、再接続をまたいで続く連番を使ってください。
 7. 別の `daemonEpoch` のリクエストは `outcome_unknown` で失敗します。daemon が再起動しており、以前の epoch の id については何もわかりません。スナップショットから再同期してください。
+8. コード `controller_taken` の `reject` の後、保留中の変更操作の結果は不明です。ビューアーはそれらを再送できないため、代わりに状態を読んでください。
+
+変更操作を送るのはコントローラーだけなので、ビューアーが変更記録を使うことはありません。
 
 ### エラー
 
@@ -137,6 +156,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `stale_session` | `sessionGeneration` がもう現在の値ではありません。最新のスナップショットから更新してください。 |
 | `stale_operation` | 対象（UI リクエスト、フォーム、会話）がもう保留中でないか、現在のものではありません。 |
 | `stale_controller` | `controllerGeneration` がもう現在の値ではありません。この接続は置き換えられました。 |
+| `not_controller` | ビューアーが、コントローラーだけが実行できる操作を呼び出しました。 |
 | `outcome_unknown` | リクエストが別の `daemonEpoch` のものです。daemon が再起動しました。再同期してください。 |
 | `operation_conflict` | 同じ `id` が異なる params で再利用されました。 |
 | `operation_expired` | 再試行した変更操作の元の結果がもう保持されていません。再実行はされていません。 |
@@ -145,6 +165,46 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `cancelled`、`disconnected` | リクエストがキャンセルされたか、ワークスペースが切り離しました。 |
 | `limit_exceeded`、`invalid_frame` | 制限超過または検証の失敗。これで拒否された変更操作は実行されていません。 |
 | `operation_failed` | その他の失敗。詳細はホストに残ります。 |
+
+## コントローラーとビューアー
+
+各接続は、その存続期間を通じて 1 つのロールを保ちます。**コントローラー**か**ビューアー**です。ロールの変更は常に新しい接続です。ビューアーになれるのは、ロール文字列を送ったクライアント（[ハンドシェイク](#ハンドシェイク)を参照）だけです。
+
+ビューアーの `welcome` は `role: "viewer"` と `controllerGeneration: 0` を持ち、その `controllerToken` は何の権限も与えません。ビューアーのリクエストとキャンセルでは `controllerGeneration: 0` を送ってください。それ以外の値は `stale_controller` で失敗します。ビューアーは、コントローラーが受け取るすべてのイベント、スナップショット、UI リクエストを自分のカーソルから受け取ります。呼び出せるのは次の操作だけです（`x-operations` の `x-access.viewer`）：`state.read`、`transcript.read`、`status.read`、`models.list`、`commands.describe`、`sessions.list`、`sessions.read`、`session.planRewind`、`jobs.list`、`jobs.output`、`jobs.wait`、`conversations.list`、`conversations.history`。それ以外の操作はすべて `not_controller` で失敗します。`turn.abort`、`commands.complete`、`form.evaluate` も同じです。
+
+- ビューアーが同時に実行できる `jobs.wait`、`jobs.output`、`conversations.history` のリクエストは最大 8 つです。それを超えると `limit_exceeded` で失敗します。
+- ビューアーが読めるのは、コントローラーがフォーカスした会話だけです。
+- 1 つのワークスペースが受け入れるビューアーは最大 8 つで、それ以上のビューアーの hello はコード `limit_exceeded` の `reject` を受け取ります。最初のスナップショットを同時に読み込めるビューアーは最大 2 つで、それ以上は `workspace_busy` を受け取るので、少し待って再試行してください。
+- 1,024 フレームまたは 16 MiB 遅れたビューアーは `limit_exceeded` で閉じられます。再接続してカーソルから再開してください。
+- ビューアーは daemon を動かし続ける理由になりません。ビューアーが接続していても、daemon はアイドルになると停止し、準備済みの更新はそれを置き換えます。`attach.role.viewer` を持つ中継の hello が daemon を起動することはありません。動いている daemon がなければ、中継はコード `disconnected` の `reject` を書き出します。
+
+### attachment フレーム
+
+ロール文字列を送ったクライアントは `attachment` フレームも受け取ります。`welcome` の後（その接続の初期再送の後）に 1 つ、その後は変化のたびに 1 つです。これはイベントではありません。`seq` を持たず、再送も確認応答もされません。各フレームは現在の状態全体を運ぶので、最新のものだけを保持してください。
+
+- `controller.state` は `attached`、`detached`（保持者が切断しており、`graceRemainingMs` ミリ秒以内なら再接続できる）、`none` のいずれかです。知らない値は `none` として扱ってください。`controller.client` は保持者を示します。
+- `viewers` は最大 8 つのビューアーを `client` と `attachedMs` 付きで列挙します。自分がビューアーなら、自分の接続も含まれます。
+
+`client` は、そのクライアントが `hello.release` で自己申告した `buildId` と `target` で、`version` は単純な `[0-9A-Za-z.+-]` のテキストである場合だけ含まれます。これは表示用のテキストにすぎません。すべてのクライアントが同じユーザーとして動くので認証されておらず、`clientId` を含むこともありません。それでも表示する前に制御文字を取り除いてください。
+
+### 制御の引き継ぎ
+
+`attach.take` を持つ hello は、次の場合にクライアントをコントローラーにします。
+
+| リース | 結果 |
+| --- | --- |
+| 空いている、または同じ `clientId` が保持している（接続中または猶予期間中） | 新しい generation とトークンでコントローラーになります。 |
+| 別のクライアントが 30 秒の猶予期間中に保持している | コントローラーになり、予約は終わります。 |
+| ロール文字列を送らなかったクライアントが接続したまま保持している | コード `controller_busy` の `reject`。理由を伝えられないクライアントが引き継がれることはありません。 |
+| ロール文字列を送ったクライアントが接続したまま保持している | コントローラーになります。以前の保持者はコード `controller_taken` の最後の `reject` を受け取り、閉じられます。 |
+| コントローラーが変わってから 1 秒未満 | コード `controller_busy` の `reject`。 |
+| daemon が `model.proxy` を使い、接続中の保持者がモデルを提供していて、引き継ぐ側が `model.proxy` を送らなかった | コード `unsupported_capability` の `reject`。 |
+
+引き継ぎで変わるのは、誰が操作できるかだけです。実行中のターン、バックグラウンドジョブ、サブエージェントは続き、保留中の UI リクエストは新しいコントローラーを待ち、以前の保持者がすでに送った変更操作は実行を続けます。それらのレスポンスは古い接続とともに失われるため、結果は不明として扱い、状態を読んでください。`controller_taken` の後は `attach.role.viewer` と自分のカーソルで再接続し、別のクライアントが制御を引き継いだことをユーザーに伝えてください。
+
+`effect` 通知は、そのコマンドを実行したコントローラーのものです。ビューアーはすべての `effect` イベントを無視します。新しいコントローラーは、初期再送（`replay: true`）に含まれる `effect` イベントを無視します。ただし、直前の接続もコントローラーだった場合は除きます。
+
+ビューアーは権限が低いのであって、信頼の度合いが低いわけではありません。中継を実行できる同じユーザーのプロセスなら、ワークスペース全体を見ることも、制御を引き継ぐことも、`amira-server stop` で daemon を止めることもできます。また daemon は、128 ソケットを超えた接続を理由を示さずに閉じます。
 
 ## イベント
 
@@ -182,7 +242,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `extension-settings` | `{ "values": {...}, "scope": "user" \| "project" }`。 |
 | `form` | `ui.respond` は使いません。`form.open` でエディターとリビジョンを取得し、編集中は `form.evaluate`、アクションフィールドには `form.action` を使い、最後に `form.submit` または `form.cancel` を送ります。 |
 
-確認結果は `accepted`、`cancelled`、`settled`（回答済み）、`invalid`、`disconnected` のいずれかです。`ui.resolved` イベントは、リクエストが閉じたことをすべてのフロントエンドに知らせます。接続しているのはコントローラーだけなので、回答するのはその 1 つのフロントエンドです。
+確認結果は `accepted`、`cancelled`、`settled`（回答済み）、`invalid`、`disconnected` のいずれかです。`ui.resolved` イベントは、リクエストが閉じたことをすべてのフロントエンドに知らせます。保留中のリクエストはすべての接続から見えますが、回答できるのはコントローラーだけです。ビューアーの `ui.respond`、`ui.cancel`、`form.*` は `not_controller` で失敗します。
 
 ## バージョンと互換性
 
@@ -204,6 +264,7 @@ schema は 1 つのバンドルです。すべての型は `$defs` の下の名�
 - タグは最初のプロパティとは限りません。`System.Text.Json` のポリモーフィズムを使う場合は `JsonSerializerOptions.AllowOutOfOrderMetadataProperties = true`（.NET 9 以降）を設定するか、先に `JsonDocument` からタグを読んで型を選ぶコンバーターを書いてください。
 - `x-decode-only` の付いた定義（`ResponseEnvelope` と、`amira-server list` の出力行を表す `ServerListOutput`）は、ルートの `x-decode-only` 配列に列挙されています。これらがフレームになることはありません。
 - `Fault.code` は拡張されうる文字列です。`x-known-codes` に文書化された値の一覧があり、それ以外は `operation_failed` として扱ってください。
+- `x-operations` の各エントリは `x-access` を持ちます。`ledger`（記録される変更操作）と `viewer`（ビューアーが呼び出せる）です。あるケイパビリティを持つクライアントにだけ送られる定義とプロパティには `x-capability` が付きます。たとえば `attach.roles` の `AttachmentFrame` と `WelcomeFrame.role` です。`x-known-values` は、`AttachmentController.state` のような拡張されうる文字列について、文書化された値を列挙します。
 
 ## やり取りの例
 

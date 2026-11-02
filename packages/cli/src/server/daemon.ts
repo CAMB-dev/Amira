@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto"
 import type { RemoteIO } from "../remote/connection.ts"
 import { RemoteError } from "../remote/errors.ts"
 import { REMOTE_PROTOCOL_VERSION, type RemoteRelease } from "../remote/protocol.ts"
+import { rolesEnabledOn } from "./attach-intent.ts"
 import { workspaceAttachments } from "./attachments.ts"
 import type { DaemonDiscovery, DaemonMetadata } from "./discovery.ts"
-import { DaemonIncompatibilityError } from "./errors.ts"
+import { DaemonIncompatibilityError, DaemonUnavailableError } from "./errors.ts"
 import { IdleDeadline } from "./idle.ts"
 import type { DaemonPlatform } from "./platform.ts"
 import { privateMessage, readPrivatePrelude } from "./private-ipc.ts"
@@ -36,6 +37,8 @@ export async function startWorkspaceDaemon(options: {
   idleTimeoutMs: number
   createRuntime(cwd: string): Promise<WorkspaceRuntime>
   poll?: boolean
+  /** Honor attachment roles; defaults to the platforms whose daemons check the socket peer. */
+  roles?: boolean
 }): Promise<WorkspaceDaemon> {
   const { discovery, platform } = options
   const owner = discovery.claim("owner")
@@ -87,7 +90,7 @@ export async function startWorkspaceDaemon(options: {
       nonce: randomUUID(),
       lockIdentity: discovery.lockIdentity(),
     }
-    const authority = workspaceAttachments(runtime)
+    const authority = workspaceAttachments(runtime, { roles: options.roles ?? rolesEnabledOn() })
     listener = await platform.listen(discovery.socket, (io) => {
       if (stopping || sockets.size >= 128) {
         io.close()
@@ -141,7 +144,8 @@ export async function startWorkspaceDaemon(options: {
     const deadline = new IdleDeadline(options.idleTimeoutMs)
     const tick = async () => {
       if (stopping) return stopping
-      const idle = runtime!.quiescent() && sockets.size === 0
+      // Viewers never keep the daemon alive or hold back a replacement; they reconnect or see it stop.
+      const idle = runtime!.quiescent() && sockets.size - authority.viewers === 0
       if (
         (idle && discovery.replacement()) ||
         deadline.sample(platform.now(), { idle, revision: runtime!.activityVersion })
@@ -167,6 +171,8 @@ interface StartupOptions {
   platform: DaemonPlatform
   release: RemoteRelease
   startupTimeoutMs?: number
+  /** false: only a running daemon; a viewer never starts one (DaemonUnavailableError). */
+  start?: boolean
 }
 
 /** Bounded startup readiness. Contenders never spawn unless they own the startup lock. */
@@ -205,13 +211,18 @@ async function readyWorkspaceDaemon(
           const result = value as { nonce?: string; daemonEpoch?: string }
           if (result?.nonce !== meta.nonce || result.daemonEpoch !== meta.daemonEpoch)
             throw new Error("Daemon readiness identity changed")
-          if (meta.release.buildId !== release.buildId || meta.release.version !== release.version)
+          // Only a caller that may start a daemon asks for its replacement; a viewer just watches.
+          if (
+            options.start !== false &&
+            (meta.release.buildId !== release.buildId || meta.release.version !== release.version)
+          )
             discovery.replacement(release)
           retained = retain
           return { metadata: meta, io: tail }
         }
         if (meta && identity !== undefined)
           throw new Error("Daemon PID identity changed; workspace ownership cannot be proven dead")
+        if (options.start === false) throw new DaemonUnavailableError()
         if (!launched && discovery.canStart()) {
           startup ??= discovery.claim("startup")
           if (startup) {
@@ -228,6 +239,7 @@ async function readyWorkspaceDaemon(
       }
       await platform.sleep(25)
     } while (platform.now() < until)
+    if (options.start === false) throw new DaemonUnavailableError()
     throw new Error("Remote daemon did not become ready before the startup deadline")
   } finally {
     startup?.release()

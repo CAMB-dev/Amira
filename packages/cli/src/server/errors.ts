@@ -11,7 +11,18 @@ export class DaemonIncompatibilityError extends Error {
   }
 }
 
+/** A viewer attach found no running daemon; viewers never start one. */
+export class DaemonUnavailableError extends Error {
+  readonly code = "disconnected"
+
+  constructor() {
+    super("No workspace daemon is running")
+    this.name = "DaemonUnavailableError"
+  }
+}
+
 export function daemonAttachFault(error: unknown): { code: string; message: string } {
+  if (error instanceof DaemonUnavailableError) return { code: "disconnected", message: error.message }
   return error instanceof DaemonIncompatibilityError
     ? { code: "incompatible_protocol", message: recovery }
     : { code: "startup_failed", message: "The remote workspace could not attach" }

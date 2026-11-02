@@ -43,6 +43,7 @@ test("daemon modules expose only host adapters, not extension API or wire state"
       ],
       "errors": [
         "DaemonIncompatibilityError",
+        "DaemonUnavailableError",
         "daemonAttachFault",
       ],
       "idle": [

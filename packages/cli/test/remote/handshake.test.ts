@@ -168,3 +168,44 @@ test("stalled handshake is bounded and close is idempotent", async () => {
   await client.closed
   client.close()
 })
+
+test("only a client that asked for roles accepts a reject after welcome; the server sends one only to such a peer", async () => {
+  const taken = { v: 1, kind: "reject", error: { code: "controller_taken", message: "Taken" } }
+  for (const [capabilities, serverCapabilities, code] of [
+    [["attach.role.auto"], ["attach.roles"], "controller_taken"],
+    [["attach.roles"], ["attach.roles"], "controller_taken"],
+    // A pre-roles server never sends one; if anything does, it is a broken handshake.
+    [["attach.roles"], [], "invalid_frame"],
+    [[], ["attach.roles"], "invalid_frame"],
+  ] as const) {
+    const io = loopback()
+    const client = new RemoteConnection(io.client, {
+      handshake: { role: "client", hello: { ...hello, capabilities: [...capabilities] } },
+    })
+    await io.server.write(encode({ ...welcome, capabilities: [...serverCapabilities] }))
+    await client.ready
+    await io.server.write(encode(taken))
+    await client.closed
+    expect(client.failureReason).toMatchObject({ code })
+  }
+  const writes = async (capabilities: string[]) => {
+    const io = loopback()
+    const output: string[] = []
+    const serverIO = {
+      ...io.server,
+      write: async (bytes: Uint8Array) => {
+        output.push(Buffer.from(bytes).toString())
+        await io.server.write(bytes)
+      },
+    }
+    const server = new RemoteConnection(serverIO, { handshake: { role: "server", accept: () => welcome } })
+    io.injectServer(encode({ ...hello, capabilities }))
+    await server.ready
+    server.reject({ code: "controller_taken", message: "Taken" })
+    await server.closed
+    expect(server.failureReason).toMatchObject({ code: "controller_taken" })
+    return output.join("")
+  }
+  expect(await writes(["attach.role.viewer"])).toContain('"controller_taken"')
+  expect(await writes(["model.proxy"])).not.toContain('"reject"')
+})

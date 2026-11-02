@@ -53,6 +53,12 @@ const release = object({
   target: id,
 })
 const fault = object({ code: id, message: constrain(text, { maxLength: 4096 }) })
+// Self-reported display text: version is echoed only when it is plain printable ASCII.
+const attachedClient = object({
+  buildId: id,
+  target: id,
+  "version?": constrain(text, { minLength: 1, maxLength: 64, pattern: "^[0-9A-Za-z.+-]{1,64}$" }),
+})
 const limits = object({
   lineBytes: values(REMOTE_LIMITS.lineBytes),
   logicalBytes: values(REMOTE_LIMITS.logicalBytes),
@@ -100,8 +106,16 @@ export const REMOTE_FRAME_SCHEMAS = {
     "controllerToken?": id,
     limits,
     capabilities: strings,
+    "role?": values("controller", "viewer"),
   }),
   reject: base("reject", { error: fault }),
+  attachment: base("attachment", {
+    daemonEpoch: id,
+    controller: object({ state: id, "graceRemainingMs?": integer, "client?": attachedClient }),
+    viewers: constrain(array(object({ client: attachedClient, attachedMs: integer })), {
+      maxItems: REMOTE_LIMITS.viewers,
+    }),
+  }),
   request: taggedUnion(pickSchemas(operationSchemas, "params"), "op", "params", {
     v: values(1),
     kind: values("request"),

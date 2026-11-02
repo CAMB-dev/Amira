@@ -8,167 +8,208 @@
   "x-operations": {
     "state.read": {
       "params": { "$ref": "#/$defs/StateReadParams" },
-      "result": { "$ref": "#/$defs/FrontendState" }
+      "result": { "$ref": "#/$defs/FrontendState" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "permissions.cycle": {
       "params": { "$ref": "#/$defs/PermissionsCycleParams" },
-      "result": { "$ref": "#/$defs/PermissionsCycleResult" }
+      "result": { "$ref": "#/$defs/PermissionsCycleResult" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "transcript.read": {
       "params": { "$ref": "#/$defs/TranscriptReadParams" },
-      "result": { "$ref": "#/$defs/Transcript" }
+      "result": { "$ref": "#/$defs/Transcript" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "turn.prompt": {
       "params": { "$ref": "#/$defs/TurnPromptParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "turn.steer": {
       "params": { "$ref": "#/$defs/TurnSteerParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "turn.abort": {
       "params": { "$ref": "#/$defs/TurnAbortParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "command.run": {
       "params": { "$ref": "#/$defs/CommandRunParams" },
-      "result": { "$ref": "#/$defs/CommandOutcome" }
+      "result": { "$ref": "#/$defs/CommandOutcome" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "commands.describe": {
       "params": { "$ref": "#/$defs/CommandsDescribeParams" },
-      "result": { "$ref": "#/$defs/CommandsDescribeResult" }
+      "result": { "$ref": "#/$defs/CommandsDescribeResult" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "commands.complete": {
       "params": { "$ref": "#/$defs/CommandsCompleteParams" },
-      "result": { "$ref": "#/$defs/CommandsCompleteResult" }
+      "result": { "$ref": "#/$defs/CommandsCompleteResult" },
+      "x-access": { "ledger": false, "viewer": false }
     },
     "skill.run": {
       "params": { "$ref": "#/$defs/SkillRunParams" },
-      "result": { "$ref": "#/$defs/CommandOutcome" }
+      "result": { "$ref": "#/$defs/CommandOutcome" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "input.run": {
       "params": { "$ref": "#/$defs/InputRunParams" },
-      "result": { "$ref": "#/$defs/CommandOutcome" }
+      "result": { "$ref": "#/$defs/CommandOutcome" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "session.resume": {
       "params": { "$ref": "#/$defs/SessionResumeParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "session.clear": {
       "params": { "$ref": "#/$defs/SessionClearParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "session.fork": {
       "params": { "$ref": "#/$defs/SessionForkParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "session.rewind": {
       "params": { "$ref": "#/$defs/SessionRewindParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "session.planRewind": {
       "params": { "$ref": "#/$defs/SessionPlanRewindParams" },
-      "result": { "$ref": "#/$defs/RewindPlan" }
+      "result": { "$ref": "#/$defs/RewindPlan" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "conversation.send": {
       "params": { "$ref": "#/$defs/ConversationSendParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "conversation.stop": {
       "params": { "$ref": "#/$defs/ConversationStopParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "sessions.list": {
       "params": { "$ref": "#/$defs/SessionsListParams" },
-      "result": { "$ref": "#/$defs/SessionList" }
+      "result": { "$ref": "#/$defs/SessionList" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "sessions.read": {
       "params": { "$ref": "#/$defs/SessionsReadParams" },
-      "result": { "$ref": "#/$defs/NullableStoredSession" }
+      "result": { "$ref": "#/$defs/NullableStoredSession" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "models.list": {
       "params": { "$ref": "#/$defs/ModelsListParams" },
-      "result": { "$ref": "#/$defs/ServerModels" }
+      "result": { "$ref": "#/$defs/ServerModels" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "model.set": {
       "params": { "$ref": "#/$defs/ModelSetParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "thinking.set": {
       "params": { "$ref": "#/$defs/ThinkingSetParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "fastMode.set": {
       "params": { "$ref": "#/$defs/FastModeSetParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "status.read": {
       "params": { "$ref": "#/$defs/StatusReadParams" },
-      "result": { "$ref": "#/$defs/Status" }
+      "result": { "$ref": "#/$defs/Status" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "jobs.list": {
       "params": { "$ref": "#/$defs/JobsListParams" },
-      "result": { "$ref": "#/$defs/JobsListResult" }
+      "result": { "$ref": "#/$defs/JobsListResult" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "jobs.output": {
       "params": { "$ref": "#/$defs/JobsOutputParams" },
-      "result": { "$ref": "#/$defs/JobsOutputResult" }
+      "result": { "$ref": "#/$defs/JobsOutputResult" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "jobs.stop": {
       "params": { "$ref": "#/$defs/JobsStopParams" },
-      "result": { "$ref": "#/$defs/BackgroundJob" }
+      "result": { "$ref": "#/$defs/BackgroundJob" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "jobs.wait": {
       "params": { "$ref": "#/$defs/JobsWaitParams" },
-      "result": { "$ref": "#/$defs/JobsWaitResult" }
+      "result": { "$ref": "#/$defs/JobsWaitResult" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "conversations.list": {
       "params": { "$ref": "#/$defs/ConversationsListParams" },
-      "result": { "$ref": "#/$defs/ConversationsListResult" }
+      "result": { "$ref": "#/$defs/ConversationsListResult" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "conversations.history": {
       "params": { "$ref": "#/$defs/ConversationsHistoryParams" },
-      "result": { "$ref": "#/$defs/ConversationsHistoryResult" }
+      "result": { "$ref": "#/$defs/ConversationsHistoryResult" },
+      "x-access": { "ledger": false, "viewer": true }
     },
     "conversations.focus": {
       "params": { "$ref": "#/$defs/ConversationsFocusParams" },
-      "result": { "$ref": "#/$defs/ConversationsFocusResult" }
+      "result": { "$ref": "#/$defs/ConversationsFocusResult" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "conversations.unfocus": {
       "params": { "$ref": "#/$defs/ConversationsUnfocusParams" },
-      "result": { "$ref": "#/$defs/Acknowledgement" }
+      "result": { "$ref": "#/$defs/Acknowledgement" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "conversations.control": {
       "params": { "$ref": "#/$defs/ConversationsControlParams" },
-      "result": { "$ref": "#/$defs/ConversationsControlResult" }
+      "result": { "$ref": "#/$defs/ConversationsControlResult" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "ui.respond": {
       "params": { "$ref": "#/$defs/UiRespondParams" },
-      "result": { "$ref": "#/$defs/UiAck" }
+      "result": { "$ref": "#/$defs/UiAck" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "ui.cancel": {
       "params": { "$ref": "#/$defs/UiCancelParams" },
-      "result": { "$ref": "#/$defs/UiAck" }
+      "result": { "$ref": "#/$defs/UiAck" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "form.open": {
       "params": { "$ref": "#/$defs/FormOpenParams" },
-      "result": { "$ref": "#/$defs/FormOpenResult" }
+      "result": { "$ref": "#/$defs/FormOpenResult" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "form.evaluate": {
       "params": { "$ref": "#/$defs/FormEvaluateParams" },
-      "result": { "$ref": "#/$defs/FormEvaluation" }
+      "result": { "$ref": "#/$defs/FormEvaluation" },
+      "x-access": { "ledger": false, "viewer": false }
     },
     "form.action": {
       "params": { "$ref": "#/$defs/FormActionParams" },
-      "result": { "$ref": "#/$defs/FormMutation" }
+      "result": { "$ref": "#/$defs/FormMutation" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "form.submit": {
       "params": { "$ref": "#/$defs/FormSubmitParams" },
-      "result": { "$ref": "#/$defs/FormMutation" }
+      "result": { "$ref": "#/$defs/FormMutation" },
+      "x-access": { "ledger": true, "viewer": false }
     },
     "form.cancel": {
       "params": { "$ref": "#/$defs/FormCancelParams" },
-      "result": { "$ref": "#/$defs/UiAck" }
+      "result": { "$ref": "#/$defs/UiAck" },
+      "x-access": { "ledger": true, "viewer": false }
     }
   },
   "x-decode-only": [{ "$ref": "#/$defs/ResponseEnvelope" }, { "$ref": "#/$defs/ServerListOutput" }],
@@ -344,6 +385,70 @@
         }
       },
       "required": ["role", "content", "model"],
+      "additionalProperties": false
+    },
+    "AttachedClient": {
+      "title": "AttachedClient",
+      "description": "Self-reported display identity of a client (never its clientId); version only when printable.",
+      "type": "object",
+      "properties": {
+        "buildId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_.:-]+$" },
+        "target": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_.:-]+$" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[0-9A-Za-z.+-]{1,64}$" }
+      },
+      "required": ["buildId", "target"],
+      "additionalProperties": false
+    },
+    "AttachmentController": {
+      "title": "AttachmentController",
+      "description": "state is open: attached, detached (in grace, with graceRemainingMs) or none. Treat an unknown value as none.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "x-known-values": ["attached", "detached", "none"]
+        },
+        "graceRemainingMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "client": { "$ref": "#/$defs/AttachedClient" }
+      },
+      "required": ["state"],
+      "additionalProperties": false
+    },
+    "AttachmentFrame": {
+      "title": "AttachmentFrame",
+      "description": "Presence of the controller and the viewers; sent after welcome and on every change, never journaled or replayed.",
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "kind": { "type": "string", "const": "attachment" },
+        "daemonEpoch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_.:-]+$"
+        },
+        "controller": { "$ref": "#/$defs/AttachmentController" },
+        "viewers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AttachmentViewer" },
+          "maxItems": 8
+        }
+      },
+      "required": ["v", "kind", "daemonEpoch", "controller", "viewers"],
+      "additionalProperties": false,
+      "x-capability": "attach.roles"
+    },
+    "AttachmentViewer": {
+      "title": "AttachmentViewer",
+      "type": "object",
+      "properties": {
+        "client": { "$ref": "#/$defs/AttachedClient" },
+        "attachedMs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "required": ["client", "attachedMs"],
       "additionalProperties": false
     },
     "BackgroundJob": {
@@ -1887,6 +1992,7 @@
           "pattern": "^[a-zA-Z0-9_.:-]+$",
           "x-known-codes": [
             "controller_busy",
+            "controller_taken",
             "incompatible_protocol",
             "incompatible_build",
             "invalid_frame",
@@ -1904,6 +2010,7 @@
             "stale_session",
             "stale_operation",
             "stale_controller",
+            "not_controller",
             "outcome_unknown",
             "operation_conflict",
             "operation_expired"
@@ -3778,7 +3885,7 @@
     },
     "RejectFrame": {
       "title": "RejectFrame",
-      "description": "Handshake refusal; the server closes the connection after sending it.",
+      "description": "Handshake refusal; the server closes the connection after sending it. An attach.roles client also accepts one after welcome (controller_taken).",
       "type": "object",
       "properties": {
         "v": { "type": "integer", "const": 1 },
@@ -4217,6 +4324,7 @@
         { "$ref": "#/$defs/ResponseFrame" },
         { "$ref": "#/$defs/ResetFrame" },
         { "$ref": "#/$defs/EventFrame" },
+        { "$ref": "#/$defs/AttachmentFrame" },
         { "$ref": "#/$defs/PingFrame" },
         { "$ref": "#/$defs/PongFrame" },
         { "$ref": "#/$defs/ChunkFrame" }
@@ -6517,6 +6625,12 @@
           "type": "array",
           "items": { "type": "string", "maxLength": 128 },
           "maxItems": 128
+        },
+        "role": {
+          "type": "string",
+          "enum": ["controller", "viewer"],
+          "description": "Sent only to peers advertising \"attach.roles\".",
+          "x-capability": "attach.roles"
         }
       },
       "required": [

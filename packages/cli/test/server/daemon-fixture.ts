@@ -58,6 +58,8 @@ export class FakeDaemonPlatform implements DaemonPlatform {
   daemon?: WorkspaceDaemon
   startupError = false
   listenError = false
+  /** Attachment roles for spawned daemons; unset follows the host platform default. */
+  roles?: boolean
   constructor(
     readonly discovery: DaemonDiscovery,
     private createRuntime: (cwd: string) => Promise<WorkspaceRuntime>,
@@ -79,6 +81,7 @@ export class FakeDaemonPlatform implements DaemonPlatform {
       idleTimeoutMs: this.idleTimeoutMs,
       createRuntime: this.createRuntime,
       poll: false,
+      ...(this.roles === undefined ? {} : { roles: this.roles }),
     })
   }
   peer = { uid: 1, pid: process.pid }

@@ -3,6 +3,7 @@ import type { RemoteIO } from "../remote/connection.ts"
 import { RemoteError } from "../remote/errors.ts"
 import { REMOTE_LIMITS, type RemoteRelease } from "../remote/protocol.ts"
 import { validateRemoteFrame } from "../remote-schema.ts"
+import { attachIntent, rolesEnabledOn } from "./attach-intent.ts"
 import { openWorkspaceDaemon } from "./daemon.ts"
 import type { DaemonDiscovery } from "./discovery.ts"
 import { daemonAttachFault } from "./errors.ts"
@@ -65,13 +66,17 @@ export async function attachWorkspace(options: {
   release: RemoteRelease
   /** The hello must arrive within this time. Defaults to 5 seconds. */
   helloTimeoutMs?: number
+  /** Honor attachment roles; defaults to the platforms whose daemons check the socket peer. */
+  roles?: boolean
 }): Promise<void> {
   let daemon: RemoteIO | undefined
   let relaying = false
   try {
     const { hello, tail } = await readHello(options.io, options.helloTimeoutMs)
     const discovery = options.discovery(hello.workspace)
-    const ready = await openWorkspaceDaemon({ ...options, discovery })
+    // A viewer only watches running work: it never starts a daemon (reject disconnected).
+    const viewer = attachIntent(hello.capabilities, options.roles ?? rolesEnabledOn()) === "viewer"
+    const ready = await openWorkspaceDaemon({ ...options, discovery, start: !viewer })
     daemon = ready.io
     await privateMessage(daemon, { action: "attach", nonce: ready.metadata.nonce })
     // Canonicalization is remote-only. The client learns the canonical identity in welcome.
