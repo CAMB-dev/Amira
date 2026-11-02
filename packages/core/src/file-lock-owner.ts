@@ -9,13 +9,35 @@ interface Owner {
   host: string | null
   boot: string | null
   pidNamespace: string | null
+  /** Written only under a lease policy; readers without one ignore it. */
+  start?: string
+}
+
+/**
+ * Opt-in lease for locks in a per-user, machine-local directory: a stable host replaces the
+ * default domain, and a recorded process start identity proves a reused or exited PID dead.
+ */
+export interface LeasePolicy {
+  domain: LeaseDomain
+  /** The process's start identity; undefined proves it has exited. */
+  start(pid: number): string | undefined
 }
 
 const domain = localDomain()
 
-export function leaseOwner(): Owner {
-  const { host, boot, pidNamespace } = domain
-  return { v: 2, pid: process.pid, nonce: randomUUID(), createdAt: Date.now(), host, boot, pidNamespace }
+export function leaseOwner(policy?: LeasePolicy): Owner {
+  const { host, boot, pidNamespace } = policy?.domain ?? domain
+  const owner: Owner = {
+    v: 2,
+    pid: process.pid,
+    nonce: randomUUID(),
+    createdAt: Date.now(),
+    host,
+    boot,
+    pidNamespace,
+  }
+  const start = policy?.start(process.pid)
+  return start === undefined ? owner : { ...owner, start }
 }
 
 type OwnerState = "live" | "dead" | "unknown"
@@ -25,6 +47,7 @@ function inspectOwner(
   value: unknown,
   local: LeaseDomain,
   probe: (pid: number) => OwnerState,
+  policy?: LeasePolicy,
 ): { state: OwnerState; reason?: string } {
   if (typeof value !== "object" || value === null) return { state: "unknown" }
   const owner = value as Partial<Owner>
@@ -57,7 +80,13 @@ function inspectOwner(
     }
   if (owner.pidNamespace !== local.pidNamespace)
     return { state: "unknown", reason: "unverifiable PID domain: PID namespaces differ or proof is missing" }
-  const state = owner.pid === process.pid ? "live" : probe(owner.pid!)
+  // A recorded start identity also covers this process's own PID: an earlier holder may have had it.
+  const state =
+    policy && typeof owner.start === "string"
+      ? startState(policy, owner.pid!, owner.start)
+      : owner.pid === process.pid
+        ? "live"
+        : probe(owner.pid!)
   return {
     state,
     ...(state === "dead"
@@ -89,6 +118,14 @@ export function ownerRecoveryFailure(
   return inspectOwner(value, local, probe).reason
 }
 
+function startState(policy: LeasePolicy, pid: number, start: string): OwnerState {
+  try {
+    return policy.start(pid) === start ? "live" : "dead"
+  } catch {
+    return "unknown"
+  }
+}
+
 function probePid(pid: number): OwnerState {
   try {
     process.kill(pid, 0)
@@ -99,14 +136,15 @@ function probePid(pid: number): OwnerState {
   }
 }
 
-export function strictOwnerState(contents: string): ReturnType<typeof ownerState> {
+/** Without a policy this is the default classification. */
+export function strictOwnerState(contents: string, policy?: LeasePolicy): ReturnType<typeof ownerState> {
   try {
     const [pid, nonce, record, trailing, ...extra] = contents.split("\n")
     const owner = JSON.parse(record!)
     if (pid !== String(owner.pid) || nonce !== owner.nonce || trailing !== "" || extra.length) {
       return "unknown"
     }
-    return ownerState(owner)
+    return policy ? inspectOwner(owner, policy.domain, probePid, policy).state : ownerState(owner)
   } catch {
     return "unknown"
   }

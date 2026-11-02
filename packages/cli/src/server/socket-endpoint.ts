@@ -3,9 +3,12 @@ import path from "node:path"
 
 export interface DaemonEndpoint {
   readonly socket: string
-  readonly uid: number
+  /** The OS principal key the connected peer must belong to. */
+  readonly principal: string
   readonly pid: number
   readonly processIdentity: string
+  /** Set only for named endpoints (Windows pipes): keys the mutual connection proof. */
+  readonly nonce?: string
   /** Recheck the pinned paths and ownership fence after connect, before any bytes are sent. */
   verify(): void
 }
@@ -64,7 +67,11 @@ export function assertDaemonPeer(
   peer: { uid: number; pid: number },
   processIdentity: string | undefined,
 ): void {
-  if (peer.uid !== endpoint.uid || peer.pid !== endpoint.pid || processIdentity !== endpoint.processIdentity)
+  if (
+    String(peer.uid) !== endpoint.principal ||
+    peer.pid !== endpoint.pid ||
+    processIdentity !== endpoint.processIdentity
+  )
     throw new Error("Connected daemon process identity does not match")
   endpoint.verify()
 }
