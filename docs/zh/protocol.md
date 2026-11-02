@@ -23,7 +23,7 @@
 - **daemon 只在 Linux 上运行。**它就是 `amira remote add` 安装的服务端（glibc Linux，x64 或 ARM64）。Windows 和 macOS 上没有本地 daemon：终端界面在自身进程内运行 agent，因此那里的 GUI 只能经 SSH 访问 Linux 工作区。
 - **每个工作区只有一个控制者。**daemon 同一时间只接受一个附加的前端。某个客户端持有控制权期间（以及断开后最多 30 秒内），其他客户端会以 `controller_busy` 被拒绝。GUI 和终端界面不能同时附加到同一工作区，也没有只读查看者模式。
 - **模型路由。**以默认 local-proxy 模式启动的 daemon（`welcome.capabilities` 含 `model.proxy`）会等待终端客户端通过内部 model 通道处理模型调用。第三方客户端做不到这一点：轮次最多等待 `remote.proxyReconnectTimeoutMs`，然后失败。请附加到使用远程凭据（`model.remote-key`）的 daemon，即以 `amira-server attach --remote-key` 启动的 daemon。
-- **变更记录上限。**daemon 会记住变更操作以便重试时只执行一次（见[请求与响应](#请求与响应)）。每个 daemon 生命周期内，所有客户端合计最多接受 4,096 个不同的变更 id，且同时最多保留 128 个变更操作（正在执行的，或在最近 10 分钟内完成的）。超过任一上限后，新的变更操作以 `limit_exceeded` 失败；重启 daemon（新的 `daemonEpoch`）会重置这些上限。另外，单个连接上使用满 65,536 个请求 id 后，daemon 会以 `limit_exceeded` 关闭该连接。
+- **变更记录。**daemon 会记住变更操作，确保重试的请求绝不执行两次（见[重试与变更记录](#重试与变更记录)）。它同时最多保存 128 个变更操作，其 params 和结果合计最多 32 MiB：包括正在执行的，以及完成后最多保留 10 分钟的。记录已满时，最早完成的结果会被提前丢弃；只有正在执行的变更操作本身就占满记录时，新的变更操作才会以 `limit_exceeded` 失败。另外，单个连接上使用满 65,536 个请求 id 后，daemon 会以 `limit_exceeded` 关闭该连接。
 
 ## 连接
 
@@ -38,7 +38,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 `amira remote add` 会把启动器安装到 `$HOME/.amira/remote/bin/amira-server`。中继会：
 
-1. 在 5 秒内读取第一行，它必须是 `hello` 帧。
+1. 在 5 秒内读取第一行，它必须是完整的 `hello` 帧（不能分块）。如果没有及时收到，中继会写出代码为 `invalid_frame` 的 `reject` 后退出。
 2. 把 `hello.workspace`（主机上已存在的绝对路径）解析为规范路径，`welcome.workspace` 会报告该路径。
 3. 查找拥有该工作区的 daemon，或启动一个。`--remote-key` 只在中继启动新 daemon 时生效；正在运行的 daemon 保持其启动时的模型模式。
 4. 在转发任何字节前检查 daemon：`/tmp/amira-<uid>-workspaces/` 下的发现文件和 `$XDG_RUNTIME_DIR/amira/`（或 `/tmp` 回退位置）下的套接字必须为该用户私有（目录 `0700`、文件 `0600`、属于该用户、无符号链接），并且已连接的套接字对端必须是记录中的 daemon 进程（相同的用户 ID、PID 和进程启动时间）。
@@ -48,7 +48,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 主机上的其他命令：
 
-- `amira-server list` 在一行中输出 `{"v":1,"workspaces":[...]}`：当前用户每个存活 daemon 的工作区路径、`protocol`、服务端 `release` 和 `daemonEpoch`。
+- `amira-server list` 在一行中输出 `{"v":1,"workspaces":[...]}`（schema 中的 `ServerListOutput`）：当前用户每个存活 daemon 的工作区路径、`protocol`、服务端 `release` 和 `daemonEpoch`。
 - `amira-server stop --cwd <workspace>` 停止 daemon 及其所有工作。它不是分离操作。
 
 附加后，用 `sessions.list` 操作列出工作区内已保存的对话。
@@ -56,8 +56,9 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 ## 帧格式
 
 - 每个帧是一个以 UTF-8 编码的 JSON 对象，后跟 `\n`（允许前面有一个 `\r`）。没有字节顺序标记，也没有其他分隔符。
-- 换行符之前，一行最多 `lineBytes` = 262,144 字节。更大的帧（例如带图片的提示词或大快照）以 `chunk` 帧发送：先序列化该帧，把字节切成 131,072 字节的分片，按顺序逐片以 base64 编码发送，各片使用同一个新的 `transferId`，并带上 `index`、分片总数 `total`、完整字节长度 `bytes` 和完整字节的十六进制 SHA-256。接收方重组、校验哈希后处理内部帧。分块中不能再嵌套分块。
+- 换行符之前，一行最多 `lineBytes` = 262,144 字节。更大的帧（例如带图片的提示词或大快照）以 `chunk` 帧发送：先序列化该帧，把字节切成 131,072 字节的分片，按顺序逐片以 base64 编码发送，各片使用同一个新的 `transferId`，并带上 `index`、分片总数 `total`、完整字节长度 `bytes` 和完整字节的十六进制 SHA-256。接收方重组、校验哈希后处理内部帧。分块中不能再嵌套分块，并且 `chunk` 的 `channel` 必须与内部帧的通道相同；所有公开帧都是 `control`。
 - 逻辑限制：一帧最多 `logicalBytes` = 67,108,864 字节，JSON 嵌套最多 64 层，最多 1,000,000 个 JSON 值，数字必须是有限值。同时最多 4 个分块传输，每个方向最多 128 个待处理请求。
+- 对象内属性的顺序没有意义。服务端不会把 `kind`、`type` 或 `op` 等标签放在最前面；不要依赖任何顺序。
 - 客户端帧会被**严格**校验。未知字段、缺少必需字段、类型错误或超出 schema 的值都会导致连接关闭。握手之后服务端不会先发送错误，而是直接关闭。绝不要发送 schema 未列出的字段。
 
 ## 握手
@@ -67,7 +68,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `hello` 字段 | 含义 |
 | --- | --- |
 | `v` | 恒为 `1`。 |
-| `clientId` | 本次附加的身份，1 到 128 个 `[A-Za-z0-9_.:-]` 字符。每次附加选一个随机值，恢复连接时沿用。 |
+| `clientId` | 本次附加的身份，1 到 128 个 `[A-Za-z0-9_.:-]` 字符。客户端进程每次启动时选一个新的随机值（例如 UUID），该进程重新连接时沿用，绝不要跨重启持久保存（见[重试与变更记录](#重试与变更记录)）。 |
 | `workspace` | 主机上工作区的绝对路径。 |
 | `release` | 你的客户端自身的 `version`、`buildId` 和 `target`。服务端不解释它；可用来标识你的客户端（例如 `"buildId": "my-gui"`）。 |
 | `limits` | 必须正好是 `{ "lineBytes": 262144, "logicalBytes": 67108864 }`。 |
@@ -88,13 +89,15 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 协议没有版本协商。`v` 不同的 `hello` 会以 `reject` 代码 `incompatible_protocol` 被拒绝；附加到使用其他协议版本、正在运行的 daemon 时也一样。客户端必须检查 `welcome.v` 为 `1`，否则关闭连接。
 
-`reject` 代码：`controller_busy`、`incompatible_protocol`、`invalid_frame`、`invalid_workspace`、`permission_denied`（例如重连凭据已过期）、`startup_failed`、`limit_exceeded`、`disconnected`、`unsupported_operation`、`operation_failed`。发送 `reject` 后连接即关闭。
+`reject` 代码：`controller_busy`、`incompatible_protocol`、`incompatible_build`、`invalid_frame`（中继 5 秒内未收到 `hello` 时也是这个代码）、`invalid_workspace`、`workspace_busy`、`unsupported_capability`、`permission_denied`（例如重连凭据已过期，或该 `clientId` 已被变更记录遗忘）、`startup_failed`、`limit_exceeded`、`disconnected`、`cancelled`、`unsupported_operation`、`operation_failed`。这个列表是开放的：不认识的代码按 `operation_failed` 处理。发送 `reject` 后连接即关闭。
 
 ## 请求与响应
 
-`request` 携带 `channel`（`"control"`）、客户端选定的 `id`、`op`、`params`，以及该请求所针对的 `daemonEpoch`、`controllerGeneration` 和 `sessionGeneration`。使用 `welcome` 中的值；会话变化后，从每个快照中取新的 `sessionGeneration`（`frontend.sessionGeneration`）。务必发送 `daemonEpoch`：缺少它或属于其他 epoch 的请求会以 `outcome_unknown` 失败。请求 id 为 1 到 128 个 `[A-Za-z0-9_.:-]` 字符，同一连接上不得重复。变更操作的 id 还必须在整个 `daemonEpoch` 内对同一 `clientId` 唯一，跨重连也是如此：daemon 以 `clientId`、`daemonEpoch` 和 `id` 为键记录所有连接上的每个变更操作，且从不释放 id。请使用 UUID，或跨重连持续递增的计数器；以同一 `clientId` 恢复连接后，切勿把计数器从 `"1"` 重新开始。重复使用的 id 会得到先前保留的结果（参数相同），或以 `operation_conflict` 失败（参数不同），或以 `operation_expired` 失败（超过 10 分钟保留期），新请求都不会执行。
+`request` 携带 `channel`（`"control"`）、客户端选定的 `id`、`op`、`params`，以及该请求所针对的 `daemonEpoch`、`controllerGeneration` 和 `sessionGeneration`。使用 `welcome` 中的值；会话变化后，从每个快照中取新的 `sessionGeneration`（`frontend.sessionGeneration`）。务必发送 `daemonEpoch`：缺少它或属于其他 epoch 的请求会以 `outcome_unknown` 失败。请求 id 为 1 到 128 个 `[A-Za-z0-9_.:-]` 字符，同一连接上不得重复。变更操作的 id 还必须在整个 `daemonEpoch` 内对同一 `clientId` 唯一，跨重连也是如此：daemon 以 `clientId`、`daemonEpoch` 和 `id` 为键记录所有连接上的每个变更操作。请使用 UUID，或在同一进程的多次重连之间持续递增的计数器；以同一 `clientId` 恢复连接后，切勿把计数器从 `"1"` 重新开始。重复使用的 id 绝不会再次执行；它会得到什么结果，见[重试与变更记录](#重试与变更记录)。
 
 服务端对每个请求恰好回复一个带相同 `id` 和 `op` 的 `response`：要么 `"ok": true` 加 `result`，要么 `"ok": false` 加 `error: { code, message }`。响应可能以任意顺序到达，也可能夹在事件之间。schema 中的 `x-operations` 把每个操作映射到其 params 和 result 定义。
+
+按以下顺序解码响应。先按 `id` 找到待处理的请求；`id` 未知的响应是对已取消请求的迟到回复，忽略即可。检查 `op` 与该请求的 `op` 相同，否则关闭连接。然后看 `ok`：为 `false` 时把 `error` 解码为 `Fault`，否则用 `x-operations[op].result` 解码 `result`。schema 中的 `ResponseFrame` 联合类型没有单一标签，不要直接用它解码；仅用于解码的 `ResponseEnvelope` 定义描述了第一步。
 
 `cancel`（相同的 `channel`、`id`、`controllerGeneration` 和 `sessionGeneration`）会中止待处理的请求。被取消的请求可能收不到响应；迟到的响应应忽略。
 
@@ -112,9 +115,21 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 `turn.prompt` 和 `turn.steer` 接受字符串，或内容包含文本块和图片块的用户消息。`command.run` 运行斜杠命令行，例如 `/clear`；`commands.describe` 和 `commands.complete` 提供命令列表和补全。
 
+### 重试与变更记录
+
+只读操作（`*.read`、`*.list`、`jobs.output`、`jobs.wait`、`conversations.history`、`commands.describe`、`commands.complete` 和 `session.planRewind`）直接执行。`form.evaluate` 也不记录：每次都用新的 `id` 发送，同一编辑器和修订号下主机会返回相同的评估结果。其他所有操作都是变更操作。对 `clientId` 为 C、`daemonEpoch` 为 E、`id` 为 X 的变更操作，客户端可以依赖的恰好是以下几点：
+
+1. **至多一次。**在任何连接上重发 (C, E, X) 都不会再次执行 X，前提是重发到达时，X 之后被接受的 C 的其他变更 id 少于 4,096 个。重新连接后先重发待处理的 id、再发送新的变更操作，总能满足这个条件。
+2. **结果。**X 的结果仍被保留时，参数相同的重发会得到该结果，参数不同的重发以 `operation_conflict` 失败。结果在 X 完成后最多保留 10 分钟，只有在更新的变更操作需要空间时（128 条或 32 MiB，见[当前限制](#当前限制)）才会被提前丢弃。之后任何重发都以 `operation_expired` 失败。以上任何情况下 X 都不会再次执行。结果过大无法保留时，原请求仍会收到它；之后的重发以 `operation_expired` 失败。
+3. **被遗忘的客户端。**当 C 不持有控制者租约（已附加，或断开后的 30 秒内）且 24 小时内没有发送或完成过变更操作，或在 C 离开期间有很多其他客户端写入（记住的 id 合计超过 65,536 个）时，daemon 会遗忘 C。之后 C 的 `hello` 和任何变更操作都以 `permission_denied` 失败。请用新的 `clientId` 附加，从快照重新同步，并把 C 的待处理变更操作视为结果未知。
+4. **每个进程使用新的 `clientId`。绝不要跨客户端重启持久保存 `clientId`。**保存下来的 id 可能已被遗忘，之后直到 daemon 重启都会被拒绝。
+5. **变更操作返回 `limit_exceeded` 表示它没有执行。**
+6. **id 仍须唯一**（按 `clientId` 和 `daemonEpoch`）：使用 UUID 或跨重连持续递增的计数器。
+7. 属于另一个 `daemonEpoch` 的请求以 `outcome_unknown` 失败：daemon 已重启，之前 epoch 的 id 一概未知。请从快照重新同步。
+
 ### 错误
 
-`error.code` 稳定且可供程序判断；`message` 是展示文本，可能变化。客户端应处理的代码：
+`error.code` 稳定且可供程序判断；`message` 是展示文本，可能变化。代码集合是开放的（`Fault.code` 在 `x-known-codes` 中列出有文档的代码）：不认识的代码按 `operation_failed` 处理。客户端应处理的代码：
 
 | 代码 | 含义 |
 | --- | --- |
@@ -124,10 +139,11 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `stale_controller` | `controllerGeneration` 已不是当前值；本次附加已被替换。 |
 | `outcome_unknown` | 请求属于另一个 `daemonEpoch`；daemon 已重启。请重新同步。 |
 | `operation_conflict` | 同一个 `id` 被用于不同的 params。 |
-| `operation_expired` | 重试的变更操作的原结果已不再保留。 |
+| `operation_expired` | 重试的变更操作的原结果已不再保留。它没有再次执行。 |
+| `permission_denied` | 变更记录已遗忘这个 `clientId`。请换一个新的附加。 |
 | `unsupported_operation` | 此处不提供该操作。 |
 | `cancelled`、`disconnected` | 请求已被取消，或工作区已将其分离。 |
-| `limit_exceeded`、`invalid_frame` | 超出限制或校验失败。 |
+| `limit_exceeded`、`invalid_frame` | 超出限制或校验失败。以此被拒绝的变更操作没有执行。 |
 | `operation_failed` | 其他任何失败。细节保留在主机上。 |
 
 ## 事件
@@ -183,6 +199,11 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 ### 使用 schema
 
 schema 是一个单一的包：每个类型都是 `$defs` 下的具名条目，只通过本地 `$ref` 引用，因此代码生成器（例如使用 `System.Text.Json` 的 C# 生成器）无需跨文件解析，并能得到稳定的类型名。`ClientFrame` 和 `ServerFrame` 是根类型。联合类型在不参与校验的 `x-discriminator` 关键字中给出其标签（`kind`、`type`、`op`、`role`、`status`、`state` 或 `action`）；`EventPayload` 根据是否含 `type`（核心事件）或 `kind` 区分。`x-operations` 把每个操作名映射到其 `params` 和 `result` 定义。整数是非负安全整数（最大 2^53 - 1）。字符串长度和模式遵循 JSON Schema 规则。
+
+- 带标签联合类型的每个分支都是单独的具名定义，且只有一个标签值（例如 `TextDelta`、`DetachEffect`、`AcceptedUiAck`），因此每个分支对应一个派生类型。某个类型与 `null` 的联合对应可空类型。其他所有无标签联合都需要自定义转换器或 `JsonElement`：对象层面例如 `EventPayload`（见上文）和 `UiAnswer`（按 JSON 类型和属性区分），字段层面例如混合 JSON 类型的字段：可以是字符串或 `UserMessage` 的 `message`、`FormValue`，以及 `writesFiles`（`true`、`false` 或 `"paths"`）。`ResponseFrame` 通过 `ResponseEnvelope` 解码（见[请求与响应](#请求与响应)）。
+- 标签不是第一个属性。使用 `System.Text.Json` 多态时，请设置 `JsonSerializerOptions.AllowOutOfOrderMetadataProperties = true`（.NET 9 或更高版本），或编写先从 `JsonDocument` 读取标签再选择类型的转换器。
+- 标记为 `x-decode-only` 的定义（`ResponseEnvelope`，以及对应 `amira-server list` 输出行的 `ServerListOutput`）列在根部的 `x-decode-only` 数组中。它们从来不是帧。
+- `Fault.code` 是开放的字符串。`x-known-codes` 列出有文档的值；其他值按 `operation_failed` 处理。
 
 ## 交换示例
 

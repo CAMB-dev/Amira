@@ -12,18 +12,23 @@ import {
   type RemoteRequest,
 } from "../remote/protocol.ts"
 import { Controller, type ControllerLease, type ControllerOptions } from "./controller.ts"
-import { OperationLedger } from "./operation-ledger.ts"
+import { OperationLedger, type OperationLedgerOptions } from "./operation-ledger.ts"
 import { OperationObservers } from "./operation-observers.ts"
 import type { ServerOperations } from "./operations.ts"
 import type { ServerEffect, WorkspaceAttachment, WorkspaceRuntime } from "./runtime.ts"
 
 type Delivery = Parameters<RemoteConnection["send"]>[0]
 const authorities = new WeakMap<WorkspaceRuntime, WorkspaceAttachments>()
+type AttachmentOptions = ControllerOptions & {
+  heartbeatMs?: number
+  /** Test seam for ledger windows and clocks; the defaults are the documented limits. */
+  ledger?: Omit<OperationLedgerOptions, "inUse">
+}
 
 /** Exactly one controller/ledger authority per runtime, never one per transport. */
 export function workspaceAttachments(
   runtime: WorkspaceRuntime,
-  options?: ControllerOptions & { heartbeatMs?: number },
+  options?: AttachmentOptions,
 ): WorkspaceAttachments {
   let authority = authorities.get(runtime)
   if (!authority) {
@@ -35,7 +40,7 @@ export function workspaceAttachments(
 
 class WorkspaceAttachments {
   #controller: Controller
-  #ledger = new OperationLedger({ maxPayloadBytes: REMOTE_LIMITS.logicalBytes })
+  #ledger: OperationLedger
   #active?: { connection: RemoteConnection; attachment: WorkspaceAttachment }
   #operations = new Map<string, { abort: AbortController; sessionGeneration: number }>()
   #observers = new OperationObservers()
@@ -47,12 +52,22 @@ class WorkspaceAttachments {
 
   constructor(
     private runtime: WorkspaceRuntime,
-    options?: ControllerOptions & { heartbeatMs?: number },
+    options?: AttachmentOptions,
   ) {
     this.#controller = new Controller(options)
+    this.#ledger = new OperationLedger({
+      maxPayloadBytes: REMOTE_LIMITS.logicalBytes,
+      ...options?.ledger,
+      // The lease holder, attached or in grace, may still resend: never forget its ids.
+      inUse: (clientId) => this.#controller.holds(clientId),
+    })
     this.#heartbeatMs = options?.heartbeatMs ?? 15_000
     if (!Number.isSafeInteger(this.#heartbeatMs) || this.#heartbeatMs < 0)
       throw new RangeError("Heartbeat interval must be a nonnegative safe integer")
+  }
+
+  #scope(clientId: string) {
+    return { clientId, controllerToken: this.runtime.journal.daemonEpoch }
   }
 
   async #execute(
@@ -143,6 +158,9 @@ class WorkspaceAttachments {
           if (hello.workspace !== options.workspace)
             throw new RemoteReplyError("invalid_workspace", "Workspace selector does not match")
           const sameEpoch = hello.resume?.daemonEpoch === this.runtime.journal.daemonEpoch
+          // A forgotten client's earlier ids are no longer deduplicated; it must use a new clientId.
+          if (this.#ledger.isForgotten(this.#scope(hello.clientId)))
+            throw new RemoteReplyError("permission_denied", "Controller reconnect credentials expired")
           lease = this.#controller.attach({
             clientId: hello.clientId,
             ...(sameEpoch && hello.resume ? { controllerToken: hello.resume.controllerToken } : {}),
@@ -200,7 +218,7 @@ class WorkspaceAttachments {
           throw new RemoteReplyError("outcome_unknown", "The operation belongs to another daemon epoch")
         // Connection EOF aborts its own handlers, NOT admitted workspace operations.
         // Retain ids for a client even if it later recovers with a fresh controller token.
-        const scope = { clientId: lease!.clientId, controllerToken: this.runtime.journal.daemonEpoch }
+        const scope = this.#scope(lease!.clientId)
         const payload = {
           op: request.op,
           params: request.params,
@@ -233,8 +251,11 @@ class WorkspaceAttachments {
           ].includes(request.op)
         if (read && request.sessionGeneration !== frontend.identity?.sessionGeneration)
           throw new RemoteReplyError("stale_session", "The active session changed")
-        observations.set(id, { sessionGeneration: request.sessionGeneration, read })
-        if (read) {
+        // Evaluations are issued per keystroke with fresh ids. The host caches them by editor
+        // and revision, so a lost reply is read again without a ledger slot; still controller-only.
+        const unledgered = read || request.op === "form.evaluate"
+        observations.set(id, { sessionGeneration: request.sessionGeneration, read: unledgered })
+        if (unledgered) {
           const abort = new AbortController()
           reads.set(id, abort)
           return this.#execute(frontend, payload, id, undefined, abort).finally(() => reads.delete(id))

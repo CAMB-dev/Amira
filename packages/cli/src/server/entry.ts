@@ -7,9 +7,14 @@ import { createServerRuntime } from "../server-main.ts"
 import { attachWorkspace, stopWorkspace } from "./attach.ts"
 import { startWorkspaceDaemon } from "./daemon.ts"
 import { capDaemonOutput } from "./daemon-log.ts"
-import { DaemonDiscovery, type DaemonMetadata, listDaemonWorkspaces } from "./discovery.ts"
+import {
+  DaemonDiscovery,
+  type DaemonMetadata,
+  type DiscoveryOptions,
+  listDaemonWorkspaces,
+} from "./discovery.ts"
 import { serverRelease } from "./identity.ts"
-import { LinuxDaemonPlatform } from "./platform.ts"
+import { type DaemonPlatform, LinuxDaemonPlatform } from "./platform.ts"
 
 function stdio(): RemoteIO {
   process.stdout.on("error", () => process.stdin.destroy())
@@ -21,6 +26,25 @@ function stdio(): RemoteIO {
       }),
     close: () => process.stdin.destroy(),
   }
+}
+
+/** The `amira-server list` line (ServerListOutput in the published schema) for live daemons only. */
+export function listCommandOutput(
+  locations: DiscoveryOptions,
+  platform: Pick<DaemonPlatform, "processIdentity">,
+): string {
+  // Public facts only: never the socket nonce, lock identity or process identity.
+  const live = (meta: DaemonMetadata) => {
+    try {
+      return platform.processIdentity(meta.pid) === meta.processIdentity
+    } catch {
+      return false
+    }
+  }
+  const workspaces = listDaemonWorkspaces(locations)
+    .filter(live)
+    .map(({ workspace, protocol, release, daemonEpoch }) => ({ workspace, protocol, release, daemonEpoch }))
+  return `${JSON.stringify({ v: 1, workspaces })}\n`
 }
 
 export async function runServerCommand(args: string[]): Promise<number> {
@@ -36,18 +60,7 @@ export async function runServerCommand(args: string[]): Promise<number> {
   })
   const discover = (cwd: string) => new DaemonDiscovery(cwd, locations())
   if (args.length === 1 && args[0] === "list") {
-    // Public facts only: never the socket nonce, lock identity or process identity.
-    const live = (meta: DaemonMetadata) => {
-      try {
-        return platform.processIdentity(meta.pid) === meta.processIdentity
-      } catch {
-        return false
-      }
-    }
-    const workspaces = listDaemonWorkspaces(locations())
-      .filter(live)
-      .map(({ workspace, protocol, release, daemonEpoch }) => ({ workspace, protocol, release, daemonEpoch }))
-    process.stdout.write(`${JSON.stringify({ v: 1, workspaces })}\n`)
+    process.stdout.write(listCommandOutput(locations(), platform))
     return 0
   }
   if (args[0] === "attach" && (args.length === 1 || (args.length === 2 && args[1] === "--remote-key"))) {

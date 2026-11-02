@@ -5,6 +5,7 @@ import { RemoteError, RemoteReplyError } from "./errors.ts"
 import { remoteMessageForPeer } from "./peer-compat.ts"
 import {
   remoteOperationChannel as operationChannel,
+  type REMOTE_FAULT_CODES,
   REMOTE_LIMITS,
   type RemoteCancel,
   type RemoteChannel,
@@ -49,7 +50,7 @@ export interface RemoteConnectionOptions {
   handshakeTimeoutMs?: number
 }
 // Only registered handshake fault codes cross this boundary. Exception text may contain secrets.
-const rejectionMessages: Record<string, string> = {
+const rejectionMessages: Record<(typeof REMOTE_FAULT_CODES.reject)[number], string> = {
   controller_busy: "A controller is already attached to this workspace",
   incompatible_protocol: "Unsupported remote protocol version",
   incompatible_build: "The running server build is not compatible with this client",
@@ -265,7 +266,7 @@ export class RemoteConnection {
       Object.hasOwn(rejectionMessages, error.code)
         ? error.code
         : "operation_failed"
-    const fault = { code, message: rejectionMessages[code]! }
+    const fault = { code, message: rejectionMessages[code as keyof typeof rejectionMessages] }
     // Await the refusal before EOF so the peer sees the reason, not a generic disconnect.
     await this.writer.send({ v: 1, kind: "reject", error: fault }).catch(() => {})
     this.close(new RemoteReplyError(fault.code, fault.message))

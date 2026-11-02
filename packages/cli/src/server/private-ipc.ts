@@ -1,17 +1,39 @@
 import type { RemoteIO } from "../remote/connection.ts"
 import { RemoteError } from "../remote/errors.ts"
 
-/** The private Unix-socket prelude is not part of the public attach wire protocol. */
+/** The first line did not arrive in time. Pending reads are not awaited. */
+export class PreludeTimeoutError extends Error {
+  constructor() {
+    super("Private prelude timed out")
+    this.name = "PreludeTimeoutError"
+  }
+}
+
+/**
+ * The private Unix-socket prelude is not part of the public attach wire protocol. By default
+ * a timeout closes the input and fails as a retryable disconnect, so readiness probes keep
+ * retrying a slow daemon. `close: false` fails with PreludeTimeoutError instead and leaves
+ * closing to the caller, which can then still write a final reply.
+ */
 export async function readPrivatePrelude(
   io: RemoteIO,
   limit = 1024,
+  timeout: { ms?: number; close?: boolean } = {},
 ): Promise<{ value: unknown; tail: RemoteIO }> {
   const iterator = io.input[Symbol.asyncIterator]()
   let bytes = Buffer.alloc(0)
-  const timer = setTimeout(() => io.close(), 5000)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      if (timeout.close === false) return reject(new PreludeTimeoutError())
+      io.close()
+      reject(new RemoteError("disconnected", "Private daemon connection ended before readiness"))
+    }, timeout.ms ?? 5000)
+  })
+  expired.catch(() => {})
   try {
     while (true) {
-      const next = await iterator.next()
+      const next = await Promise.race([iterator.next(), expired])
       if (next.done) throw new RemoteError("disconnected", "Private daemon connection ended before readiness")
       const chunk = Buffer.from(next.value)
       const end = chunk.indexOf(10)

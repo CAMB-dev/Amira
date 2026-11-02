@@ -91,7 +91,7 @@ the detailed boundary/fault matrix:
 | Boundary | Focused suites |
 | --- | --- |
 | Framing, chunks, pressure and wire coverage | `remote/codec`, `connection`, `handshake`, `schema-parity*` |
-| Replay, single controller and duplicate mutations | `remote/replay`, `controller`, `operation-ledger`, `agent-port*` |
+| Replay, single controller and duplicate mutations | `remote/replay`, `controller`, `operation-ledger*`, `agent-port*` |
 | Retained dialogs and stale form revisions | `remote/form-admission*`, `form-evaluation*`, `agent-port-forms` |
 | Accepted model calls, expiry and credentials | `remote/model-retention`, `proxy-*`, `model-outbound-*`, `provider-*` |
 | Disconnect at the subprocess boundary | `remote/reconnect-install`, `reconnect-policy`, `incomplete-eof-reconnect`, `relay-*` |

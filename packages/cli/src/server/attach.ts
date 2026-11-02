@@ -7,30 +7,41 @@ import { openWorkspaceDaemon } from "./daemon.ts"
 import type { DaemonDiscovery } from "./discovery.ts"
 import { daemonAttachFault } from "./errors.ts"
 import type { DaemonPlatform } from "./platform.ts"
-import { privateMessage, readPrivatePrelude } from "./private-ipc.ts"
+import { PreludeTimeoutError, privateMessage, readPrivatePrelude } from "./private-ipc.ts"
 
 /** A refused hello keeps its handshake code; any later failure is sanitized by daemonAttachFault. */
 class HelloError extends Error {
   readonly fault: { code: string; message: string }
-  constructor(incompatible: boolean) {
+  constructor(reason: "invalid" | "incompatible" | "timeout") {
     super("Invalid attach hello")
-    this.fault = incompatible
-      ? { code: "incompatible_protocol", message: "Unsupported remote protocol version" }
-      : { code: "invalid_frame", message: "Invalid remote handshake" }
+    this.fault =
+      reason === "incompatible"
+        ? { code: "incompatible_protocol", message: "Unsupported remote protocol version" }
+        : {
+            code: "invalid_frame",
+            message: reason === "timeout" ? "Remote handshake timed out" : "Invalid remote handshake",
+          }
   }
 }
 
-async function readHello(io: RemoteIO) {
-  const { value, tail } = await readPrivatePrelude(io, REMOTE_LIMITS.lineBytes).catch((error) => {
-    throw error instanceof SyntaxError ? new HelloError(false) : error
+async function readHello(io: RemoteIO, timeoutMs?: number) {
+  // The input stays open on timeout so the typed reject below is written before closing.
+  const { value, tail } = await readPrivatePrelude(io, REMOTE_LIMITS.lineBytes, {
+    ms: timeoutMs,
+    close: false,
+  }).catch((error) => {
+    if (error instanceof PreludeTimeoutError) throw new HelloError("timeout")
+    throw error instanceof SyntaxError ? new HelloError("invalid") : error
   })
   let hello: ReturnType<typeof validateRemoteFrame>
   try {
     hello = validateRemoteFrame(value)
   } catch (error) {
-    throw new HelloError(error instanceof RemoteError && error.code === "incompatible_protocol")
+    throw new HelloError(
+      error instanceof RemoteError && error.code === "incompatible_protocol" ? "incompatible" : "invalid",
+    )
   }
-  if (hello.kind !== "hello") throw new HelloError(false)
+  if (hello.kind !== "hello") throw new HelloError("invalid")
   return { hello, tail }
 }
 
@@ -52,11 +63,13 @@ export async function attachWorkspace(options: {
   discovery(workspace: string): DaemonDiscovery
   platform: DaemonPlatform
   release: RemoteRelease
+  /** The hello must arrive within this time. Defaults to 5 seconds. */
+  helloTimeoutMs?: number
 }): Promise<void> {
   let daemon: RemoteIO | undefined
   let relaying = false
   try {
-    const { hello, tail } = await readHello(options.io)
+    const { hello, tail } = await readHello(options.io, options.helloTimeoutMs)
     const discovery = options.discovery(hello.workspace)
     const ready = await openWorkspaceDaemon({ ...options, discovery })
     daemon = ready.io

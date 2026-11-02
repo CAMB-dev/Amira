@@ -46,6 +46,7 @@ test("remote host modules keep an explicit export surface independent of legacy 
   expect(hostOperationsCovered).toBe(true)
   expect(Object.keys(protocol).sort()).toEqual([
     "CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY",
+    "REMOTE_FAULT_CODES",
     "REMOTE_FRONTEND_OPERATIONS",
     "REMOTE_GATED_VALUES",
     "REMOTE_LIMITS",
@@ -57,6 +58,7 @@ test("remote host modules keep an explicit export surface independent of legacy 
   ])
   expect(Object.keys(schema).sort()).toEqual([
     "REMOTE_FRAME_SCHEMAS",
+    "SERVER_LIST_OUTPUT_SCHEMA",
     "assertRemoteJson",
     "backgroundJob",
     "copyRemoteJson",

@@ -23,7 +23,7 @@
 - **daemon は Linux でのみ動きます。**`amira remote add` がインストールするサーバー（glibc Linux、x64 または ARM64）がそれです。Windows と macOS にはローカルの daemon がありません。端末 UI は自分のプロセス内でエージェントを動かすため、これらの OS の GUI は SSH 経由で Linux のワークスペースにしか接続できません。
 - **ワークスペースごとにコントローラーは 1 つです。**daemon が同時に受け入れる接続中フロントエンドは 1 つだけです。あるクライアントがコントローラーを保持している間（および切断後最大 30 秒間）、他のクライアントは `controller_busy` で拒否されます。GUI と端末 UI を同じワークスペースに同時に接続することはできず、読み取り専用のビューアーもありません。
 - **モデルの経路。**デフォルトの local-proxy モードで起動した daemon（`welcome.capabilities` に `model.proxy`）は、端末クライアントが内部の model チャネルでモデル呼び出しを処理するのを待ちます。サードパーティのクライアントにはそれができず、ターンは最大 `remote.proxyReconnectTimeoutMs` 待ったあと失敗します。リモートの認証情報を使う daemon（`model.remote-key`）、つまり `amira-server attach --remote-key` で起動した daemon に接続してください。
-- **変更記録の上限。**daemon は再試行で一度だけ実行するために変更操作を記録します（[リクエストとレスポンス](#リクエストとレスポンス)を参照）。daemon の稼働期間中、全クライアント合計で受け入れる変更 id は最大 4,096 個、同時に保持する変更操作（実行中、または直近 10 分以内に完了したもの）は最大 128 個です。どちらかを超えると、新しい変更操作は `limit_exceeded` で失敗します。daemon を再起動する（新しい `daemonEpoch`）とリセットされます。また、1 つの接続でリクエスト id を 65,536 個使うと、daemon はその接続を `limit_exceeded` で閉じます。
+- **変更記録。**daemon は、再試行したリクエストが二重に実行されないよう変更操作を記録します（[再試行と変更記録](#再試行と変更記録)を参照）。同時に保持する変更操作は最大 128 個で、その params と結果は合計最大 32 MiB です。実行中のものと、完了後最大 10 分間のものが含まれます。いっぱいになると、最も古い完了済みの結果が早めに破棄されます。実行中の変更操作だけで埋まっているときに限り、新しい変更操作は `limit_exceeded` で失敗します。また、1 つの接続でリクエスト id を 65,536 個使うと、daemon はその接続を `limit_exceeded` で閉じます。
 
 ## 接続
 
@@ -38,7 +38,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 `amira remote add` はランチャーを `$HOME/.amira/remote/bin/amira-server` にインストールします。中継は次のように動きます。
 
-1. 最初の行を 5 秒以内に読みます。これは `hello` フレームでなければなりません。
+1. 最初の行を 5 秒以内に読みます。これは `hello` フレーム全体（チャンク不可）でなければなりません。時間内に届かなければ、コード `invalid_frame` の `reject` を書き出して終了します。
 2. `hello.workspace`（ホスト上に存在する絶対パス）を正規のパスに解決します。そのパスは `welcome.workspace` で返されます。
 3. ワークスペースを所有する daemon を探すか、起動します。`--remote-key` は中継が新しい daemon を起動するときだけ有効で、動作中の daemon は起動時のモデルモードのままです。
 4. バイトを中継する前に daemon を確認します。`/tmp/amira-<uid>-workspaces/` の検出用ファイルと `$XDG_RUNTIME_DIR/amira/`（または `/tmp` の代替場所）のソケットはユーザー専用でなければならず（ディレクトリ `0700`、ファイル `0600`、ユーザー所有、シンボリックリンクなし）、接続したソケットの相手は記録された daemon プロセス（同じユーザー ID、PID、プロセス開始時刻）でなければなりません。
@@ -48,7 +48,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 ホスト上のその他のコマンド：
 
-- `amira-server list` は `{"v":1,"workspaces":[...]}` を 1 行で出力します。ユーザーが所有する動作中の各 daemon について、ワークスペースのパス、`protocol`、サーバーの `release`、`daemonEpoch` を示します。
+- `amira-server list` は `{"v":1,"workspaces":[...]}` を 1 行で出力します（schema の `ServerListOutput`）。ユーザーが所有する動作中の各 daemon について、ワークスペースのパス、`protocol`、サーバーの `release`、`daemonEpoch` を示します。
 - `amira-server stop --cwd <workspace>` は daemon とそのすべての作業を停止します。切断ではありません。
 
 ワークスペース内の保存済み会話は、接続後に `sessions.list` 操作で一覧できます。
@@ -56,8 +56,9 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 ## フレーム形式
 
 - 各フレームは UTF-8 でエンコードした 1 つの JSON オブジェクトで、後に `\n` が続きます（直前の `\r` は許容されます）。バイトオーダーマークや他の区切りはありません。
-- 改行の前の 1 行は最大 `lineBytes` = 262,144 バイトです。それより大きいフレーム（画像付きのプロンプトや大きなスナップショットなど）は `chunk` フレームで送ります。フレームをシリアライズし、バイト列を 131,072 バイトずつに分け、各部分を base64 にして順番に送ります。どの部分にも同じ新しい `transferId`、その `index`、部分の総数 `total`、全体のバイト長 `bytes`、全体のバイト列の 16 進 SHA-256 を付けます。受信側は再構成してハッシュを確認し、内側のフレームを処理します。チャンクの中にチャンクを入れることはできません。
+- 改行の前の 1 行は最大 `lineBytes` = 262,144 バイトです。それより大きいフレーム（画像付きのプロンプトや大きなスナップショットなど）は `chunk` フレームで送ります。フレームをシリアライズし、バイト列を 131,072 バイトずつに分け、各部分を base64 にして順番に送ります。どの部分にも同じ新しい `transferId`、その `index`、部分の総数 `total`、全体のバイト長 `bytes`、全体のバイト列の 16 進 SHA-256 を付けます。受信側は再構成してハッシュを確認し、内側のフレームを処理します。チャンクの中にチャンクを入れることはできません。また `chunk` の `channel` は内側のフレームのチャネルと同じでなければならず、公開フレームではすべて `control` です。
 - 論理的な制限：1 フレームは最大 `logicalBytes` = 67,108,864 バイト、JSON の入れ子は最大 64 段、JSON 値は最大 1,000,000 個、数値は有限でなければなりません。同時に進行できるチャンク転送は 4 つまで、保留中のリクエストは各方向 128 個までです。
+- オブジェクト内のプロパティの順序に意味はありません。サーバーは `kind`、`type`、`op` などのタグを先頭に置くとは限らないので、順序に依存しないでください。
 - クライアントのフレームは**厳密に**検証されます。未知のフィールド、必須フィールドの欠落、型の誤り、schema の範囲外の値があると接続が閉じられます。ハンドシェイク後、サーバーは先にエラーを送らず、単に接続を閉じます。schema にないフィールドは決して送らないでください。
 
 ## ハンドシェイク
@@ -67,7 +68,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `hello` のフィールド | 意味 |
 | --- | --- |
 | `v` | 常に `1`。 |
-| `clientId` | この接続の識別子。`[A-Za-z0-9_.:-]` の 1〜128 文字。接続ごとにランダムな値を選び、再開時には同じ値を使います。 |
+| `clientId` | この接続の識別子。`[A-Za-z0-9_.:-]` の 1〜128 文字。クライアントのプロセスが起動するたびに新しいランダムな値（UUID など）を選び、そのプロセスの再接続では同じ値を使い、再起動をまたいで保存しないでください（[再試行と変更記録](#再試行と変更記録)を参照）。 |
 | `workspace` | ホスト上のワークスペースの絶対パス。 |
 | `release` | クライアント自身の `version`、`buildId`、`target`。サーバーは解釈しません。クライアントの識別に使えます（例：`"buildId": "my-gui"`）。 |
 | `limits` | 正確に `{ "lineBytes": 262144, "logicalBytes": 67108864 }`。 |
@@ -88,13 +89,15 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 バージョンのネゴシエーションはありません。`v` が異なる `hello` は `reject` のコード `incompatible_protocol` で拒否され、別のプロトコルバージョンで動作中の daemon に接続した場合も同様です。クライアントは `welcome.v` が `1` であることを確認し、そうでなければ接続を閉じなければなりません。
 
-`reject` のコード：`controller_busy`、`incompatible_protocol`、`invalid_frame`、`invalid_workspace`、`permission_denied`（再接続用の認証情報の期限切れなど）、`startup_failed`、`limit_exceeded`、`disconnected`、`unsupported_operation`、`operation_failed`。`reject` の後、接続は閉じられます。
+`reject` のコード：`controller_busy`、`incompatible_protocol`、`incompatible_build`、`invalid_frame`（中継が 5 秒以内に `hello` を受け取れなかった場合も）、`invalid_workspace`、`workspace_busy`、`unsupported_capability`、`permission_denied`（再接続用の認証情報の期限切れや、変更記録が忘れた `clientId` など）、`startup_failed`、`limit_exceeded`、`disconnected`、`cancelled`、`unsupported_operation`、`operation_failed`。この一覧は拡張されることがあり、知らないコードは `operation_failed` として扱ってください。`reject` の後、接続は閉じられます。
 
 ## リクエストとレスポンス
 
-`request` は `channel`（`"control"`）、クライアントが選ぶ `id`、`op`、`params`、そしてリクエストの対象となる `daemonEpoch`、`controllerGeneration`、`sessionGeneration` を持ちます。`welcome` の値を使い、セッションが変わったら各スナップショットから新しい `sessionGeneration`（`frontend.sessionGeneration`）を取ります。`daemonEpoch` は必ず送ってください。これがない、または別の epoch のリクエストは `outcome_unknown` で失敗します。リクエスト id は `[A-Za-z0-9_.:-]` の 1〜128 文字で、同じ接続で繰り返してはいけません。さらに変更操作の id は、再接続をまたいで `daemonEpoch` 全体を通して `clientId` ごとに一意でなければなりません。daemon はすべての接続の変更操作を `clientId`、`daemonEpoch`、`id` をキーに記録し、id を解放しません。UUID か、再接続後も続く連番を使ってください。同じ `clientId` で再開したあと連番を `"1"` からやり直してはいけません。再利用した id は、以前に保持された結果を返す（params が同じ）か、`operation_conflict` で失敗する（params が異なる）か、`operation_expired` で失敗し（10 分の保持期間後）、新しいリクエストは実行されません。
+`request` は `channel`（`"control"`）、クライアントが選ぶ `id`、`op`、`params`、そしてリクエストの対象となる `daemonEpoch`、`controllerGeneration`、`sessionGeneration` を持ちます。`welcome` の値を使い、セッションが変わったら各スナップショットから新しい `sessionGeneration`（`frontend.sessionGeneration`）を取ります。`daemonEpoch` は必ず送ってください。これがない、または別の epoch のリクエストは `outcome_unknown` で失敗します。リクエスト id は `[A-Za-z0-9_.:-]` の 1〜128 文字で、同じ接続で繰り返してはいけません。さらに変更操作の id は、再接続をまたいで `daemonEpoch` 全体を通して `clientId` ごとに一意でなければなりません。daemon はすべての接続の変更操作を `clientId`、`daemonEpoch`、`id` をキーに記録します。UUID か、同じプロセスの再接続をまたいで続く連番を使ってください。同じ `clientId` で再開したあと連番を `"1"` からやり直してはいけません。再利用した id が再び実行されることはありません。何が返るかは[再試行と変更記録](#再試行と変更記録)を参照してください。
 
 サーバーは各リクエストに、同じ `id` と `op` を持つ `response` をちょうど 1 つ返します。`"ok": true` と `result`、または `"ok": false` と `error: { code, message }` のどちらかです。レスポンスは任意の順序で、イベントの間に届くこともあります。schema の `x-operations` は各操作をその params と result の定義に対応付けています。
+
+レスポンスは次の順序でデコードします。まず `id` で保留中のリクエストを探します。未知の `id` のレスポンスはキャンセルしたリクエストへの遅れた返信なので無視します。`op` がそのリクエストの `op` と一致することを確認し、一致しなければ接続を閉じます。次に `ok` で分岐し、`false` なら `error` を `Fault` として、そうでなければ `result` を `x-operations[op].result` でデコードします。schema の `ResponseFrame` ユニオンには単一のタグがないので、直接デコードしないでください。デコード専用の `ResponseEnvelope` 定義が最初の手順を表します。
 
 `cancel`（同じ `channel`、`id`、`controllerGeneration`、`sessionGeneration`）は保留中のリクエストを中止します。キャンセルしたリクエストにはレスポンスが来ないことがあり、遅れて届いたものは無視します。
 
@@ -112,9 +115,21 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 `turn.prompt` と `turn.steer` は文字列、またはテキストブロックと画像ブロックを内容に持つユーザーメッセージを受け取ります。`command.run` は `/clear` などのスラッシュコマンド行を実行し、`commands.describe` と `commands.complete` はコマンド一覧と補完を返します。
 
+### 再試行と変更記録
+
+読み取りだけの操作（`*.read`、`*.list`、`jobs.output`、`jobs.wait`、`conversations.history`、`commands.describe`、`commands.complete`、`session.planRewind`）はそのまま実行されます。`form.evaluate` も記録されません。毎回新しい `id` で送ってください。同じエディターとリビジョンなら、ホストは同じ評価結果を返します。それ以外の操作はすべて変更操作です。`clientId` が C、`daemonEpoch` が E、`id` が X の変更操作について、クライアントが頼れるのは次のとおりです。
+
+1. **最大 1 回。**どの接続でも (C, E, X) の再送で X が再び実行されることはありません。ただし再送が届いた時点で、X の後に受け入れられた C の他の変更 id が 4,096 個未満であることが条件です。再接続の直後、新しい変更操作を送る前に保留中の id を再送すれば、この条件は必ず満たされます。
+2. **結果。**X の結果が保持されている間は、同じ params の再送はその結果を返し、異なる params の再送は `operation_conflict` で失敗します。結果は X の完了後最大 10 分間保持され、より新しい変更操作が場所を必要とするとき（128 件または 32 MiB、[現在の制限](#現在の制限)を参照）に限り早めに破棄されます。その後の再送はすべて `operation_expired` で失敗します。いずれの場合も X は再実行されません。保持できないほど大きな結果も元のリクエストには届き、その後の再送は `operation_expired` で失敗します。
+3. **忘れられたクライアント。**C がコントローラーのリースを持たず（接続中、または切断後 30 秒以内なら持っています）、24 時間変更操作を送りも完了もしていない場合、または C の不在中に多くの他クライアントが書き込んだ場合（記録した id が合計 65,536 個を超えた場合）、daemon は C を忘れます。以後 C の `hello` と変更操作は `permission_denied` で失敗します。新しい `clientId` で接続し、スナップショットから再同期し、C の保留中の変更操作は結果不明として扱ってください。
+4. **プロセスごとに新しい `clientId` を使ってください。クライアントの再起動をまたいで `clientId` を保存しないでください。**保存した id はすでに忘れられている可能性があり、その場合は daemon が再起動するまで拒否されます。
+5. **変更操作の `limit_exceeded` は、それが実行されなかったことを意味します。**
+6. **id は引き続き一意**（`clientId` と `daemonEpoch` ごと）でなければなりません。UUID か、再接続をまたいで続く連番を使ってください。
+7. 別の `daemonEpoch` のリクエストは `outcome_unknown` で失敗します。daemon が再起動しており、以前の epoch の id については何もわかりません。スナップショットから再同期してください。
+
 ### エラー
 
-`error.code` は安定した機械可読なコードで、`message` は表示用のテキストで変わることがあります。クライアントが扱うべきコード：
+`error.code` は安定した機械可読なコードで、`message` は表示用のテキストで変わることがあります。コードの集合は拡張されることがあり（`Fault.code` の `x-known-codes` に文書化されたコードの一覧があります）、知らないコードは `operation_failed` として扱ってください。クライアントが扱うべきコード：
 
 | コード | 意味 |
 | --- | --- |
@@ -124,10 +139,11 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `stale_controller` | `controllerGeneration` がもう現在の値ではありません。この接続は置き換えられました。 |
 | `outcome_unknown` | リクエストが別の `daemonEpoch` のものです。daemon が再起動しました。再同期してください。 |
 | `operation_conflict` | 同じ `id` が異なる params で再利用されました。 |
-| `operation_expired` | 再試行した変更操作の元の結果がもう保持されていません。 |
+| `operation_expired` | 再試行した変更操作の元の結果がもう保持されていません。再実行はされていません。 |
+| `permission_denied` | 変更記録がこの `clientId` を忘れました。新しい `clientId` で接続してください。 |
 | `unsupported_operation` | この操作はここでは使えません。 |
 | `cancelled`、`disconnected` | リクエストがキャンセルされたか、ワークスペースが切り離しました。 |
-| `limit_exceeded`、`invalid_frame` | 制限超過または検証の失敗。 |
+| `limit_exceeded`、`invalid_frame` | 制限超過または検証の失敗。これで拒否された変更操作は実行されていません。 |
 | `operation_failed` | その他の失敗。詳細はホストに残ります。 |
 
 ## イベント
@@ -183,6 +199,11 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 ### schema の使い方
 
 schema は 1 つのバンドルです。すべての型は `$defs` の下の名前付きエントリで、ローカルの `$ref` だけで参照されるため、コードジェネレーター（例：`System.Text.Json` を使う C# 向け）はファイルをまたいだ解決を必要とせず、安定した型名が得られます。ルートは `ClientFrame` と `ServerFrame` です。ユニオンは検証に使われない `x-discriminator` キーワードでタグ（`kind`、`type`、`op`、`role`、`status`、`state`、`action`）を示します。`EventPayload` は `type`（コアイベント）と `kind` のどちらを持つかで区別します。`x-operations` は各操作名をその `params` と `result` の定義に対応付けます。整数は負でない安全な整数（最大 2^53 - 1）です。文字列の長さとパターンは JSON Schema のルールに従います。
+
+- タグ付きユニオンの各分岐は、タグの値を 1 つだけ持つ独立した名前付き定義です（`TextDelta`、`DetachEffect`、`AcceptedUiAck` など）。そのため各分岐は 1 つの派生型に対応します。ある型と `null` のユニオンは null 許容型に対応します。それ以外のタグのないユニオンはすべて、カスタムコンバーターか `JsonElement` が必要です。オブジェクトでは `EventPayload`（上記）や `UiAnswer`（JSON の型とプロパティで区別）、フィールドでは JSON の型が混在するもの、たとえば文字列または `UserMessage` の `message`、`FormValue`、`writesFiles`（`true`、`false`、`"paths"`）がその例です。`ResponseFrame` は `ResponseEnvelope` を通してデコードします（[リクエストとレスポンス](#リクエストとレスポンス)を参照）。
+- タグは最初のプロパティとは限りません。`System.Text.Json` のポリモーフィズムを使う場合は `JsonSerializerOptions.AllowOutOfOrderMetadataProperties = true`（.NET 9 以降）を設定するか、先に `JsonDocument` からタグを読んで型を選ぶコンバーターを書いてください。
+- `x-decode-only` の付いた定義（`ResponseEnvelope` と、`amira-server list` の出力行を表す `ServerListOutput`）は、ルートの `x-decode-only` 配列に列挙されています。これらがフレームになることはありません。
+- `Fault.code` は拡張されうる文字列です。`x-known-codes` に文書化された値の一覧があり、それ以外は `operation_failed` として扱ってください。
 
 ## やり取りの例
 

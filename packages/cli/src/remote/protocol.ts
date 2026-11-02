@@ -28,6 +28,45 @@ export const REMOTE_GATED_VALUES = [
   },
 ] as const
 
+/**
+ * Documented Fault.code values (the schema's x-known-codes). The set is open: a client treats an
+ * unknown code as operation_failed, so adding one is not a protocol change.
+ */
+export const REMOTE_FAULT_CODES = {
+  reject: [
+    "controller_busy",
+    "incompatible_protocol",
+    "incompatible_build",
+    "invalid_frame",
+    "invalid_workspace",
+    "workspace_busy",
+    "unsupported_capability",
+    "permission_denied",
+    "startup_failed",
+    "limit_exceeded",
+    "disconnected",
+    "cancelled",
+    "unsupported_operation",
+    "operation_failed",
+  ],
+  response: [
+    "agent_busy",
+    "stale_session",
+    "stale_operation",
+    "stale_controller",
+    "outcome_unknown",
+    "operation_conflict",
+    "operation_expired",
+    "permission_denied",
+    "unsupported_operation",
+    "cancelled",
+    "disconnected",
+    "limit_exceeded",
+    "invalid_frame",
+    "operation_failed",
+  ],
+} as const
+
 export type RemoteJson = null | boolean | number | string | RemoteJson[] | { [key: string]: RemoteJson }
 export type RemoteChannel = "control" | "model" | "files"
 
