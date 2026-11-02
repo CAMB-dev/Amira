@@ -51,6 +51,83 @@ test("only the frontend control surface is published", () => {
   )
 })
 
+/** Code generators need every tagged union branch to be a named type with a single tag value. */
+function taggedUnionProblems(schema: Node): string[] {
+  const problems: string[] = []
+  const tag = (branch: Node, key: string): Node | undefined => {
+    const target = branch.$ref ? schema.$defs[(branch.$ref as string).replace("#/$defs/", "")] : branch
+    if (target?.anyOf || target?.oneOf) return undefined // A nested union is checked on its own.
+    return target?.properties?.[key]
+  }
+  const walk = (node: unknown, at: string) => {
+    if (!node || typeof node !== "object") return
+    if (Array.isArray(node)) {
+      for (const [index, item] of node.entries()) walk(item, `${at}/${index}`)
+      return
+    }
+    const record = node as Node
+    const key = record["x-discriminator"]
+    for (const union of ["oneOf", "anyOf"] as const)
+      for (const [index, branch] of (key ? (record[union] ?? []) : []).entries()) {
+        if (!branch.$ref) problems.push(`${at}/${union}/${index}: inline branch of a tagged union`)
+        const value = tag(branch, key)
+        if (value && !("const" in value)) problems.push(`${at}/${union}/${index}: ${key} has several values`)
+      }
+    for (const [name, child] of Object.entries(record)) walk(child, `${at}/${name}`)
+  }
+  walk(schema, "#")
+  return problems
+}
+
+test("tagged unions have only named single-tag branches, and the lint catches regressions", () => {
+  const schema = buildProtocolSchema() as Node
+  expect(taggedUnionProblems(schema)).toEqual([])
+  const inline = { type: "object", properties: { kind: { const: "a" } } }
+  const multi = { type: "object", properties: { kind: { enum: ["b", "c"] } } }
+  const broken = {
+    $defs: {
+      ...schema.$defs,
+      Multi: multi,
+      Bad: { anyOf: [inline, { $ref: "#/$defs/Multi" }], "x-discriminator": "kind" },
+    },
+  }
+  expect(taggedUnionProblems(broken)).toEqual([
+    "#/$defs/Bad/anyOf/0: inline branch of a tagged union",
+    "#/$defs/Bad/anyOf/1: kind has several values",
+  ])
+  // Hoisted names a C# or TypeScript generator would emit for the split branches.
+  for (const name of [
+    "TextDelta",
+    "ThinkingDelta",
+    "ContentStartStreamEvent",
+    "QueuedSteer",
+    "DetachEffect",
+    "AcceptedUiAck",
+    "InvalidUiAck",
+    "PauseConversationControl",
+    "AssistantContent",
+    "ThinkingBlock",
+  ])
+    expect(schema.$defs[name], name).toBeDefined()
+})
+
+test("decode-only documents and known fault codes are published outside the frame unions", () => {
+  const schema = buildProtocolSchema() as Node
+  expect(schema["x-decode-only"]).toEqual([
+    { $ref: "#/$defs/ResponseEnvelope" },
+    { $ref: "#/$defs/ServerListOutput" },
+  ])
+  for (const name of ["ResponseEnvelope", "ServerListOutput"]) {
+    expect(schema.$defs[name]["x-decode-only"]).toBe(true)
+    expect(JSON.stringify(schema.$defs.ServerFrame)).not.toContain(name)
+  }
+  expect(schema.$defs.ResponseEnvelope["x-result-by"]).toBe("op")
+  const codes = schema.$defs.Fault.properties.code["x-known-codes"]
+  for (const code of ["controller_busy", "incompatible_build", "operation_expired", "operation_failed"])
+    expect(codes).toContain(code)
+  expect(new Set(codes).size).toBe(codes.length)
+})
+
 test(
   "--check passes for the current file and fails for a stale one",
   () => {

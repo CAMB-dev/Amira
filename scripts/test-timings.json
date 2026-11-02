@@ -8,6 +8,7 @@
     "extensions/agent/test/agent.test.ts": 18000,
     "extensions/agent/test/worktree.test.ts": 17000,
     "packages/tui/test/app-external-editor.test.ts": 15000,
+    "packages/cli/test/remote/operation-ledger-window.test.ts": 13000,
     "extensions/builtin-tools/test/bash.test.ts": 12000,
     "extensions/commands/test/ext.test.ts": 12000,
     "packages/proc/test/pipe.test.ts": 10000,

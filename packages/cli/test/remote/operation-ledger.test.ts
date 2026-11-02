@@ -10,7 +10,8 @@ function fixture(options: OperationLedgerOptions = {}) {
   const ledger = new OperationLedger({
     retentionMs: 100,
     maxEntries: 2,
-    maxIds: 4,
+    windowIds: 4,
+    maxIds: 8,
     now: () => time,
     ...options,
   })
@@ -188,35 +189,42 @@ test("running entries never expire or evict, and retention starts only on settle
   expect(await ledger.run(scope, "op-2", payload, () => ++rejectedEffects)).toBe(1)
 })
 
-test("full retained capacity refuses new ids but still replays accepted ones", async () => {
+test("a full ledger tombstones the oldest settled result early instead of refusing new work", async () => {
   const { ledger } = fixture({ maxEntries: 1 })
-  const first = ledger.run(scope, "op-1", payload, () => "done")
+  let effects = 0
+  const first = ledger.run(scope, "op-1", payload, () => ++effects)
+  expect(ledger.run(scope, "op-1", payload, () => ++effects)).toBe(first)
   await first
-  await expect(ledger.run(scope, "op-2", payload, () => "unexpected")).rejects.toMatchObject({
-    code: "limit_exceeded",
-  })
-  expect(ledger.run(scope, "op-1", payload, () => "unexpected")).toBe(first)
+  expect(await ledger.run(scope, "op-2", payload, () => ++effects)).toBe(2)
+  // The early tombstone keeps the no-reexecution guarantee; only the retained result is gone.
+  for (const value of [payload, { different: true }])
+    await expect(ledger.run(scope, "op-1", value, () => ++effects)).rejects.toMatchObject({
+      code: "operation_expired",
+    })
+  expect(effects).toBe(2)
 })
 
-test("bounded tombstones exhaust fail-closed across clients without forgetting any accepted id", async () => {
-  const { ledger, at } = fixture({ maxEntries: 1, maxIds: 2 })
+test("tombstones slide out of a scope's window only after windowIds newer admissions", async () => {
+  const { ledger } = fixture({ maxEntries: 1, windowIds: 3, retentionMs: 0 })
   let effects = 0
-  await ledger.run(scope, "op-1", payload, () => ++effects)
-  at(1_100)
-  await ledger.run(scope, "op-2", payload, () => ++effects)
-  at(1_200)
-  expect(ledger.prune()).toBe(1)
-  for (const id of ["op-1", "op-2"]) {
+  for (const id of ["op-1", "op-2", "op-3"]) await ledger.run(scope, id, payload, () => ++effects)
+  // Two newer ids: op-1 is still remembered.
+  await expect(ledger.run(scope, "op-1", payload, () => ++effects)).rejects.toMatchObject({
+    code: "operation_expired",
+  })
+  // Another scope's admissions never push this scope's ids out.
+  await ledger.run({ ...scope, clientId: "client-b" }, "op-1", payload, () => ++effects)
+  await expect(ledger.run(scope, "op-1", payload, () => ++effects)).rejects.toMatchObject({
+    code: "operation_expired",
+  })
+  // The third newer id slides op-1 out; op-2, op-3 and op-4 are still remembered.
+  await ledger.run(scope, "op-4", payload, () => ++effects)
+  for (const id of ["op-2", "op-3", "op-4"])
     await expect(ledger.run(scope, id, payload, () => ++effects)).rejects.toMatchObject({
       code: "operation_expired",
     })
-  }
-  for (const client of [scope, { ...scope, clientId: "client-b" }]) {
-    await expect(ledger.run(client, "op-3", payload, () => ++effects)).rejects.toMatchObject({
-      code: "limit_exceeded",
-    })
-  }
-  expect(effects).toBe(2)
+  expect(effects).toBe(5)
+  expect(await ledger.run(scope, "op-1", payload, () => ++effects)).toBe(6)
 })
 
 test("the admitted payload is an immutable JSON snapshot, not a mutable caller reference", async () => {
@@ -292,7 +300,7 @@ test("malformed or oversized payloads are rejected before admission without invo
 
 test("aggregate UTF-8 payload bytes reject before effects without evicting running entries", async () => {
   const { ledger, at } = fixture({ maxBytes: 12, maxEntries: 3 })
-  const pending = deferred<number>()
+  const pending = deferred<string>()
   let effects = 0
   // Each canonical payload is six UTF-8 bytes, including the JSON quotes.
   const first = ledger.run(scope, "op-1", "éé", () => {
@@ -308,14 +316,16 @@ test("aggregate UTF-8 payload bytes reject before effects without evicting runni
   await expect(ledger.run(scope, "op-3", null, () => ++effects)).rejects.toMatchObject({
     code: "limit_exceeded",
   })
-  expect(ledger.run(scope, "op-1", "éé", () => ++effects)).toBe(first)
+  expect(ledger.run<unknown>(scope, "op-1", "éé", () => ++effects)).toBe(first)
   expect(effects).toBe(2)
-  pending.resolve(1)
-  // Neither result fits, but the accepted ids remain failures rather than being evicted.
-  await expect(first).rejects.toMatchObject({ code: "limit_exceeded" })
-  await expect(second).rejects.toMatchObject({ code: "limit_exceeded" })
-  at(10_100)
-  expect(ledger.prune()).toBe(2)
+  pending.resolve("result")
+  // Neither result fits, yet both callers receive it; the ids become tombstones at once.
+  expect(await first).toBe("result")
+  expect(await second).toBe("result")
+  for (const id of ["op-1", "op-2"])
+    await expect(ledger.run(scope, id, "éé", () => ++effects)).rejects.toMatchObject({
+      code: "operation_expired",
+    })
   expect(await ledger.run(scope, "op-3", null, () => ++effects)).toBe(3)
 })
 
@@ -330,67 +340,61 @@ test("a single payload exceeding the aggregate budget is rejected before executi
   expect(await ledger.run(scope, "op-1", null, () => ++effects)).toBe(1)
 })
 
-test("retained result bytes count toward admission and are released on expiry", async () => {
+test("retained result bytes count toward admission and are released early or on expiry", async () => {
   const { ledger, at } = fixture({ maxBytes: 12 })
   // Four payload bytes plus eight result bytes exactly fill the budget.
   const first = ledger.run(scope, "op-1", null, () => "ééé")
   expect(await first).toBe("ééé")
-  let effects = 0
-  await expect(ledger.run(scope, "op-2", null, () => ++effects)).rejects.toMatchObject({
-    code: "limit_exceeded",
-  })
-  expect(effects).toBe(0)
   expect(ledger.run(scope, "op-1", null, () => "unexpected")).toBe(first)
+  let effects = 0
+  // Admission tombstones the retained result early rather than refusing.
+  expect(await ledger.run(scope, "op-2", null, () => ++effects)).toBe(1)
+  await expect(ledger.run(scope, "op-1", null, () => "unexpected")).rejects.toMatchObject({
+    code: "operation_expired",
+  })
   at(1_100)
   expect(ledger.prune()).toBe(1)
   expect(ledger.prune()).toBe(0)
-  expect(await ledger.run(scope, "op-2", null, () => ++effects)).toBe(1)
 })
 
-test("an oversized terminal result becomes a retained failure and never repeats the mutation", async () => {
-  const { ledger, at } = fixture({ maxBytes: 12 })
+test("an oversized terminal result reaches its caller and its id never runs again", async () => {
+  const { ledger } = fixture({ maxBytes: 12 })
   let effects = 0
+  const pending = deferred<string>()
   const execute = () => {
     effects++
-    return "x".repeat(100)
+    return pending.promise
   }
   const first = ledger.run(scope, "op-1", null, execute)
-  await expect(first).rejects.toMatchObject({ code: "limit_exceeded" })
   const retry = ledger.run(scope, "op-1", null, execute)
   expect(retry).toBe(first)
-  await expect(retry).rejects.toMatchObject({ code: "limit_exceeded" })
-  await expect(ledger.run(scope, "op-1", true, execute)).rejects.toMatchObject({
-    code: "operation_conflict",
-  })
-  // The rejected result was not retained or charged; only its canonical payload remains.
-  expect(await ledger.run(scope, "op-2", null, () => 1)).toBe(1)
-  expect(effects).toBe(1)
-  at(1_100)
-  expect(ledger.prune()).toBe(2)
-  await expect(ledger.run(scope, "op-1", null, execute)).rejects.toMatchObject({
-    code: "operation_expired",
-  })
-  expect(await ledger.run(scope, "op-3", null, () => "123456")).toBe("123456")
+  pending.resolve("x".repeat(100))
+  expect(await first).toBe("x".repeat(100))
+  for (const value of [null, true])
+    await expect(ledger.run(scope, "op-1", value, execute)).rejects.toMatchObject({
+      code: "operation_expired",
+    })
+  // Nothing was retained or charged for the unretained result.
+  expect(await ledger.run(scope, "op-2", null, () => "123456")).toBe("123456")
   expect(effects).toBe(1)
 })
 
-test("ordinary retained errors consume bytes and release them on expiry", async () => {
-  const { ledger, at } = fixture({ maxBytes: 16 * 1024 })
+test("ordinary retained errors consume bytes and are released early when room is needed", async () => {
+  const { ledger } = fixture({ maxBytes: 16 * 1024 })
   const failure = new RemoteReplyError("agent_busy", "x".repeat(12 * 1024))
   failure.stack = ""
   const first = ledger.run(scope, "op-1", null, () => {
     throw failure
   })
   await expect(first).rejects.toBe(failure)
+  expect(ledger.run(scope, "op-1", null, () => "unexpected")).toBe(first)
   const large = "x".repeat(8 * 1024)
   let effects = 0
-  await expect(ledger.run(scope, "op-2", large, () => ++effects)).rejects.toMatchObject({
-    code: "limit_exceeded",
-  })
-  expect(effects).toBe(0)
-  at(1_100)
-  expect(ledger.prune()).toBe(1)
   expect(await ledger.run(scope, "op-2", large, () => ++effects)).toBe(1)
+  await expect(ledger.run(scope, "op-1", null, () => ++effects)).rejects.toMatchObject({
+    code: "operation_expired",
+  })
+  expect(effects).toBe(1)
 })
 
 test("retained JSON results are snapshots that cannot grow after byte accounting", async () => {
@@ -405,22 +409,30 @@ test("retained JSON results are snapshots that cannot grow after byte accounting
   expect(await ledger.run(scope, "op-2", null, () => 1)).toBe(1)
 })
 
-test("oversized operation errors cannot escape the retained byte budget", async () => {
-  const { ledger, at } = fixture({ maxBytes: 12 })
+test("oversized or unretainable operation errors reach their caller and are not retained", async () => {
+  const { ledger } = fixture({ maxBytes: 12 })
   let effects = 0
-  const first = ledger.run(scope, "op-1", null, () => {
-    effects++
-    throw new RemoteReplyError("agent_busy", "x".repeat(100))
-  })
-  await expect(first).rejects.toMatchObject({ code: "limit_exceeded" })
-  expect(ledger.run(scope, "op-1", null, () => ++effects)).toBe(first)
-  expect(await ledger.run(scope, "op-2", null, () => 1)).toBe(1)
-  at(1_100)
-  expect(ledger.prune()).toBe(2)
-  await expect(ledger.run(scope, "op-1", null, () => ++effects)).rejects.toMatchObject({
-    code: "operation_expired",
-  })
-  expect(effects).toBe(1)
+  const oversized = new RemoteReplyError("agent_busy", "x".repeat(100))
+  await expect(
+    ledger.run(scope, "op-1", null, () => {
+      effects++
+      throw oversized
+    }),
+  ).rejects.toBe(oversized)
+  class Custom extends Error {}
+  const custom = new Custom("graph")
+  await expect(
+    ledger.run(scope, "op-2", null, () => {
+      effects++
+      throw custom
+    }),
+  ).rejects.toBe(custom)
+  for (const id of ["op-1", "op-2"])
+    await expect(ledger.run(scope, id, null, () => ++effects)).rejects.toMatchObject({
+      code: "operation_expired",
+    })
+  expect(await ledger.run(scope, "op-3", null, () => 1)).toBe(1)
+  expect(effects).toBe(2)
 })
 
 test("default limits admit image-sized payloads and retain results for the reconnect window", async () => {
@@ -429,20 +441,22 @@ test("default limits admit image-sized payloads and retain results for the recon
   const images = { images: ["a".repeat(Math.ceil((5 * 1024 * 1024 * 4) / 3))] }
   const first = ledger.run(scope, "op-1", images, () => "done")
   expect(await first).toBe("done")
-  // Four image messages fit in 32 MiB; the fifth exceeds the default aggregate budget.
+  // Four image messages fit in 32 MiB; the fifth tombstones the oldest result early.
   for (const id of ["op-2", "op-3", "op-4"])
     expect(await ledger.run(scope, id, images, () => "done")).toBe("done")
   let effects = 0
-  await expect(ledger.run(scope, "op-5", images, () => ++effects)).rejects.toMatchObject({
-    code: "limit_exceeded",
-  })
-  expect(effects).toBe(0)
-  time += 10 * 60 * 1_000 - 1
-  expect(ledger.run(scope, "op-1", images, () => "unexpected")).toBe(first)
-  time++
+  expect(await ledger.run(scope, "op-5", images, () => ++effects)).toBe(1)
   await expect(ledger.run(scope, "op-1", images, () => "unexpected")).rejects.toMatchObject({
     code: "operation_expired",
   })
+  const second = ledger.run(scope, "op-2", images, () => "unexpected")
+  time += 10 * 60 * 1_000 - 1
+  expect(ledger.run(scope, "op-2", images, () => "unexpected")).toBe(second)
+  time++
+  await expect(ledger.run(scope, "op-2", images, () => "unexpected")).rejects.toMatchObject({
+    code: "operation_expired",
+  })
+  expect(effects).toBe(1)
 })
 
 test("clock rollback cannot resurrect an expired id", async () => {
@@ -485,7 +499,15 @@ test("bounded identity validation rejects malformed scopes and ids without consu
 })
 
 test("ledger configuration and clock values are validated", async () => {
-  for (const key of ["maxEntries", "maxIds", "maxPayloadBytes", "maxBytes"] as const) {
+  for (const key of [
+    "maxEntries",
+    "windowIds",
+    "maxIds",
+    "idleScopeMs",
+    "maxForgotten",
+    "maxPayloadBytes",
+    "maxBytes",
+  ] as const) {
     for (const value of [0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
       expect(() => fixture({ [key]: value })).toThrow(RangeError)
     }

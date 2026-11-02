@@ -158,6 +158,19 @@ export const REMOTE_FRAME_SCHEMAS = {
   }),
 } satisfies Record<RemoteFrame["kind"], Schema>
 
+/** The single stdout line of `amira-server list`; a decode-only document, never a frame. */
+export const SERVER_LIST_OUTPUT_SCHEMA = object({
+  v: values(1),
+  workspaces: array(
+    object({
+      workspace: constrain(text, { minLength: 1, maxLength: 4096 }),
+      protocol: integer,
+      release,
+      daemonEpoch: id,
+    }),
+  ),
+})
+
 export function remoteSchema(): Record<string, unknown> {
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",

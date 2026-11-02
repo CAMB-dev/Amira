@@ -179,3 +179,16 @@ test("controller configuration and clock values are bounded", () => {
   const { controller } = fixture({ now: () => -1 })
   expect(() => controller.attach({ clientId: "client-a" })).toThrow(RangeError)
 })
+
+test("holds reports the lease holder while attached and through grace only", () => {
+  const { controller, at } = fixture()
+  expect(controller.holds("client-a")).toBe(false)
+  const lease = controller.attach({ clientId: "client-a" })
+  expect(controller.holds("client-a")).toBe(true)
+  expect(controller.holds("client-b")).toBe(false)
+  controller.detach(lease.clientId, lease.controllerGeneration)
+  at(1_099)
+  expect(controller.holds("client-a")).toBe(true)
+  at(1_100)
+  expect(controller.holds("client-a")).toBe(false)
+})

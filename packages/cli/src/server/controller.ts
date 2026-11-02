@@ -121,6 +121,12 @@ export class Controller {
       throw new RemoteReplyError("stale_controller", "The controller attachment is no longer current")
   }
 
+  /** Whether clientId holds the lease, attached or within its grace, and so may still resend. */
+  holds(clientId: string): boolean {
+    this.expireDetached(this.now())
+    return this.held?.lease.clientId === clientId
+  }
+
   private now(): number {
     const value = this.clock()
     if (!Number.isSafeInteger(value) || value < 0)

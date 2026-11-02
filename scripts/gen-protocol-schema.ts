@@ -7,6 +7,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import {
+  REMOTE_FAULT_CODES,
   REMOTE_FRONTEND_OPERATIONS,
   REMOTE_GATED_VALUES,
   REMOTE_PROTOCOL_VERSION,
@@ -19,7 +20,7 @@ import * as frontend from "../packages/cli/src/remote/schema/frontend.ts"
 import * as messages from "../packages/cli/src/remote/schema/messages.ts"
 import { operationSchemas } from "../packages/cli/src/remote/schema/operations.ts"
 import * as workspace from "../packages/cli/src/remote/schema/workspace.ts"
-import { REMOTE_FRAME_SCHEMAS } from "../packages/cli/src/remote-schema.ts"
+import { REMOTE_FRAME_SCHEMAS, SERVER_LIST_OUTPUT_SCHEMA } from "../packages/cli/src/remote-schema.ts"
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 type Schema = base.Schema
@@ -87,6 +88,11 @@ const descriptions: Record<string, string> = {
   ErrorResponse: "Failed operation. error.code is a stable machine-readable code.",
   EventPayload: "Event payload: a core event (has type) or a workspace notification (has kind).",
   WorkspaceSnapshot: "Complete workspace state captured at one event cursor.",
+  Fault:
+    "Stable machine-readable code plus display text. The code set is open: treat an unknown code as operation_failed. x-known-codes lists the documented ones.",
+  ResponseEnvelope:
+    "Decode-only, not a frame variant: parse a response by this envelope, match id to the pending request (ignore an unknown id), check op equals that request's op, then decode error as Fault when ok is false, else result with x-operations[op].result.",
+  ServerListOutput: "Decode-only: the single stdout line of `amira-server list`, one entry per live daemon.",
 }
 // Unions whose discriminated object branches become named definitions, with the name suffix.
 const hoisted: Record<string, string> = {
@@ -97,6 +103,13 @@ const hoisted: Record<string, string> = {
   FormField: "FormField",
   SettingField: "SettingField",
   RequestFrame: "Request",
+  AssistantContent: "Block",
+  MessageDeltaEventData: "Delta",
+  MessageStreamEventData: "StreamEvent",
+  TurnSteerEventData: "Steer",
+  ServerEffect: "Effect",
+  UiAck: "UiAck",
+  ConversationsControlParams: "ConversationControl",
 }
 const renamed: Record<string, string> = { snapshot: "FrontendSnapshot", update: "FrontendUpdate" }
 const discriminators = ["kind", "type", "op", "role", "status", "state", "action"]
@@ -106,6 +119,7 @@ class Bundle {
   used = new Set<string>()
   queue: [string, Schema][] = []
   defs: Record<string, Json> = {}
+  splits = new WeakMap<Schema, Schema[]>()
 
   name(schema: unknown, value: string): void {
     if (!isSchema(schema) || primitives.has(schema) || this.names.has(schema)) return
@@ -139,6 +153,28 @@ class Bundle {
       // A nested union branch (RequestFrame) may repeat one value; branches must still be disjoint.
       const flat = values.flatMap((value) => [...new Set(value)])
       return new Set(flat).size === flat.length
+    })
+  }
+
+  /**
+   * One branch per discriminator value: an object branch whose tag is an enum becomes one copy
+   * per value with a single-value tag. The accepted JSON is identical; each copy can be named.
+   */
+  split(branches: readonly Schema[]): readonly Schema[] {
+    const key = this.discriminator(branches)
+    if (!key) return branches
+    return branches.flatMap((branch) => {
+      const tag = branch.properties?.[key]
+      if (!tag?.enum || tag.enum.length < 2 || this.names.has(branch)) return [branch]
+      let copies = this.splits.get(branch)
+      if (!copies) {
+        copies = tag.enum.map(
+          (value) =>
+            ({ ...branch, properties: { ...branch.properties, [key]: { ...tag, enum: [value] } } }) as Schema,
+        )
+        this.splits.set(branch, copies)
+      }
+      return copies
     })
   }
 
@@ -212,8 +248,8 @@ class Bundle {
     ] as const)
       if (schema[key] !== undefined) out[key] = schema[key]!
     for (const key of ["oneOf", "anyOf"] as const) {
-      const branches = schema[key]
-      if (!branches) continue
+      if (!schema[key]) continue
+      const branches = this.split(schema[key])
       const suffix = defining && hoisted[defining]
       if (suffix) this.hoist(branches, suffix)
       out[key] = branches.map((branch) => this.render(branch))
@@ -266,6 +302,7 @@ export function buildProtocolSchema(): Json {
     for (const [key, value] of Object.entries(module)) bundle.name(value, renamed[key] ?? pascal(key))
   for (const [type, data] of Object.entries(events.coreEventData))
     bundle.name(data, `${pascal(type)}EventData`)
+  bundle.name(messages.assistantMessage.properties!.content!.items, "AssistantContent")
   const frames = REMOTE_FRAME_SCHEMAS
   bundle.name(frames.hello.properties!.release, "Release")
   bundle.name(frames.hello.properties!.limits, "PeerLimits")
@@ -322,7 +359,26 @@ export function buildProtocolSchema(): Json {
   bundle.name(client, "ClientFrame")
   bundle.name(server, "ServerFrame")
   const frameRefs = [bundle.ref(client), bundle.ref(server)]
+  // Decode-only documents: never frames, so outside ClientFrame and ServerFrame.
+  const envelope = base.object({
+    v: base.enumeration(1),
+    kind: base.enumeration("response"),
+    channel: base.enumeration("control"),
+    id: base.id,
+    op: base.enumeration(...REMOTE_FRONTEND_OPERATIONS),
+    ok: base.bool,
+    "result?": base.json,
+    "error?": frames.reject.properties!.error!,
+  })
+  bundle.name(envelope, "ResponseEnvelope")
+  bundle.name(SERVER_LIST_OUTPUT_SCHEMA, "ServerListOutput")
+  const decodeRefs = [bundle.ref(envelope), bundle.ref(SERVER_LIST_OUTPUT_SCHEMA)]
   bundle.drain()
+  const defsOut = bundle.defs as Record<string, Record<string, Json>>
+  for (const name of ["ResponseEnvelope", "ServerListOutput"]) defsOut[name]!["x-decode-only"] = true
+  defsOut.ResponseEnvelope!["x-result-by"] = "op"
+  const faultCode = (defsOut.Fault!.properties as Record<string, Record<string, Json>>).code!
+  faultCode["x-known-codes"] = [...new Set([...REMOTE_FAULT_CODES.reject, ...REMOTE_FAULT_CODES.response])]
   const defs = Object.fromEntries(
     Object.keys(bundle.defs)
       .sort()
@@ -337,6 +393,7 @@ export function buildProtocolSchema(): Json {
       "One JSON object per line on the control channel. Validate client frames with ClientFrame and server frames with ServerFrame. See docs/protocol.md.",
     "x-protocol-version": REMOTE_PROTOCOL_VERSION,
     "x-operations": operations,
+    "x-decode-only": decodeRefs,
     anyOf: frameRefs,
     $defs: defs,
   }

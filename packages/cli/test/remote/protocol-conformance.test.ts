@@ -247,3 +247,111 @@ test("the documented example exchange is valid and identical in every language",
   }
   for (const file of ["docs/zh/protocol.md", "docs/ja/protocol.md"]) expect(example(file)).toEqual(frames)
 })
+
+const coreEvent = (type: string, data: unknown) => ({
+  v: 1,
+  kind: "event",
+  daemonEpoch: "epoch-1",
+  seq: 1,
+  payload: { seq: 1, ts: 1, sessionId: "s1", type, data },
+})
+const notification = (payload: unknown) => ({ v: 1, kind: "event", daemonEpoch: "epoch-1", seq: 1, payload })
+const assistantWith = (block: unknown) => ({
+  message: { role: "assistant", content: [block], model: { provider: "mock", model: "m" } },
+})
+const user = { role: "user", content: [{ type: "text", text: "hi" }] }
+
+test("split union branches accept and reject exactly what the runtime does, value by value", () => {
+  const cases: [unknown, boolean][] = [
+    [coreEvent("message.delta", { kind: "text", text: "a" }), true],
+    [coreEvent("message.delta", { kind: "thinking", text: "a" }), true],
+    [coreEvent("message.delta", { kind: "thinking" }), false],
+    [coreEvent("message.delta", { kind: "text", argsDelta: "{}", toolCallId: "c" }), false],
+    [coreEvent("message.delta", { kind: "redacted", text: "a" }), false],
+    ...["contentStart", "thinkingStart", "thinkingEnd"].flatMap((kind): [unknown, boolean][] => [
+      [coreEvent("message.stream", { kind, index: 1 }), true],
+      [coreEvent("message.stream", { kind, outputTokens: 1 }), false],
+    ]),
+    [coreEvent("message.stream", { kind: "end", outputTokens: 3 }), true],
+    ...["queued", "injected", "dropped"].flatMap((state): [unknown, boolean][] => [
+      [coreEvent("turn.steer", { message: user, state }), true],
+      [coreEvent("turn.steer", { message: user, state, nextTurnId: "t2" }), false],
+    ]),
+    [coreEvent("turn.steer", { message: user, state: "promoted" }), false],
+    ...["detach", "rewind", "unfocus"].flatMap((kind): [unknown, boolean][] => [
+      [notification({ kind: "effect", effect: { kind, invocationId: "i1" } }), true],
+      [notification({ kind: "effect", effect: { kind, id: "j1" } }), false],
+    ]),
+    [notification({ kind: "effect", effect: { kind: "view", view: "subagent", id: "a1" } }), true],
+    [
+      notification({ kind: "effect", effect: { kind: "focus", conversationId: "c", incarnation: "i" } }),
+      true,
+    ],
+    [coreEvent("message.end", assistantWith({ type: "thinking", text: "t", redacted: true })), true],
+    [coreEvent("message.end", assistantWith({ type: "toolCall", id: "c", name: "read", args: {} })), true],
+    [coreEvent("message.end", assistantWith({ type: "thinking", text: "t", args: {} })), false],
+    ...["accepted", "cancelled", "settled"].flatMap((status): [unknown, boolean][] => [
+      [response("ui.respond", { status }), true],
+      [response("ui.respond", { status, message: "m" }), false],
+    ]),
+    ...["invalid", "disconnected"].flatMap((status): [unknown, boolean][] => [
+      [response("ui.respond", { status, message: "m" }), true],
+      [response("ui.respond", { status }), false],
+    ]),
+  ]
+  for (const [frame, ok] of cases) {
+    expect({ frame, valid: server(frame), runtime: runtime(frame) }).toEqual({
+      frame,
+      valid: ok,
+      runtime: ok,
+    })
+  }
+  for (const [params, ok] of [
+    ...["pause", "resume", "stop"].flatMap((action): [unknown, boolean][] => [
+      [{ conversationId: "c", action }, true],
+      [{ conversationId: "c", action, text: "x" }, false],
+    ]),
+    [{ conversationId: "c", action: "message", text: "x" }, true],
+    [{ conversationId: "c", action: "message" }, false],
+  ] as const) {
+    const frame = request("conversations.control", params)
+    expect({ params, valid: client(frame), runtime: runtime(frame) }).toEqual({
+      params,
+      valid: ok,
+      runtime: ok,
+    })
+  }
+})
+
+test("every recorded response decodes through ResponseEnvelope and then x-operations[op].result", () => {
+  const responses = wire.filter(({ frame }) => frame.kind === "response").map(({ frame }) => frame)
+  expect(responses.length).toBeGreaterThan(1)
+  const failure: (typeof responses)[number] = {
+    ...envelope,
+    kind: "response",
+    op: "turn.prompt",
+    ok: false,
+    error: { code: "x", message: "" },
+  }
+  for (const frame of [...responses, failure]) {
+    expect(valid(frame, def("ResponseEnvelope"))).toBe(true)
+    const decoded = frame.ok
+      ? valid(frame.result, bundle["x-operations"][frame.op].result)
+      : valid(frame.error, def("Fault"))
+    expect({ op: frame.op, decoded }).toEqual({ op: frame.op, decoded: true })
+  }
+  expect(valid({ ...failure, op: "model.stream" }, def("ResponseEnvelope"))).toBe(false)
+  expect(valid({ ...failure, extra: 1 }, def("ResponseEnvelope"))).toBe(false)
+})
+
+test("ServerListOutput describes the amira-server list line", () => {
+  const entry = {
+    workspace: "/srv/project",
+    protocol: 1,
+    release: { version: "0.0.1", buildId: "b1", target: "bun-linux-x64-baseline" },
+    daemonEpoch: "epoch-1",
+  }
+  expect(valid({ v: 1, workspaces: [] }, def("ServerListOutput"))).toBe(true)
+  expect(valid({ v: 1, workspaces: [entry] }, def("ServerListOutput"))).toBe(true)
+  expect(valid({ v: 1, workspaces: [{ ...entry, nonce: "n" }] }, def("ServerListOutput"))).toBe(false)
+})

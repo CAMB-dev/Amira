@@ -23,7 +23,7 @@ Read these before planning a client. They are properties of the current daemon, 
 - **The daemon runs on Linux only.** It is the server installed by `amira remote add` (glibc Linux, x64 or ARM64). On Windows and macOS there is no local daemon: the terminal UI runs the agent in its own process, so a GUI there can only reach a Linux workspace over SSH.
 - **One controller per workspace.** A daemon accepts one attached frontend at a time. While a client holds the controller (and for up to 30 seconds after it disconnects), another client is refused with `controller_busy`. A GUI and the terminal UI cannot be attached to the same workspace at the same time, and there is no read-only viewer.
 - **Model routing.** A daemon started in the default local-proxy mode (`model.proxy` in `welcome.capabilities`) waits for the terminal client to serve model calls over the internal model channel. A third-party client cannot do that: turns wait up to `remote.proxyReconnectTimeoutMs` and then fail. Attach to daemons that use remote credentials (`model.remote-key`), started with `amira-server attach --remote-key`.
-- **Mutation ledger caps.** The daemon remembers mutations for exactly-once retries (see [Requests and responses](#requests-and-responses)). It accepts at most 4,096 distinct mutation ids per daemon lifetime across all clients, and retains at most 128 mutations (running, or completed within the last 10 minutes) at once. Past either cap, new mutations fail with `limit_exceeded`; restarting the daemon (a new `daemonEpoch`) resets them. Separately, after 65,536 request ids on one connection, the daemon closes the connection with `limit_exceeded`.
+- **Mutation ledger.** The daemon remembers mutations so that a retried request never runs twice (see [Retries and the mutation ledger](#retries-and-the-mutation-ledger)). It holds at most 128 mutations at once, with at most 32 MiB of their params and results: running ones, and completed ones for up to 10 minutes. When it is full, the oldest completed results are dropped early; only when running mutations alone fill it do new mutations fail with `limit_exceeded`. Separately, after 65,536 request ids on one connection, the daemon closes the connection with `limit_exceeded`.
 
 ## Connecting
 
@@ -38,7 +38,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 
 `amira remote add` installs the launcher at `$HOME/.amira/remote/bin/amira-server`. The relay:
 
-1. Reads the first line, which must be the `hello` frame, within 5 seconds.
+1. Reads the first line, which must be the whole `hello` frame (never chunked), within 5 seconds. If no line arrives in time, it writes a `reject` with code `invalid_frame` and exits.
 2. Resolves `hello.workspace` (an existing absolute path on the host) to its canonical path. `welcome.workspace` reports that path.
 3. Finds the daemon that owns the workspace, or starts one. `--remote-key` only applies when the relay starts a new daemon; a running daemon keeps the model mode it started with.
 4. Checks the daemon before relaying a byte: the discovery files under `/tmp/amira-<uid>-workspaces/` and the socket under `$XDG_RUNTIME_DIR/amira/` (or the `/tmp` fallback) must be private to the user (directories `0700`, files `0600`, owned by the user, no symbolic links), and the connected socket peer must be the recorded daemon process (same user ID, PID and process start time).
@@ -48,7 +48,7 @@ The relay's stdout carries only protocol frames. If it cannot attach, it writes 
 
 Other commands on the host:
 
-- `amira-server list` prints `{"v":1,"workspaces":[...]}` on one line: the workspace path, `protocol`, server `release` and `daemonEpoch` of each live daemon owned by the user.
+- `amira-server list` prints `{"v":1,"workspaces":[...]}` on one line (`ServerListOutput` in the schema): the workspace path, `protocol`, server `release` and `daemonEpoch` of each live daemon owned by the user.
 - `amira-server stop --cwd <workspace>` stops a daemon and all of its work. It is not a detach.
 
 Saved conversations inside a workspace are listed with the `sessions.list` operation after attaching.
@@ -56,8 +56,9 @@ Saved conversations inside a workspace are listed with the `sessions.list` opera
 ## Framing
 
 - Each frame is one JSON object encoded as UTF-8, followed by `\n` (a preceding `\r` is tolerated). There is no byte-order mark and no other separator.
-- A line may hold at most `lineBytes` = 262,144 bytes before the newline. A larger frame (for example a prompt with images or a big snapshot) is sent as `chunk` frames: serialize the frame, split the bytes into 131,072-byte parts, and send each part base64-encoded in order with the same fresh `transferId`, its `index`, `total` parts, the full byte length `bytes` and the hex SHA-256 of the full bytes. The receiver reassembles, checks the hash and handles the inner frame. A chunk never contains a chunk.
+- A line may hold at most `lineBytes` = 262,144 bytes before the newline. A larger frame (for example a prompt with images or a big snapshot) is sent as `chunk` frames: serialize the frame, split the bytes into 131,072-byte parts, and send each part base64-encoded in order with the same fresh `transferId`, its `index`, `total` parts, the full byte length `bytes` and the hex SHA-256 of the full bytes. The receiver reassembles, checks the hash and handles the inner frame. A chunk never contains a chunk, and its `channel` must equal the inner frame's channel, which is `control` for every public frame.
 - Logical limits: a frame is at most `logicalBytes` = 67,108,864 bytes, JSON nesting at most 64 levels, at most 1,000,000 JSON values, numbers must be finite. At most 4 chunked transfers may be in flight and 128 requests may be pending in each direction.
+- Property order inside an object is not significant. The server does not put tags such as `kind`, `type` or `op` first; do not rely on any order.
 - Client frames are validated **strictly**. An unknown field, a missing required field, a wrong type or a value outside the schema closes the connection. After the handshake the server does not send an error first: it simply closes. Never send fields the schema does not list.
 
 ## Handshake
@@ -67,7 +68,7 @@ The client sends `hello` first and must wait for `welcome` (or `reject`) before 
 | `hello` field | Meaning |
 | --- | --- |
 | `v` | Always `1`. |
-| `clientId` | Your attachment identity, 1 to 128 characters of `[A-Za-z0-9_.:-]`. Pick a random value per attachment and reuse it when resuming. |
+| `clientId` | Your attachment identity, 1 to 128 characters of `[A-Za-z0-9_.:-]`. Pick a fresh random value (for example a UUID) each time your client process starts, reuse it when that process reconnects, and never persist it across restarts (see [Retries and the mutation ledger](#retries-and-the-mutation-ledger)). |
 | `workspace` | Absolute workspace path on the host. |
 | `release` | Your client's own `version`, `buildId` and `target`. The server does not interpret it; use it to identify your client (for example `"buildId": "my-gui"`). |
 | `limits` | Exactly `{ "lineBytes": 262144, "logicalBytes": 67108864 }`. |
@@ -88,13 +89,15 @@ The client sends `hello` first and must wait for `welcome` (or `reject`) before 
 
 There is no version negotiation. A `hello` with a different `v` is refused with `reject` code `incompatible_protocol`, and so is an attachment to a running daemon that speaks another protocol version. A client must check that `welcome.v` is `1` and close otherwise.
 
-`reject` codes: `controller_busy`, `incompatible_protocol`, `invalid_frame`, `invalid_workspace`, `permission_denied` (for example expired reconnect credentials), `startup_failed`, `limit_exceeded`, `disconnected`, `unsupported_operation`, `operation_failed`. The connection closes after a `reject`.
+`reject` codes: `controller_busy`, `incompatible_protocol`, `incompatible_build`, `invalid_frame` (also when the relay received no `hello` within 5 seconds), `invalid_workspace`, `workspace_busy`, `unsupported_capability`, `permission_denied` (for example expired reconnect credentials, or a `clientId` the mutation ledger has forgotten), `startup_failed`, `limit_exceeded`, `disconnected`, `cancelled`, `unsupported_operation`, `operation_failed`. The list is open: treat a code you do not know as `operation_failed`. The connection closes after a `reject`.
 
 ## Requests and responses
 
-A `request` carries `channel` (`"control"`), a client-chosen `id`, `op`, `params`, and the `daemonEpoch`, `controllerGeneration` and `sessionGeneration` the request was made for. Use the values from `welcome`; take a new `sessionGeneration` from each snapshot (`frontend.sessionGeneration`) after the session changes. Always send `daemonEpoch`: a request without it, or for another epoch, fails with `outcome_unknown`. Request ids are 1 to 128 characters of `[A-Za-z0-9_.:-]` and must never repeat on one connection. Mutation ids must also be unique per `clientId` for the whole `daemonEpoch`, across reconnects: the daemon keys every mutation by `clientId`, `daemonEpoch` and `id` over all connections and never frees an id. Use a UUID, or a counter that persists across reconnects; never restart a counter at `"1"` after resuming with the same `clientId`. A reused id returns the earlier retained outcome (same params), fails with `operation_conflict` (different params) or fails with `operation_expired` (after the 10-minute retention), and the new request never runs.
+A `request` carries `channel` (`"control"`), a client-chosen `id`, `op`, `params`, and the `daemonEpoch`, `controllerGeneration` and `sessionGeneration` the request was made for. Use the values from `welcome`; take a new `sessionGeneration` from each snapshot (`frontend.sessionGeneration`) after the session changes. Always send `daemonEpoch`: a request without it, or for another epoch, fails with `outcome_unknown`. Request ids are 1 to 128 characters of `[A-Za-z0-9_.:-]` and must never repeat on one connection. Mutation ids must also be unique per `clientId` for the whole `daemonEpoch`, across reconnects: the daemon keys every mutation by `clientId`, `daemonEpoch` and `id` over all connections. Use a UUID, or a counter that persists across reconnects of the same process; never restart a counter at `"1"` after resuming with the same `clientId`. A reused id never runs again; see [Retries and the mutation ledger](#retries-and-the-mutation-ledger) for what it returns.
 
 The server answers each request with exactly one `response` carrying the same `id` and `op`: either `"ok": true` with `result`, or `"ok": false` with `error: { code, message }`. Responses can arrive in any order and between events. `x-operations` in the schema maps each operation to its params and result definitions.
+
+Decode a response in this order. Look up the pending request by `id`; a response with an unknown `id` is a late reply to a request you cancelled, so ignore it. Check that `op` equals that request's `op`, and close the connection otherwise. Then branch on `ok`: decode `error` as `Fault` when it is `false`, otherwise decode `result` with `x-operations[op].result`. The schema's `ResponseFrame` union has no single tag, so do not decode it directly; the decode-only `ResponseEnvelope` definition describes the first step.
 
 `cancel` (same `channel`, `id`, `controllerGeneration` and `sessionGeneration`) aborts a pending request. A cancelled request may get no response; ignore a late one.
 
@@ -112,9 +115,21 @@ Read operations fail with `stale_session` when `sessionGeneration` is not curren
 
 `turn.prompt` and `turn.steer` take a string or a user message whose content holds text and image blocks. `command.run` runs a slash command line such as `/clear`; `commands.describe` and `commands.complete` provide the command list and completions.
 
+### Retries and the mutation ledger
+
+Every operation that only reads (the `*.read`, `*.list`, `jobs.output`, `jobs.wait`, `conversations.history`, `commands.describe`, `commands.complete` and `session.planRewind` operations) runs directly. `form.evaluate` is not recorded either: send it with a fresh `id` each time, and the host returns the same evaluation for the same editor and revision. Every other operation is a mutation. For a mutation with `clientId` C, `daemonEpoch` E and `id` X, a client may rely on exactly this:
+
+1. **At most once.** A resend of (C, E, X), on any connection, never runs X again, provided that fewer than 4,096 other mutation ids of C were accepted after X when the resend arrives. Resending your pending ids right after reconnecting, before sending new mutations, always meets this condition.
+2. **Outcome.** While X's outcome is retained, a resend with the same params returns it, and a resend with different params fails with `operation_conflict`. It is retained for up to 10 minutes after X completed, and is dropped earlier only when newer mutations need the room (128 entries or 32 MiB, see [Current limits](#current-limits)). After that, any resend fails with `operation_expired`. X does not run again in any of these cases. A result too large to retain still reaches the original request; a resend then fails with `operation_expired`.
+3. **Forgotten clients.** When C does not hold the controller lease (attached, or within the 30 seconds after it disconnects) and has not sent or completed a mutation for 24 hours, or when many other clients write while C is away (more than 65,536 remembered ids in total), the daemon forgets C. Its next `hello` and any mutation fail with `permission_denied`. Attach with a new `clientId`, resynchronize from the snapshot, and treat C's pending mutations as having an unknown outcome.
+4. **Use a fresh `clientId` per process. Never persist a `clientId` across restarts of your client.** A stored id may already be forgotten and is then refused until the daemon restarts.
+5. **`limit_exceeded` on a mutation means it did not run.**
+6. **Ids must still be unique** per `clientId` and `daemonEpoch`: use a UUID or a counter that persists across reconnects.
+7. A request for another `daemonEpoch` fails with `outcome_unknown`: the daemon restarted, and nothing is known about the earlier epoch's ids. Resynchronize from the snapshot.
+
 ### Errors
 
-`error.code` is stable and machine-readable; `message` is display text and may change. Codes a client should handle:
+`error.code` is stable and machine-readable; `message` is display text and may change. The set of codes is open (`Fault.code` lists the documented ones in `x-known-codes`): treat a code you do not know as `operation_failed`. Codes a client should handle:
 
 | Code | Meaning |
 | --- | --- |
@@ -124,10 +139,11 @@ Read operations fail with `stale_session` when `sessionGeneration` is not curren
 | `stale_controller` | `controllerGeneration` is no longer current; this attachment was replaced. |
 | `outcome_unknown` | The request belongs to another `daemonEpoch`; the daemon restarted. Resynchronize. |
 | `operation_conflict` | The same `id` was reused with different params. |
-| `operation_expired` | The original outcome of a retried mutation is no longer retained. |
+| `operation_expired` | The original outcome of a retried mutation is no longer retained. It did not run again. |
+| `permission_denied` | The mutation ledger has forgotten this `clientId`. Attach with a new one. |
 | `unsupported_operation` | The operation is not available here. |
 | `cancelled`, `disconnected` | The request was cancelled, or the workspace detached it. |
-| `limit_exceeded`, `invalid_frame` | A limit or validation failure. |
+| `limit_exceeded`, `invalid_frame` | A limit or validation failure. A mutation refused this way did not run. |
 | `operation_failed` | Any other failure. Details stay on the host. |
 
 ## Events
@@ -183,6 +199,11 @@ Generated code should still tolerate unknown properties on objects it receives, 
 ### Using the schema
 
 The schema is one bundle: every type is a named entry under `$defs`, referenced with local `$ref`s only, so code generators (for example for C# with `System.Text.Json`) need no cross-file resolution and produce stable type names. `ClientFrame` and `ServerFrame` are the roots. Unions name their tag in a non-validating `x-discriminator` keyword (`kind`, `type`, `op`, `role`, `status`, `state` or `action`); `EventPayload` is told apart by whether it has `type` (core event) or `kind`. `x-operations` maps each operation name to its `params` and `result` definitions. Integers are non-negative safe integers (at most 2^53 - 1). String lengths and patterns follow JSON Schema rules.
+
+- Every branch of a tagged union is its own named definition with a single tag value (for example `TextDelta`, `DetachEffect`, `AcceptedUiAck`), so each maps to one derived type. A union of one type with `null` maps to a nullable type. Every other untagged union needs a custom converter or `JsonElement`: for example `EventPayload` (see above) and `UiAnswer` (told apart by JSON type and properties) at object level, and fields that mix JSON types such as a `message` that is a string or a `UserMessage`, `FormValue`, or `writesFiles` (`true`, `false` or `"paths"`). Decode `ResponseFrame` through `ResponseEnvelope` (see [Requests and responses](#requests-and-responses)).
+- Tags are not the first property. With `System.Text.Json` polymorphism, set `JsonSerializerOptions.AllowOutOfOrderMetadataProperties = true` (.NET 9 or later), or write a converter that reads the tag from a `JsonDocument` before choosing the type.
+- Definitions marked `x-decode-only` (`ResponseEnvelope`, and `ServerListOutput` for the `amira-server list` line) are listed in the root `x-decode-only` array. They are never frames.
+- `Fault.code` is an open string. `x-known-codes` lists the documented values; treat others as `operation_failed`.
 
 ## Example exchange
 

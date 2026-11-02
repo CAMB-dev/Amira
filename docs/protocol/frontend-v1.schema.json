@@ -171,8 +171,18 @@
       "result": { "$ref": "#/$defs/UiAck" }
     }
   },
+  "x-decode-only": [{ "$ref": "#/$defs/ResponseEnvelope" }, { "$ref": "#/$defs/ServerListOutput" }],
   "anyOf": [{ "$ref": "#/$defs/ClientFrame" }, { "$ref": "#/$defs/ServerFrame" }],
   "$defs": {
+    "AcceptedUiAck": {
+      "title": "AcceptedUiAck",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "const": "accepted" }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
     "AckFrame": {
       "title": "AckFrame",
       "description": "Client confirmation of the last applied event seq; id is the daemon epoch.",
@@ -307,6 +317,16 @@
       "required": ["requestId", "kind", "title", "questions"],
       "additionalProperties": false
     },
+    "AssistantContent": {
+      "title": "AssistantContent",
+      "anyOf": [
+        { "$ref": "#/$defs/TextBlock" },
+        { "$ref": "#/$defs/ThinkingBlock" },
+        { "$ref": "#/$defs/ToolCallBlock" },
+        { "$ref": "#/$defs/ServerTool" }
+      ],
+      "x-discriminator": "type"
+    },
     "AssistantMessage": {
       "title": "AssistantMessage",
       "type": "object",
@@ -314,38 +334,7 @@
         "role": { "type": "string", "const": "assistant" },
         "content": {
           "type": "array",
-          "items": {
-            "anyOf": [
-              { "$ref": "#/$defs/TextBlock" },
-              {
-                "type": "object",
-                "properties": {
-                  "type": { "type": "string", "const": "thinking" },
-                  "text": { "type": "string" },
-                  "redacted": { "type": "boolean" },
-                  "signature": { "$ref": "#/$defs/Signature" }
-                },
-                "required": ["type", "text"],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "type": { "type": "string", "const": "toolCall" },
-                  "id": { "type": "string" },
-                  "name": { "type": "string" },
-                  "args": {
-                    "type": "object",
-                    "additionalProperties": {}
-                  }
-                },
-                "required": ["type", "id", "name", "args"],
-                "additionalProperties": false
-              },
-              { "$ref": "#/$defs/ServerTool" }
-            ],
-            "x-discriminator": "type"
-          }
+          "items": { "$ref": "#/$defs/AssistantContent" }
         },
         "model": { "$ref": "#/$defs/ModelRef" },
         "usage": { "$ref": "#/$defs/Usage" },
@@ -475,6 +464,15 @@
         "sessionGeneration": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
       },
       "required": ["v", "kind", "channel", "id"],
+      "additionalProperties": false
+    },
+    "CancelledUiAck": {
+      "title": "CancelledUiAck",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "const": "cancelled" }
+      },
+      "required": ["status"],
       "additionalProperties": false
     },
     "CheckboxFormField": {
@@ -982,6 +980,16 @@
       "required": ["requestId", "kind", "title"],
       "additionalProperties": false
     },
+    "ContentStartStreamEvent": {
+      "title": "ContentStartStreamEvent",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "contentStart" },
+        "index": { "type": "number" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
     "ConversationSendParams": {
       "title": "ConversationSendParams",
       "type": "object",
@@ -1086,28 +1094,10 @@
     "ConversationsControlParams": {
       "title": "ConversationsControlParams",
       "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "conversationId": { "type": "string" },
-            "action": {
-              "type": "string",
-              "enum": ["pause", "resume", "stop"]
-            }
-          },
-          "required": ["conversationId", "action"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "conversationId": { "type": "string" },
-            "action": { "type": "string", "const": "message" },
-            "text": { "type": "string" }
-          },
-          "required": ["conversationId", "action", "text"],
-          "additionalProperties": false
-        }
+        { "$ref": "#/$defs/PauseConversationControl" },
+        { "$ref": "#/$defs/ResumeConversationControl" },
+        { "$ref": "#/$defs/StopConversationControl" },
+        { "$ref": "#/$defs/MessageConversationControl" }
       ],
       "x-discriminator": "action"
     },
@@ -1470,6 +1460,16 @@
       ],
       "x-discriminator": "type"
     },
+    "DetachEffect": {
+      "title": "DetachEffect",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "detach" },
+        "invocationId": { "type": "string" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
     "DiffReviewUiRequest": {
       "title": "DiffReviewUiRequest",
       "type": "object",
@@ -1487,6 +1487,16 @@
         }
       },
       "required": ["requestId", "kind", "title", "diff", "options"],
+      "additionalProperties": false
+    },
+    "DisconnectedUiAck": {
+      "title": "DisconnectedUiAck",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "const": "disconnected" },
+        "message": { "type": "string" }
+      },
+      "required": ["status", "message"],
       "additionalProperties": false
     },
     "Display": {
@@ -1515,6 +1525,16 @@
       "required": ["text"],
       "additionalProperties": false
     },
+    "DroppedSteer": {
+      "title": "DroppedSteer",
+      "type": "object",
+      "properties": {
+        "message": { "$ref": "#/$defs/UserMessage" },
+        "state": { "type": "string", "const": "dropped" }
+      },
+      "required": ["message", "state"],
+      "additionalProperties": false
+    },
     "EffectPayload": {
       "title": "EffectPayload",
       "type": "object",
@@ -1523,6 +1543,16 @@
         "effect": { "$ref": "#/$defs/ServerEffect" }
       },
       "required": ["kind", "effect"],
+      "additionalProperties": false
+    },
+    "EndStreamEvent": {
+      "title": "EndStreamEvent",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "end" },
+        "outputTokens": { "type": "number" }
+      },
+      "required": ["kind"],
       "additionalProperties": false
     },
     "ErrorKind": {
@@ -1847,12 +1877,53 @@
     },
     "Fault": {
       "title": "Fault",
+      "description": "Stable machine-readable code plus display text. The code set is open: treat an unknown code as operation_failed. x-known-codes lists the documented ones.",
       "type": "object",
       "properties": {
-        "code": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_.:-]+$" },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_.:-]+$",
+          "x-known-codes": [
+            "controller_busy",
+            "incompatible_protocol",
+            "incompatible_build",
+            "invalid_frame",
+            "invalid_workspace",
+            "workspace_busy",
+            "unsupported_capability",
+            "permission_denied",
+            "startup_failed",
+            "limit_exceeded",
+            "disconnected",
+            "cancelled",
+            "unsupported_operation",
+            "operation_failed",
+            "agent_busy",
+            "stale_session",
+            "stale_operation",
+            "stale_controller",
+            "outcome_unknown",
+            "operation_conflict",
+            "operation_expired"
+          ]
+        },
         "message": { "type": "string", "maxLength": 4096 }
       },
       "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "FocusEffect": {
+      "title": "FocusEffect",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "focus" },
+        "conversationId": { "type": "string" },
+        "incarnation": { "type": "string" },
+        "invocationId": { "type": "string" }
+      },
+      "required": ["kind", "conversationId", "incarnation"],
       "additionalProperties": false
     },
     "FormAction": {
@@ -2689,6 +2760,16 @@
       "required": ["type", "mimeType", "data"],
       "additionalProperties": false
     },
+    "InjectedSteer": {
+      "title": "InjectedSteer",
+      "type": "object",
+      "properties": {
+        "message": { "$ref": "#/$defs/UserMessage" },
+        "state": { "type": "string", "const": "injected" }
+      },
+      "required": ["message", "state"],
+      "additionalProperties": false
+    },
     "InputQueue": {
       "title": "InputQueue",
       "type": "array",
@@ -2803,6 +2884,16 @@
         "secret": { "type": "boolean" }
       },
       "required": ["requestId", "kind", "title"],
+      "additionalProperties": false
+    },
+    "InvalidUiAck": {
+      "title": "InvalidUiAck",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "const": "invalid" },
+        "message": { "type": "string" }
+      },
+      "required": ["status", "message"],
       "additionalProperties": false
     },
     "JobsListParams": {
@@ -3061,6 +3152,17 @@
       ],
       "x-discriminator": "role"
     },
+    "MessageConversationControl": {
+      "title": "MessageConversationControl",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "action": { "type": "string", "const": "message" },
+        "text": { "type": "string" }
+      },
+      "required": ["conversationId", "action", "text"],
+      "additionalProperties": false
+    },
     "MessageDeltaEvent": {
       "title": "MessageDeltaEvent",
       "type": "object",
@@ -3079,39 +3181,10 @@
     "MessageDeltaEventData": {
       "title": "MessageDeltaEventData",
       "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["text", "thinking"]
-            },
-            "text": { "type": "string" }
-          },
-          "required": ["kind", "text"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": { "type": "string", "const": "toolCall" },
-            "toolCallId": { "type": "string" },
-            "index": { "type": "number" },
-            "name": { "type": "string" },
-            "argsDelta": { "type": "string" }
-          },
-          "required": ["kind", "toolCallId", "argsDelta"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": { "type": "string", "const": "serverTool" },
-            "block": { "$ref": "#/$defs/ServerTool" }
-          },
-          "required": ["kind", "block"],
-          "additionalProperties": false
-        }
+        { "$ref": "#/$defs/TextDelta" },
+        { "$ref": "#/$defs/ThinkingDelta" },
+        { "$ref": "#/$defs/ToolCallDelta" },
+        { "$ref": "#/$defs/ServerToolDelta" }
       ],
       "x-discriminator": "kind"
     },
@@ -3182,39 +3255,11 @@
     "MessageStreamEventData": {
       "title": "MessageStreamEventData",
       "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "kind": { "type": "string", "const": "request" },
-            "thinkingDisplay": {
-              "type": "string",
-              "enum": ["summarized", "omitted", "raw"]
-            }
-          },
-          "required": ["kind"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["contentStart", "thinkingStart", "thinkingEnd"]
-            },
-            "index": { "type": "number" }
-          },
-          "required": ["kind"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": { "type": "string", "const": "end" },
-            "outputTokens": { "type": "number" }
-          },
-          "required": ["kind"],
-          "additionalProperties": false
-        }
+        { "$ref": "#/$defs/RequestStreamEvent" },
+        { "$ref": "#/$defs/ContentStartStreamEvent" },
+        { "$ref": "#/$defs/ThinkingStartStreamEvent" },
+        { "$ref": "#/$defs/ThinkingEndStreamEvent" },
+        { "$ref": "#/$defs/EndStreamEvent" }
       ],
       "x-discriminator": "kind"
     },
@@ -3605,6 +3650,16 @@
       ],
       "additionalProperties": false
     },
+    "PauseConversationControl": {
+      "title": "PauseConversationControl",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "action": { "type": "string", "const": "pause" }
+      },
+      "required": ["conversationId", "action"],
+      "additionalProperties": false
+    },
     "PeerLimits": {
       "title": "PeerLimits",
       "type": "object",
@@ -3695,6 +3750,27 @@
       "required": ["v", "kind", "id"],
       "additionalProperties": false
     },
+    "PromotedSteer": {
+      "title": "PromotedSteer",
+      "type": "object",
+      "properties": {
+        "message": { "$ref": "#/$defs/UserMessage" },
+        "state": { "type": "string", "const": "promoted" },
+        "nextTurnId": { "type": "string" }
+      },
+      "required": ["message", "state", "nextTurnId"],
+      "additionalProperties": false
+    },
+    "QueuedSteer": {
+      "title": "QueuedSteer",
+      "type": "object",
+      "properties": {
+        "message": { "$ref": "#/$defs/UserMessage" },
+        "state": { "type": "string", "const": "queued" }
+      },
+      "required": ["message", "state"],
+      "additionalProperties": false
+    },
     "Reasoning": {
       "title": "Reasoning",
       "type": "string",
@@ -3771,6 +3847,19 @@
       ],
       "x-discriminator": "op"
     },
+    "RequestStreamEvent": {
+      "title": "RequestStreamEvent",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "request" },
+        "thinkingDisplay": {
+          "type": "string",
+          "enum": ["summarized", "omitted", "raw"]
+        }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
     "ResetFrame": {
       "title": "ResetFrame",
       "description": "Authoritative workspace snapshot that replaces all client state at seq.",
@@ -3793,6 +3882,70 @@
       },
       "required": ["v", "kind", "daemonEpoch", "seq", "reason", "snapshot"],
       "additionalProperties": false
+    },
+    "ResponseEnvelope": {
+      "title": "ResponseEnvelope",
+      "description": "Decode-only, not a frame variant: parse a response by this envelope, match id to the pending request (ignore an unknown id), check op equals that request's op, then decode error as Fault when ok is false, else result with x-operations[op].result.",
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "kind": { "type": "string", "const": "response" },
+        "channel": { "type": "string", "const": "control" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_.:-]+$" },
+        "op": {
+          "type": "string",
+          "enum": [
+            "state.read",
+            "permissions.cycle",
+            "transcript.read",
+            "turn.prompt",
+            "turn.steer",
+            "turn.abort",
+            "command.run",
+            "commands.describe",
+            "commands.complete",
+            "skill.run",
+            "input.run",
+            "session.resume",
+            "session.clear",
+            "session.fork",
+            "session.rewind",
+            "session.planRewind",
+            "conversation.send",
+            "conversation.stop",
+            "sessions.list",
+            "sessions.read",
+            "models.list",
+            "model.set",
+            "thinking.set",
+            "fastMode.set",
+            "status.read",
+            "jobs.list",
+            "jobs.output",
+            "jobs.stop",
+            "jobs.wait",
+            "conversations.list",
+            "conversations.history",
+            "conversations.focus",
+            "conversations.unfocus",
+            "conversations.control",
+            "ui.respond",
+            "ui.cancel",
+            "form.open",
+            "form.evaluate",
+            "form.action",
+            "form.submit",
+            "form.cancel"
+          ]
+        },
+        "ok": { "type": "boolean" },
+        "result": {},
+        "error": { "$ref": "#/$defs/Fault" }
+      },
+      "required": ["v", "kind", "channel", "id", "op", "ok"],
+      "additionalProperties": false,
+      "x-decode-only": true,
+      "x-result-by": "op"
     },
     "ResponseFrame": {
       "title": "ResponseFrame",
@@ -3841,6 +3994,26 @@
         { "$ref": "#/$defs/FormCancelResponse" },
         { "$ref": "#/$defs/ErrorResponse" }
       ]
+    },
+    "ResumeConversationControl": {
+      "title": "ResumeConversationControl",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "action": { "type": "string", "const": "resume" }
+      },
+      "required": ["conversationId", "action"],
+      "additionalProperties": false
+    },
+    "RewindEffect": {
+      "title": "RewindEffect",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "rewind" },
+        "invocationId": { "type": "string" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
     },
     "RewindPlan": {
       "title": "RewindPlan",
@@ -4027,43 +4200,11 @@
     "ServerEffect": {
       "title": "ServerEffect",
       "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["detach", "rewind", "unfocus"]
-            },
-            "invocationId": { "type": "string" }
-          },
-          "required": ["kind"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": { "type": "string", "const": "view" },
-            "view": {
-              "type": "string",
-              "enum": ["background-job", "subagent"]
-            },
-            "id": { "type": "string" },
-            "invocationId": { "type": "string" }
-          },
-          "required": ["kind", "view", "id"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": { "type": "string", "const": "focus" },
-            "conversationId": { "type": "string" },
-            "incarnation": { "type": "string" },
-            "invocationId": { "type": "string" }
-          },
-          "required": ["kind", "conversationId", "incarnation"],
-          "additionalProperties": false
-        }
+        { "$ref": "#/$defs/DetachEffect" },
+        { "$ref": "#/$defs/RewindEffect" },
+        { "$ref": "#/$defs/UnfocusEffect" },
+        { "$ref": "#/$defs/ViewEffect" },
+        { "$ref": "#/$defs/FocusEffect" }
       ],
       "x-discriminator": "kind"
     },
@@ -4081,6 +4222,36 @@
         { "$ref": "#/$defs/ChunkFrame" }
       ],
       "x-discriminator": "kind"
+    },
+    "ServerListOutput": {
+      "title": "ServerListOutput",
+      "description": "Decode-only: the single stdout line of `amira-server list`, one entry per live daemon.",
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "protocol": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+              "release": { "$ref": "#/$defs/Release" },
+              "daemonEpoch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[a-zA-Z0-9_.:-]+$"
+              }
+            },
+            "required": ["workspace", "protocol", "release", "daemonEpoch"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["v", "workspaces"],
+      "additionalProperties": false,
+      "x-decode-only": true
     },
     "ServerModels": {
       "title": "ServerModels",
@@ -4138,6 +4309,16 @@
         "signature": { "$ref": "#/$defs/Signature" }
       },
       "required": ["type", "id", "name", "input", "status"],
+      "additionalProperties": false
+    },
+    "ServerToolDelta": {
+      "title": "ServerToolDelta",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "serverTool" },
+        "block": { "$ref": "#/$defs/ServerTool" }
+      },
+      "required": ["kind", "block"],
       "additionalProperties": false
     },
     "SessionClearParams": {
@@ -4636,6 +4817,15 @@
       ],
       "x-discriminator": "type"
     },
+    "SettledUiAck": {
+      "title": "SettledUiAck",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "const": "settled" }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
     "Signature": {
       "title": "Signature",
       "type": "object",
@@ -4907,6 +5097,16 @@
       "required": ["kind", "sessionId", "sessionGeneration", "steering"],
       "additionalProperties": false
     },
+    "StopConversationControl": {
+      "title": "StopConversationControl",
+      "type": "object",
+      "properties": {
+        "conversationId": { "type": "string" },
+        "action": { "type": "string", "const": "stop" }
+      },
+      "required": ["conversationId", "action"],
+      "additionalProperties": false
+    },
     "StoredSession": {
       "title": "StoredSession",
       "type": "object",
@@ -5082,6 +5282,16 @@
       "required": ["type", "text"],
       "additionalProperties": false
     },
+    "TextDelta": {
+      "title": "TextDelta",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "text" },
+        "text": { "type": "string" }
+      },
+      "required": ["kind", "text"],
+      "additionalProperties": false
+    },
     "TextFormField": {
       "title": "TextFormField",
       "type": "object",
@@ -5169,6 +5379,18 @@
       "required": ["type", "id", "label"],
       "additionalProperties": false
     },
+    "ThinkingBlock": {
+      "title": "ThinkingBlock",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "const": "thinking" },
+        "text": { "type": "string" },
+        "redacted": { "type": "boolean" },
+        "signature": { "$ref": "#/$defs/Signature" }
+      },
+      "required": ["type", "text"],
+      "additionalProperties": false
+    },
     "ThinkingChangedEvent": {
       "title": "ThinkingChangedEvent",
       "type": "object",
@@ -5190,6 +5412,26 @@
       "properties": {
         "thinking": { "$ref": "#/$defs/Reasoning" }
       },
+      "additionalProperties": false
+    },
+    "ThinkingDelta": {
+      "title": "ThinkingDelta",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "thinking" },
+        "text": { "type": "string" }
+      },
+      "required": ["kind", "text"],
+      "additionalProperties": false
+    },
+    "ThinkingEndStreamEvent": {
+      "title": "ThinkingEndStreamEvent",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "thinkingEnd" },
+        "index": { "type": "number" }
+      },
+      "required": ["kind"],
       "additionalProperties": false
     },
     "ThinkingSetParams": {
@@ -5240,6 +5482,16 @@
       "required": ["v", "kind", "channel", "id", "ok", "op", "result"],
       "additionalProperties": false
     },
+    "ThinkingStartStreamEvent": {
+      "title": "ThinkingStartStreamEvent",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "thinkingStart" },
+        "index": { "type": "number" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
     "ToggleSettingField": {
       "title": "ToggleSettingField",
       "type": "object",
@@ -5251,6 +5503,34 @@
         "default": { "type": "boolean" }
       },
       "required": ["type", "key", "label", "default"],
+      "additionalProperties": false
+    },
+    "ToolCallBlock": {
+      "title": "ToolCallBlock",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "const": "toolCall" },
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "args": {
+          "type": "object",
+          "additionalProperties": {}
+        }
+      },
+      "required": ["type", "id", "name", "args"],
+      "additionalProperties": false
+    },
+    "ToolCallDelta": {
+      "title": "ToolCallDelta",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "toolCall" },
+        "toolCallId": { "type": "string" },
+        "index": { "type": "number" },
+        "name": { "type": "string" },
+        "argsDelta": { "type": "string" }
+      },
+      "required": ["kind", "toolCallId", "argsDelta"],
       "additionalProperties": false
     },
     "ToolExecuteEndEvent": {
@@ -5761,28 +6041,10 @@
     "TurnSteerEventData": {
       "title": "TurnSteerEventData",
       "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "message": { "$ref": "#/$defs/UserMessage" },
-            "state": {
-              "type": "string",
-              "enum": ["queued", "injected", "dropped"]
-            }
-          },
-          "required": ["message", "state"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "message": { "$ref": "#/$defs/UserMessage" },
-            "state": { "type": "string", "const": "promoted" },
-            "nextTurnId": { "type": "string" }
-          },
-          "required": ["message", "state", "nextTurnId"],
-          "additionalProperties": false
-        }
+        { "$ref": "#/$defs/QueuedSteer" },
+        { "$ref": "#/$defs/InjectedSteer" },
+        { "$ref": "#/$defs/DroppedSteer" },
+        { "$ref": "#/$defs/PromotedSteer" }
       ],
       "x-discriminator": "state"
     },
@@ -5841,29 +6103,11 @@
     "UiAck": {
       "title": "UiAck",
       "anyOf": [
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "enum": ["accepted", "cancelled", "settled"]
-            }
-          },
-          "required": ["status"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "type": "string",
-              "enum": ["invalid", "disconnected"]
-            },
-            "message": { "type": "string" }
-          },
-          "required": ["status", "message"],
-          "additionalProperties": false
-        }
+        { "$ref": "#/$defs/AcceptedUiAck" },
+        { "$ref": "#/$defs/CancelledUiAck" },
+        { "$ref": "#/$defs/SettledUiAck" },
+        { "$ref": "#/$defs/InvalidUiAck" },
+        { "$ref": "#/$defs/DisconnectedUiAck" }
       ],
       "x-discriminator": "status"
     },
@@ -6174,6 +6418,16 @@
       "required": ["pending", "hidden", "change"],
       "additionalProperties": false
     },
+    "UnfocusEffect": {
+      "title": "UnfocusEffect",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "unfocus" },
+        "invocationId": { "type": "string" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
     "Usage": {
       "title": "Usage",
       "type": "object",
@@ -6212,6 +6466,21 @@
         "display": { "$ref": "#/$defs/Display" }
       },
       "required": ["role", "content"],
+      "additionalProperties": false
+    },
+    "ViewEffect": {
+      "title": "ViewEffect",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "const": "view" },
+        "view": {
+          "type": "string",
+          "enum": ["background-job", "subagent"]
+        },
+        "id": { "type": "string" },
+        "invocationId": { "type": "string" }
+      },
+      "required": ["kind", "view", "id"],
       "additionalProperties": false
     },
     "WelcomeFrame": {
