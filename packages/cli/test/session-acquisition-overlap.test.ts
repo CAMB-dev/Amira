@@ -88,7 +88,11 @@ test(
         ),
       })
       const notice = current.expectNotice()
-      await until(() => current.backgroundJobs!.get(job!.id)?.status === "running")
+      // Starting the job spawns a process, which can stall for seconds on Windows.
+      await waitForSpawnCondition(
+        "overlap job start",
+        () => current.backgroundJobs!.get(job!.id)?.status === "running",
+      )
       release()
       expect(await pending).toMatchObject({ ok: false, error: "cancelled" })
       // Cancellation stops acquisition retries; the pre-existing requested release finishes
