@@ -312,7 +312,8 @@ test("randomized runs never re-execute an id inside the client window, refuse fo
   }
   // Every guarded path ran, not only first admissions.
   for (const count of Object.values(totals)) expect(count).toBeGreaterThan(20)
-})
+  // About 2 s alone; the full parallel suite can slow it past the default 5 s.
+}, 30_000)
 
 /** Retained heap growth of one ledger after a workload, measured rather than estimated. */
 async function retainedBytes(work: (ledger: OperationLedger) => Promise<void>) {
