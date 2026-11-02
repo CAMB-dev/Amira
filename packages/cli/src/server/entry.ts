@@ -13,8 +13,9 @@ import {
   type DiscoveryOptions,
   listDaemonWorkspaces,
 } from "./discovery.ts"
+import { selectDaemonHost } from "./host.ts"
 import { serverRelease } from "./identity.ts"
-import { type DaemonPlatform, LinuxDaemonPlatform } from "./platform.ts"
+import type { DaemonPlatform } from "./platform.ts"
 
 function stdio(): RemoteIO {
   process.stdout.on("error", () => process.stdin.destroy())
@@ -49,18 +50,14 @@ export function listCommandOutput(
 
 export async function runServerCommand(args: string[]): Promise<number> {
   const interpreter = /^bun(?:\.exe)?$/i.test(path.basename(process.execPath))
-  const platform = new LinuxDaemonPlatform(
-    interpreter ? [process.execPath, Bun.main] : [process.execPath],
-    args.at(-1) === "--remote-key" ? "remote-key" : "local-proxy",
-  )
-  const locations = () => ({
-    runtimeDir: process.env.XDG_RUNTIME_DIR,
-    tmpDir: "/tmp",
-    uid: process.getuid!(),
+  const host = selectDaemonHost(process.platform, {
+    command: interpreter ? [process.execPath, Bun.main] : [process.execPath],
+    modelMode: args.at(-1) === "--remote-key" ? "remote-key" : "local-proxy",
   })
-  const discover = (cwd: string) => new DaemonDiscovery(cwd, locations())
+  const { platform } = host
+  const discover = (cwd: string) => new DaemonDiscovery(cwd, host.layout())
   if (args.length === 1 && args[0] === "list") {
-    process.stdout.write(listCommandOutput(locations(), platform))
+    process.stdout.write(listCommandOutput(host.layout(), platform))
     return 0
   }
   if (args[0] === "attach" && (args.length === 1 || (args.length === 2 && args[1] === "--remote-key"))) {
@@ -100,11 +97,15 @@ export async function runServerCommand(args: string[]): Promise<number> {
   }
   process.once("SIGTERM", stop)
   process.once("SIGINT", stop)
+  // Windows: Ctrl+Break and console close. `process.kill(pid)` from another process is
+  // TerminateProcess, which runs no handler; lease recovery covers that.
+  if (process.platform === "win32") process.once("SIGBREAK", stop)
   try {
     await daemon.closed
   } finally {
     process.removeListener("SIGTERM", stop)
     process.removeListener("SIGINT", stop)
+    process.removeListener("SIGBREAK", stop)
   }
   return process.exitCode ? 1 : 0
 }

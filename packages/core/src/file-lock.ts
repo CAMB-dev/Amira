@@ -24,7 +24,7 @@ import {
   takeFilesystemGate,
   withFilesystemGateAttempt,
 } from "./file-lock-gate.ts"
-import { leaseOwner, ownerRecoveryFailure, strictOwnerState } from "./file-lock-owner.ts"
+import { type LeasePolicy, leaseOwner, ownerRecoveryFailure, strictOwnerState } from "./file-lock-owner.ts"
 
 // Only release-requested leases enter this registry; a live pid never grants cleanup
 // authority. Callbacks retain the original parent, inode and immutable nonce proof.
@@ -81,6 +81,8 @@ export interface FileLock {
  * participants must use this mode; older builds must heartbeat. Foreign or invalid owner
  * records and unknown gates still fail closed. `onGuardBusy` receives the blocking
  * guard or unverifiable lease path; a missing guard means publication lost a concurrent race.
+ * A `policy` (strict mode only) writes and proves owner records in its machine-local domain;
+ * without one nothing changes.
  * Undefined when another live process holds it. Other errors (no permission, ...) are thrown.
  */
 export function tryFileLock(
@@ -89,6 +91,7 @@ export function tryFileLock(
   heartbeatMs?: number,
   livePidWins = false,
   onGuardBusy?: (gatePath: string) => void,
+  policy?: LeasePolicy,
 ): FileLock | undefined {
   mkdirSync(path.dirname(lockPath), { recursive: true })
   if (livePidWins) {
@@ -104,9 +107,9 @@ export function tryFileLock(
       try {
         if (!restoreLegacyLease(lockPath, onGuardBusy)) return undefined
         return (
-          createStrict(lockPath, heartbeatMs) ??
-          (removeStrictIfDead(lockPath, staleMs, onGuardBusy)
-            ? createStrict(lockPath, heartbeatMs)
+          createStrict(lockPath, heartbeatMs, policy) ??
+          (removeStrictIfDead(lockPath, staleMs, onGuardBusy, policy)
+            ? createStrict(lockPath, heartbeatMs, policy)
             : undefined)
         )
       } finally {
@@ -202,6 +205,7 @@ function removeStrictIfDead(
   lockPath: string,
   staleMs: number,
   onGuardBusy?: (ownerPath: string) => void,
+  policy?: LeasePolicy,
 ): boolean {
   let identity: ReturnType<typeof statSync>
   let contents: string
@@ -225,7 +229,7 @@ function removeStrictIfDead(
     identity = statSync(lockPath)
     if (identity.isFile()) {
       contents = readFileSync(lockPath, "utf8")
-      state = strictOwnerState(contents)
+      state = strictOwnerState(contents, policy)
       const pid = state === "unknown" ? legacyLockPid(contents) : undefined
       legacy = pid !== undefined
       recoverable =
@@ -396,14 +400,14 @@ function ownedCleanup(
 }
 
 /** Called only while holding the strict gate. */
-function createStrict(lockPath: string, heartbeatMs?: number): FileLock | undefined {
+function createStrict(lockPath: string, heartbeatMs?: number, policy?: LeasePolicy): FileLock | undefined {
   // Initialize a private inode, then publish exclusively. A crash between open and write
   // must not leave an empty lease that a dead gate cannot safely attribute to its owner.
   const parent = path.dirname(lockPath)
   const key = strictReleaseKey(lockPath)
   const parentIdentity = statSync(parent)
   const pending = `${lockPath}.pending-${process.pid}-${randomUUID()}`
-  const owner = leaseOwner()
+  const owner = leaseOwner(policy)
   const contents = `${owner.pid}\n${owner.nonce}\n${JSON.stringify(owner)}\n`
   const fd = openSync(pending, "wx", 0o600)
   let closed = false

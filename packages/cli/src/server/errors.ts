@@ -1,3 +1,6 @@
+import { DaemonUnavailableError } from "./fallback.ts"
+
+/** Explicit owner stop, deliberately separate from turn.abort and relay detach. */
 const recovery =
   "The running daemon is incompatible. Explicitly stop it, then retry attaching. Active work will not be restarted automatically."
 
@@ -12,18 +15,19 @@ export class DaemonIncompatibilityError extends Error {
 }
 
 /** A viewer attach found no running daemon; viewers never start one. */
-export class DaemonUnavailableError extends Error {
+export class DaemonNotRunningError extends Error {
   readonly code = "disconnected"
 
   constructor() {
     super("No workspace daemon is running")
-    this.name = "DaemonUnavailableError"
+    this.name = "DaemonNotRunningError"
   }
 }
 
 export function daemonAttachFault(error: unknown): { code: string; message: string } {
-  if (error instanceof DaemonUnavailableError) return { code: "disconnected", message: error.message }
-  return error instanceof DaemonIncompatibilityError
-    ? { code: "incompatible_protocol", message: recovery }
-    : { code: "startup_failed", message: "The remote workspace could not attach" }
+  if (error instanceof DaemonNotRunningError) return { code: "disconnected", message: error.message }
+  if (error instanceof DaemonIncompatibilityError) return { code: "incompatible_protocol", message: recovery }
+  // An expected refusal (elevated session, job, network workspace) names its reason, never a path.
+  if (error instanceof DaemonUnavailableError) return { code: "startup_failed", message: error.message }
+  return { code: "startup_failed", message: "The remote workspace could not attach" }
 }

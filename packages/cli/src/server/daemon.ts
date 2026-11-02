@@ -4,12 +4,16 @@ import { RemoteError } from "../remote/errors.ts"
 import { REMOTE_PROTOCOL_VERSION, type RemoteRelease } from "../remote/protocol.ts"
 import { rolesEnabledOn } from "./attach-intent.ts"
 import { workspaceAttachments } from "./attachments.ts"
+import { DaemonProofError } from "./daemon-proof.ts"
 import type { DaemonDiscovery, DaemonMetadata } from "./discovery.ts"
-import { DaemonIncompatibilityError, DaemonUnavailableError } from "./errors.ts"
+import { DaemonIncompatibilityError, DaemonNotRunningError } from "./errors.ts"
 import { IdleDeadline } from "./idle.ts"
 import type { DaemonPlatform } from "./platform.ts"
 import { privateMessage, readPrivatePrelude } from "./private-ipc.ts"
 import type { WorkspaceRuntime } from "./runtime.ts"
+
+/** Age-based temp cleaners must never see a live daemon's files as abandoned. */
+const touchIntervalMs = 60 * 60 * 1000
 
 function retryableLoss(error: unknown): boolean {
   if (error instanceof RemoteError) return error.code === "disconnected"
@@ -57,16 +61,22 @@ export async function startWorkspaceDaemon(options: {
       clearInterval(timer)
       for (const socket of sockets) socket.close()
       try {
-        await listener?.close()
+        // Retire readiness before the endpoint closes: a client then sees a live owner lock
+        // and no metadata, and relaunches after release instead of meeting a freed endpoint.
+        discovery.retireMetadata()
       } finally {
         try {
-          await runtime?.stop()
+          await listener?.close()
         } finally {
           try {
-            discovery.clearOwnedFiles()
+            await runtime?.stop()
           } finally {
-            owner.release()
-            resolveClosed()
+            try {
+              discovery.clearOwnedFiles()
+            } finally {
+              owner.release()
+              resolveClosed()
+            }
           }
         }
       }
@@ -91,7 +101,7 @@ export async function startWorkspaceDaemon(options: {
       lockIdentity: discovery.lockIdentity(),
     }
     const authority = workspaceAttachments(runtime, { roles: options.roles ?? rolesEnabledOn() })
-    listener = await platform.listen(discovery.socket, (io) => {
+    const accept = (io: RemoteIO) => {
       if (stopping || sockets.size >= 128) {
         io.close()
         return
@@ -138,14 +148,28 @@ export async function startWorkspaceDaemon(options: {
           io.close()
         }
       })()
-    })
+    }
+    listener = await platform.listen(discovery.socket, accept, metadata.nonce)
+    // A platform that had to pick another endpoint (a busy Windows pipe name) reports it here.
+    metadata.socket = listener.endpoint ?? metadata.socket
     discovery.privateSocket()
     discovery.publish(metadata)
     const deadline = new IdleDeadline(options.idleTimeoutMs)
+    let touched = platform.now()
     const tick = async () => {
       if (stopping) return stopping
+      // A replaced or deleted owner lock ends this daemon's authority; its files are no longer ours.
+      if (!discovery.ownsLock()) return stop().catch(() => {})
+      if (platform.now() - touched >= touchIntervalMs) {
+        touched = platform.now()
+        try {
+          discovery.touch()
+        } catch {
+          // Best effort; a lost lock is caught by the check above on the next tick.
+        }
+      }
       // Viewers never keep the daemon alive or hold back a replacement; they reconnect or see it stop.
-      const idle = runtime!.quiescent() && sockets.size - authority.viewers === 0
+      const idle = runtime!.quiescent() && sockets.size - authority.viewers <= 0
       if (
         (idle && discovery.replacement()) ||
         deadline.sample(platform.now(), { idle, revision: runtime!.activityVersion })
@@ -171,7 +195,7 @@ interface StartupOptions {
   platform: DaemonPlatform
   release: RemoteRelease
   startupTimeoutMs?: number
-  /** false: only a running daemon; a viewer never starts one (DaemonUnavailableError). */
+  /** false: only a running daemon; a viewer never starts one (DaemonNotRunningError). */
   start?: boolean
 }
 
@@ -195,6 +219,7 @@ async function readyWorkspaceDaemon(
   const until = platform.now() + (options.startupTimeoutMs ?? 15_000)
   let startup: ReturnType<DaemonDiscovery["claim"]>
   let launched = false
+  let unverified = false
   try {
     do {
       let io: RemoteIO | undefined
@@ -220,27 +245,35 @@ async function readyWorkspaceDaemon(
           retained = retain
           return { metadata: meta, io: tail }
         }
-        if (meta && identity !== undefined)
-          throw new Error("Daemon PID identity changed; workspace ownership cannot be proven dead")
-        if (options.start === false) throw new DaemonUnavailableError()
-        if (!launched && discovery.canStart()) {
-          startup ??= discovery.claim("startup")
-          if (startup) {
-            await platform.spawn(discovery)
-            launched = true
-          }
+        if (options.start === false) throw new DaemonNotRunningError()
+        // A recorded PID that now names another process only says the daemon is gone. The owner
+        // lock decides: a lease policy can prove its holder dead, the default probe cannot.
+        if (!launched) {
+          if (discovery.canStart()) {
+            startup ??= discovery.claim("startup")
+            if (startup) {
+              await platform.spawn(discovery)
+              launched = true
+            }
+          } else if (meta && identity !== undefined)
+            throw new Error("Daemon PID identity changed; workspace ownership cannot be proven dead")
         }
       } catch (error) {
         // Missing/closed endpoints may be retiring. Permission, identity and malformed replies
         // fail closed immediately. A retry never grants authority to reclaim a live owner.
         if (!retryableLoss(error)) throw error
+        unverified = error instanceof DaemonProofError
       } finally {
         if (!retained) io?.close()
       }
       await platform.sleep(25)
     } while (platform.now() < until)
-    if (options.start === false) throw new DaemonUnavailableError()
-    throw new Error("Remote daemon did not become ready before the startup deadline")
+    if (options.start === false) throw new DaemonNotRunningError()
+    throw new Error(
+      unverified
+        ? "Remote daemon could not be verified before the startup deadline"
+        : "Remote daemon did not become ready before the startup deadline",
+    )
   } finally {
     startup?.release()
   }
