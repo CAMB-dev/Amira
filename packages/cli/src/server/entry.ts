@@ -1,4 +1,3 @@
-import path from "node:path"
 import { amiraHome, resolveRemoteSettings } from "@amira/core"
 import { parseCliArgs } from "../args.ts"
 import { resolveConfig } from "../config.ts"
@@ -13,8 +12,9 @@ import {
   type DiscoveryOptions,
   listDaemonWorkspaces,
 } from "./discovery.ts"
-import { selectDaemonHost } from "./host.ts"
+import { hasDaemonHost, selectDaemonHost } from "./host.ts"
 import { serverRelease } from "./identity.ts"
+import { daemonCommand, type ServerLaunch } from "./launch.ts"
 import type { DaemonPlatform } from "./platform.ts"
 
 function stdio(): RemoteIO {
@@ -48,10 +48,17 @@ export function listCommandOutput(
   return `${JSON.stringify({ v: 1, workspaces })}\n`
 }
 
-export async function runServerCommand(args: string[]): Promise<number> {
-  const interpreter = /^bun(?:\.exe)?$/i.test(path.basename(process.execPath))
+export async function runServerCommand(
+  args: string[],
+  launch: ServerLaunch = { script: Bun.main, subcommand: [] },
+): Promise<number> {
+  // No daemon can run here, so there is none to list.
+  if (args.length === 1 && args[0] === "list" && !hasDaemonHost(process.platform)) {
+    process.stdout.write(`${JSON.stringify({ v: 1, workspaces: [] })}\n`)
+    return 0
+  }
   const host = selectDaemonHost(process.platform, {
-    command: interpreter ? [process.execPath, Bun.main] : [process.execPath],
+    command: daemonCommand(process.execPath, launch),
     modelMode: args.at(-1) === "--remote-key" ? "remote-key" : "local-proxy",
   })
   const { platform } = host

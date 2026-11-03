@@ -76,6 +76,9 @@ jobs:
         run: |
           "./dist/amira-$TARGET/$EXE" --version
           "./dist/amira-$TARGET/$EXE" --self-check
+          # The hidden daemon entry answers from the same executable, without settings or a TUI.
+          "./dist/amira-$TARGET/$EXE" server --version-json | grep -F '"product":"amira-server"'
+          "./dist/amira-$TARGET/$EXE" server list | grep -F '{"v":1,"workspaces":'
       - name: Compile a native Windows test-only server
         if: runner.os == 'Windows'
         run: bun scripts/build-server.ts --native-windows-test --build-id 0123456789abcdef0123456789abcdef01234567

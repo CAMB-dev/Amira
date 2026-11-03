@@ -9,6 +9,11 @@ export interface DaemonHost {
   layout(): DaemonLayout
 }
 
+/** Whether `selectDaemonHost` supports this OS. */
+export function hasDaemonHost(os: NodeJS.Platform): boolean {
+  return os === "linux" || os === "win32"
+}
+
 /** The one place that knows which OS effects and private locations a daemon host uses. */
 export function selectDaemonHost(
   os: NodeJS.Platform,
@@ -20,7 +25,7 @@ export function selectDaemonHost(
     const resolve = () => (layout ??= windowsDaemonLayout())
     return { platform: new WindowsDaemonPlatform(launch.command, launch.modelMode, resolve), layout: resolve }
   }
-  if (os !== "linux") throw new Error("Daemons require Linux or Windows")
+  if (!hasDaemonHost(os)) throw new Error("Daemons require Linux or Windows")
   return {
     platform: new LinuxDaemonPlatform(launch.command, launch.modelMode),
     // The stable fence is anchored at /tmp, never HOME, TMPDIR, XDG or an Amira config directory.
