@@ -13,6 +13,8 @@ import { matches } from "../../src/remote/schema/base.ts"
 import { SERVER_LIST_OUTPUT_SCHEMA } from "../../src/remote-schema.ts"
 import * as attach from "../../src/server/attach.ts"
 import { runServerCommand } from "../../src/server/entry.ts"
+import { DaemonUnavailableError } from "../../src/server/fallback.ts"
+import * as host from "../../src/server/host.ts"
 import { serverRelease } from "../../src/server/identity.ts"
 import { daemonCommand } from "../../src/server/launch.ts"
 import { discoveryFixture } from "./daemon-fixture.ts"
@@ -129,3 +131,28 @@ test(
   },
   SPAWN_TEST_TIMEOUT_MS,
 )
+
+test("server list in a session that may not run daemons is an empty list", async () => {
+  const real = host.selectDaemonHost(process.platform === "darwin" ? "linux" : process.platform, {
+    command: ["amira"],
+    modelMode: "local-proxy",
+  })
+  const selected = spyOn(host, "selectDaemonHost").mockReturnValue({
+    ...real,
+    layout: () => {
+      throw new DaemonUnavailableError("integrity")
+    },
+  })
+  const written: string[] = []
+  const write = spyOn(process.stdout, "write").mockImplementation(((chunk: string) => {
+    written.push(chunk)
+    return true
+  }) as typeof process.stdout.write)
+  try {
+    expect(await runServerCommand(["list"], cli)).toBe(0)
+  } finally {
+    write.mockRestore()
+    selected.mockRestore()
+  }
+  expect(written).toEqual([`${JSON.stringify({ v: 1, workspaces: [] })}\n`])
+})
