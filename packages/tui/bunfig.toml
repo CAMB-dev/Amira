@@ -1,0 +1,3 @@
+# Running bun test from this package must still isolate the home directory.
+[test]
+preload = ["../../scripts/test-env.ts"]
