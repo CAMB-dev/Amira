@@ -3,6 +3,7 @@ import { resolveRemoteSettings } from "@amira/core"
 import type { ProxyAi } from "./remote/proxy-ai.ts"
 import { serverVersionIdentity } from "./remote/release-identity.ts"
 import { configuredServerAi } from "./server/configured-ai.ts"
+import type { ServerLaunch } from "./server/launch.ts"
 import { version } from "./version.ts"
 
 export type ServerAiRoute = { mode: "proxy"; ai: ProxyAi } | { mode: "remote-key"; ai: Ai }
@@ -69,7 +70,7 @@ export async function createServerRuntime(options: {
 }
 
 /** Probes never read settings, create a session or start a daemon. */
-export async function serverMain(args: string[]): Promise<number> {
+export async function serverMain(args: string[], launch?: ServerLaunch): Promise<number> {
   if (args.length === 1 && args[0] === "--version") {
     process.stdout.write(`${version}\n`)
     return 0
@@ -85,7 +86,7 @@ export async function serverMain(args: string[]): Promise<number> {
   }
   try {
     const { runServerCommand } = await import("./server/entry.ts")
-    return await runServerCommand(args)
+    return await runServerCommand(args, launch)
   } catch {
     process.stderr.write("amira-server: unable to start or attach the remote workspace\n")
     return 1

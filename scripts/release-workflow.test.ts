@@ -247,6 +247,9 @@ test("server CI compiles Linux production targets and an explicitly test-only na
   expect(run).toContain('"buildId"')
   expect(run).toContain("Server Linux ARM64 execution unverified: no native runner")
   expect(run).not.toContain("./dist/amira-server-bun-linux-arm64 --self-check")
+  const smoke = ci.jobs.check!.steps.find((step) => step.name === "Smoke-test the executable")!
+  expect(smoke.run).toContain('"./dist/amira-$TARGET/$EXE" server --version-json')
+  expect(smoke.run).toContain('"./dist/amira-$TARGET/$EXE" server list')
   const windows = ci.jobs.check!.steps.find(
     (step) => step.name === "Compile a native Windows test-only server",
   )!
