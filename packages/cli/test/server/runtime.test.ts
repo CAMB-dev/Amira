@@ -223,3 +223,31 @@ test("arbitrary extensions never execute, including reload, and only allowlisted
   expect((await attachment.execute("command.run", { line: "/reload" })).ok).toBe(true)
   expect(existsSync(marker)).toBe(false)
 })
+
+test("readers coexist with the attachment, read without activity and cannot mutate", async () => {
+  const { runtime } = await setup()
+  const viewer = runtime.reader()
+  const second = runtime.reader()
+  const controller = runtime.attach()
+  expect(() => runtime.attach()).toThrow(expect.objectContaining({ code: "agent_busy" }))
+  await controller.detach()
+  expect(runtime.quiescent()).toBe(true)
+  const version = runtime.activityVersion
+  const options = { sessionGeneration: viewer.identity!.sessionGeneration }
+  expect((await viewer.request("status.read", {}, options)).info).toBeDefined()
+  expect((await second.execute("state.read", {}, options)).sessionId).toBe(viewer.identity!.sessionId)
+  expect(viewer.snapshot.sessionGeneration).toBe(options.sessionGeneration)
+  expect(viewer.pendingRequests).toEqual([])
+  // Reads by viewers neither count as activity nor keep the workspace busy.
+  expect(runtime.activityVersion).toBe(version)
+  expect(runtime.quiescent()).toBe(true)
+  await expect(viewer.execute("turn.prompt", { message: "no" } as never, options)).rejects.toMatchObject({
+    code: "not_controller",
+  })
+  await expect(viewer.request("ui.respond", {} as never, options)).rejects.toMatchObject({
+    code: "not_controller",
+  })
+  viewer.close()
+  await expect(viewer.request("status.read", {}, options)).rejects.toMatchObject({ code: "disconnected" })
+  expect((await second.request("status.read", {}, options)).info).toBeDefined()
+})

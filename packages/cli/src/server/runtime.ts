@@ -31,6 +31,7 @@ import type { ReplayJournal } from "./journal.ts"
 import { validateMessageImages } from "./message-images.ts"
 import { createServerOperations, type ServerOperations } from "./operations.ts"
 import { serverBuiltins } from "./profile.ts"
+import { createWorkspaceReader, type WorkspaceReader } from "./reader.ts"
 
 export type ServerEffect = (
   | { kind: "detach" }
@@ -128,6 +129,8 @@ export interface WorkspaceRuntime {
   /** Includes short model/operation activity between daemon clock samples. */
   readonly activityVersion: number
   attach(options?: { onEffect?: (effect: ServerEffect) => void }): WorkspaceAttachment
+  /** Non-exclusive read-only handle; any number may coexist with the attachment. */
+  reader(): WorkspaceReader
   /** Explicit owner shutdown, never called by attachment EOF/detach. */
   stop(): Promise<void>
 }
@@ -195,6 +198,8 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
   let stopping: Promise<void> | undefined
   const lifetime = new AbortController()
   const inflight = new Set<Promise<unknown>>()
+  // Reader work is drained on stop but is neither activity nor a reason to stay alive.
+  const reads = new Set<Promise<unknown>>()
   const startupEvents = freezeSnapshot(session.startupEvents.map(eventDto))
   validateRemoteDto("startup", startupEvents)
   const capture = createWorkspaceCapture({
@@ -425,7 +430,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
         },
         async request(operation, params, executeOptions) {
           connected()
-          return track(() => request(operation, params, guarded(executeOptions)))
+          return track(() => request(operation, params, { ...guarded(executeOptions), owner: attachment }))
         },
         async detach() {
           if (detached) return
@@ -443,6 +448,31 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
       activityVersion++
       return attachment
     },
+    reader() {
+      if (lifetime.signal.aborted) throw new FrontendOperationError("disconnected", "The runtime is stopped")
+      return createWorkspaceReader({
+        view: {
+          get identity() {
+            return port.identity
+          },
+          get snapshot() {
+            validateRemoteDto("snapshot", port.snapshot)
+            return port.snapshot
+          },
+          get pendingRequests() {
+            return freezeSnapshot(session.host.ui.pending.map(requestDto))
+          },
+          supportedOperations: port.supportedOperations,
+        },
+        lifetime: lifetime.signal,
+        execute,
+        request,
+        track(read) {
+          reads.add(read)
+          void read.finally(() => reads.delete(read)).catch(() => {})
+        },
+      })
+    },
     stop() {
       if (!stopping)
         stopping = (async () => {
@@ -455,7 +485,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
           commands.agent.abort()
           opts.modelProxy?.close()
           // Selection commit detaches its cancellation listener; drain before disposing the winner.
-          await Promise.allSettled([...inflight])
+          await Promise.allSettled([...inflight, ...reads])
           await port.detach()
           try {
             await commands.agent.dispose("exit")

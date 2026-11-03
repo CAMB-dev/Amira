@@ -14,7 +14,18 @@ export class DaemonIncompatibilityError extends Error {
   }
 }
 
+/** A viewer attach found no running daemon; viewers never start one. */
+export class DaemonNotRunningError extends Error {
+  readonly code = "disconnected"
+
+  constructor() {
+    super("No workspace daemon is running")
+    this.name = "DaemonNotRunningError"
+  }
+}
+
 export function daemonAttachFault(error: unknown): { code: string; message: string } {
+  if (error instanceof DaemonNotRunningError) return { code: "disconnected", message: error.message }
   if (error instanceof DaemonIncompatibilityError) return { code: "incompatible_protocol", message: recovery }
   // An expected refusal (elevated session, job, network workspace) names its reason, never a path.
   if (error instanceof DaemonUnavailableError) return { code: "startup_failed", message: error.message }

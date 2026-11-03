@@ -192,3 +192,129 @@ test("holds reports the lease holder while attached and through grace only", () 
   at(1_100)
   expect(controller.holds("client-a")).toBe(false)
 })
+
+test("take of a free workspace is a fresh lease; a roles-aware holder is taken over after one second", () => {
+  const { controller, at } = fixture()
+  const first = controller.take({ clientId: "client-a" })
+  expect(first.previous).toBeUndefined()
+  expect(first.lease.controllerGeneration).toBe(1)
+  at(1_999)
+  expect(() => controller.take({ clientId: "client-b" })).toThrow(
+    expect.objectContaining({ code: "controller_busy" }),
+  )
+  at(2_000)
+  const second = controller.take({ clientId: "client-b" })
+  expect(second.previous).toEqual({ lease: first.lease, attached: true })
+  expect(second.lease.controllerGeneration).toBe(2)
+  expect(second.lease.controllerToken).not.toBe(first.lease.controllerToken)
+  expect(() => controller.assertCurrent("client-a", 1)).toThrow(
+    expect.objectContaining({ code: "stale_controller" }),
+  )
+  // The fenced holder's late close cannot open a grace window.
+  expect(controller.detach("client-a", 1)).toBe(false)
+  expect(controller.state()).toEqual({ state: "attached" })
+  // The later click loses: the holder just changed.
+  expect(() => controller.take({ clientId: "client-a" })).toThrow(
+    expect.objectContaining({ code: "controller_busy" }),
+  )
+})
+
+test("an attached legacy holder is never taken over; its grace can be", () => {
+  const { controller, at } = fixture({ tokenLifetimeMs: 100_000 })
+  const legacy = controller.attach({ clientId: "client-a" })
+  at(5_000)
+  expect(() => controller.take({ clientId: "client-b" })).toThrow(
+    expect.objectContaining({ code: "controller_busy" }),
+  )
+  controller.detach(legacy.clientId, legacy.controllerGeneration)
+  expect(controller.state()).toEqual({ state: "detached", graceRemainingMs: 100 })
+  at(5_040)
+  expect(controller.state()).toEqual({ state: "detached", graceRemainingMs: 60 })
+  const taken = controller.take({ clientId: "client-b" })
+  expect(taken.previous).toEqual({ lease: legacy, attached: false })
+  // Grace ended with the take: the old token cannot resume.
+  expect(() => controller.attach(legacy)).toThrow(expect.objectContaining({ code: "controller_busy" }))
+})
+
+test("a roles reconnect records its flags; a non-serving taker cannot strand a model-serving holder", () => {
+  const { controller, at } = fixture({ tokenLifetimeMs: 100_000 })
+  const legacy = controller.attach({ clientId: "client-a" })
+  const roles = controller.attach({ ...legacy, roles: true, servesModels: true })
+  at(5_000)
+  expect(() => controller.take({ clientId: "client-b" })).toThrow(
+    expect.objectContaining({ code: "unsupported_capability" }),
+  )
+  expect(() => controller.take({ clientId: "client-b", servesModels: false })).toThrow(
+    expect.objectContaining({ code: "unsupported_capability" }),
+  )
+  const taken = controller.take({ clientId: "client-b", servesModels: true })
+  expect(taken.previous?.lease).toBe(roles)
+  at(6_000)
+  // In grace the holder serves nothing, so any taker may take it.
+  controller.detach(taken.lease.clientId, taken.lease.controllerGeneration)
+  at(6_050)
+  expect(controller.take({ clientId: "client-c" }).previous?.attached).toBe(false)
+})
+
+test("taking an own lease reissues it at once, covering a lost welcome", () => {
+  const { controller, at } = fixture()
+  const first = controller.take({ clientId: "client-a" })
+  const again = controller.take({ clientId: "client-a" })
+  expect(again.previous).toEqual({ lease: first.lease, attached: true })
+  expect(again.lease.controllerGeneration).toBe(2)
+  expect(again.lease.controllerToken).not.toBe(first.lease.controllerToken)
+  controller.detach(again.lease.clientId, again.lease.controllerGeneration)
+  const third = controller.take({ clientId: "client-a" })
+  expect(third.previous?.attached).toBe(false)
+  // The own retake kept the original acquisition time for the one-second rule.
+  at(2_000)
+  expect(controller.take({ clientId: "client-b" }).previous?.lease).toBe(third.lease)
+})
+
+test("a take mints a full token lifetime, unlike a resume", () => {
+  const { controller, at } = fixture({ tokenLifetimeMs: 100 })
+  const first = controller.attach({ clientId: "client-a" })
+  at(1_090)
+  const taken = controller.take({ clientId: "client-a" })
+  at(1_150)
+  expect(() => controller.attach(first)).toThrow(expect.objectContaining({ code: "controller_busy" }))
+  expect(controller.attach(taken.lease).controllerGeneration).toBe(3)
+  at(1_190)
+  expect(() => controller.attach(taken.lease)).toThrow(expect.objectContaining({ code: "permission_denied" }))
+})
+
+test("release by the holder's own token ends the lease without grace", () => {
+  const { controller } = fixture()
+  const lease = controller.attach({ clientId: "client-a", roles: true })
+  expect(controller.release({ clientId: "client-b", controllerToken: lease.controllerToken })).toBeUndefined()
+  expect(controller.release({ clientId: "client-a", controllerToken: "other-token" })).toBeUndefined()
+  expect(controller.release(lease)).toBe(lease)
+  expect(controller.holds("client-a")).toBe(false)
+  expect(controller.state()).toEqual({ state: "none" })
+  expect(() => controller.assertCurrent(lease.clientId, lease.controllerGeneration)).toThrow(
+    expect.objectContaining({ code: "stale_controller" }),
+  )
+  expect(controller.release(lease)).toBeUndefined()
+  // Released in grace too; nobody waits out the reservation.
+  const next = controller.attach({ clientId: "client-b" })
+  controller.detach(next.clientId, next.controllerGeneration)
+  expect(controller.release(next)).toBe(next)
+  expect(controller.attach({ clientId: "client-c" }).controllerGeneration).toBe(3)
+  // An expired token releases nothing.
+  const { controller: aged, at: age } = fixture({ tokenLifetimeMs: 50 })
+  const old = aged.attach({ clientId: "client-a" })
+  age(1_050)
+  expect(aged.release(old)).toBeUndefined()
+  expect(aged.holds("client-a")).toBe(true)
+})
+
+test("take and release validate their inputs", () => {
+  const { controller } = fixture()
+  expect(() => controller.take({ clientId: "bad id" })).toThrow(
+    expect.objectContaining({ code: "invalid_frame" }),
+  )
+  expect(() => controller.release({ clientId: "client-a", controllerToken: "" })).toThrow(
+    expect.objectContaining({ code: "invalid_frame" }),
+  )
+  expect(controller.state()).toEqual({ state: "none" })
+})

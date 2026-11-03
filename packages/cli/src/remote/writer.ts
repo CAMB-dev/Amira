@@ -28,7 +28,16 @@ export class RemoteWriter {
   send(message: RemoteMessage): Promise<void> {
     if (this.failure) return Promise.reject(this.failure)
     try {
-      const { message: frame, bytes } = prepareRemoteMessage(message)
+      return this.sendPrepared(prepareRemoteMessage(message))
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  /** A frame already validated and encoded by prepareRemoteMessage; its bytes are shared, never mutated. */
+  sendPrepared({ message: frame, bytes }: ReturnType<typeof prepareRemoteMessage>): Promise<void> {
+    if (this.failure) return Promise.reject(this.failure)
+    try {
       const urgent =
         bytes.length <= REMOTE_LIMITS.lineBytes &&
         (frame.kind === "cancel" ||

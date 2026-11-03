@@ -21,7 +21,7 @@
 规划客户端前请先阅读。这些是当前 daemon 的特性，而非线路格式本身的规定。
 
 - **daemon 只在 Linux 上运行。**它就是 `amira remote add` 安装的服务端（glibc Linux，x64 或 ARM64）。Windows 和 macOS 上没有本地 daemon：终端界面在自身进程内运行 agent，因此那里的 GUI 只能经 SSH 访问 Linux 工作区。
-- **每个工作区只有一个控制者。**daemon 同一时间只接受一个附加的前端。某个客户端持有控制权期间（以及断开后最多 30 秒内），其他客户端会以 `controller_busy` 被拒绝。GUI 和终端界面不能同时附加到同一工作区，也没有只读查看者模式。
+- **每个工作区一个控制者，外加最多 8 个查看者。**daemon 同一时间只接受一个控制者。某个客户端持有控制权期间（以及断开后最多 30 秒内），其他控制者会以 `controller_busy` 被拒绝。其他客户端可以作为只读查看者附加，或显式接管控制权（见[控制者与查看者](#控制者与查看者)）。查看者从不启动 daemon，也不会让 daemon 保持运行。
 - **模型路由。**以默认 local-proxy 模式启动的 daemon（`welcome.capabilities` 含 `model.proxy`）会等待终端客户端通过内部 model 通道处理模型调用。第三方客户端做不到这一点：轮次最多等待 `remote.proxyReconnectTimeoutMs`，然后失败。请附加到使用远程凭据（`model.remote-key`）的 daemon，即以 `amira-server attach --remote-key` 启动的 daemon。
 - **变更记录。**daemon 会记住变更操作，确保重试的请求绝不执行两次（见[重试与变更记录](#重试与变更记录)）。它同时最多保存 128 个变更操作，其 params 和结果合计最多 32 MiB：包括正在执行的，以及完成后最多保留 10 分钟的。记录已满时，最早完成的结果会被提前丢弃；只有正在执行的变更操作本身就占满记录时，新的变更操作才会以 `limit_exceeded` 失败。另外，单个连接上使用满 65,536 个请求 id 后，daemon 会以 `limit_exceeded` 关闭该连接。
 
@@ -76,7 +76,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `resume` | 可选：来自先前 `welcome` 的 `daemonEpoch`、`after`（最后应用的事件 `seq`）和 `controllerToken`，用于重新连接。 |
 | `snapshot` | 可选：`true` 表示即使在恢复连接时也要求一个 `reset` 快照。 |
 
-`welcome` 返回服务端 `release`、规范的 `workspace` 及其 `workspaceId`、`daemonEpoch`、`controllerGeneration`、`sessionGeneration`、用于重新连接的 `controllerToken`（请保密）、相同的 `limits` 和服务端 `capabilities`：
+`welcome` 返回服务端 `release`、规范的 `workspace` 及其 `workspaceId`、`daemonEpoch`、`controllerGeneration`、`sessionGeneration`、用于重新连接的 `controllerToken`（请保密）、相同的 `limits`、服务端 `capabilities`，以及（仅对发送了角色字符串的客户端）该连接的 `role`（`controller` 或 `viewer`）：
 
 | 能力 | 含义 |
 | --- | --- |
@@ -86,10 +86,26 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `files`、`images` | 内部的 files 通道。 |
 | `model.remote-key` / `model.proxy` | daemon 在哪里发起模型调用（见[当前限制](#当前限制)）。 |
 | `context-window-source.provider` | 也是客户端能力，见[版本与兼容性](#版本与兼容性)。 |
+| `attach.roles` | 附加角色。仅当客户端发送了下文的某个角色字符串时出现。 |
 
 协议没有版本协商。`v` 不同的 `hello` 会以 `reject` 代码 `incompatible_protocol` 被拒绝；附加到使用其他协议版本、正在运行的 daemon 时也一样。客户端必须检查 `welcome.v` 为 `1`，否则关闭连接。
 
-`reject` 代码：`controller_busy`、`incompatible_protocol`、`incompatible_build`、`invalid_frame`（中继 5 秒内未收到 `hello` 时也是这个代码）、`invalid_workspace`、`workspace_busy`、`unsupported_capability`、`permission_denied`（例如重连凭据已过期，或该 `clientId` 已被变更记录遗忘）、`startup_failed`、`limit_exceeded`、`disconnected`、`cancelled`、`unsupported_operation`、`operation_failed`。这个列表是开放的：不认识的代码按 `operation_failed` 处理。发送 `reject` 后连接即关闭。
+**附加意图。**理解角色的客户端在 `hello.capabilities` 中加入下列字符串之一。每个都隐含 `attach.roles`。只发送一个；发送了多个时，`attach.take` 优先于 `attach.role.viewer`，后者又优先于 `attach.role.auto`。
+
+| 字符串 | 结果 |
+| --- | --- |
+| `attach.roles` | 控制者，或 `controller_busy`，与没有角色时相同。客户端同时表明它理解 `welcome.role`、`attachment` 帧、`not_controller` 以及 `welcome` 之后的最后一个 `reject`。 |
+| `attach.role.viewer` | 查看者。若 `resume` 带有该 `clientId` 当前的控制者令牌，租约还会立即结束，不再保留 30 秒：控制者就是这样交还控制权的。 |
+| `attach.role.auto` | 工作区空闲且 hello 不带 `resume` 时，或 `resume` 恢复的是该客户端自己的租约时，成为控制者；否则成为查看者。被拒绝的恢复绝不会变成新的控制者。 |
+| `attach.take` | 立即接管控制权（见[接管控制权](#接管控制权)）。只在用户明确操作时发送。 |
+
+不带这些字符串时，握手的行为与引入角色之前完全一致，客户端也绝不会收到 `welcome.role` 或 `attachment` 帧。
+
+每个 `clientId` 同时最多只有一个连接。hello 被接受时，同一 `clientId` 的旧连接会被关闭；被拒绝的 hello（例如 `controller_busy`）不会关闭任何连接。每个单独附加的窗口请使用各自的 `clientId`。
+
+引入角色之前的 daemon 会忽略这些字符串：查看者意图因此会作为控制者附加，或得到 `controller_busy`，而 `welcome.capabilities` 中没有 `attach.roles`。附加查看者之前，请先用 `amira-server list` 检查 daemon 的 `release`。如果本想观看的客户端仍然成了控制者，它应保持附加、不发送任何变更操作，直到用户关闭它，因为每次关闭都会为工作区保留 30 秒。
+
+`reject` 代码：`controller_busy`、`incompatible_protocol`、`incompatible_build`、`invalid_frame`（中继 5 秒内未收到 `hello` 时也是这个代码）、`invalid_workspace`、`workspace_busy`、`unsupported_capability`、`permission_denied`（例如重连凭据已过期，或该 `clientId` 已被变更记录遗忘）、`startup_failed`、`limit_exceeded`、`disconnected`、`cancelled`、`unsupported_operation`、`operation_failed`，以及 `controller_taken`（见[接管控制权](#接管控制权)）。`workspace_busy` 也可能表示此刻正在加载快照的查看者过多：请稍后重试。`limit_exceeded` 也可能表示工作区已有 8 个查看者。这个列表是开放的：不认识的代码按 `operation_failed` 处理。发送 `reject` 后连接即关闭。只有发送了角色字符串的客户端才可能在 `welcome` 之后收到 `reject`。
 
 ## 请求与响应
 
@@ -126,6 +142,9 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 5. **变更操作返回 `limit_exceeded` 表示它没有执行。**
 6. **id 仍须唯一**（按 `clientId` 和 `daemonEpoch`）：使用 UUID 或跨重连持续递增的计数器。
 7. 属于另一个 `daemonEpoch` 的请求以 `outcome_unknown` 失败：daemon 已重启，之前 epoch 的 id 一概未知。请从快照重新同步。
+8. 收到代码为 `controller_taken` 的 `reject` 后，待处理的变更操作结果未知。查看者不能重发它们；请改为读取状态。
+
+只有控制者发送变更操作，因此查看者从不使用变更记录。
 
 ### 错误
 
@@ -137,6 +156,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `stale_session` | `sessionGeneration` 已不是当前值。请从最新快照刷新。 |
 | `stale_operation` | 目标（UI 请求、表单或对话）已不再待处理或已不是当前目标。 |
 | `stale_controller` | `controllerGeneration` 已不是当前值；本次附加已被替换。 |
+| `not_controller` | 查看者调用了只有控制者才能执行的操作。 |
 | `outcome_unknown` | 请求属于另一个 `daemonEpoch`；daemon 已重启。请重新同步。 |
 | `operation_conflict` | 同一个 `id` 被用于不同的 params。 |
 | `operation_expired` | 重试的变更操作的原结果已不再保留。它没有再次执行。 |
@@ -145,6 +165,46 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `cancelled`、`disconnected` | 请求已被取消，或工作区已将其分离。 |
 | `limit_exceeded`、`invalid_frame` | 超出限制或校验失败。以此被拒绝的变更操作没有执行。 |
 | `operation_failed` | 其他任何失败。细节保留在主机上。 |
+
+## 控制者与查看者
+
+每个连接在整个生命周期内保持同一个角色：**控制者**或**查看者**。角色变化总是一个新连接。只有发送了角色字符串的客户端（见[握手](#握手)）才能成为查看者。
+
+查看者的 `welcome` 含 `role: "viewer"` 和 `controllerGeneration: 0`，其 `controllerToken` 不授予任何权限。查看者的请求和取消中请发送 `controllerGeneration: 0`；其他值以 `stale_controller` 失败。查看者从自己的游标起收到控制者收到的每个事件、快照和 UI 请求。它只能调用以下操作（`x-operations` 中的 `x-access.viewer`）：`state.read`、`transcript.read`、`status.read`、`models.list`、`commands.describe`、`sessions.list`、`sessions.read`、`session.planRewind`、`jobs.list`、`jobs.output`、`jobs.wait`、`conversations.list` 和 `conversations.history`。其他所有操作都以 `not_controller` 失败，包括 `turn.abort`、`commands.complete` 和 `form.evaluate`。
+
+- 查看者同时最多执行 8 个 `jobs.wait`、`jobs.output` 和 `conversations.history` 请求；更多的以 `limit_exceeded` 失败。
+- 查看者只能读取控制者聚焦过的对话。
+- 一个工作区最多接受 8 个查看者；再来的查看者 hello 会得到代码为 `limit_exceeded` 的 `reject`。同一时间最多 2 个查看者在加载首个快照；再来的会得到 `workspace_busy`，应稍后重试。
+- 落后 1,024 帧或 16 MiB 的查看者会以 `limit_exceeded` 被关闭；请重新连接并从游标恢复。
+- 查看者不会让 daemon 保持运行。即使有查看者附加，daemon 空闲时也会停止，已暂存的更新也会替换它。带 `attach.role.viewer` 的中继 hello 绝不启动 daemon：没有 daemon 运行时，中继写出代码为 `disconnected` 的 `reject`。
+
+### attachment 帧
+
+发送了角色字符串的客户端还会收到 `attachment` 帧：`welcome` 之后一个（在该连接的初始重放之后），此后每次变化一个。它们不是事件：没有 `seq`，从不重放，也不需要确认。每一帧都携带完整的当前状态，所以只保留最新的一帧即可。
+
+- `controller.state` 为 `attached`、`detached`（持有者已断开，可在 `graceRemainingMs` 毫秒内重连）或 `none`。不认识的值按 `none` 处理。`controller.client` 标识持有者。
+- `viewers` 列出最多 8 个查看者，含 `client` 和 `attachedMs`。你自己是查看者时，其中也包括你的连接。
+
+`client` 是该客户端在 `hello.release` 中自报的 `buildId` 和 `target`，仅当 `version` 是纯 `[0-9A-Za-z.+-]` 文本时才附带它。它只是展示文本：所有客户端以同一用户运行，因此它未经认证，也从不包含 `clientId`。即便如此，显示前仍请去掉控制字符。
+
+### 接管控制权
+
+带 `attach.take` 的 hello 在以下情况下使客户端成为控制者：
+
+| 租约 | 结果 |
+| --- | --- |
+| 空闲，或由同一 `clientId` 持有（已附加或在宽限期内） | 控制者，使用新的 generation 和令牌。 |
+| 由另一客户端持有，处于 30 秒宽限期内 | 控制者；保留结束。 |
+| 由未发送角色字符串的客户端持有且已附加 | 代码为 `controller_busy` 的 `reject`。无法被告知原因的客户端绝不会被接管。 |
+| 由发送了角色字符串的客户端持有且已附加 | 控制者。之前的持有者收到代码为 `controller_taken` 的最后一个 `reject`，随后被关闭。 |
+| 控制者在不到 1 秒前刚变更过 | 代码为 `controller_busy` 的 `reject`。 |
+| daemon 使用 `model.proxy`，已附加的持有者在提供模型服务，而接管者没有发送 `model.proxy` | 代码为 `unsupported_capability` 的 `reject`。 |
+
+接管只改变谁可以操作。正在运行的轮次、后台任务和子 agent 会继续，待处理的 UI 请求等待新的控制者，之前的持有者已发送的变更操作会继续执行。它们的响应随旧连接一起丢失，因此请视其结果为未知并读取状态。收到 `controller_taken` 后，请以 `attach.role.viewer` 和你的游标重新连接，并告诉用户另一个客户端接管了控制权。
+
+`effect` 通知属于运行该命令的控制者。查看者忽略所有 `effect` 事件。新的控制者忽略其初始重放（`replay: true`）中的 `effect` 事件，除非它之前的连接也是控制者。
+
+查看者的权限更低，但信任级别并不更低。同一用户的任何能运行中继的进程，都可以观看整个工作区、接管控制权，或用 `amira-server stop` 停止 daemon。daemon 还会在超过 128 个套接字时不加说明地关闭连接。
 
 ## 事件
 
@@ -182,7 +242,7 @@ ssh -T devbox '"$HOME/.amira/remote/bin/amira-server" attach --remote-key'
 | `extension-settings` | `{ "values": {...}, "scope": "user" \| "project" }`。 |
 | `form` | 不使用 `ui.respond`。用 `form.open` 获取编辑器和修订号，编辑期间用 `form.evaluate`，动作字段用 `form.action`，最后用 `form.submit` 或 `form.cancel`。 |
 
-确认结果为 `accepted`、`cancelled`、`settled`（已被回答）、`invalid` 或 `disconnected`。`ui.resolved` 事件告知所有前端某个请求已关闭。由于只有控制者处于附加状态，回答请求的就是它这一个前端。
+确认结果为 `accepted`、`cancelled`、`settled`（已被回答）、`invalid` 或 `disconnected`。`ui.resolved` 事件告知所有前端某个请求已关闭。每个连接都能看到待处理的请求，但只有控制者可以回答：对查看者而言，`ui.respond`、`ui.cancel` 和 `form.*` 以 `not_controller` 失败。
 
 ## 版本与兼容性
 
@@ -204,6 +264,7 @@ schema 是一个单一的包：每个类型都是 `$defs` 下的具名条目，�
 - 标签不是第一个属性。使用 `System.Text.Json` 多态时，请设置 `JsonSerializerOptions.AllowOutOfOrderMetadataProperties = true`（.NET 9 或更高版本），或编写先从 `JsonDocument` 读取标签再选择类型的转换器。
 - 标记为 `x-decode-only` 的定义（`ResponseEnvelope`，以及对应 `amira-server list` 输出行的 `ServerListOutput`）列在根部的 `x-decode-only` 数组中。它们从来不是帧。
 - `Fault.code` 是开放的字符串。`x-known-codes` 列出有文档的值；其他值按 `operation_failed` 处理。
+- 每个 `x-operations` 条目都带有 `x-access`：`ledger`（会被记录的变更操作）和 `viewer`（查看者可以调用）。只发送给具备某项能力的客户端的定义和属性带有 `x-capability`，例如带 `attach.roles` 的 `AttachmentFrame` 和 `WelcomeFrame.role`。`x-known-values` 列出开放字符串（例如 `AttachmentController.state`）的有文档的值。
 
 ## 交换示例
 

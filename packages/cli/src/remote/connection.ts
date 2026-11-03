@@ -2,19 +2,22 @@ import { randomUUID } from "node:crypto"
 import { validateRemoteParams } from "../remote-schema.ts"
 import { RemoteDecoder } from "./codec.ts"
 import { RemoteError, RemoteReplyError } from "./errors.ts"
-import { remoteMessageForPeer } from "./peer-compat.ts"
+import { type PreparedRemoteMessage, remoteMessageForPeer } from "./peer-compat.ts"
 import {
+  ATTACH_ROLES,
   remoteOperationChannel as operationChannel,
   type REMOTE_FAULT_CODES,
   REMOTE_LIMITS,
   type RemoteCancel,
   type RemoteChannel,
+  type RemoteFault,
   type RemoteHello,
   type RemoteJson,
   type RemoteMessage,
   type RemoteOperation,
   type RemoteRequest,
   type RemoteWelcome,
+  remotePeerCapabilities,
 } from "./protocol.ts"
 import { matches, id as operationId } from "./schema/base.ts"
 import { RemoteWriter } from "./writer.ts"
@@ -52,6 +55,7 @@ export interface RemoteConnectionOptions {
 // Only registered handshake fault codes cross this boundary. Exception text may contain secrets.
 const rejectionMessages: Record<(typeof REMOTE_FAULT_CODES.reject)[number], string> = {
   controller_busy: "A controller is already attached to this workspace",
+  controller_taken: "Another client took control of this workspace",
   incompatible_protocol: "Unsupported remote protocol version",
   incompatible_build: "The running server build is not compatible with this client",
   invalid_frame: "Invalid remote handshake",
@@ -209,8 +213,46 @@ export class RemoteConnection {
     await this.sendToPeer(message)
   }
 
+  /** A frame the owner already filtered and encoded for this peer's capabilities (prepareForPeer). */
+  async sendPrepared(prepared: PreparedRemoteMessage): Promise<void> {
+    await this.ready
+    await this.writer.sendPrepared(prepared)
+  }
+
+  /**
+   * Ends the attachment after the handshake. Only an attach.roles peer understands a final
+   * reject; any other peer is simply closed, as a released client would treat it as invalid.
+   */
+  reject(fault: RemoteFault): void {
+    const error = new RemoteReplyError(fault.code, fault.message)
+    if (this.failure) return
+    if (!this.welcome || !this.understandsRoles()) {
+      this.close(error)
+      return
+    }
+    // A stalled peer must not keep a fenced attachment open.
+    const timer = setTimeout(() => this.close(error), 1_000)
+    void this.writer
+      .send({ v: 1, kind: "reject", error: fault })
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timer)
+        this.close(error)
+      })
+  }
+
+  private understandsRoles(): boolean {
+    const handshake = this.options.handshake
+    const own = handshake.role === "client" ? remotePeerCapabilities(handshake.hello.capabilities) : []
+    const peer = remotePeerCapabilities(this.peerCapabilities)
+    return handshake.role === "client"
+      ? own.includes(ATTACH_ROLES) && peer.includes(ATTACH_ROLES)
+      : peer.includes(ATTACH_ROLES)
+  }
+
   private async sendToPeer(message: RemoteMessage): Promise<void> {
-    await this.writer.send(remoteMessageForPeer(message, this.peerCapabilities))
+    const filtered = remoteMessageForPeer(message, this.peerCapabilities)
+    if (filtered) await this.writer.send(filtered)
   }
 
   close(error: unknown = new RemoteError("disconnected", "Remote attachment closed")): void {
@@ -281,7 +323,7 @@ export class RemoteConnection {
         try {
           welcome = await handshake.accept(message)
           this.peerCapabilities = message.capabilities
-          await this.writer.send(welcome)
+          await this.writer.send(remoteMessageForPeer(welcome, message.capabilities)!)
         } catch (error) {
           await this.rejectHandshake(error)
           return
@@ -300,9 +342,13 @@ export class RemoteConnection {
       return
     }
     switch (message.kind) {
+      case "reject":
+        // A role-aware client accepts one final reject (for example controller_taken).
+        if (this.options.handshake.role === "client" && this.understandsRoles())
+          throw new RemoteReplyError(message.error.code, message.error.message)
+        throw new RemoteError("invalid_frame", "Repeated remote handshake")
       case "hello":
       case "welcome":
-      case "reject":
         throw new RemoteError("invalid_frame", "Repeated remote handshake")
       case "request":
         this.dispatch(message)

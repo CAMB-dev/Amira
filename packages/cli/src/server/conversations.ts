@@ -84,11 +84,26 @@ export function createServerConversations(deps: {
       bytes: number
       sizes: number[]
       cut: ServerConversationCut
+      owner: object
     }
   >()
+  // Cuts are per connection: one connection's paging never evicts another's below the shared
+  // byte budget. Callers without an owner (in-process ports) share one scope.
+  const shared = {}
   const now = deps.now ?? Date.now
   const stale = () =>
     new FrontendOperationError("stale_operation", "The conversation is unavailable in this scope")
+  /** Oldest of this owner's cuts first; another owner's only when the shared bytes need it. */
+  function evictPages(owner: object, bytes: number) {
+    const own = [...pages].filter(([, cached]) => cached.owner === owner).map(([token]) => token)
+    while (own.length >= 4) pages.delete(own.shift()!)
+    let total = [...pages.values()].reduce((sum, cached) => sum + cached.bytes, bytes)
+    while (total > 32 * 1024 * 1024) {
+      const token = own.shift() ?? pages.keys().next().value!
+      total -= pages.get(token)!.bytes
+      pages.delete(token)
+    }
+  }
   function resolve(ref: ServerConversationRef): OwnedConversation | undefined {
     const binding = owned.get(ref.conversationId)
     if (
@@ -123,19 +138,26 @@ export function createServerConversations(deps: {
           : []
       }),
     }),
-    "conversations.history": ({
-      snapshot,
-      offset = 0,
-      limit = 50,
-      ...ref
-    }: ServerConversationOperations["conversations.history"]["params"]) => {
+    "conversations.history": (
+      {
+        snapshot,
+        offset = 0,
+        limit = 50,
+        ...ref
+      }: ServerConversationOperations["conversations.history"]["params"],
+      _signal?: AbortSignal,
+      owner: object = shared,
+    ) => {
       const conversation = resolve(ref)
       for (const [token, page] of pages)
         if (page.expires <= now() || page.generation !== deps.generation()) pages.delete(token)
       let page = snapshot ? pages.get(snapshot) : undefined
       if (
         snapshot &&
-        (!page || page.ref.conversationId !== ref.conversationId || page.ref.incarnation !== ref.incarnation)
+        (!page ||
+          page.owner !== owner ||
+          page.ref.conversationId !== ref.conversationId ||
+          page.ref.incarnation !== ref.incarnation)
       )
         throw stale()
       if (!page) {
@@ -164,13 +186,10 @@ export function createServerConversations(deps: {
           ...projected.history,
           cut,
           bytes,
+          owner,
         }
         snapshot = crypto.randomUUID()
-        while (
-          pages.size >= 4 ||
-          [...pages.values()].reduce((sum, cached) => sum + cached.bytes, page.bytes) > 32 * 1024 * 1024
-        )
-          pages.delete(pages.keys().next().value!)
+        evictPages(owner, page.bytes)
         pages.set(snapshot, page)
       }
       const end = historyPageEnd(page.sizes, offset, limit)

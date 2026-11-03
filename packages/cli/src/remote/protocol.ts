@@ -19,6 +19,16 @@ export type ModelFramePayload =
 export const REMOTE_PROTOCOL_VERSION = 1
 /** Peer understands the optional endpoint-reported context-window source in model/session DTOs. */
 export const CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY = "context-window-source.provider"
+/**
+ * Attachment roles. A client sends at most one intent, and each implies ATTACH_ROLES. The daemon
+ * echoes ATTACH_ROLES in welcome.capabilities only to such clients, and only where roles are on.
+ */
+export const ATTACH_ROLES = "attach.roles"
+export const ATTACH_INTENTS = {
+  viewer: "attach.role.viewer",
+  auto: "attach.role.auto",
+  take: "attach.take",
+} as const
 /** Optional DTO values sent only to peers that advertised the capability; others see the field omitted. */
 export const REMOTE_GATED_VALUES = [
   {
@@ -27,6 +37,17 @@ export const REMOTE_GATED_VALUES = [
     value: "provider",
   },
 ] as const
+/** Optional top-level frame fields, removed for peers without the capability. */
+export const REMOTE_GATED_FIELDS = [{ capability: ATTACH_ROLES, frame: "welcome", property: "role" }] as const
+/** Whole frames that are never sent to peers without the capability. */
+export const REMOTE_GATED_FRAMES = [{ capability: ATTACH_ROLES, kind: "attachment" }] as const
+/** Adds the capabilities a hello string implies, so gating sees what the peer understands. */
+export function remotePeerCapabilities(capabilities: readonly string[]): readonly string[] {
+  const intents: readonly string[] = Object.values(ATTACH_INTENTS)
+  return !capabilities.includes(ATTACH_ROLES) && capabilities.some((value) => intents.includes(value))
+    ? [...capabilities, ATTACH_ROLES]
+    : capabilities
+}
 
 /**
  * Documented Fault.code values (the schema's x-known-codes). The set is open: a client treats an
@@ -35,6 +56,7 @@ export const REMOTE_GATED_VALUES = [
 export const REMOTE_FAULT_CODES = {
   reject: [
     "controller_busy",
+    "controller_taken",
     "incompatible_protocol",
     "incompatible_build",
     "invalid_frame",
@@ -54,6 +76,7 @@ export const REMOTE_FAULT_CODES = {
     "stale_session",
     "stale_operation",
     "stale_controller",
+    "not_controller",
     "outcome_unknown",
     "operation_conflict",
     "operation_expired",
@@ -80,6 +103,8 @@ export const REMOTE_LIMITS = {
   queuedBytes: 64 * 1024 * 1024,
   transfers: 4,
   transferBytes: 64 * 1024 * 1024,
+  /** Viewers per workspace, beside its one controller. */
+  viewers: 8,
 } as const
 
 /** Finite operation names; each owning host adapter validates its operation-specific DTO. */
@@ -143,6 +168,79 @@ export const REMOTE_OPERATIONS = [
 ] as const
 export type RemoteOperation = (typeof REMOTE_OPERATIONS)[number]
 
+/** ledger: admitted through the mutation ledger. viewer: a read-only attachment may call it. */
+export interface RemoteOperationAccess {
+  readonly ledger: boolean
+  readonly viewer: boolean
+}
+const read = { ledger: false, viewer: true } as const
+const mutation = { ledger: true, viewer: false } as const
+/** Unledgered but controller-only: shared listing state, extension code, staging or model routing. */
+const control = { ledger: false, viewer: false } as const
+/**
+ * The single classification of every operation; an unclassified one fails to compile.
+ * form.evaluate is unledgered: the host caches it by editor and revision, and it is issued per
+ * keystroke. turn.abort is a mutation like any other; a viewer must take control first.
+ */
+export const REMOTE_OPERATION_ACCESS: { readonly [K in RemoteOperation]: RemoteOperationAccess } = {
+  "state.read": read,
+  "permissions.cycle": mutation,
+  "transcript.read": read,
+  "turn.prompt": mutation,
+  "turn.steer": mutation,
+  "turn.abort": mutation,
+  "command.run": mutation,
+  "commands.describe": read,
+  "commands.complete": control,
+  "skill.run": mutation,
+  "input.run": mutation,
+  "session.resume": mutation,
+  "session.clear": mutation,
+  "session.fork": mutation,
+  "session.rewind": mutation,
+  "session.planRewind": read,
+  "conversation.send": mutation,
+  "conversation.stop": mutation,
+  "sessions.list": read,
+  "sessions.read": read,
+  "models.list": read,
+  "proxy.describe": control,
+  "proxy.bind": mutation,
+  "model.set": mutation,
+  "thinking.set": mutation,
+  "fastMode.set": mutation,
+  "status.read": read,
+  "files.list": control,
+  "files.refresh": control,
+  "files.cancel": control,
+  "images.read": read,
+  "artifacts.read": read,
+  "uploads.begin": control,
+  "uploads.chunk": control,
+  "uploads.finish": control,
+  "uploads.cancel": control,
+  "uploads.send": mutation,
+  "jobs.list": read,
+  "jobs.output": read,
+  "jobs.stop": mutation,
+  "jobs.wait": read,
+  "conversations.list": read,
+  "conversations.history": read,
+  "conversations.focus": mutation,
+  "conversations.unfocus": mutation,
+  "conversations.control": mutation,
+  "ui.respond": mutation,
+  "ui.cancel": mutation,
+  "form.open": mutation,
+  "form.evaluate": control,
+  "form.action": mutation,
+  "form.submit": mutation,
+  "form.cancel": mutation,
+  "model.stream": control,
+  "model.compact": control,
+  "model.open": control,
+}
+
 export function remoteOperationChannel(op: RemoteOperation): RemoteChannel {
   if (op === "model.open" || op === "model.stream" || op === "model.compact") return "model"
   return /^(?:files|images|artifacts|uploads)\./.test(op) ? "files" : "control"
@@ -193,6 +291,23 @@ export interface RemoteWelcome {
   controllerToken?: string
   limits: RemotePeerLimits
   capabilities: string[]
+  /** Only for attach.roles peers; a connection's role never changes. */
+  role?: "controller" | "viewer"
+}
+/** Display identity of an attached client, never its clientId (the ledger scope). */
+export interface RemoteAttachedClient {
+  buildId: string
+  target: string
+  version?: string
+}
+/** Level-triggered presence per connection, never journaled; only for attach.roles peers. */
+export interface RemoteAttachment {
+  v: 1
+  kind: "attachment"
+  daemonEpoch: string
+  /** state is open (attached, detached or none); a client treats an unknown value as none. */
+  controller: { state: string; graceRemainingMs?: number; client?: RemoteAttachedClient }
+  viewers: { client: RemoteAttachedClient; attachedMs: number }[]
 }
 export interface RemoteRequest {
   v: 1
@@ -250,6 +365,7 @@ export type RemoteMessage =
   | RemoteResponse
   | RemoteCancel
   | RemoteReset
+  | RemoteAttachment
   | { v: 1; kind: "event"; daemonEpoch: string; seq: number; replay?: boolean; payload: RemoteJson }
   | { v: 1; kind: "model.event"; callId: string; seq: number; event: RemoteJson }
   | {

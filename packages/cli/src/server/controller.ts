@@ -15,12 +15,31 @@ export interface ControllerOptions {
   now?: () => number
 }
 
+/** What the holder's hello advertised; a takeover must not strand a peer that cannot be told. */
+export interface ControllerHolder {
+  /** Understands roles and a post-welcome controller_taken; legacy holders are never taken over. */
+  roles?: boolean
+  /** Serves models for this daemon (model.proxy on both sides). */
+  servesModels?: boolean
+}
+
+export type ControllerState =
+  | { state: "attached" }
+  | { state: "detached"; graceRemainingMs: number }
+  | { state: "none" }
+
 interface HeldLease {
   lease: ControllerLease
+  holder: ControllerHolder
   attached: boolean
   tokenExpiresAt: number
   detachedUntil?: number
+  /** When this clientId acquired the lease; its own reconnects and retakes keep it. */
+  since: number
 }
+
+/** A different client cannot take the lease within this long of the last holder change. */
+const TAKE_INTERVAL_MS = 1_000
 
 const identifier = /^[a-zA-Z0-9_.:-]+$/
 
@@ -57,7 +76,11 @@ export class Controller {
       throw new RangeError("Controller token lifetime must be a positive safe integer")
   }
 
-  attach({ clientId, controllerToken }: { clientId: string; controllerToken?: string }): ControllerLease {
+  attach({
+    clientId,
+    controllerToken,
+    ...holder
+  }: { clientId: string; controllerToken?: string } & ControllerHolder): ControllerLease {
     validateIdentity(clientId)
     if (controllerToken !== undefined) validateIdentity(controllerToken)
     const now = this.now()
@@ -81,11 +104,84 @@ export class Controller {
     })
     this.held = {
       lease,
+      holder: { roles: holder.roles === true, servesModels: holder.servesModels === true },
       attached: true,
       tokenExpiresAt:
         previous?.tokenExpiresAt ?? Math.min(Number.MAX_SAFE_INTEGER, now + this.tokenLifetimeMs),
+      since: previous?.since ?? now,
     }
     return lease
+  }
+
+  /**
+   * Explicit takeover: a fresh lease with a new generation and token, ending any grace. A taker
+   * always understands roles. The caller closes the previous holder's connection, if attached.
+   */
+  take({ clientId, servesModels }: { clientId: string } & Pick<ControllerHolder, "servesModels">): {
+    lease: ControllerLease
+    previous?: { lease: ControllerLease; attached: boolean }
+  } {
+    validateIdentity(clientId)
+    const now = this.now()
+    this.expireDetached(now)
+    const previous = this.held
+    // A lost welcome leaves the taker's own lease held; taking it again is not a holder change.
+    if (previous && previous.lease.clientId !== clientId) {
+      if (now - previous.since < TAKE_INTERVAL_MS)
+        throw new RemoteReplyError("controller_busy", "Control changed hands less than a second ago")
+      if (previous.attached && !previous.holder.roles)
+        throw new RemoteReplyError("controller_busy", "A controller already holds this workspace")
+      if (previous.attached && previous.holder.servesModels && !servesModels)
+        throw new RemoteReplyError(
+          "unsupported_capability",
+          "The current controller serves models; taking control requires model.proxy",
+        )
+    }
+    if (this.generation === Number.MAX_SAFE_INTEGER)
+      throw new RemoteError("limit_exceeded", "Controller generation exhausted")
+    const lease: ControllerLease = Object.freeze({
+      clientId,
+      controllerToken: randomBytes(32).toString("hex"),
+      controllerGeneration: ++this.generation,
+    })
+    this.held = {
+      lease,
+      holder: { roles: true, servesModels: servesModels === true },
+      attached: true,
+      tokenExpiresAt: Math.min(Number.MAX_SAFE_INTEGER, now + this.tokenLifetimeMs),
+      since: previous?.lease.clientId === clientId ? previous.since : now,
+    }
+    return { lease, ...(previous && { previous: { lease: previous.lease, attached: previous.attached } }) }
+  }
+
+  /**
+   * The holder hands control back by reconnecting as a viewer with its live token: the lease
+   * ends without grace. Returns the ended lease so its connection, if still open, can be closed.
+   */
+  release({ clientId, controllerToken }: { clientId: string; controllerToken: string }) {
+    validateIdentity(clientId)
+    validateIdentity(controllerToken)
+    const now = this.now()
+    this.expireDetached(now)
+    const held = this.held
+    if (
+      !held ||
+      held.lease.clientId !== clientId ||
+      held.lease.controllerToken !== controllerToken ||
+      now >= held.tokenExpiresAt
+    )
+      return undefined
+    this.held = undefined
+    return held.lease
+  }
+
+  /** Presence for display; never authority. */
+  state(): ControllerState {
+    const now = this.now()
+    this.expireDetached(now)
+    if (!this.held) return { state: "none" }
+    if (this.held.attached) return { state: "attached" }
+    return { state: "detached", graceRemainingMs: this.held.detachedUntil! - now }
   }
 
   /** Only the current transport can detach; repeated or fenced closes cannot extend grace. */

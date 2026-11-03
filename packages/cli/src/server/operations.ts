@@ -22,6 +22,8 @@ export type ServerModel = Pick<ModelInfo, "provider" | "id" | "contextWindow" | 
   ref: string
   available: boolean
 }
+/** owner scopes per-connection server state (history cuts); omitted means the shared scope. */
+export type ServerOperationOptions = FrontendExecuteOptions & { owner?: object }
 
 /** Host-only DTO operations. Never return Ai.providers(), executable controls or view definitions. */
 export interface ServerOperations
@@ -148,6 +150,7 @@ export function createServerOperations(deps: {
     [K in keyof ServerOperations]: (
       params: ServerOperations[K]["params"],
       signal?: AbortSignal,
+      owner?: object,
     ) => ServerOperations[K]["result"] | Promise<ServerOperations[K]["result"]>
   } = {
     ...createServerUiOperations(deps.session.host.ui),
@@ -218,7 +221,7 @@ export function createServerOperations(deps: {
   const execute = async <K extends keyof ServerOperations>(
     operation: K,
     params: ServerOperations[K]["params"],
-    options?: FrontendExecuteOptions,
+    options?: ServerOperationOptions,
   ): Promise<ServerOperations[K]["result"]> => {
     if (options?.signal?.aborted) throw new FrontendOperationError("cancelled", "Operation cancelled")
     if (options?.sessionGeneration !== undefined && options.sessionGeneration !== ack().sessionGeneration)
@@ -227,7 +230,7 @@ export function createServerOperations(deps: {
       throw new FrontendOperationError("unsupported_operation", "Unknown server operation")
     validateRemoteParams(operation, params)
     const generation = deps.generation()
-    const result = frontendJson(await handlers[operation](params, options?.signal))
+    const result = frontendJson(await handlers[operation](params, options?.signal, options?.owner))
     validateRemoteResult(operation, result)
     // Fence slow reads/waits after a switch, not merely their initial submission.
     if (generation !== deps.generation())

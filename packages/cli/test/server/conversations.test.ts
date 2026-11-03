@@ -200,3 +200,38 @@ test("a fork authorizes inherited artifacts without creating its own output dire
     await f.close()
   }
 })
+
+test("history cuts are per owner: one connection's paging never evicts or reads another's", async () => {
+  const f = await fixture()
+  try {
+    await f.owned.send("one")
+    const binding = f.request.conversations.bind(f.owned)
+    const ref = { conversationId: f.owned.id, incarnation: binding.incarnation, limit: 1 }
+    const controller = {}
+    const viewer = {}
+    const cut = (owner: object) => f.request("conversations.history", ref, { owner })
+    const kept = await cut(controller)
+    for (let index = 0; index < 4; index++) await cut(viewer)
+    const next = { ...ref, snapshot: kept.snapshot, offset: 1 }
+    expect((await f.request("conversations.history", next, { owner: controller })).messages).toHaveLength(1)
+    // A token is bound to the owner that cut it.
+    await expect(f.request("conversations.history", next, { owner: viewer })).rejects.toMatchObject({
+      code: "stale_operation",
+    })
+    await expect(f.request("conversations.history", next)).rejects.toMatchObject({ code: "stale_operation" })
+    // The fifth cut of one owner evicts that owner's oldest only.
+    const viewerFirst = await cut(viewer)
+    for (let index = 0; index < 4; index++) await cut(viewer)
+    await expect(
+      f.request(
+        "conversations.history",
+        { ...ref, snapshot: viewerFirst.snapshot, offset: 1 },
+        { owner: viewer },
+      ),
+    ).rejects.toMatchObject({ code: "stale_operation" })
+    for (let index = 0; index < 3; index++) await cut(controller)
+    expect((await f.request("conversations.history", next, { owner: controller })).messages).toHaveLength(1)
+  } finally {
+    await f.close()
+  }
+})

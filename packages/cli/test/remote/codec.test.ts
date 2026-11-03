@@ -74,6 +74,17 @@ const frames: RemoteMessage[] = [
     payload: { kind: "stream", data: { value: { type: "text.delta", text: "hi" }, usage: [] } },
   },
   { v: 1, kind: "ack", channel: "model", id: "call-1", seq: 3 },
+  {
+    v: 1,
+    kind: "attachment",
+    daemonEpoch: "epoch-1",
+    controller: {
+      state: "detached",
+      graceRemainingMs: 1000,
+      client: { buildId: "gui", target: "linux-x64" },
+    },
+    viewers: [{ client: { buildId: "tui", target: "linux-x64", version: "1.0.0" }, attachedMs: 5 }],
+  },
   { v: 1, kind: "ping", id: "p1" },
   { v: 1, kind: "pong", id: "p1" },
 ]
@@ -88,7 +99,7 @@ describe("remote codecs", () => {
     }
     decoder.finish()
     expect(result).toEqual(frames)
-    expect(remoteSchema().oneOf).toHaveLength(14)
+    expect(remoteSchema().oneOf).toHaveLength(15)
   })
 
   test("strict shapes, finite JSON and generation/ID validation", () => {

@@ -9,7 +9,10 @@ import path from "node:path"
 import {
   REMOTE_FAULT_CODES,
   REMOTE_FRONTEND_OPERATIONS,
+  REMOTE_GATED_FIELDS,
+  REMOTE_GATED_FRAMES,
   REMOTE_GATED_VALUES,
+  REMOTE_OPERATION_ACCESS,
   REMOTE_PROTOCOL_VERSION,
   type RemoteOperation,
 } from "../packages/cli/src/remote/protocol.ts"
@@ -73,7 +76,14 @@ const isSchema = (value: unknown): value is Schema =>
 const descriptions: Record<string, string> = {
   HelloFrame: "First client frame. Selects the workspace and advertises the client's capabilities.",
   WelcomeFrame: "Server handshake reply: daemon epoch, generations and server capabilities.",
-  RejectFrame: "Handshake refusal; the server closes the connection after sending it.",
+  RejectFrame:
+    "Handshake refusal; the server closes the connection after sending it. An attach.roles client also accepts one after welcome (controller_taken).",
+  AttachmentFrame:
+    "Presence of the controller and the viewers; sent after welcome and on every change, never journaled or replayed.",
+  AttachmentController:
+    "state is open: attached, detached (in grace, with graceRemainingMs) or none. Treat an unknown value as none.",
+  AttachedClient:
+    "Self-reported display identity of a client (never its clientId); version only when printable.",
   RequestFrame: "Client operation request on the control channel, correlated by id.",
   ResponseFrame: "Exactly one response per request id, unless the client cancelled it first.",
   CancelFrame: "Cancels a pending request by id.",
@@ -229,6 +239,15 @@ class Bundle {
                 .join(" "),
             }
           : rendered
+        const field = REMOTE_GATED_FIELDS.find(
+          (gate) => REMOTE_FRAME_SCHEMAS[gate.frame].properties?.[gate.property] === value,
+        )
+        if (field)
+          properties[key] = {
+            ...(properties[key] as Record<string, Json>),
+            description: `Sent only to peers advertising "${field.capability}".`,
+            "x-capability": field.capability,
+          }
       }
       out.properties = properties
     }
@@ -308,6 +327,9 @@ export function buildProtocolSchema(): Json {
   bundle.name(frames.hello.properties!.limits, "PeerLimits")
   bundle.name(frames.reject.properties!.error, "Fault")
   bundle.name(frames.event.properties!.payload, "EventPayload")
+  bundle.name(frames.attachment.properties!.controller, "AttachmentController")
+  bundle.name(frames.attachment.properties!.controller!.properties!.client, "AttachedClient")
+  bundle.name(frames.attachment.properties!.viewers!.items, "AttachmentViewer")
   const simple = [
     "hello",
     "welcome",
@@ -315,6 +337,7 @@ export function buildProtocolSchema(): Json {
     "cancel",
     "reset",
     "event",
+    "attachment",
     "ack",
     "ping",
     "pong",
@@ -339,7 +362,12 @@ export function buildProtocolSchema(): Json {
     const response = control({ ...success, properties: { ...success.properties, result } } as Schema)
     bundle.name(response, `${pascal(op)}Response`)
     responses.push(response)
-    operations[op] = { params: bundle.ref(params), result: bundle.ref(result) }
+    const { ledger, viewer } = REMOTE_OPERATION_ACCESS[op]
+    operations[op] = {
+      params: bundle.ref(params),
+      result: bundle.ref(result),
+      "x-access": { ledger, viewer },
+    }
   }
   const failure = branch(failures!, REMOTE_FRONTEND_OPERATIONS[0]!)
   const error = control({
@@ -354,7 +382,11 @@ export function buildProtocolSchema(): Json {
   const pick = (...kinds: string[]) => kinds.map((kind) => (kind === "request" ? request : frame[kind]!))
   const client = { oneOf: pick("hello", "request", "cancel", "ack", "ping", "pong", "chunk") } as Schema
   const server = {
-    oneOf: [...pick("welcome", "reject"), response, ...pick("reset", "event", "ping", "pong", "chunk")],
+    oneOf: [
+      ...pick("welcome", "reject"),
+      response,
+      ...pick("reset", "event", "attachment", "ping", "pong", "chunk"),
+    ],
   } as Schema
   bundle.name(client, "ClientFrame")
   bundle.name(server, "ServerFrame")
@@ -378,6 +410,10 @@ export function buildProtocolSchema(): Json {
   for (const name of ["ResponseEnvelope", "ServerListOutput"]) defsOut[name]!["x-decode-only"] = true
   defsOut.ResponseEnvelope!["x-result-by"] = "op"
   const faultCode = (defsOut.Fault!.properties as Record<string, Record<string, Json>>).code!
+  for (const gate of REMOTE_GATED_FRAMES)
+    defsOut[`${pascal(gate.kind)}Frame`]!["x-capability"] = gate.capability
+  const state = (defsOut.AttachmentController!.properties as Record<string, Record<string, Json>>).state!
+  state["x-known-values"] = ["attached", "detached", "none"]
   faultCode["x-known-codes"] = [...new Set([...REMOTE_FAULT_CODES.reject, ...REMOTE_FAULT_CODES.response])]
   const defs = Object.fromEntries(
     Object.keys(bundle.defs)

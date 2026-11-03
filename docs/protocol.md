@@ -21,7 +21,7 @@ These parts are **internal**: they exist on the same connection but are not docu
 Read these before planning a client. They are properties of the current daemon, not of the wire format.
 
 - **The daemon runs on Linux only.** It is the server installed by `amira remote add` (glibc Linux, x64 or ARM64). On Windows and macOS there is no local daemon: the terminal UI runs the agent in its own process, so a GUI there can only reach a Linux workspace over SSH.
-- **One controller per workspace.** A daemon accepts one attached frontend at a time. While a client holds the controller (and for up to 30 seconds after it disconnects), another client is refused with `controller_busy`. A GUI and the terminal UI cannot be attached to the same workspace at the same time, and there is no read-only viewer.
+- **One controller and up to 8 viewers per workspace.** A daemon accepts one controller at a time. While a client holds the controller (and for up to 30 seconds after it disconnects), another controller is refused with `controller_busy`. Other clients can attach as read-only viewers, or take control explicitly (see [Controller and viewers](#controller-and-viewers)). A viewer never starts a daemon and does not keep one running.
 - **Model routing.** A daemon started in the default local-proxy mode (`model.proxy` in `welcome.capabilities`) waits for the terminal client to serve model calls over the internal model channel. A third-party client cannot do that: turns wait up to `remote.proxyReconnectTimeoutMs` and then fail. Attach to daemons that use remote credentials (`model.remote-key`), started with `amira-server attach --remote-key`.
 - **Mutation ledger.** The daemon remembers mutations so that a retried request never runs twice (see [Retries and the mutation ledger](#retries-and-the-mutation-ledger)). It holds at most 128 mutations at once, with at most 32 MiB of their params and results: running ones, and completed ones for up to 10 minutes. When it is full, the oldest completed results are dropped early; only when running mutations alone fill it do new mutations fail with `limit_exceeded`. Separately, after 65,536 request ids on one connection, the daemon closes the connection with `limit_exceeded`.
 
@@ -76,7 +76,7 @@ The client sends `hello` first and must wait for `welcome` (or `reject`) before 
 | `resume` | Optional: `daemonEpoch`, `after` (last applied event `seq`) and `controllerToken` from an earlier `welcome`, to reconnect. |
 | `snapshot` | Optional: `true` asks for a `reset` snapshot even when resuming. |
 
-`welcome` returns the server `release`, the canonical `workspace` and its `workspaceId`, the `daemonEpoch`, `controllerGeneration`, `sessionGeneration`, the `controllerToken` for reconnecting (keep it secret), the same `limits` and the server `capabilities`:
+`welcome` returns the server `release`, the canonical `workspace` and its `workspaceId`, the `daemonEpoch`, `controllerGeneration`, `sessionGeneration`, the `controllerToken` for reconnecting (keep it secret), the same `limits`, the server `capabilities` and, for clients that sent a role string, the connection's `role` (`controller` or `viewer`):
 
 | Capability | Meaning |
 | --- | --- |
@@ -86,10 +86,26 @@ The client sends `hello` first and must wait for `welcome` (or `reject`) before 
 | `files`, `images` | The internal files channel. |
 | `model.remote-key` / `model.proxy` | Where the daemon makes model calls (see [Current limits](#current-limits)). |
 | `context-window-source.provider` | Also a client capability: see [Versioning](#versioning-and-compatibility). |
+| `attach.roles` | Attachment roles. Present only when the client sent one of the role strings below. |
 
 There is no version negotiation. A `hello` with a different `v` is refused with `reject` code `incompatible_protocol`, and so is an attachment to a running daemon that speaks another protocol version. A client must check that `welcome.v` is `1` and close otherwise.
 
-`reject` codes: `controller_busy`, `incompatible_protocol`, `incompatible_build`, `invalid_frame` (also when the relay received no `hello` within 5 seconds), `invalid_workspace`, `workspace_busy`, `unsupported_capability`, `permission_denied` (for example expired reconnect credentials, or a `clientId` the mutation ledger has forgotten), `startup_failed`, `limit_exceeded`, `disconnected`, `cancelled`, `unsupported_operation`, `operation_failed`. The list is open: treat a code you do not know as `operation_failed`. The connection closes after a `reject`.
+**Attachment intent.** A client that understands roles adds one of these strings to `hello.capabilities`. Each implies `attach.roles`. Send only one; with several, `attach.take` wins over `attach.role.viewer`, which wins over `attach.role.auto`.
+
+| String | Result |
+| --- | --- |
+| `attach.roles` | Controller, or `controller_busy`, as without roles. The client also understands `welcome.role`, `attachment` frames, `not_controller` and a final `reject` after `welcome`. |
+| `attach.role.viewer` | Viewer. With a `resume` that carries this `clientId`'s current controller token, the lease also ends at once, without the 30-second reservation: this is how a controller hands control back. |
+| `attach.role.auto` | Controller when the workspace is free and the hello has no `resume`, or when `resume` resumes this client's own lease; otherwise viewer. A refused resume never becomes a fresh controller. |
+| `attach.take` | Take control now (see [Taking control](#taking-control)). Send it only on an explicit user action. |
+
+Without any of these strings the handshake behaves exactly as it did before roles existed, and the client never receives `welcome.role` or `attachment` frames.
+
+At most one connection per `clientId` is live. When a hello is admitted, an older connection with the same `clientId` is closed; a refused hello (for example `controller_busy`) closes nothing. Use a separate `clientId` for each window that attaches on its own.
+
+A daemon from before roles ignores the strings: a viewer intent then attaches as controller or gets `controller_busy`, and `welcome.capabilities` has no `attach.roles`. Check the daemon's `release` with `amira-server list` before attaching a viewer. If a client that meant to watch still lands as controller, it should stay attached and send no mutations until the user closes it, because every close reserves the workspace for 30 seconds.
+
+`reject` codes: `controller_busy`, `incompatible_protocol`, `incompatible_build`, `invalid_frame` (also when the relay received no `hello` within 5 seconds), `invalid_workspace`, `workspace_busy`, `unsupported_capability`, `permission_denied` (for example expired reconnect credentials, or a `clientId` the mutation ledger has forgotten), `startup_failed`, `limit_exceeded`, `disconnected`, `cancelled`, `unsupported_operation`, `operation_failed`, and `controller_taken` (see [Taking control](#taking-control)). `workspace_busy` also means too many viewers are loading a snapshot right now: retry after a short delay. `limit_exceeded` also means the workspace already has 8 viewers. The list is open: treat a code you do not know as `operation_failed`. The connection closes after a `reject`. Only a client that sent a role string can receive a `reject` after `welcome`.
 
 ## Requests and responses
 
@@ -126,6 +142,9 @@ Every operation that only reads (the `*.read`, `*.list`, `jobs.output`, `jobs.wa
 5. **`limit_exceeded` on a mutation means it did not run.**
 6. **Ids must still be unique** per `clientId` and `daemonEpoch`: use a UUID or a counter that persists across reconnects.
 7. A request for another `daemonEpoch` fails with `outcome_unknown`: the daemon restarted, and nothing is known about the earlier epoch's ids. Resynchronize from the snapshot.
+8. After `reject` code `controller_taken`, pending mutations have an unknown outcome. A viewer cannot resend them; read the state instead.
+
+Only the controller sends mutations, so a viewer never uses the ledger.
 
 ### Errors
 
@@ -137,6 +156,7 @@ Every operation that only reads (the `*.read`, `*.list`, `jobs.output`, `jobs.wa
 | `stale_session` | `sessionGeneration` is no longer current. Refresh from the latest snapshot. |
 | `stale_operation` | The target (a UI request, form or conversation) is no longer pending or current. |
 | `stale_controller` | `controllerGeneration` is no longer current; this attachment was replaced. |
+| `not_controller` | A viewer called an operation only the controller may run. |
 | `outcome_unknown` | The request belongs to another `daemonEpoch`; the daemon restarted. Resynchronize. |
 | `operation_conflict` | The same `id` was reused with different params. |
 | `operation_expired` | The original outcome of a retried mutation is no longer retained. It did not run again. |
@@ -145,6 +165,46 @@ Every operation that only reads (the `*.read`, `*.list`, `jobs.output`, `jobs.wa
 | `cancelled`, `disconnected` | The request was cancelled, or the workspace detached it. |
 | `limit_exceeded`, `invalid_frame` | A limit or validation failure. A mutation refused this way did not run. |
 | `operation_failed` | Any other failure. Details stay on the host. |
+
+## Controller and viewers
+
+Every connection keeps one role for its whole lifetime: **controller** or **viewer**. A role change is always a new connection. Only clients that sent a role string (see [Handshake](#handshake)) can be viewers.
+
+A viewer's `welcome` has `role: "viewer"` and `controllerGeneration: 0`, and its `controllerToken` grants nothing. Send `controllerGeneration: 0` in a viewer's requests and cancels; any other value fails with `stale_controller`. A viewer receives every event, snapshot and UI request the controller receives, from its own cursor. It may call only these operations (`x-access.viewer` in `x-operations`): `state.read`, `transcript.read`, `status.read`, `models.list`, `commands.describe`, `sessions.list`, `sessions.read`, `session.planRewind`, `jobs.list`, `jobs.output`, `jobs.wait`, `conversations.list` and `conversations.history`. Every other operation fails with `not_controller`, including `turn.abort`, `commands.complete` and `form.evaluate`.
+
+- A viewer runs at most 8 `jobs.wait`, `jobs.output` and `conversations.history` requests at once; more fail with `limit_exceeded`.
+- A viewer can read only conversations the controller has focused.
+- A workspace accepts up to 8 viewers; another viewer hello gets `reject` code `limit_exceeded`. At most 2 viewers may be loading their first snapshot at once; another gets `workspace_busy` and should retry shortly.
+- A viewer that falls 1,024 frames or 16 MiB behind is closed with `limit_exceeded`; reconnect and resume from your cursor.
+- Viewers do not keep the daemon running. It stops when idle, and a staged update replaces it, even while viewers are attached. A relay hello with `attach.role.viewer` never starts a daemon: when none is running, the relay writes `reject` code `disconnected`.
+
+### Attachment frames
+
+Clients that sent a role string also receive `attachment` frames: one after `welcome` (after the connection's initial replay) and one after every change. They are not events: they have no `seq` and are never replayed or acknowledged. Each frame carries the whole current state, so keep only the latest.
+
+- `controller.state` is `attached`, `detached` (the holder disconnected and may reconnect within `graceRemainingMs` milliseconds) or `none`. Treat an unknown value as `none`. `controller.client` identifies the holder.
+- `viewers` lists up to 8 viewers with `client` and `attachedMs`. It includes your own connection when you are a viewer.
+
+`client` is the self-reported `buildId` and `target` from that client's `hello.release`, plus `version` only when it is plain `[0-9A-Za-z.+-]` text. It is display text only: it is not authenticated, since every client runs as the same user, and it never contains a `clientId`. Strip control characters before showing it anyway.
+
+### Taking control
+
+A hello with `attach.take` makes the client the controller in these cases:
+
+| Lease | Result |
+| --- | --- |
+| Free, or held by the same `clientId` (attached or in its grace) | Controller, with a new generation and token. |
+| Held by another client in its 30-second grace | Controller; the reservation ends. |
+| Held and attached by a client that sent no role string | `reject` code `controller_busy`. A client that cannot be told is never taken over. |
+| Held and attached by a client that sent a role string | Controller. The previous holder receives a final `reject` with code `controller_taken` and is closed. |
+| The controller changed less than 1 second ago | `reject` code `controller_busy`. |
+| The daemon uses `model.proxy`, the attached holder serves models, and the taker did not send `model.proxy` | `reject` code `unsupported_capability`. |
+
+Taking control changes only who may act. A running turn, background jobs and sub-agents continue, pending UI requests wait for the new controller, and mutations the previous holder already sent keep running. Their responses are lost with its connection, so treat them as having an unknown outcome and read the state. After `controller_taken`, reconnect with `attach.role.viewer` and your cursor, and tell the user that another client took control.
+
+`effect` notifications belong to the controller that ran the command. A viewer ignores every `effect` event. A new controller ignores `effect` events in its initial replay (`replay: true`) unless its previous connection was the controller too.
+
+Viewers have less authority, not less trust. Any process of the same user that can run the relay can watch the whole workspace, take control, or stop the daemon with `amira-server stop`. The daemon also closes connections beyond 128 sockets without a reason.
 
 ## Events
 
@@ -182,7 +242,7 @@ When the agent needs an answer (a tool approval, a question, a form, extension s
 | `extension-settings` | `{ "values": {...}, "scope": "user" \| "project" }`. |
 | `form` | Not via `ui.respond`. Use `form.open` to get an editor and revision, `form.evaluate` while editing, `form.action` for action fields, then `form.submit` or `form.cancel`. |
 
-The acknowledgement is `accepted`, `cancelled`, `settled` (already answered), `invalid` or `disconnected`. A `ui.resolved` event tells every frontend that a request is closed. Since only the controller is attached, it is the one frontend that answers.
+The acknowledgement is `accepted`, `cancelled`, `settled` (already answered), `invalid` or `disconnected`. A `ui.resolved` event tells every frontend that a request is closed. Every connection sees pending requests, but only the controller may answer them: `ui.respond`, `ui.cancel` and `form.*` fail with `not_controller` for a viewer.
 
 ## Versioning and compatibility
 
@@ -204,6 +264,7 @@ The schema is one bundle: every type is a named entry under `$defs`, referenced 
 - Tags are not the first property. With `System.Text.Json` polymorphism, set `JsonSerializerOptions.AllowOutOfOrderMetadataProperties = true` (.NET 9 or later), or write a converter that reads the tag from a `JsonDocument` before choosing the type.
 - Definitions marked `x-decode-only` (`ResponseEnvelope`, and `ServerListOutput` for the `amira-server list` line) are listed in the root `x-decode-only` array. They are never frames.
 - `Fault.code` is an open string. `x-known-codes` lists the documented values; treat others as `operation_failed`.
+- Each `x-operations` entry carries `x-access`: `ledger` (a recorded mutation) and `viewer` (a viewer may call it). Definitions and properties sent only to clients with a capability carry `x-capability`, for example `AttachmentFrame` and `WelcomeFrame.role` with `attach.roles`. `x-known-values` lists the documented values of an open string such as `AttachmentController.state`.
 
 ## Example exchange
 

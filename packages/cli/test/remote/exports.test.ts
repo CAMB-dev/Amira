@@ -45,16 +45,22 @@ const hostOperationsCovered: Exclude<
 test("remote host modules keep an explicit export surface independent of legacy RPC", () => {
   expect(hostOperationsCovered).toBe(true)
   expect(Object.keys(protocol).sort()).toEqual([
+    "ATTACH_INTENTS",
+    "ATTACH_ROLES",
     "CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY",
     "REMOTE_FAULT_CODES",
     "REMOTE_FRONTEND_OPERATIONS",
+    "REMOTE_GATED_FIELDS",
+    "REMOTE_GATED_FRAMES",
     "REMOTE_GATED_VALUES",
     "REMOTE_LIMITS",
     "REMOTE_OPERATIONS",
+    "REMOTE_OPERATION_ACCESS",
     "REMOTE_PEER_LIMITS",
     "REMOTE_PROTOCOL_VERSION",
     "remoteChannel",
     "remoteOperationChannel",
+    "remotePeerCapabilities",
   ])
   expect(Object.keys(schema).sort()).toEqual([
     "REMOTE_FRAME_SCHEMAS",
@@ -109,7 +115,7 @@ test("remote host modules keep an explicit export surface independent of legacy 
   expect(Object.keys(secretPatterns)).toEqual(["secretPatterns"])
   expect(Object.keys(redaction).sort()).toEqual(["ModelStreamRedactor", "redactModelValue"])
   expect(Object.keys(connection)).toEqual(["RemoteConnection"])
-  expect(Object.keys(peerCompat)).toEqual(["remoteMessageForPeer"])
+  expect(Object.keys(peerCompat).sort()).toEqual(["prepareForPeer", "remoteGateKey", "remoteMessageForPeer"])
   expect(Object.keys(errors).sort()).toEqual(["RemoteError", "RemoteReplyError"])
   expect(Object.keys(writer)).toEqual(["RemoteWriter"])
   expect(Object.keys(replay)).toEqual(["RemoteReplay"])
