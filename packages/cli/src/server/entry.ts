@@ -12,6 +12,7 @@ import {
   type DiscoveryOptions,
   listDaemonWorkspaces,
 } from "./discovery.ts"
+import { DaemonUnavailableError } from "./fallback.ts"
 import { hasDaemonHost, selectDaemonHost } from "./host.ts"
 import { serverRelease } from "./identity.ts"
 import { daemonCommand, type ServerLaunch } from "./launch.ts"
@@ -52,19 +53,27 @@ export async function runServerCommand(
   args: string[],
   launch: ServerLaunch = { script: Bun.main, subcommand: [] },
 ): Promise<number> {
-  // No daemon can run here, so there is none to list.
-  if (args.length === 1 && args[0] === "list" && !hasDaemonHost(process.platform)) {
+  const listing = args.length === 1 && args[0] === "list"
+  const none = () => {
     process.stdout.write(`${JSON.stringify({ v: 1, workspaces: [] })}\n`)
     return 0
   }
+  // No daemon can run here, so there is none to list.
+  if (listing && !hasDaemonHost(process.platform)) return none()
   const host = selectDaemonHost(process.platform, {
     command: daemonCommand(process.execPath, launch),
     modelMode: args.at(-1) === "--remote-key" ? "remote-key" : "local-proxy",
   })
   const { platform } = host
   const discover = (cwd: string) => new DaemonDiscovery(cwd, host.layout())
-  if (args.length === 1 && args[0] === "list") {
-    process.stdout.write(listCommandOutput(host.layout(), platform))
+  if (listing) {
+    try {
+      process.stdout.write(listCommandOutput(host.layout(), platform))
+    } catch (error) {
+      // This session may not run daemons (an elevated token, say), so none of its own can exist.
+      if (error instanceof DaemonUnavailableError) return none()
+      throw error
+    }
     return 0
   }
   if (args[0] === "attach" && (args.length === 1 || (args.length === 2 && args[1] === "--remote-key"))) {
