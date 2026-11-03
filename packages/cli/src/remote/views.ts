@@ -1,10 +1,12 @@
 import type { Message } from "@amira/ai"
-import type { ViewControl, ViewDefinition, ViewLine } from "@amira/api"
+import type { ViewControl, ViewDefinition } from "@amira/api"
 import type { FrontendExecuteOptions } from "@amira/core"
 import type { ServerOperations } from "../server/operations.ts"
 import type { RemoteAgentPort } from "./agent-port.ts"
+import { messageLines } from "./message-lines.ts"
+import { remoteSessionBrowser } from "./session-browser.ts"
 
-interface ViewClient extends Pick<RemoteAgentPort, "subscribeWorkspace" | "snapshot"> {
+export interface ViewClient extends Pick<RemoteAgentPort, "subscribeWorkspace" | "snapshot"> {
   request<K extends keyof ServerOperations>(
     operation: K,
     params: ServerOperations[K]["params"],
@@ -159,48 +161,18 @@ export function createRemoteViews(client: ViewClient) {
       const page = pages.get(data)
       if (page?.error) return [{ kind: "error", text: page.error }]
       if (!page) return [{ kind: "muted", text: "Loading remote conversation…" }]
-      const lines: ViewLine[] = []
-      for (const message of page.messages) {
-        if (message.role === "toolResult") continue
-        const text = message.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("\n")
-        if (message.role === "user") lines.push({ kind: "user-message", text: message.display?.text ?? text })
-        else {
-          lines.push(...(options.renderReply?.(text) ?? [{ kind: "text" as const, text }]))
-          for (const call of message.content) {
-            if (call.type !== "toolCall") continue
-            const result = page.messages.find(
-              (item) => item.role === "toolResult" && item.toolCallId === call.id,
-            )
-            if (result?.role === "toolResult")
-              lines.push(
-                ...(options.renderTool?.(
-                  call.name,
-                  {
-                    args: call.args,
-                    text: result.content
-                      .filter((block) => block.type === "text")
-                      .map((block) => block.text)
-                      .join("\n"),
-                    result: { content: result.content, isError: result.isError, details: result.details },
-                  },
-                  options.toolDetail ?? "summary",
-                ) ?? [{ kind: "text" as const, text: call.name }]),
-              )
-          }
-        }
-      }
-      return lines
+      return messageLines(page.messages, options)
     },
     follow: true,
   }
+  const sessions = remoteSessionBrowser(client)
   return {
     get(kind: string) {
+      if (kind === sessions.kind) return sessions
       return kind === job.kind ? job : kind === conversation.kind ? conversation : undefined
     },
     dispose() {
+      sessions.dispose()
       for (const page of pages.values()) page.dispose()
     },
   }

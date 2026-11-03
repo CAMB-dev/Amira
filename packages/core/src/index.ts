@@ -45,6 +45,7 @@ export {
 } from "./frontend/operations.ts"
 export {
   type AgentPort,
+  type FrontendAttachment,
   type FrontendConnectionIssue,
   type FrontendOperations,
   type FrontendSessionIdentity,

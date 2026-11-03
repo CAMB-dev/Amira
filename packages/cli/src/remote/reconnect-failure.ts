@@ -101,6 +101,14 @@ export function classifyReconnectFailure(error: unknown): ReconnectFailure {
       recovery: "Automatic reconnect stopped. Check SSH installation and local setup, then use /reconnect.",
       retryable: false,
     }
+  // Not a setup problem: other viewers are loading a snapshot, and the protocol says retry shortly.
+  if ((error instanceof RemoteReplyError || error instanceof RemoteError) && error.code === "workspace_busy")
+    return {
+      code: "workspace_busy",
+      message: "The remote workspace is busy: other viewers are still loading it.",
+      recovery: "Retrying shortly.",
+      retryable: true,
+    }
   if (error instanceof RemoteReplyError || error instanceof RemoteError)
     return {
       code: error.code,

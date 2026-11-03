@@ -26,6 +26,7 @@ import { type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
 import { renderViewLines } from "../view-lines.ts"
 import type { TurnActivity } from "./activity.ts"
+import { attachmentBanner, attachmentStatus } from "./attachment-banner.ts"
 import type { CommandRunner } from "./command-runner.ts"
 import type { DockedView } from "./dock.ts"
 import { type NoticeStrip, type Outgoing, otherWay, pendingMessageRows, type WhileWorking } from "./outbox.ts"
@@ -132,15 +133,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   const statusItems = (): StatusEntry[] => {
     const connection = deps.frontend?.connection
     const connectionItems: StatusEntry[] = connection
-      ? [
-          {
-            id: "connection",
-            align: "left",
-            tone: connection === "connected" ? "muted" : "warning",
-            priority: 100,
-            text: `Remote ${connection}`,
-          },
-        ]
+      ? attachmentStatus(deps.frontend?.attachment, connection)
       : []
     // Root model and permission decorations must not masquerade as the owned runtime.
     if (deps.conversationFocused?.()) return connectionItems
@@ -293,6 +286,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       return panelsShown ? [...lines, ...gap] : []
     }),
     new View((width, ctx) => [
+      // While this TUI only watches, a persistent row says so, and who controls the workspace.
+      ...attachmentBanner(deps.frontend?.attachment, ctx.theme, width),
       ...deps
         .noticeStrip()
         .render(ctx.theme)
@@ -497,17 +492,25 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const cancellable = deps.commandActivity().hasCancellable() && !deps.activity().compacting
     const waiting = deps.queued().length > 0 || deps.steering().length > 0
     const stop = cancellable ? "cancel command" : waiting ? "send queued" : "stop"
+    // A viewer cannot stop the controller's turn: the hint says how to get control instead.
+    const viewer = deps.frontend?.attachment?.role === "viewer"
     return [
-      item(keys.label("permissions.mode"), "mode", 5),
+      // A viewer cannot change the mode, so its key is not offered.
+      !viewer && item(keys.label("permissions.mode"), "mode", 5),
       deps.dock?.()
         ? item(keyLabel({ name: "escape" }), "close dock", 6)
-        : (working || cancellable || deps.activity().compacting) && item(interruptKey, stop, 6),
+        : viewer && !cancellable
+          ? (working || deps.activity().compacting) && item("/take", "read-only, take control", 6)
+          : (working || cancellable || deps.activity().compacting) && item(interruptKey, stop, 6),
       item(keys.label("tool-output"), "detail", 5),
       item(keys.label("help"), "keys", 5),
       !editor.isEmpty && item(newlineKey, "newline", 1),
       (working || cancellable) && item(keys.label("submit"), working ? enterDoes : "send", 4),
       working && item(queueKey, otherWay(enterDoes), 3),
-      working && deps.canRewind() && item(interruptKey && `${interruptKey} ${interruptKey}`, "rewind", 2),
+      working &&
+        !viewer &&
+        deps.canRewind() &&
+        item(interruptKey && `${interruptKey} ${interruptKey}`, "rewind", 2),
       panelsCollapsed && panelsShown && item(keys.label("panels.toggle"), "unfold panels", 4),
     ]
   }
