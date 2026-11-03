@@ -133,16 +133,15 @@ test(
 )
 
 test("server list in a session that may not run daemons is an empty list", async () => {
-  const real = host.selectDaemonHost(process.platform === "darwin" ? "linux" : process.platform, {
-    command: ["amira"],
-    modelMode: "local-proxy",
-  })
+  // Only the layout is reached before the refusal, so no real platform is built on any runner.
   const selected = spyOn(host, "selectDaemonHost").mockReturnValue({
-    ...real,
+    platform: {},
     layout: () => {
       throw new DaemonUnavailableError("integrity")
     },
-  })
+  } as unknown as ReturnType<typeof host.selectDaemonHost>)
+  const platformProperty = Object.getOwnPropertyDescriptor(process, "platform")!
+  Object.defineProperty(process, "platform", { value: "win32" })
   const written: string[] = []
   const write = spyOn(process.stdout, "write").mockImplementation(((chunk: string) => {
     written.push(chunk)
@@ -151,6 +150,7 @@ test("server list in a session that may not run daemons is an empty list", async
   try {
     expect(await runServerCommand(["list"], cli)).toBe(0)
   } finally {
+    Object.defineProperty(process, "platform", platformProperty)
     write.mockRestore()
     selected.mockRestore()
   }
