@@ -15,6 +15,7 @@ import { CONTENT_INSET, contentRoom } from "../grid.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { TranscriptView } from "../view.ts"
 import type { TurnActivity } from "./activity.ts"
+import { VIEWER_STOP_NOTICE } from "./attachment-banner.ts"
 import type { DisplayModel } from "./frontend-display.ts"
 import { DOUBLE_ESC_MS } from "./startup.ts"
 
@@ -329,12 +330,20 @@ export function createOutbox(deps: OutboxDeps): Outbox {
    * Esc or Ctrl+C while working. With steering or queued messages waiting, the turn stops and
    * they go out at once, merged in the order they were typed (on turn.end).
    */
+  const viewing = () => deps.frontend.attachment?.role === "viewer"
+
   function interrupt(expectedTurnId?: string) {
     const agent = deps.agent()
     if (expectedTurnId !== undefined && agent.turnId !== expectedTurnId) return
     const turnId = expectedTurnId ?? agent.turnId
     const holdId = turnId === undefined ? agent.holdId : undefined
     if (turnId === undefined && holdId === undefined) return
+    // A viewer stops nothing: the turn is the controller's, so nothing is marked interrupted.
+    if (viewing()) {
+      view.notice("warning", VIEWER_STOP_NOTICE)
+      view.requestRender()
+      return
+    }
     const target = turnId !== undefined ? { turnId } : { holdId }
     const sessionGeneration = frontendIdentity(deps.frontend).sessionGeneration
     deps.onInterrupt()
@@ -593,7 +602,8 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       const now = Date.now()
       const double = now - lastInterruptAt < DOUBLE_ESC_MS
       lastInterruptAt = double ? 0 : now
-      if (!double) {
+      // A viewer neither stops nor rewinds: interrupt only says so.
+      if (!double || viewing()) {
         if (activity.working || activity.compacting) interrupt()
         return
       }

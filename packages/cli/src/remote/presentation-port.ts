@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { AnyEvent, CommandContext, CommandDefinition } from "@amira/api"
 import {
   type AgentPort,
@@ -10,12 +11,13 @@ import {
   rankMatches,
   StatusRegistry,
 } from "@amira/core"
-import type { FrontendEffect } from "@amira/tui"
+import type { FrontendEffect, OverlayRequestBackend } from "@amira/tui"
 import { localCommandContext } from "../../../core/src/frontend/operations.ts"
 import type { ServerOperations } from "../server/operations.ts"
 import type { RemoteAgentPort } from "./agent-port.ts"
 import { waitForRemoteEffects } from "./effect-delivery.ts"
 import { sendRemoteImages } from "./image-upload.ts"
+import { remoteAttachment } from "./presence.ts"
 
 /** Pure local commands and semantic presentation. No local Agent, tools, stores or extension loading. */
 export function remotePresentationPort(remote: RemoteAgentPort) {
@@ -29,7 +31,15 @@ export function remotePresentationPort(remote: RemoteAgentPort) {
   const effects = new Set<(effect: FrontendEffect) => void>()
   const connections = new Set<() => void>()
   let connectionIssue: FrontendConnectionIssue | undefined
+  let attachmentNotice: string | undefined
+  const announce = () => {
+    for (const listener of connections) listener()
+  }
   let seq = 0
+  /** Dialogs this TUI asks itself, such as a binding approval after /take; never sent remotely. */
+  const localDialogs = new Map<string, { event: AnyEvent; answer(value: boolean): void }>()
+  let disposed = false
+  const localIds = new Set<string>()
   let pending = new Set(remote.pendingRequests.map((request) => request.requestId))
   const restore = (listener: (event: AnyEvent, context?: { replay: boolean }) => void) => {
     for (const event of remote.workspaceSnapshot.activity.events)
@@ -61,6 +71,24 @@ export function remotePresentationPort(remote: RemoteAgentPort) {
         { replay: true },
       )
     }
+    for (const dialog of localDialogs.values()) listener(dialog.event, { replay: true })
+  }
+  const broadcast = (event: AnyEvent) => {
+    for (const listener of events) listener(event, { replay: false })
+  }
+  const settleLocal = (requestId: string, value: boolean | undefined) => {
+    const dialog = localDialogs.get(requestId)
+    if (!dialog) return false
+    localDialogs.delete(requestId)
+    dialog.answer(value === true)
+    broadcast({
+      seq: ++seq,
+      ts: Date.now(),
+      sessionId: "host",
+      type: "ui.resolved",
+      data: { requestId, cancelled: value === undefined, ...(value === undefined ? {} : { value }) },
+    })
+    return true
   }
   const emit = (command: string, text: string, level: "info" | "warning" | "error" = "info") => {
     const event: AnyEvent = {
@@ -96,6 +124,9 @@ export function remotePresentationPort(remote: RemoteAgentPort) {
     },
     get connectionIssue() {
       return connectionIssue
+    },
+    get attachment() {
+      return remoteAttachment(remote, attachmentNotice)
     },
     subscribe: (listener) => remote.subscribe(listener),
     subscribeConnection(listener) {
@@ -184,12 +215,14 @@ export function remotePresentationPort(remote: RemoteAgentPort) {
   refreshStatus()
   const offWorkspace = remote.subscribeWorkspace((update, context) => {
     if ("kind" in update && update.kind === "semantic") refreshStatus()
-    if (!("kind" in update) || update.kind !== "effect" || context.replay) return
+    // Effects belong to the controller's commands: a viewer never acts on one, and replay never does.
+    if (!("kind" in update) || update.kind !== "effect" || context.replay || remote.readOnly) return
     const effect = update.effect
     const ctx = localCommandContext(frontend, effect.invocationId)
     if (effect.invocationId && (!ctx || ctx.isFrontendCurrent?.() === false)) return
     for (const listener of effects) listener(effect)
   })
+  const offPresence = remote.subscribePresence(announce)
   const offRequests = remote.subscribeEvents((event) => {
     if (event.type === "ui.request") pending.add(event.data.requestId)
     else if (event.type === "ui.resolved") pending.delete(event.data.requestId)
@@ -220,7 +253,44 @@ export function remotePresentationPort(remote: RemoteAgentPort) {
     refreshCommands,
     setConnectionIssue(issue?: FrontendConnectionIssue) {
       connectionIssue = issue && Object.freeze({ ...issue })
-      for (const listener of connections) listener()
+      announce()
+    },
+    /**
+     * Asks a yes/no question in this TUI's own dialog; resolves false when declined, dismissed
+     * or disposed. Answered locally only: nothing reaches the daemon.
+     */
+    confirm(title: string, message?: string): Promise<boolean> {
+      if (disposed) return Promise.resolve(false)
+      const requestId = `local-${randomUUID()}`
+      const event: AnyEvent = {
+        seq: ++seq,
+        ts: Date.now(),
+        sessionId: "host",
+        type: "ui.request",
+        data: { requestId, kind: "confirm", title, ...(message ? { message } : {}) },
+      }
+      const answer = Promise.withResolvers<boolean>()
+      localIds.add(requestId)
+      localDialogs.set(requestId, { event, answer: answer.resolve })
+      broadcast(event)
+      return answer.promise
+    },
+    /** The overlay backend, with this TUI's own dialogs answered here instead of remotely. */
+    requests<B extends OverlayRequestBackend>(backend: B): B {
+      return {
+        ...backend,
+        requestState: (id: string) =>
+          localDialogs.has(id) ? "pending" : localIds.has(id) ? "settled" : backend.requestState(id),
+        respond: (id: string, value: unknown) =>
+          settleLocal(id, typeof value === "boolean" ? value : undefined)
+            ? { status: typeof value === "boolean" ? "accepted" : "cancelled" }
+            : backend.respond(id, value),
+      }
+    },
+    /** A persistent attachment notice, such as who took control; undefined clears it. */
+    setAttachmentNotice(notice?: string) {
+      attachmentNotice = notice
+      announce()
     },
     completions: {
       list: () => [...metadata.commands, ...commands.list()],
@@ -266,7 +336,10 @@ export function remotePresentationPort(remote: RemoteAgentPort) {
     },
     registerCommand: (command: CommandDefinition) => commands.register(command, "builtin:tui"),
     dispose() {
+      disposed = true
+      for (const requestId of [...localDialogs.keys()]) settleLocal(requestId, undefined)
       offWorkspace()
+      offPresence()
       offReset()
       offRequests()
       for (const off of unregister) off()

@@ -6,18 +6,19 @@ import { remoteBuiltinPresenters } from "../frontend/builtin-presenters.ts"
 import { loadProviderModelCache } from "../provider-models.ts"
 import { createRemoteAgentPort } from "./agent-port.ts"
 import { createRemoteOverlayBackend } from "./agent-port-requests.ts"
+import { attachRetries } from "./attach-retry.ts"
+import { bindingApprover, remoteRoleControl } from "./attach-roles.ts"
 import { BindingApprovals } from "./binding-approvals.ts"
 import type { RemoteAttachContext } from "./command.ts"
 import { remoteConversationSource } from "./conversations.ts"
-import { RemoteError } from "./errors.ts"
 import { createRemoteFileSource } from "./file-source.ts"
 import { localModelBindings } from "./local-models.ts"
 import { loadRemoteLocalSettings } from "./local-settings.ts"
 import { ModelBrokerPeer } from "./model-peer.ts"
 import { remotePresentationPort } from "./presentation-port.ts"
 import { CONTEXT_WINDOW_SOURCE_PROVIDER_CAPABILITY, REMOTE_PEER_LIMITS } from "./protocol.ts"
-import { classifyReconnectFailure } from "./reconnect-failure.ts"
 import { observeSshRelay } from "./relay-io.ts"
+import { REMOTE_SESSIONS_VIEW } from "./session-browser.ts"
 import { createRemoteViews } from "./views.ts"
 
 /** Mount only local presentation. The remote port owns no local agent, tools or conversation store. */
@@ -32,6 +33,8 @@ export async function attachRemoteUi(
 ): Promise<number> {
   const local = options.local ?? loadRemoteLocalSettings()
   let mounted = false
+  /** A /take is binding models: the only time a new binding is asked after the UI opened. */
+  let promoting = false
   let unavailable: string[] = []
   const models =
     context.modelMode === "remote-key"
@@ -43,7 +46,13 @@ export async function attachRemoteUi(
             modelLimits: loadProviderModelCache(path.join(local.home, "cache", "provider-models.json"))
               .lookup,
           }),
-          async (binding) => !mounted && (await options.approve?.(binding)) === true,
+          // Once the UI owns the terminal, a /take asks in its own dialog.
+          bindingApprover({
+            mounted: () => mounted,
+            promoting: () => promoting,
+            beforeMount: options.approve,
+            confirm: (title, message) => presentation.confirm(title, message),
+          }),
           new BindingApprovals(local.home, context.host, context.workspace),
         )
   const brokerPeer = models ? new ModelBrokerPeer(models.broker) : undefined
@@ -66,6 +75,8 @@ export async function attachRemoteUi(
       ],
       snapshot: true,
     },
+    // The first TUI on a workspace controls it; any later one watches until it takes control.
+    intent: "auto",
     brokerPeer,
     validateWelcome: (welcome) => {
       replacementPending = context.validateWelcome(welcome).replacementPending
@@ -98,66 +109,57 @@ export async function attachRemoteUi(
   const presentation = remotePresentationPort(port)
   const views = createRemoteViews(port)
   const requests = createRemoteOverlayBackend(port)
+  const dialogs = presentation.requests(requests)
   const conversations = remoteConversationSource(port)
   const files = createRemoteFileSource(port)
-  let stopped = false
-  let reconnecting = false
-  let reconnectBlocked = false
-  let retryTimer: ReturnType<typeof setTimeout> | undefined
-  const reportFailure = (error: unknown) => {
-    const failure = classifyReconnectFailure(error)
-    presentation.setConnectionIssue(failure)
-    reconnectBlocked = !failure.retryable
-    return failure.retryable
-  }
-  const retry = async () => {
-    if (stopped || reconnecting || reconnectBlocked) return
-    reconnecting = true
-    try {
-      await port.reconnect()
-      await models?.negotiate(port)
-      if (port.status !== "connected")
-        throw port.disconnectionReason ?? new RemoteError("disconnected", "Remote attachment unavailable")
-      presentation.setConnectionIssue()
-    } catch (error) {
-      if (stopped) return
-      if (reportFailure(error))
-        retryTimer = setTimeout(() => {
-          retryTimer = undefined
-          void retry()
-        }, 2000)
-    } finally {
-      reconnecting = false
-    }
-  }
-  const offStatus = port.subscribeStatus((status) => {
-    if (
-      status === "disconnected" &&
-      !stopped &&
-      !reconnecting &&
-      !reconnectBlocked &&
-      reportFailure(port.disconnectionReason)
-    )
-      void retry()
+  // Declared before use: the retry loop reports takeovers through the role control.
+  let roles: ReturnType<typeof remoteRoleControl> | undefined
+  const retries = attachRetries({
+    port,
+    negotiate: models && (() => models.negotiate(port)),
+    setConnectionIssue: presentation.setConnectionIssue,
+    lost: (reason) => roles?.lost(reason) === true,
+  })
+  roles = remoteRoleControl({
+    port,
+    presentation,
+    busy: () => retries.busy,
+    reconnect: retries.reconnect,
+    restore: retries.restore,
+    async promoted() {
+      promoting = true
+      try {
+        const missing = (await models?.negotiate(port)) ?? []
+        return missing.length
+          ? [
+              `Local provider binding unavailable for ${missing.join(", ")}. Configure and approve the provider on this computer, then reattach.`,
+            ]
+          : []
+      } finally {
+        promoting = false
+      }
+    },
+  })
+  const offTake = presentation.registerCommand(roles.command)
+  const offSessions = presentation.registerCommand({
+    name: "sessions",
+    description: "Browse this workspace's stored sessions read-only, without switching to one",
+    run(_args, ctx) {
+      if (!ctx.openView?.({ kind: REMOTE_SESSIONS_VIEW, data: {} }))
+        ctx.print("Stored sessions cannot be shown here.", "warning")
+    },
   })
   const offReconnect = presentation.registerCommand({
     name: "reconnect",
     description: "Retry attaching after fixing a remote connection or setup issue",
     run(_args, ctx) {
-      if (reconnecting) return ctx.print("Reconnect is already in progress.")
-      if (port.status === "connected" && !reconnectBlocked)
-        return ctx.print("The remote workspace is already connected.")
-      if (retryTimer) {
-        clearTimeout(retryTimer)
-        retryTimer = undefined
-      }
-      reconnectBlocked = false
-      presentation.setConnectionIssue()
-      void retry()
+      const outcome = retries.manual()
+      if (outcome === "in-progress") return ctx.print("Reconnect is already in progress.")
+      if (outcome === "connected") return ctx.print("The remote workspace is already connected.")
     },
   })
   try {
-    unavailable = (await models?.negotiate(port)) ?? []
+    unavailable = (port.readOnly ? undefined : await models?.negotiate(port)) ?? []
     await presentation.refreshCommands()
     mounted = true
     return await (options.interactive ?? runInteractive)({
@@ -188,7 +190,7 @@ export async function attachRemoteUi(
         )
         return { data: result.data, mimeType: result.mimeType, name: result.name }
       },
-      requests,
+      requests: dialogs,
       themes: local.themes,
       keybindings: local.keybindings,
       settings: local.settings,
@@ -211,10 +213,11 @@ export async function attachRemoteUi(
       ].join("\n"),
     })
   } finally {
-    stopped = true
-    if (retryTimer) clearTimeout(retryTimer)
-    offStatus()
+    retries.stop()
     offReconnect()
+    offTake()
+    offSessions()
+    roles.dispose()
     requests.dispose()
     conversations.dispose()
     views.dispose()

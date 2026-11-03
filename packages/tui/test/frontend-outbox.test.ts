@@ -3,9 +3,10 @@ import { createAi, createMockDialect } from "@amira/ai"
 import { Agent, type AgentPort, createLocalAgentPort } from "@amira/core"
 import { Editor, type EditorPart } from "@amira/tui-kit"
 import { createTurnActivity } from "../src/app/activity.ts"
+import { VIEWER_STOP_NOTICE } from "../src/app/attachment-banner.ts"
 import { createOutbox, type Outgoing, toPrompt } from "../src/app/outbox.ts"
 
-function fixture(forward = true) {
+function fixture(forward = true, options: { viewer?: boolean } = {}) {
   const ai = createAi({
     dialects: [createMockDialect([])],
     providers: [{ id: "mock", dialect: "mock", baseUrl: "" }],
@@ -22,8 +23,10 @@ function fixture(forward = true) {
       return forward && calls.length > 1 ? local.execute(operation, params, options) : pending.promise
     },
     detach: async () => {},
+    ...(options.viewer ? { attachment: { role: "viewer" as const, viewers: 0 } } : {}),
   }
   const editor = new Editor()
+  let interrupts = 0
   const activity = createTurnActivity()
   const notices: string[] = []
   let changes = 0
@@ -37,9 +40,11 @@ function fixture(forward = true) {
     takeEcho: () => false,
     echoedNote: () => {},
     noModelYet: () => false,
-    canRewind: () => false,
+    canRewind: () => options.viewer === true,
     openRewind: () => false,
-    onInterrupt: () => {},
+    onInterrupt: () => {
+      interrupts++
+    },
     changed: () => changes++,
   })
   return {
@@ -53,6 +58,9 @@ function fixture(forward = true) {
     outbox,
     get changes() {
       return changes
+    },
+    get interrupts() {
+      return interrupts
     },
     async dispose() {
       outbox.dispose()
@@ -427,6 +435,25 @@ for (const terminal of [undefined, "injected", "dropped"] as const) {
     }
   })
 }
+
+test("Esc on a viewer stops nothing, marks nothing interrupted and says it is read-only", async () => {
+  const s = fixture(false, { viewer: true })
+  const turn = s.agent.prompt("the controller's turn")
+  try {
+    s.activity.beginSend()
+    s.outbox.interrupt()
+    s.outbox.pressInterrupt()
+    s.outbox.pressInterrupt()
+    expect(s.calls).toEqual([])
+    expect(s.interrupts).toBe(0)
+    expect(s.notices.length).toBeGreaterThan(0)
+    expect(new Set(s.notices)).toEqual(new Set([VIEWER_STOP_NOTICE]))
+  } finally {
+    s.agent.abort()
+    await turn.catch(() => {})
+    await s.dispose()
+  }
+})
 
 test("a late abort rejection cannot print into a replacement turn", async () => {
   const s = fixture(false)

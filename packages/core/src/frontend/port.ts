@@ -36,6 +36,18 @@ export interface FrontendConnectionIssue {
   readonly retryable: boolean
 }
 
+/** This frontend's role on a workspace shared with other clients; display text is plain. */
+export interface FrontendAttachment {
+  /** A viewer only reads: the frontend refuses changes locally and sends none. */
+  readonly role: "controller" | "viewer"
+  /** Other clients watching read-only, never counting this one. */
+  readonly viewers: number
+  /** Who controls the workspace now, e.g. "amira-gui 0.2.0 (win32-x64)"; absent when nobody does. */
+  readonly controller?: string
+  /** A persistent explanation, e.g. that another client took control. */
+  readonly notice?: string
+}
+
 export interface AgentPort {
   /** Current control authority, independent of successful transcript/state projection. */
   readonly identity?: FrontendSessionIdentity
@@ -55,6 +67,8 @@ export interface AgentPort {
   readonly connection?: "connecting" | "connected" | "reconnecting" | "disconnected"
   /** Cached local setup/transport failure and explicit recovery; announced by subscribeConnection. */
   readonly connectionIssue?: FrontendConnectionIssue
+  /** Role and presence on a shared workspace, announced by subscribeConnection; absent locally. */
+  readonly attachment?: FrontendAttachment
   subscribeConnection?(listener: () => void): () => void
   execute<K extends keyof FrontendOperations>(
     operation: K,

@@ -12,6 +12,7 @@ import { bindLocalCommandContext } from "../../../core/src/frontend/operations.t
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { PromptHistory } from "../prompt-history.ts"
 import type { TranscriptView } from "../view.ts"
+import { VIEWER_INPUT_NOTICE } from "./attachment-banner.ts"
 import type { CommandRunner, CommandRunnerOptions } from "./command-runner.ts"
 import type { Composer } from "./composer.ts"
 import type { DisplayModel } from "./frontend-display.ts"
@@ -101,6 +102,14 @@ export function createSubmission(deps: SubmissionDeps) {
       return
     }
     if (!trimmed && !hasImages) return
+    // A viewer sends nothing: only slash commands run, such as /take; the draft stays put.
+    if (deps.port?.attachment?.role === "viewer" && (hasImages || !parseCommandLine(trimmed))) {
+      editor.setParts(parts)
+      const visible = deps.composerView?.() ?? view
+      visible.notice("warning", VIEWER_INPUT_NOTICE)
+      visible.requestRender()
+      return
+    }
     editor.clear()
     history.add(parts)
     composer.resetHistory()
