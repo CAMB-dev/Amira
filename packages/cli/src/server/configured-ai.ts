@@ -1,4 +1,4 @@
-import { createAi } from "@amira/ai"
+import { type AiOptions, createAi } from "@amira/ai"
 import { resolveRemoteSettings } from "@amira/core"
 import type { Config } from "../config.ts"
 import { loadProviderModelCache } from "../provider-models.ts"
@@ -7,9 +7,15 @@ import type { ServerAiRoute } from "../server-main.ts"
 
 /** No credential store/environment lookup in the default route, even during metadata discovery. */
 export function configuredServerAi(config: Config, mode: "proxy" | "remote-key"): ServerAiRoute {
-  const modelLimits = loadProviderModelCache().lookup
+  const cache = loadProviderModelCache()
+  const modelLimits = cache.lookup
   if (mode === "remote-key") {
-    return { mode, ai: createAi({ providers: config.providers, apiKeys: config.apiKeys, modelLimits }) }
+    const learnModelLimits: AiOptions["learnModelLimits"] = (provider, modelId, limits) =>
+      void cache.learn(provider, modelId, limits)
+    return {
+      mode,
+      ai: createAi({ providers: config.providers, apiKeys: config.apiKeys, modelLimits, learnModelLimits }),
+    }
   }
   const metadataAi = createAi({
     modelLimits,
