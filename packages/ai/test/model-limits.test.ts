@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { createCatalog, findCatalogModel, type ModelCatalog } from "../src/catalog.ts"
 import { createAi } from "../src/client.ts"
 import { DEFAULT_CAPS } from "../src/providers.ts"
@@ -89,7 +89,7 @@ test("disabled and local catalogs do not borrow limits", () => {
   }
 })
 
-test("direct ids beat vendor-stripped ids; ambiguous case-insensitive ids do not match", () => {
+test("direct ids beat vendor-stripped ids; ambiguous case-insensitive ids take the smaller limit", () => {
   const catalog = createCatalog({
     one: {
       models: {
@@ -102,7 +102,8 @@ test("direct ids beat vendor-stripped ids; ambiguous case-insensitive ids do not
   })
   expect(findCatalogModel(catalog, proxy, "vendor/m")).toEqual({ contextWindow: 500_000 })
   expect(findCatalogModel(catalog, proxy, "models/vendor/m")).toEqual({ contextWindow: 500_000 })
-  expect(findCatalogModel(catalog, proxy, "dupe")).toBeUndefined()
+  // No exact match: the fuzzy index holds both spellings, and borrows the safer window.
+  expect(findCatalogModel(catalog, proxy, "dupe")).toEqual({ contextWindow: 8000 })
   expect(findCatalogModel(catalog, proxy, "Dupe")).toEqual({ contextWindow: 9000 })
 })
 
@@ -163,5 +164,86 @@ test("settings > endpoint > own catalog > borrowed catalog > defaults, per field
     contextWindow: 50_000,
     maxOutput: 1000,
     contextWindowSource: "settings",
+  })
+})
+
+describe("fuzzy catalog matching for borrowed limits", () => {
+  const catalog = createCatalog({
+    anthropic: {
+      models: {
+        "claude-sonnet-4-5": { limit: { context: 200_000, output: 64_000 }, cost: { input: 3, output: 15 } },
+        "claude-sonnet-4-5-20250929": { limit: { context: 1_000_000, output: 64_000 } },
+        "claude-opus-4-1": { limit: { context: 200_000, output: 32_000 }, tool_call: false },
+      },
+    },
+    openai: {
+      models: {
+        "gpt-5": { limit: { context: 400_000, output: 128_000 } },
+        "gpt-5-mini": { limit: { context: 272_000, output: 64_000 } },
+        "gpt-4.1": { limit: { context: 1_047_576, output: 32_768 } },
+      },
+    },
+    meta: { models: { llama3: { limit: { context: 8192, output: 2048 } } } },
+  })
+
+  test.each([
+    ["Claude-Sonnet-4.5", 200_000],
+    ["anthropic/claude-sonnet-4.5", 200_000],
+    ["openrouter/anthropic/claude-sonnet-4-5:thinking", 200_000],
+    ["claude-sonnet-4-5@20250929", 200_000],
+    ["claude-sonnet-4-5-2025-09-29", 200_000],
+    ["claude-sonnet-4-5-latest", 200_000],
+    ["claude-opus-4.1:beta", 200_000],
+    ["GPT-4-1", 1_047_576],
+    ["openai/gpt-5:free", 400_000],
+  ])("%s borrows %d", (id, contextWindow) => {
+    expect(findCatalogModel(catalog, proxy, id)?.contextWindow).toBe(contextWindow)
+  })
+
+  test("exact ids win over fuzzy ones", () => {
+    // The dated id is in the catalog itself, so its own window is used, not the family's minimum.
+    expect(findCatalogModel(catalog, proxy, "claude-sonnet-4-5-20250929")?.contextWindow).toBe(1_000_000)
+    expect(findCatalogModel(catalog, proxy, "gpt-5-mini")?.contextWindow).toBe(272_000)
+  })
+
+  test("only the listed decorations are cut, never a different model's suffix", () => {
+    for (const id of [
+      "gpt-5-nano",
+      "gpt-5-pro:free",
+      "claude-sonnet-4",
+      "llama3:70b",
+      "gpt-5-0613",
+      "latest",
+    ]) {
+      expect(findCatalogModel(catalog, proxy, id)).toBeUndefined()
+    }
+    expect(findCatalogModel(catalog, proxy, "gpt-5")?.contextWindow).toBe(400_000)
+  })
+
+  test("fuzzy matches borrow only token limits", () => {
+    const model = createAi({ providers: [proxy], catalog }).model("local-test/claude-opus-4.1")
+    expect(model).toMatchObject({ contextWindow: 200_000, maxOutput: 32_000, contextWindowSource: "catalog" })
+    expect(model.caps).toEqual(DEFAULT_CAPS)
+    expect(
+      createAi({ providers: [proxy], catalog }).model("local-test/claude-sonnet-4.5").cost,
+    ).toBeUndefined()
+  })
+
+  test("the normalized index is built once per catalog", () => {
+    let lists = 0
+    const counted: ModelCatalog = {
+      find: catalog.find,
+      providers: catalog.providers!,
+      list: (vendor) => {
+        lists++
+        return catalog.list!(vendor)
+      },
+    }
+    findCatalogModel(counted, proxy, "claude-sonnet-4.5")
+    const built = lists
+    expect(built).toBeGreaterThan(0)
+    findCatalogModel(counted, proxy, "gpt-4-1")
+    findCatalogModel(counted, proxy, "nothing-like-it")
+    expect(lists).toBe(built)
   })
 })

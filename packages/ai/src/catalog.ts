@@ -77,19 +77,15 @@ export function findCatalogModel(
   if (!memo.has(modelId)) {
     const collect = (mid: string): ModelLimits | undefined => {
       const limits: ModelLimits = {}
-      for (const vendor of catalog.providers?.() ?? []) {
-        const model = catalog.find(vendor, mid)
-        for (const field of ["contextWindow", "maxOutput"] as const) {
-          const value = model?.[field]
-          if (value !== undefined) limits[field] = Math.min(limits[field] ?? value, value)
-        }
-      }
+      for (const vendor of catalog.providers?.() ?? []) addLimits(limits, catalog.find(vendor, mid))
       return Object.keys(limits).length ? limits : undefined
     }
     const bare = modelId.replace(/^models\//, "")
     memo.set(
       modelId,
-      collect(modelId) ?? (bare.includes("/") ? collect(bare.slice(bare.indexOf("/") + 1)) : undefined),
+      collect(modelId) ??
+        (bare.includes("/") ? collect(bare.slice(bare.indexOf("/") + 1)) : undefined) ??
+        fuzzyIndex(catalog).get(normalizedModelId(modelId)),
     )
   }
   const limits = memo.get(modelId)
@@ -103,6 +99,56 @@ export function findCatalogModel(
       ? { maxOutput: limits.maxOutput }
       : {}),
   }
+}
+
+/** Keeps the smaller of each limit: when entries disagree, the safe one. */
+function addLimits(limits: ModelLimits, model: ModelLimits | undefined): void {
+  for (const field of ["contextWindow", "maxOutput"] as const) {
+    const value = model?.[field]
+    if (value !== undefined) limits[field] = Math.min(limits[field] ?? value, value)
+  }
+}
+
+const TAG = /(?::[a-z][a-z-]*)$/
+const SNAPSHOT = /(?:[-@]\d{8}|-\d{4}-\d{2}-\d{2}|-latest)$/
+
+/**
+ * A model id without the decorations relays add to the same model: case, any leading
+ * `vendor/` segments, `:tag` suffixes without digits (`:free`, `:beta`, `:thinking`; not
+ * `:70b`), trailing date stamps and `-latest`, and `.` for `-` between version digits
+ * (`claude-sonnet-4.5` is `claude-sonnet-4-5`). Nothing else is cut, so `gpt-5-mini` stays
+ * apart from `gpt-5`.
+ */
+function normalizedModelId(modelId: string): string {
+  let id = modelId.toLowerCase()
+  id = id.slice(id.lastIndexOf("/") + 1)
+  for (let prev = ""; prev !== id; ) {
+    prev = id
+    id = id.replace(TAG, "").replace(SNAPSHOT, "")
+  }
+  return id.replace(/(\d)\.(?=\d)/g, "$1-")
+}
+
+const fuzzyIndexes = new WeakMap<ModelCatalog, Map<string, ModelLimits>>()
+
+/** Every vendor's token limits by normalized model id, built once per catalog. */
+function fuzzyIndex(catalog: ModelCatalog): Map<string, ModelLimits> {
+  let index = fuzzyIndexes.get(catalog)
+  if (index) return index
+  index = new Map()
+  for (const vendor of catalog.providers?.() ?? []) {
+    for (const mid of catalog.list?.(vendor) ?? []) {
+      const model = catalog.find(vendor, mid)
+      if (model?.contextWindow === undefined && model?.maxOutput === undefined) continue
+      const key = normalizedModelId(mid)
+      if (!key) continue
+      const limits = index.get(key) ?? {}
+      addLimits(limits, model)
+      index.set(key, limits)
+    }
+  }
+  fuzzyIndexes.set(catalog, index)
+  return index
 }
 
 type Raw = Record<string, any>
