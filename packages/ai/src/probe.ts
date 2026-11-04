@@ -82,11 +82,7 @@ export async function listModels(ep: ProbeEndpoint, opts: ProbeOptions = {}): Pr
           if (typeof m?.id !== "string" || !m.id) return []
           const out: ListedModel = { id: m.id }
           if (typeof m.name === "string" && m.name !== m.id) out.name = m.name
-          const ctx = m.context_length ?? m.context_window ?? m.max_model_len
-          if (positive(ctx)) out.contextWindow = ctx
-          const maxOut = m.top_provider?.max_completion_tokens ?? m.max_output_tokens
-          if (positive(maxOut)) out.maxOutput = maxOut
-          return [out]
+          return [{ ...out, ...listedLimits(m, OPENAI_CONTEXT, OPENAI_MAX_OUTPUT) }]
         }),
       )
     }
@@ -105,7 +101,11 @@ export async function listModels(ep: ProbeEndpoint, opts: ProbeOptions = {}): Pr
           throw new ProbeError(`${host(base)} answered without a model list`, "format")
         for (const m of body.data) {
           if (typeof m?.id !== "string") continue
-          out.push({ id: m.id, ...(typeof m.display_name === "string" ? { name: m.display_name } : {}) })
+          out.push({
+            id: m.id,
+            ...(typeof m.display_name === "string" ? { name: m.display_name } : {}),
+            ...listedLimits(m, ANTHROPIC_CONTEXT, ANTHROPIC_MAX_OUTPUT),
+          })
         }
         if (!body.has_more || typeof body.last_id !== "string") break
         after = body.last_id
@@ -332,6 +332,43 @@ function short(s: string, max = 200): string {
 function uniq(models: ListedModel[]): ListedModel[] {
   const seen = new Set<string>()
   return models.filter((m) => !seen.has(m.id) && seen.add(m.id))
+}
+
+/** Where OpenAI-compatible servers (vLLM, OpenRouter, relays) put a model's limits, first wins. */
+const OPENAI_CONTEXT = [
+  "context_length",
+  "context_window",
+  "max_model_len",
+  "max_context_length",
+  "context_size",
+  "limits.context",
+  "limits.max_context_tokens",
+  "top_provider.context_length",
+  "max_input_tokens",
+]
+const OPENAI_MAX_OUTPUT = ["top_provider.max_completion_tokens", "max_output_tokens"]
+/** Anthropic's own listing has no limits; newer APIs and relays add these. */
+const ANTHROPIC_CONTEXT = ["max_input_tokens", "context_window", "context_length"]
+const ANTHROPIC_MAX_OUTPUT = ["max_tokens", "max_output_tokens"]
+
+/** The first positive integer at each list of dotted paths into a listed model. */
+function listedLimits(
+  m: Record<string, unknown>,
+  context: string[],
+  output: string[],
+): Pick<ListedModel, "contextWindow" | "maxOutput"> {
+  const first = (paths: string[]) =>
+    paths
+      .map((p) =>
+        p.split(".").reduce<unknown>((v, k) => (v && typeof v === "object" ? (v as any)[k] : undefined), m),
+      )
+      .find((v): v is number => Number.isSafeInteger(v) && (v as number) > 0)
+  const contextWindow = first(context)
+  const maxOutput = first(output)
+  return {
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxOutput !== undefined ? { maxOutput } : {}),
+  }
 }
 
 const positive = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0
