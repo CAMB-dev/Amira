@@ -2,13 +2,13 @@ import { expect, test } from "bun:test"
 import { mkdtemp } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createAi, createMockDialect, type MockStep, type ModelLimits } from "@amira/ai"
+import { createAi, createMockDialect, type MockReply, type MockStep, type ModelLimits } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
 import { Agent } from "../src/agent.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { SessionStore } from "../src/session-store.ts"
 
-const overflowAt = (limit: number): MockStep => ({
+const overflowAt = (limit: number): MockReply => ({
   error: {
     message: `HTTP 400: This model's maximum context length is ${limit} tokens. However, you requested ${limit + 5000} tokens.`,
     status: 400,
