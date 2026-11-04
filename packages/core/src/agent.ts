@@ -393,6 +393,7 @@ export class Agent {
           this.lastFastPricingUnknown = pricingUnknown
         },
         model: () => this.model,
+        setModel: (model) => this.setModel(model),
         maxSteps,
         maxTokens,
         depth: this.depth,

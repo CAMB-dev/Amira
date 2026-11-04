@@ -4,8 +4,10 @@ import {
   type AssistantMessage,
   describeModelError,
   isContextOverflow,
+  isNoModel,
   type ModelError,
   type ModelInfo,
+  overflowLimit,
   type ToolCallBlock,
   type ToolSpec,
   type Usage,
@@ -58,6 +60,8 @@ interface TurnRunnerDeps {
   fastMode: () => boolean
   recordSpeed: (speed: string | undefined, pricingUnknown?: boolean) => void
   model: () => ModelInfo
+  /** Replaces the session's model, e.g. with the smaller window an overflow error stated. */
+  setModel: (model: ModelInfo) => void
   maxSteps: number
   maxTokens: number | undefined
   depth: number
@@ -79,7 +83,8 @@ interface TurnRunnerDeps {
 
 type ModelReply =
   | { kind: "ok"; message: AssistantMessage }
-  | { kind: "error"; error: string; model?: ModelError }
+  /** `sent`: the model the failed request went to, when one was sent. */
+  | { kind: "error"; error: string; model?: ModelError; sent?: ModelInfo }
   | { kind: "aborted" }
 
 /** One async driver: delegation adds no await between admission and finalization. */
@@ -185,6 +190,7 @@ export class TurnRunner {
         }
         if (reply.kind === "error") {
           const overflow = reply.model && isContextOverflow(reply.model)
+          if (overflow && reply.sent) this.#learnWindow(turn, reply.model!, reply.sent)
           if (overflow && !overflowAged) {
             overflowAged = true
             const aging = this.#deps.contextManager.age(turn, true)
@@ -292,6 +298,28 @@ export class TurnRunner {
     return result
   }
 
+  /**
+   * Takes the window an overflow error states when it is smaller than the model's: the
+   * recovery below then ages and compacts to it, and the ai client keeps it for next time.
+   */
+  #learnWindow(turn: Turn, error: ModelError, sent: ModelInfo): void {
+    const limit = overflowLimit(error)
+    const model = this.#deps.model()
+    // The session switched models meanwhile: the limit is about one it no longer uses.
+    if (model.provider !== sent.provider || model.id !== sent.id) return
+    if (limit === undefined || isNoModel(model) || limit >= model.contextWindow) return
+    this.#deps.setModel({ ...model, contextWindow: limit, contextWindowSource: "provider" })
+    // The compaction floor was measured against the larger window.
+    this.#deps.compactor.modelChanged()
+    this.#deps.ai.learnModelLimits?.(model, { contextWindow: limit })
+    const ref = `${model.provider}/${model.id}`
+    this.#deps.emit(turn, "extension.notice", {
+      source: "context",
+      text: `The provider says ${ref} fits ${limit.toLocaleString("en-US")} tokens; using that from now on. Set contextWindow in the provider's settings to override.`,
+      level: "info",
+    })
+  }
+
   #terminalFailure(turn: Turn, steps: number): TurnResult | undefined {
     const error = this.#deps.compactor.failure(turn.signal)
     if (!error) return undefined
@@ -344,7 +372,8 @@ export class TurnRunner {
     if (admissionFailure) return { kind: "error", error: admissionFailure.message, model: admissionFailure }
     if (ctx.blocked) return { kind: "error", error: `context.build blocked the request: ${ctx.reason}` }
 
-    const requestModelRef = modelRef(this.#deps.model())
+    const sent = this.#deps.model()
+    const requestModelRef = modelRef(sent)
     this.#deps.emit(turn, "message.start", {
       model: requestModelRef,
       contextWindow: this.#deps.model().contextWindow,
@@ -376,7 +405,7 @@ export class TurnRunner {
     if (message.usage) this.#deps.recordTreeUsage(message.usage)
 
     if (aborted || turn.signal.aborted) return { kind: "aborted" }
-    if (error) return { kind: "error", error, ...(modelError ? { model: modelError } : {}) }
+    if (error) return { kind: "error", error, sent, ...(modelError ? { model: modelError } : {}) }
     return { kind: "ok", message }
   }
 

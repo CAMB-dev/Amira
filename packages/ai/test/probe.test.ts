@@ -58,6 +58,61 @@ describe("listModels", () => {
     expect(calls[0]!.headers.authorization).toBe(`Bearer ${KEY}`)
   })
 
+  test("OpenAI-compatible: limits from the fields relays use; only positive integers", async () => {
+    const { fetch } = routes(() =>
+      json({
+        data: [
+          { id: "a", max_context_length: 65536 },
+          { id: "b", context_size: 32768, max_output_tokens: 4096 },
+          { id: "c", limits: { context: 131072 } },
+          { id: "d", limits: { max_context_tokens: 200000 } },
+          { id: "e", top_provider: { context_length: 1000000, max_completion_tokens: 32000 } },
+          { id: "f", max_input_tokens: 400000 },
+          { id: "g", context_length: 0, context_window: 12.5, max_model_len: "8192", context_size: 8192 },
+          { id: "h", context_length: -1, max_output_tokens: 1.5 },
+        ],
+      }),
+    )
+    const models = await listModels(
+      { dialect: "openai-chat", baseUrl: "https://relay.example/v1" },
+      { fetch },
+    )
+    expect(models).toEqual([
+      { id: "a", contextWindow: 65536 },
+      { id: "b", contextWindow: 32768, maxOutput: 4096 },
+      { id: "c", contextWindow: 131072 },
+      { id: "d", contextWindow: 200000 },
+      { id: "e", contextWindow: 1000000, maxOutput: 32000 },
+      { id: "f", contextWindow: 400000 },
+      { id: "g", contextWindow: 8192 },
+      { id: "h" },
+    ])
+  })
+
+  test("Anthropic: limits when the listing (a relay, a newer API) has them", async () => {
+    const { fetch } = routes(() =>
+      json({
+        data: [
+          { id: "claude-a", max_input_tokens: 200000, max_tokens: 64000 },
+          { id: "claude-b", context_window: 1000000, max_output_tokens: 128000 },
+          { id: "claude-c", context_length: 100000 },
+          { id: "claude-d", max_input_tokens: "200000", max_tokens: 0 },
+        ],
+        has_more: false,
+      }),
+    )
+    const models = await listModels(
+      { dialect: "anthropic-messages", baseUrl: "https://relay.example/anthropic" },
+      { fetch },
+    )
+    expect(models).toEqual([
+      { id: "claude-a", contextWindow: 200000, maxOutput: 64000 },
+      { id: "claude-b", contextWindow: 1000000, maxOutput: 128000 },
+      { id: "claude-c", contextWindow: 100000 },
+      { id: "claude-d" },
+    ])
+  })
+
   test("Anthropic: /v1/models with its headers, following pages", async () => {
     const { fetch, calls } = routes((url) =>
       url.includes("after_id")

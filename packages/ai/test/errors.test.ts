@@ -4,7 +4,13 @@ import { anthropicError } from "../src/dialects/anthropic-errors.ts"
 import { geminiError } from "../src/dialects/google-gemini-errors.ts"
 import { bodyError, isRetryableBodyError } from "../src/dialects/openai-chat-errors.ts"
 import { responsesError } from "../src/dialects/openai-responses-errors.ts"
-import { describeModelError, isContextOverflow, modelErrorKind, providerMessage } from "../src/errors.ts"
+import {
+  describeModelError,
+  isContextOverflow,
+  modelErrorKind,
+  overflowLimit,
+  providerMessage,
+} from "../src/errors.ts"
 import { events } from "./helpers.ts"
 
 test("sorts failures into auth, rate, server, network, context, config and other", () => {
@@ -125,4 +131,66 @@ test("a client error that mentions a timeout is not retried", () => {
   expect(isRetryableBodyError({ message: "tools[0].parameters.timeout: invalid", status: 400 })).toBe(false)
   expect(isRetryableBodyError({ message: "request timed out", status: 408 })).toBe(true)
   expect(isRetryableBodyError({ message: "unable to start processing your request" })).toBe(true)
+})
+
+test.each([
+  ["This model's maximum context length is 65536 tokens. However, you requested 70000 tokens.", 65536],
+  [
+    `HTTP 400: {"error":{"message":"This model's maximum context length is 131072 tokens. However, you requested 140000 tokens (139000 in the messages, 1000 in the completion).","code":"context_length_exceeded"}}`,
+    131072,
+  ],
+  ["prompt is too long: 210000 tokens > 200000 maximum", 200000],
+  [
+    "input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000, decrease input length or `max_tokens` and try again",
+    200000,
+  ],
+  ["The request exceeds the model's context window of 32,768 tokens", 32768],
+  ["input length exceeds the limit of 98304 tokens", 98304],
+  ["Prompt contains 40000 tokens, too large for model with 32768 maximum context length", 32768],
+  ["The input token count (1234567) exceeds the maximum number of tokens allowed (1048576).", 1048576],
+  ["max_tokens is too large: the context limit is 16384 tokens", 16384],
+])("overflowLimit reads the limit from %s", (message, limit) => {
+  expect(overflowLimit({ message, status: 400 })).toBe(limit)
+})
+
+test("overflowLimit ignores other errors, missing and implausible numbers", () => {
+  expect(overflowLimit({ message: "maximum context length is 65536 tokens", status: 429 })).toBeUndefined()
+  expect(
+    overflowLimit({ message: "Rate limit: maximum context length is 65536", status: 500 }),
+  ).toBeUndefined()
+  expect(overflowLimit({ message: "prompt is too long", status: 400 })).toBeUndefined()
+  expect(overflowLimit({ message: "maximum context length is 512 tokens", status: 400 })).toBeUndefined()
+  expect(overflowLimit({ message: "maximum context length is 2000 tokens", status: 400 })).toBeUndefined()
+  expect(overflowLimit({ message: "maximum context length is 2048 tokens", status: 400 })).toBe(2048)
+  expect(
+    overflowLimit({ message: "context_length_exceeded", code: "context_length_exceeded" }),
+  ).toBeUndefined()
+})
+
+test.each([
+  // Not tokens: request size and characters.
+  [{ message: "Request body exceeds the limit of 32768 bytes", code: "request_too_large" }],
+  [{ message: "Request body exceeds the limit of 32768 bytes", status: 413 }],
+  [{ message: "input length exceeds the limit of 32768 characters", status: 400 }],
+  [{ message: "the context window is 65536 chars at most; input length exceeds it", status: 400 }],
+  // Rates, not windows.
+  [{ message: "input tokens exceeds the limit of 40000 tokens per minute", status: 400 }],
+  [{ message: "too many tokens: rate of 90000 tokens per day; context limit is 90000 tokens", status: 400 }],
+  // Loose wordings without the unit right after the number.
+  [{ message: "too many tokens in the request: exceeded the limit of 4000", status: 400 }],
+  [{ message: "context window of 32768 is too small for this request", status: 400 }],
+  [{ message: "input length exceeds the limit of 98304 (see docs)", status: 400 }],
+  // request_too_large counts only in an explicit token wording.
+  [{ message: "context window of 32768 tokens exceeded", code: "request_too_large" }],
+])("overflowLimit learns nothing from %j", (error) => {
+  expect(overflowLimit(error)).toBeUndefined()
+})
+
+test("request_too_large still counts in an explicit token wording", () => {
+  expect(
+    overflowLimit({
+      message: "prompt is too long: 210000 tokens > 200000 maximum",
+      code: "request_too_large",
+    }),
+  ).toBe(200000)
 })
