@@ -4,8 +4,10 @@ import {
   type AssistantMessage,
   describeModelError,
   isContextOverflow,
+  isNoModel,
   type ModelError,
   type ModelInfo,
+  overflowLimit,
   type ToolCallBlock,
   type ToolSpec,
   type Usage,
@@ -58,6 +60,8 @@ interface TurnRunnerDeps {
   fastMode: () => boolean
   recordSpeed: (speed: string | undefined, pricingUnknown?: boolean) => void
   model: () => ModelInfo
+  /** Replaces the session's model, e.g. with the smaller window an overflow error stated. */
+  setModel: (model: ModelInfo) => void
   maxSteps: number
   maxTokens: number | undefined
   depth: number
@@ -185,6 +189,7 @@ export class TurnRunner {
         }
         if (reply.kind === "error") {
           const overflow = reply.model && isContextOverflow(reply.model)
+          if (overflow) this.#learnWindow(reply.model!)
           if (overflow && !overflowAged) {
             overflowAged = true
             const aging = this.#deps.contextManager.age(turn, true)
@@ -290,6 +295,20 @@ export class TurnRunner {
       }
     }
     return result
+  }
+
+  /**
+   * Takes the window an overflow error states when it is smaller than the model's: the
+   * recovery below then ages and compacts to it, and the ai client keeps it for next time.
+   */
+  #learnWindow(error: ModelError): void {
+    const limit = overflowLimit(error)
+    const model = this.#deps.model()
+    if (limit === undefined || isNoModel(model) || limit >= model.contextWindow) return
+    this.#deps.setModel({ ...model, contextWindow: limit, contextWindowSource: "provider" })
+    // The compaction floor was measured against the larger window.
+    this.#deps.compactor.modelChanged()
+    this.#deps.ai.learnModelLimits?.(model, { contextWindow: limit })
   }
 
   #terminalFailure(turn: Turn, steps: number): TurnResult | undefined {
