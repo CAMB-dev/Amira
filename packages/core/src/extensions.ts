@@ -11,6 +11,7 @@ import {
   type CompleteResult,
   type Extension,
   type ExtensionAPI,
+  type ExtensionFrontend,
   type ExtensionSettingsTarget,
   type ExtensionStatusMetadata,
   type FileRestorationOwner,
@@ -139,6 +140,8 @@ export interface ExtensionHostOptions {
   sessionId?: string
   /** Working directory handed to extensions. Default: the process's. */
   cwd?: string
+  /** How this process runs Amira, for ExtensionAPI.frontend. Default "embedded". */
+  frontend?: ExtensionFrontend
   /** Host-owned background jobs. Defaults to the process service's session-aware host. */
   backgroundJobs?: BackgroundJobHost
 }
@@ -616,6 +619,7 @@ export class ExtensionHost {
     }
     return {
       apiVersion: API_VERSION,
+      frontend: this.#opts.frontend ?? "embedded",
       cwd: this.#opts.cwd ?? process.cwd(),
       home,
       get dataDir() {

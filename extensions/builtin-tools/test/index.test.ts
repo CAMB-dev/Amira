@@ -63,6 +63,7 @@ test(
       registerWorkspaceProvider: () => () => {},
       registerFileRestoration: () => () => {},
       apiVersion: "0.1.0",
+      frontend: "embedded",
       cwd: process.cwd(),
       home: process.cwd(),
       dataDir: process.cwd(),

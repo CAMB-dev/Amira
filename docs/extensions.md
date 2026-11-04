@@ -214,6 +214,7 @@ Default-export a function, usually wrapped in `defineExtension`. Amira calls it 
 | `provideService`, `useService` | Share named extension services; look them up when needed because a provider may be absent or unloaded |
 | `settings.declare` | Declare ordered settings fields and an optional isolated preview; read typed values with `get()` and subscribe with `onChange()` |
 | `settings`, `cwd`, `home`, `apiVersion` | Read merged settings, provenance layers for each top-level key, the working directory, the user directory and API version |
+| `frontend` | How this process runs Amira: `"tui"`, `"print"` (`-p`), `"rpc"`, `"server"` (a workspace daemon or remote server) or `"embedded"` (another host); e.g. for integrations that belong to an interactive terminal only |
 | `dataDir` | Required, read-only absolute path to this extension's persistent state directory, created on first access |
 | `backgroundJobs` | Start and inspect only this extension's background jobs; built-in frontend code uses the host-only `hostBackgroundJobs()` capability |
 | `runCommand`, `openPipe`, `onExit` | Run managed subprocesses, open a long-lived piped process, or register short exit work |
