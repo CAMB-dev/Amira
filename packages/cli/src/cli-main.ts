@@ -203,6 +203,7 @@ async function run(argv: string[]): Promise<number> {
     packages: plan.packages,
     noBuiltins: args.noBuiltins,
     nonInteractive: args.print,
+    frontend: args.print ? "print" : args.rpc ? "rpc" : "tui",
     ...(store ? { store } : {}),
     disabledTools: config.disabledTools,
     shell: config.shell,

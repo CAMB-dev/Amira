@@ -52,6 +52,9 @@ export interface CompleteResult {
   usage?: Usage
 }
 
+/** How the process hosting an extension runs Amira (ExtensionAPI.frontend). */
+export type ExtensionFrontend = "tui" | "print" | "rpc" | "server" | "embedded"
+
 export interface ExtensionAPI {
   /** Structured terminal effects, bound by the interactive frontend; no-op otherwise. */
   readonly terminal: TerminalApi
@@ -60,6 +63,12 @@ export interface ExtensionAPI {
   /** Claims rewind's file restoration exclusively. Unloading releases the claim. */
   registerFileRestoration(owner: FileRestorationOwner): () => void
   readonly apiVersion: string
+  /**
+   * How this process runs Amira: "tui" (the interactive terminal UI), "print" (`-p`), "rpc"
+   * (`--rpc`), "server" (a workspace daemon or remote server) or "embedded" (another host).
+   * E.g. for integrations that belong to an interactive terminal only.
+   */
+  readonly frontend: ExtensionFrontend
   /** The working directory of the sessions this host serves. */
   readonly cwd: string
   /** Amira's per-user directory: `$AMIRA_HOME`, or `~/.amira`. */

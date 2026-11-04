@@ -155,6 +155,7 @@ export async function createWorkspaceRuntime(opts: WorkspaceRuntimeOptions): Pro
     extensions: opts.extensions ?? [],
     noBuiltins: opts.noBuiltins ?? false,
     executionOnly: true,
+    frontend: "server",
     catalog: false,
     builtins: opts.builtins ?? serverBuiltins,
   })

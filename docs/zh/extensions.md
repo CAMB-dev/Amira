@@ -214,6 +214,7 @@ amira
 | `provideService`、`useService` | 共享具名服务；使用时再查找，提供方可能未加载或已卸载 |
 | `settings.declare` | 声明有序设置字段和可选的隔离预览，通过 `get()` 读取类型化值，通过 `onChange()` 订阅保存后的变化 |
 | `settings`、`cwd`、`home`、`apiVersion` | 读取合并后的设置、每个顶层键的来源层、工作目录、用户目录和 API 版本 |
+| `frontend` | 当前进程以哪种方式运行 Amira：`"tui"`（交互式终端界面）、`"print"`（`-p`）、`"rpc"`、`"server"`（工作区守护进程或远程服务器）或 `"embedded"`（其他宿主）；例如只属于交互式终端的集成可以据此判断 |
 | `dataDir` | 必需的只读绝对路径，指向本扩展的持久状态目录，首次访问时创建 |
 | `backgroundJobs` | 启动并查看本扩展自己启动的后台任务；内置前端代码使用仅供 host 使用的 `hostBackgroundJobs()` 能力 |
 | `runCommand`、`openPipe`、`onExit` | 运行受管理的子进程、启动长期管道进程，或注册短时退出工作 |

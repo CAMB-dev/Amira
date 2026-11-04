@@ -1,5 +1,13 @@
 import { type Ai, createAi, isNoModel, type ModelInfo, NO_MODEL, type ProviderConfig } from "@amira/ai"
-import type { AnyEvent, Extension, ReloadReport, Settings, SettingsLayers, ShellMode } from "@amira/api"
+import type {
+  AnyEvent,
+  Extension,
+  ExtensionFrontend,
+  ReloadReport,
+  Settings,
+  SettingsLayers,
+  ShellMode,
+} from "@amira/api"
 import { DEFAULT_SHELL, DEFAULT_WEB_NATIVE_SEARCH } from "@amira/api"
 import {
   Agent,
@@ -76,6 +84,8 @@ export interface SessionOptions {
   shell?: ShellMode
   /** The model cannot ask a person; print mode and RPC without a UI use this. */
   nonInteractive?: boolean
+  /** How this process runs Amira, passed to extensions (ExtensionAPI.frontend). */
+  frontend?: ExtensionFrontend
   /** Names the user asked to disable and where they came from; ones no tool has are reported. */
   requestedDisabled?: { names: string[]; from: string }
   ai?: Ai
@@ -256,6 +266,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
         }
       : undefined,
     cwd: opts.cwd,
+    ...(opts.frontend ? { frontend: opts.frontend } : {}),
   })
   const startupEvents: AnyEvent[] = []
   const stopCapture = bus.subscribe((e) => void startupEvents.push(e), {
