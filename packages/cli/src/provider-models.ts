@@ -7,6 +7,11 @@ import { amiraPath, waitFileLock } from "@amira/core"
 
 type Endpoint = { id: string; baseUrl: string }
 type ListedModel = ModelLimits & { id: string }
+/** `learnedAt`: when the window was learned (learn()) rather than listed, in ms since the epoch. */
+type StoredModel = ListedModel & { learnedAt?: number }
+
+/** How long a learned window outlives refreshes whose listing states none. */
+export const LEARNED_WINDOW_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 export interface ProviderModelCache {
   lookup(provider: Endpoint, modelId: string): ModelLimits | undefined
@@ -14,7 +19,8 @@ export interface ProviderModelCache {
   record(provider: Endpoint, models: readonly ListedModel[]): Promise<void>
   /**
    * Lowers one model's limits to what the endpoint revealed (e.g. in an overflow error); never
-   * raises them. A later record() keeps a learned window the new list does not state.
+   * raises them. A later record() replaces a learned window with a listed one, and keeps it
+   * for LEARNED_WINDOW_TTL_MS when the listing states none.
    */
   learn(provider: Endpoint, modelId: string, limits: ModelLimits): Promise<void>
 }
@@ -25,21 +31,23 @@ const endpointKey = (provider: Endpoint) =>
 
 const positive = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0
 
-function modelsFrom(value: unknown): ListedModel[] {
+function modelsFrom(value: unknown): StoredModel[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((model: unknown) => {
     if (!model || typeof model !== "object" || !("id" in model) || typeof model.id !== "string") return []
-    const limits: ListedModel = { id: model.id }
+    const limits: StoredModel = { id: model.id }
     for (const field of ["contextWindow", "maxOutput"] as const) {
       const n = (model as Record<string, unknown>)[field]
       if (positive(n)) limits[field] = n
     }
+    const learnedAt = (model as Record<string, unknown>).learnedAt
+    if (positive(learnedAt) && limits.contextWindow !== undefined) limits.learnedAt = learnedAt
     return [limits]
   })
 }
 
-function readEntries(file: string): Map<string, ListedModel[]> {
-  const entries = new Map<string, ListedModel[]>()
+function readEntries(file: string): Map<string, StoredModel[]> {
+  const entries = new Map<string, StoredModel[]>()
   try {
     const raw: unknown = JSON.parse(readFileSync(file, "utf8"))
     if (raw && typeof raw === "object" && "version" in raw && raw.version === 1 && "providers" in raw) {
@@ -59,11 +67,12 @@ function readEntries(file: string): Map<string, ListedModel[]> {
 /** Local endpoint observations only: no settings, credentials, headers or network access. */
 export function loadProviderModelCache(
   file = amiraPath("cache", "provider-models.json"),
+  { now = Date.now }: { now?: () => number } = {},
 ): ProviderModelCache {
   const entries = readEntries(file)
   let writing = Promise.resolve()
   /** Applies a change now, then again under the lock to the file's latest content. */
-  const persist = (change: (entries: Map<string, ListedModel[]>) => void) => {
+  const persist = (change: (entries: Map<string, StoredModel[]>) => void) => {
     change(entries)
     writing = writing.then(async () => {
       const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
@@ -98,15 +107,20 @@ export function loadProviderModelCache(
     },
     record(provider, models) {
       const key = endpointKey(provider)
-      const listed = modelsFrom(models)
+      const listed = modelsFrom(models).map(({ learnedAt: _, ...model }) => model)
       return persist((all) => {
         const before = all.get(key)
+        const fresh = now() - LEARNED_WINDOW_TTL_MS
         all.set(
           key,
           listed.map((model) => {
-            const window = before?.find((m) => m.id === model.id)?.contextWindow
-            return model.contextWindow === undefined && window !== undefined
-              ? { ...model, contextWindow: window }
+            // Only a recently learned window survives a listing that states none.
+            const old = before?.find((m) => m.id === model.id)
+            return model.contextWindow === undefined &&
+              old?.contextWindow !== undefined &&
+              old.learnedAt !== undefined &&
+              old.learnedAt > fresh
+              ? { ...model, contextWindow: old.contextWindow, learnedAt: old.learnedAt }
               : model
           }),
         )
@@ -117,11 +131,12 @@ export function loadProviderModelCache(
       return persist((all) => {
         const models = all.get(key) ?? []
         const current = models.find((m) => m.id === modelId)
-        const next: ListedModel = { ...current, id: modelId }
+        const next: StoredModel = { ...current, id: modelId }
         for (const field of ["contextWindow", "maxOutput"] as const) {
           const n = limits[field]
           if (positive(n) && n < (next[field] ?? Number.POSITIVE_INFINITY)) next[field] = n
         }
+        if (next.contextWindow !== current?.contextWindow) next.learnedAt = now()
         all.set(key, [...models.filter((m) => m !== current), next])
       })
     },

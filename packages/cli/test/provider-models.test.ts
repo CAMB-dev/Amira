@@ -123,23 +123,61 @@ test("independent cache instances preserve each other's endpoint observations", 
   expect(updated.lookup(other, "shared")).toEqual({ contextWindow: 96000 })
 })
 
-test("learn lowers one model's window, persists it, and survives a refresh that states none", async () => {
-  const cache = loadProviderModelCache(file)
+test("learn lowers one model's window and persists it with when it was learned", async () => {
+  const cache = loadProviderModelCache(file, { now: () => 1_000 })
   await cache.record(provider, [{ id: "listed", contextWindow: 200_000, maxOutput: 8000 }, { id: "bare" }])
   await cache.learn(provider, "listed", { contextWindow: 65_536 })
   await cache.learn(provider, "listed", { contextWindow: 100_000 })
   await cache.learn(provider, "bare", { contextWindow: 32_768 })
   await cache.learn(provider, "unlisted", { contextWindow: 16_384, maxOutput: -1 })
   expect(cache.lookup(provider, "listed")).toEqual({ contextWindow: 65_536, maxOutput: 8000 })
+  const raw = JSON.parse(readFileSync(file, "utf8"))
+  expect(Object.values(raw.providers)).toEqual([
+    [
+      { id: "listed", contextWindow: 65_536, maxOutput: 8000, learnedAt: 1_000 },
+      { id: "bare", contextWindow: 32_768, learnedAt: 1_000 },
+      { id: "unlisted", contextWindow: 16_384, learnedAt: 1_000 },
+    ],
+  ])
   const reloaded = loadProviderModelCache(file)
   expect(reloaded.lookup(provider, "listed")).toEqual({ contextWindow: 65_536, maxOutput: 8000 })
-  expect(reloaded.lookup(provider, "bare")).toEqual({ contextWindow: 32_768 })
   expect(reloaded.lookup(provider, "unlisted")).toEqual({ contextWindow: 16_384 })
   expect(reloaded.lookup({ ...provider, baseUrl: "https://other.example/v1" }, "listed")).toBeUndefined()
-  // A refresh without limits keeps the learned window; one that states a window replaces it.
-  await reloaded.record(provider, [{ id: "listed" }, { id: "bare", contextWindow: 50_000 }])
+})
+
+test("a refresh keeps only recent learned windows it does not state", async () => {
+  let now = 0
+  const day = 24 * 60 * 60 * 1000
+  const cache = loadProviderModelCache(file, { now: () => now })
+  await cache.record(provider, [
+    { id: "kept" },
+    { id: "replaced" },
+    { id: "expired" },
+    { id: "listed-only", contextWindow: 100_000 },
+  ])
+  await cache.learn(provider, "expired", { contextWindow: 20_000 })
+  now = 20 * day
+  await cache.learn(provider, "kept", { contextWindow: 65_536 })
+  await cache.learn(provider, "replaced", { contextWindow: 32_768 })
+  now = 40 * day
+  // The listing states no windows except for "replaced"; "listed-only" was never learned.
+  await cache.record(provider, [
+    { id: "kept" },
+    { id: "replaced", contextWindow: 50_000 },
+    { id: "expired" },
+    { id: "listed-only" },
+  ])
   const refreshed = loadProviderModelCache(file)
-  expect(refreshed.lookup(provider, "listed")).toEqual({ contextWindow: 65_536 })
-  expect(refreshed.lookup(provider, "bare")).toEqual({ contextWindow: 50_000 })
-  expect(refreshed.lookup(provider, "unlisted")).toBeUndefined()
+  expect(refreshed.lookup(provider, "kept")).toEqual({ contextWindow: 65_536 })
+  expect(refreshed.lookup(provider, "replaced")).toEqual({ contextWindow: 50_000 })
+  expect(refreshed.lookup(provider, "expired")).toBeUndefined()
+  expect(refreshed.lookup(provider, "listed-only")).toBeUndefined()
+  // A listed window is no learned one: the next refresh without it drops it.
+  await refreshed.record(provider, [{ id: "replaced" }])
+  expect(loadProviderModelCache(file).lookup(provider, "replaced")).toBeUndefined()
+  // A listing cannot smuggle in the learned mark.
+  await cache.record(provider, [{ id: "x", contextWindow: 9000, learnedAt: now } as never])
+  expect(Object.values(JSON.parse(readFileSync(file, "utf8")).providers)).toEqual([
+    [{ id: "x", contextWindow: 9000 }],
+  ])
 })
