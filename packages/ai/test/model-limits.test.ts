@@ -184,6 +184,8 @@ describe("fuzzy catalog matching for borrowed limits", () => {
       },
     },
     meta: { models: { llama3: { limit: { context: 8192, output: 2048 } } } },
+    alibaba: { models: { "qwen-max": { limit: { context: 32_768, output: 8192 } } } },
+    microsoft: { models: { phi3: { limit: { context: 4096, output: 4096 } } } },
   })
 
   test.each([
@@ -192,10 +194,13 @@ describe("fuzzy catalog matching for borrowed limits", () => {
     ["openrouter/anthropic/claude-sonnet-4-5:thinking", 200_000],
     ["claude-sonnet-4-5@20250929", 200_000],
     ["claude-sonnet-4-5-2025-09-29", 200_000],
-    ["claude-sonnet-4-5-latest", 200_000],
     ["claude-opus-4.1:beta", 200_000],
     ["GPT-4-1", 1_047_576],
     ["openai/gpt-5:free", 400_000],
+    ["gpt-5:online", 400_000],
+    ["gpt-5:exacto", 400_000],
+    ["qwen-max:nitro", 32_768],
+    ["phi3:floor", 4096],
   ])("%s borrows %d", (id, contextWindow) => {
     expect(findCatalogModel(catalog, proxy, id)?.contextWindow).toBe(contextWindow)
   })
@@ -214,6 +219,11 @@ describe("fuzzy catalog matching for borrowed limits", () => {
       "llama3:70b",
       "gpt-5-0613",
       "latest",
+      "claude-sonnet-4-5-latest",
+      "qwen-max-latest",
+      "phi3:mini",
+      "phi3:instruct",
+      "gpt-5:preview",
     ]) {
       expect(findCatalogModel(catalog, proxy, id)).toBeUndefined()
     }

@@ -109,13 +109,15 @@ function addLimits(limits: ModelLimits, model: ModelLimits | undefined): void {
   }
 }
 
-const TAG = /(?::[a-z][a-z-]*)$/
-const SNAPSHOT = /(?:[-@]\d{8}|-\d{4}-\d{2}-\d{2}|-latest)$/
+/** Routing and pricing tags that leave the model as it is (`phi3:mini` is another model). */
+const TAG = /:(?:free|beta|thinking|online|nitro|floor|extended|exacto)$/
+/** `-latest` is not one: an alias may point at another generation. */
+const SNAPSHOT = /(?:[-@]\d{8}|-\d{4}-\d{2}-\d{2})$/
 
 /**
  * A model id without the decorations relays add to the same model: case, any leading
- * `vendor/` segments, `:tag` suffixes without digits (`:free`, `:beta`, `:thinking`; not
- * `:70b`), trailing date stamps and `-latest`, and `.` for `-` between version digits
+ * `vendor/` segments, routing tags (`:free`, `:beta`, `:thinking`, ...; see TAG), trailing
+ * date stamps, and `.` for `-` between version digits
  * (`claude-sonnet-4.5` is `claude-sonnet-4-5`). Nothing else is cut, so `gpt-5-mini` stays
  * apart from `gpt-5`.
  */
