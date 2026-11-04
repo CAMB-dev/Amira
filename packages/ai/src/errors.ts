@@ -32,13 +32,53 @@ const CONFIG_CODES = new Set(["no_model", "unknown_provider", "unknown_dialect",
 /** How providers say a request is over the context window, in their codes or messages. */
 const CONTEXT_CODES = new Set(["context_length_exceeded", "string_above_max_length", "request_too_large"])
 const CONTEXT_TEXT =
-  /context[ _-]?(length|window|limit)|maximum context|prompt is too long|input is too long|too many (input )?tokens|exceeds? the (model'?s? )?(context|token limit|maximum)|reduce the length of the messages|input token count/i
+  /context[ _-]?(length|window|limit)|maximum context|prompt is too long|input is too long|too many (input )?tokens|exceeds? the (model'?s? )?(context|token limit|maximum)|reduce the length of the messages|input token count|input (length|tokens?) exceeds?/i
 
 /** Whether the error says the request did not fit the model's context window. */
 export function isContextOverflow(e: ModelError): boolean {
   if (e.code && CONTEXT_CODES.has(e.code)) return true
   if (e.status !== undefined && e.status !== 400 && e.status !== 413 && e.status !== 422) return false
   return CONTEXT_TEXT.test(e.message)
+}
+
+const N = String.raw`(\d{1,3}(?:,\d{3})+|\d+)`
+/**
+ * How providers state the real limit when a request overflows, most specific first; the
+ * captured number is the limit, never the size that was asked for.
+ */
+const OVERFLOW_LIMITS: RegExp[] = [
+  // Anthropic: "input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000"
+  new RegExp(String.raw`context limit:?\s*${N}\s*\+\s*${N}\s*>\s*${N}`, "i"),
+  // Anthropic: "prompt is too long: 210000 tokens > 200000 maximum"
+  new RegExp(`${N} tokens? > ${N}(?: tokens?)? maximum`, "i"),
+  // OpenAI, DeepSeek, vLLM: "This model's maximum context length is 65536 tokens."
+  new RegExp(String.raw`maximum (?:context|input) (?:length|size|window)(?: is| of)?:?\s*${N}`, "i"),
+  // Mistral: "too large for model with 32768 maximum context length"
+  new RegExp(`${N} maximum context length`, "i"),
+  // Gemini: "exceeds the maximum number of tokens allowed (1048576)"
+  new RegExp(String.raw`maximum number of tokens allowed(?: is)?\s*\(?${N}`, "i"),
+  // "context window of 32768 tokens", llama.cpp "the available context size (4096 tokens)"
+  new RegExp(String.raw`context (?:window|length|limit|size)(?: is| of)?:?\s*\(?${N}`, "i"),
+  // "input length exceeds the limit of 32768", "exceeds the maximum of 131072 tokens"
+  new RegExp(String.raw`exceed(?:s|ed)? the (?:\w+ )?(?:limit|maximum) of ${N}`, "i"),
+]
+
+/** Below this a number in an error message is no context window (a count, a code, a typo). */
+const MIN_PLAUSIBLE_WINDOW = 1024
+
+/**
+ * The context window an overflow error states, e.g. 65536 from "maximum context length is
+ * 65536 tokens"; undefined when the error is no overflow or names no plausible limit.
+ */
+export function overflowLimit(e: ModelError): number | undefined {
+  if (!isContextOverflow(e)) return undefined
+  for (const pattern of OVERFLOW_LIMITS) {
+    const m = pattern.exec(e.message)
+    if (!m) continue
+    const n = Number(m[m.length - 1]!.replace(/,/g, ""))
+    return Number.isSafeInteger(n) && n >= MIN_PLAUSIBLE_WINDOW ? n : undefined
+  }
+  return undefined
 }
 
 export function modelErrorKind(e: ModelError): ModelErrorKind {

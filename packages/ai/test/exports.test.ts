@@ -77,6 +77,7 @@ test("the public ai exports stay stable", async () => {
     "modelMessages",
     "openaiChat",
     "openaiResponses",
+    "overflowLimit",
     "parseSSE",
     "parseToolArgs",
     "providerMessage",

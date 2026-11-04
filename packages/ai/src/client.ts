@@ -52,6 +52,8 @@ export interface AiOptions {
   catalog?: ModelCatalog
   /** Cached endpoint-reported limits; lookup must match both provider id and base URL. */
   modelLimits?: (provider: ProviderConfig, modelId: string) => ModelLimits | undefined
+  /** Keeps limits learned from the endpoint (learnModelLimits), e.g. in the cache modelLimits reads. */
+  learnModelLimits?: (provider: ProviderConfig, modelId: string, limits: ModelLimits) => void
   /** Retrying failed requests (D52); by default 3 retries, backing off from 1 s. */
   retry?: RetryOptions
   /** false turns every provider's hosted web search off (settings web.nativeSearch). */
@@ -85,7 +87,12 @@ export interface Ai {
   /** The catalog in use, if any. */
   catalog?(): ModelCatalog | undefined
   /** Replaces the cached endpoint limit lookup; affects models resolved from now on. */
-  setModelLimits?(lookup: AiOptions["modelLimits"]): void
+  setModelLimits?(lookup: AiOptions["modelLimits"], learn?: AiOptions["learnModelLimits"]): void
+  /**
+   * Notes limits the endpoint revealed for `model`, e.g. the window an overflow error stated:
+   * models resolved from now on use them (as "provider"-reported), and learnModelLimits keeps them.
+   */
+  learnModelLimits?(model: ModelInfo, limits: ModelLimits): void
   /** Forgets a provider. */
   removeProvider?(id: string): void
   /** Sets or (undefined) forgets the stored key (auth.json) used for a provider when its variables are unset. */
@@ -131,6 +138,21 @@ export function createAi(opts: AiOptions = {}): Ai {
   const doFetch = opts.fetch ?? fetch
   let catalog = opts.catalog
   let modelLimits = opts.modelLimits
+  let learnLimits = opts.learnModelLimits
+  /** Learned this run, by provider, base URL and model: a lower bound on what lookups report. */
+  const learned = new Map<string, ModelLimits>()
+  const learnedKey = (p: ProviderConfig, modelId: string) => `${p.id}\n${p.baseUrl}\n${modelId}`
+  const reportedLimits = (p: ProviderConfig, modelId: string): ModelLimits | undefined => {
+    const reported = modelLimits?.(p, modelId)
+    const own = learned.get(learnedKey(p, modelId))
+    if (!own) return reported
+    const out: ModelLimits = { ...reported }
+    for (const field of ["contextWindow", "maxOutput"] as const) {
+      const value = own[field]
+      if (value !== undefined) out[field] = Math.min(value, out[field] ?? value)
+    }
+    return out
+  }
   // A copy, so keys stored or deleted later (/provider) change what requests use.
   // Null-prototype, so ids such as "constructor" never find Object's members.
   const storedKeys: Record<string, string> = Object.assign(Object.create(null), opts.apiKeys)
@@ -361,7 +383,7 @@ export function createAi(opts: AiOptions = {}): Ai {
       }
       const p = provider(ref.slice(0, slash))
       const id = ref.slice(slash + 1)
-      const info = resolveModelInfo(p, id, findCatalogModel(catalog, p, id), modelLimits?.(p, id))
+      const info = resolveModelInfo(p, id, findCatalogModel(catalog, p, id), reportedLimits(p, id))
       if (opts.webSearch === false) info.caps.webSearch = false
       return info
     },
@@ -494,8 +516,28 @@ export function createAi(opts: AiOptions = {}): Ai {
       catalog = c
     },
     catalog: () => catalog,
-    setModelLimits: (lookup) => {
+    setModelLimits: (lookup, learn) => {
       modelLimits = lookup
+      learnLimits = learn
+    },
+    learnModelLimits: (model, limits) => {
+      const p = providers.get(model.provider)
+      if (!p) return
+      const key = learnedKey(p, model.id)
+      const merged: ModelLimits = { ...learned.get(key) }
+      let lowered = false
+      for (const field of ["contextWindow", "maxOutput"] as const) {
+        const value = limits[field]
+        if (value === undefined || !(value > 0) || value >= (merged[field] ?? model[field])) continue
+        merged[field] = value
+        lowered = true
+      }
+      // Never raises a limit: a learned one only says the endpoint accepts less than assumed.
+      if (!lowered) return
+      learned.set(key, merged)
+      try {
+        learnLimits?.(p, model.id, merged)
+      } catch {}
     },
     setStoredKey: (id, key) => {
       if (key === undefined) delete storedKeys[id]

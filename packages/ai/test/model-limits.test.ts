@@ -247,3 +247,39 @@ describe("fuzzy catalog matching for borrowed limits", () => {
     expect(lists).toBe(built)
   })
 })
+
+test("learned limits only lower what models resolve to, and reach the host's learner", () => {
+  const kept: unknown[] = []
+  const ai = createAi({
+    providers: [proxy, { ...proxy, id: "other" }],
+    catalog: createCatalog(data),
+    modelLimits: () => ({ maxOutput: 24_000 }),
+    learnModelLimits: (provider, modelId, limits) => void kept.push([provider.id, modelId, limits]),
+  })
+  const model = ai.model("local-test/gpt-test")
+  expect(model).toMatchObject({ contextWindow: 400_000, contextWindowSource: "catalog" })
+  ai.learnModelLimits?.(model, { contextWindow: 500_000 })
+  ai.learnModelLimits?.(model, { contextWindow: 0 })
+  expect(kept).toEqual([])
+  ai.learnModelLimits?.(model, { contextWindow: 65_536 })
+  expect(ai.model("local-test/gpt-test")).toMatchObject({
+    contextWindow: 65_536,
+    maxOutput: 24_000,
+    contextWindowSource: "provider",
+  })
+  ai.learnModelLimits?.(ai.model("local-test/gpt-test"), { contextWindow: 100_000 })
+  expect(ai.model("local-test/gpt-test").contextWindow).toBe(65_536)
+  expect(kept).toEqual([["local-test", "gpt-test", { contextWindow: 65_536 }]])
+  // Per provider and model: the same id elsewhere keeps its own window.
+  expect(ai.model("other/gpt-test").contextWindow).toBe(400_000)
+  expect(ai.model("local-test/claude-test").contextWindow).toBe(200_000)
+  // Settings still win; setModelLimits swaps the learner too.
+  ai.setModelLimits?.(undefined, (_p, id, limits) => void kept.push(["swapped", id, limits]))
+  ai.learnModelLimits?.(ai.model("local-test/claude-test"), { contextWindow: 32_000 })
+  expect(kept.at(-1)).toEqual(["swapped", "claude-test", { contextWindow: 32_000 }])
+  ai.registerProvider({ ...proxy, models: [{ id: "gpt-test", contextWindow: 250_000 }] })
+  expect(ai.model("local-test/gpt-test")).toMatchObject({
+    contextWindow: 250_000,
+    contextWindowSource: "settings",
+  })
+})
