@@ -64,6 +64,12 @@ test("an overflow that states a smaller window is learned, then compacted to and
     ),
   ).toBe(false)
   expect(events.some((e) => e.type === "model.changed")).toBe(false)
+  const notices = events.filter(
+    (e) => e.type === "extension.notice" && (e.data as { source: string }).source === "context",
+  )
+  expect(notices.map((e) => (e.data as { text: string }).text)).toEqual([
+    "The provider says relay/m fits 65,536 tokens; using that from now on. Set contextWindow in the provider's settings to override.",
+  ])
   // Models resolved from now on use it, and the host was asked to keep it.
   expect(ai.model("relay/m")).toMatchObject({ contextWindow: 65_536, contextWindowSource: "provider" })
   expect(learned).toEqual([{ provider: "relay", modelId: "m", limits: { contextWindow: 65_536 } }])
@@ -85,4 +91,27 @@ test("an overflow never raises a window, and implausible limits are ignored", as
   expect(agent.model).toMatchObject({ contextWindow: 128_000, contextWindowSource: "default" })
   expect(ai.model("relay/m").contextWindow).toBe(128_000)
   expect(learned).toEqual([])
+})
+
+test("a limit from a request sent to a model the session left is not learned", async () => {
+  const { agent, ai, mock, bus, events, learned } = await setup([{ text: "r1" }, { text: "r2" }])
+  mock.push(
+    () => {
+      agent.setModel(ai.model("relay/n"))
+      return overflowAt(65_536)
+    },
+    { text: "SUM" },
+    { text: "r3" },
+  )
+  await agent.prompt("q1")
+  await agent.prompt("q2")
+  await agent.prompt("q3")
+  await bus.flush()
+  expect(agent.model).toMatchObject({ id: "n", contextWindow: 128_000, contextWindowSource: "default" })
+  expect(ai.model("relay/n").contextWindow).toBe(128_000)
+  expect(ai.model("relay/m").contextWindow).toBe(128_000)
+  expect(learned).toEqual([])
+  expect(
+    events.some((e) => e.type === "extension.notice" && (e.data as { source: string }).source === "context"),
+  ).toBe(false)
 })
