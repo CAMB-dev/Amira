@@ -1,7 +1,15 @@
 // Owns between-turn work and the prompts/steers queued behind it.
 import type { UserMessage } from "@amira/ai"
-import { freezeSnapshot } from "../frontend/json.ts"
 import { addHeldInput, clearHeldInput, type HeldInput, publishHoldState } from "./held-input.ts"
+
+function freezeSnapshot<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const item of Object.values(value)) freezeSnapshot(item)
+    Object.freeze(value)
+  }
+  return value
+}
+
 import type { NoticeInbox } from "./notices.ts"
 import { transportFailure } from "./transport-failure.ts"
 import type { TurnState } from "./turn-runner.ts"

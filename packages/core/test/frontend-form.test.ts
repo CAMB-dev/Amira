@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { FormActionResult, FormSpec } from "@amira/api"
 import { EventBus } from "../src/event-bus.ts"
-import { createUiFormBackend } from "../src/frontend/form-backend.ts"
+import { createUiFormBackend } from "../src/form-backend.ts"
 import { UiRequests } from "../src/ui-requests.ts"
 
 function setup(spec: FormSpec) {

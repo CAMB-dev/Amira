@@ -1,18 +1,15 @@
 // Owns interactive options, shared UI constants and startup helpers.
 import { homedir } from "node:os"
 import type { AnyEvent, CommandDefinition, ShimmerEffect, TerminalApi, TuiSettings } from "@amira/api"
-import {
-  type Agent,
-  type AgentPort,
-  type CommandHost,
-  type CommandRunOptions,
-  createLocalAgentPort,
-  type PanelRegistry,
-  type StatusRegistry,
-  type ThemeRegistry,
-  type UiRequests,
+import type {
+  Agent,
+  CommandHost,
+  PanelRegistry,
+  StatusRegistry,
+  ThemeRegistry,
+  UiRequests,
 } from "@amira/core"
-import type { EditorImage, InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
+import type { InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
 import { applyClockSetting } from "../clock.ts"
 import type { ViewSource } from "../extension-view.ts"
 import type { FileSource } from "../file-index.ts"
@@ -23,41 +20,22 @@ import type { ImageSource, MarkdownRenderSource } from "../markdown-nodes.ts"
 import type { PromptHistory } from "../prompt-history.ts"
 import type { PresenterSource } from "../tool-view.ts"
 import type { TranscriptView } from "../view.ts"
-import type { FrontendConversationRef, FrontendConversationSource } from "./frontend-focus.ts"
 import type { OverlayRequestBackend } from "./overlays.ts"
 
-export type FrontendEffect =
-  | { readonly kind: "detach" | "rewind" | "unfocus" }
-  | { readonly kind: "view"; readonly view: "background-job" | "subagent"; readonly id: string }
-  | ({ readonly kind: "focus" } & FrontendConversationRef)
-
 export interface InteractiveOptions {
-  agent?: Agent
-  /** Host-owned display reads. Omitted by local embedders: composed for this UI's lifetime. */
-  frontend?: AgentPort
-  /** Finite, live command effects only; replay must not re-open views or change focus. */
-  subscribeFrontendEffects?: (listener: (effect: FrontendEffect) => void) => () => void
-  /** Optional invocation-scoped command callbacks, owned by a transport adapter. */
-  bindCommandFrontend?: (invocationId: string, options: CommandRunOptions) => () => void
-  /** Cached DTO-backed owned-conversation reads and events; no executable remote handles. */
-  conversations?: FrontendConversationSource
+  agent: Agent
   status: StatusRegistry
   /** Live panels registered by extensions, shown above the activity line. */
   panels?: PanelRegistry
   /** Extension dialogs, answered inline. Without it they are left to other frontends. */
   ui?: UiRequests
-  /** Transport-backed dialogs/forms; presentation reads its cached lifecycle state. */
+  /** Optional custom dialog/form backend (mainly for tests). */
   requests?: OverlayRequestBackend
   /**
    * Slash commands and their completion popup. It owns the active session: the UI follows
    * the agent it switches to (/clear, /resume).
    */
   commands?: CommandHost
-  /** Cached command/skill metadata and asynchronous completion, without a local command host. */
-  completions?: Pick<
-    CommandHost,
-    "complete" | "list" | "completeSkill" | "skills" | "inputLine" | "skillLine"
-  >
   /**
    * Adds the TUI's own slash commands (/verbose) to the registry `commands` runs from; the
    * returned function removes them again when the UI quits.
@@ -103,12 +81,6 @@ export interface InteractiveOptions {
   history?: PromptHistory
   /** The files the @ picker offers. Default: the working directory's, from git or a walk. */
   files?: FileSource
-  /** Host-owned sources for focused conversation working directories; never walk them locally. */
-  filesForCwd?: (cwd: string) => FileSource
-  /** Local clipboard/editor cwd, independent of a remote workspace or focused conversation. */
-  localCwd?: string
-  /** Explicit workspace image read. A remote frontend must supply this instead of local IO. */
-  readWorkspaceImage?: (cwd: string, path: string, signal: AbortSignal) => Promise<EditorImage>
   /** The keys of every action; defaults to the defaults for this terminal. See loadKeybindings. */
   keybindings?: Keybindings
   /** The `tui` settings: bell, title, progress indicator, reflow, what Enter does while working. */
@@ -146,19 +118,13 @@ export function startupDirections(
   view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
 }
 
-/** Local embedding compatibility; the CLI normally supplies its own port. */
-export async function withFrontend<T>(
-  opts: InteractiveOptions,
-  run: (opts: InteractiveOptions & { frontend: AgentPort }) => Promise<T>,
-): Promise<T> {
-  if (!opts.frontend && !opts.agent) throw new Error("Interactive UI requires a frontend or local agent")
-  const frontend = opts.frontend ?? createLocalAgentPort({ agent: opts.agent!, commands: opts.commands })
+/** Applies clock formatting preference for the duration of the interactive session. */
+export async function withClock<T>(opts: InteractiveOptions, run: () => Promise<T>): Promise<T> {
   const restoreClock = applyClockSetting(opts.settings?.clock)
   try {
-    return await run({ ...opts, frontend })
+    return await run()
   } finally {
     restoreClock()
-    if (!opts.frontend) await frontend.detach()
   }
 }
 

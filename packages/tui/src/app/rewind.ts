@@ -1,6 +1,6 @@
 // Owns rewind and fork picking, optional file restoration and draft recovery.
 import type { FileRewindPlan, SessionControl, UserMessage } from "@amira/api"
-import { type Agent, type AgentPort, type CommandHost, frontendIdentity } from "@amira/core"
+import type { Agent, CommandHost } from "@amira/core"
 import type { Editor, EditorPart } from "@amira/tui-kit"
 import { Dialog, type DialogRequest } from "../dialog.ts"
 import { userText } from "../format.ts"
@@ -22,9 +22,8 @@ type RewindMode = { fork: true } | { restoreFiles: boolean; plan?: FileRewindPla
 
 export interface RewindFlowDeps {
   /** The active session; commands such as /resume can replace it while the UI is open. */
-  agent: () => Agent | undefined
+  agent: () => Agent
   commands?: Pick<CommandHost, "control">
-  port?: AgentPort
   dialogs: Dialog[]
   keys: Keybindings
   editor: Pick<Editor, "getParts" | "setParts" | "isEmpty">
@@ -61,42 +60,7 @@ export class RewindFlow {
   private showRewind(current: () => boolean): boolean {
     if (!current()) return false
     const { commands, dialogs, keys, view } = this.deps
-    const port = this.deps.port
-    const snapshot = port?.snapshot
-    const identity = port ? frontendIdentity(port) : undefined
-    if (
-      snapshot &&
-      identity &&
-      (snapshot.sessionGeneration !== identity.sessionGeneration ||
-        snapshot.state.sessionId !== identity.sessionId)
-    )
-      return false
-    // These indices belong to the displayed transcript, not merely the current authority.
-    const sessionGeneration = snapshot?.sessionGeneration
-    const control: RewindControl | undefined = port
-      ? {
-          fork:
-            commands && !commands.control.fork
-              ? undefined
-              : async (index) => {
-                  await port.execute("session.fork", { index: index! }, { sessionGeneration })
-                },
-          rewind:
-            commands && !commands.control.rewind
-              ? undefined
-              : async (index, options) => {
-                  await port.execute(
-                    "session.rewind",
-                    { index, restoreFiles: options?.restoreFiles },
-                    { sessionGeneration },
-                  )
-                },
-          planRewind:
-            commands && !commands.control.planRewind
-              ? undefined
-              : (index) => port.execute("session.planRewind", { index }, { sessionGeneration }),
-        }
-      : commands?.control
+    const control: RewindControl | undefined = commands?.control
     if (
       !control?.rewind ||
       this.deps.working() ||
@@ -104,9 +68,7 @@ export class RewindFlow {
       dialogs.some((d) => d.request.requestId.startsWith(REWIND_ID))
     )
       return false
-    const messages = snapshot
-      ? snapshot.transcript.messages.map((entry) => entry.message)
-      : (this.deps.agent()?.messages ?? [])
+    const messages = this.deps.agent().messages
     const picks = messages
       .map((m, index) => ({ m, index }))
       .filter((p): p is RewindPick => p.m.role === "user" && !p.m.display?.origin)
@@ -171,20 +133,18 @@ export class RewindFlow {
   }
 
   private async planFileRewind(control: RewindControl, pick: RewindPick, current: () => boolean) {
-    const { view, port } = this.deps
-    const generation = port ? frontendIdentity(port).sessionGeneration : undefined
-    const valid = () => current() && (!port || frontendIdentity(port).sessionGeneration === generation)
+    const { view } = this.deps
     let plan: FileRewindPlan
     try {
       plan = await control.planRewind!(pick.index)
     } catch (error) {
-      if (!valid()) return
+      if (!current()) return
       view.notice("warning", `Cannot rewind: ${error instanceof Error ? error.message : String(error)}`)
       view.requestRender()
       return
     }
-    if (!valid()) return
-    const run = () => valid() && this.confirmFileRewind(control, pick, plan, current)
+    if (!current()) return
+    const run = () => current() && this.confirmFileRewind(control, pick, plan, current)
     if (this.deps.onMain) this.deps.onMain(run)
     else run()
   }

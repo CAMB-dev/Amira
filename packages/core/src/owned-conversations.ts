@@ -16,7 +16,6 @@ import { Agent } from "./agent.ts"
 import { checkAskAnswers } from "./ask-answers.ts"
 import { completeForAgent } from "./completion.ts"
 import { EventBus } from "./event-bus.ts"
-import { registerNativeFrontend } from "./frontend/native-conversations.ts"
 import { amiraHome } from "./home.ts"
 import { ConversationEvents } from "./owned-conversations-events.ts"
 import { ConversationOpenings } from "./owned-conversations-openings.ts"
@@ -476,7 +475,6 @@ class Handle implements OwnedConversation {
   #running: Promise<void> | undefined
   #abort: AbortController | undefined
   #trace: TraceRecorder
-  #releaseFrontend: () => void
   #released = false
   #archiving = false
   #archivePrepared = false
@@ -522,7 +520,6 @@ class Handle implements OwnedConversation {
     this.#trace = new TraceRecorder(agent.bus)
     this.#trace.register(agent.sessionId, agent.session!.file)
     this.#agent = agent
-    this.#releaseFrontend = registerNativeFrontend(this, agent, () => this.#check())
     this.#onRelease = onRelease
   }
 
@@ -573,7 +570,6 @@ class Handle implements OwnedConversation {
     await scopeAdmission(this.#agent.tree!).drain()
     await drainOwnedBackgroundJobs(this.#agent.session!.file, this.id)
     this.events.close()
-    this.#releaseFrontend()
     await this.#agent.bus.flush()
     await this.#trace.close()
     // Keep the writer lease on any drain/publication failure. A retry must finish this
@@ -814,7 +810,6 @@ class Handle implements OwnedConversation {
       } finally {
         this.#agent.tree?.releaseScope()
         this.events.close()
-        this.#releaseFrontend()
         try {
           await this.#agent.bus.flush()
           await this.#trace.close()

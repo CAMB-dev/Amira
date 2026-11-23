@@ -1,6 +1,6 @@
 // Owns bottom-area layout: panels, activity, pending messages, input, status and hints.
 import { AGENT_STATUS_BADGES } from "@amira/api"
-import type { Agent, AgentPort, PanelRegistry, StatusRegistry } from "@amira/core"
+import type { Agent, PanelRegistry, StatusRegistry } from "@amira/core"
 import {
   bold,
   type Editor,
@@ -27,7 +27,6 @@ import { type TranscriptView, View } from "../view.ts"
 import { visibleAnimation } from "../view-animation.ts"
 import { renderViewLines } from "../view-lines.ts"
 import type { TurnActivity } from "./activity.ts"
-import { attachmentBanner, attachmentStatus } from "./attachment-banner.ts"
 import type { CommandRunner } from "./command-runner.ts"
 import type { DockedView } from "./dock.ts"
 import { type NoticeStrip, type Outgoing, otherWay, pendingMessageRows, type WhileWorking } from "./outbox.ts"
@@ -51,8 +50,7 @@ export interface BottomArea {
 
 /** The functions are read at draw time, never once: the agent is replaced on a session switch. */
 export interface BottomAreaDeps {
-  agent: () => Agent | undefined
-  frontend?: AgentPort
+  agent: () => Agent
   activity: () => TurnActivity
   /** The activity row survived the final bottom-aligned viewport budget. */
   activityVisible?: (visible: boolean, ctx: RenderContext) => void
@@ -139,26 +137,21 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
    * and the running turn's rate stay out of the border, so each is shown only once.
    */
   const statusItems = (): StatusEntry[] => {
-    const connection = deps.frontend?.connection
-    const connectionItems: StatusEntry[] = connection
-      ? attachmentStatus(deps.frontend?.attachment, connection)
-      : []
     // Root model and permission decorations must not masquerade as the owned runtime.
-    if (deps.conversationFocused?.()) return connectionItems
+    if (deps.conversationFocused?.()) return []
     const agent = deps.agent()
     const items = deps.status
       .snapshot()
       .filter((i) => !["context", "cost", "place", "token-speed"].includes(i.id))
     const model = items.find((i) => i.id === "model")
-    const state = deps.frontend?.snapshot.state
-    const thinking = agent ? agent.thinking.state(agent.model).thinking : state?.thinking
-    const activeModel = agent?.model ?? state?.model
-    const fallback = activeModel?.provider
+    const thinking = agent.thinking.state(agent.model).thinking
+    const activeModel = agent.model
+    const fallback = activeModel.provider
       ? `${activeModel.id}${thinking ? ` (${thinking})` : ""}`
       : "(no model)"
-    const mode = agent?.permissions.mode ?? state?.permissionMode
-    const fastRequested = agent?.fastMode ?? state?.fastMode?.requested
-    const fastApplied = agent?.fastModeApplied ?? state?.fastMode?.applied
+    const mode = agent.permissions.mode
+    const fastRequested = agent.fastMode
+    const fastApplied = agent.fastModeApplied
     return [
       ...items.filter((i) => i.id !== "model").map(statusText),
       {
@@ -169,7 +162,6 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         text: `${model?.text ?? fallback}${mode ? ` ${glyphs.separator} ${mode}` : ""}`,
       },
       // Requested but not supported by the current model: say so, instead of hiding the choice.
-      ...connectionItems,
       ...(fastApplied
         ? [{ id: "fast", align: "right", tone: "accent", priority: 40, text: "fast" } as const]
         : fastRequested
@@ -313,8 +305,6 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       return panelsShown ? [...lines, ...gap] : []
     }),
     new View((width, ctx) => [
-      // While this TUI only watches, a persistent row says so, and who controls the workspace.
-      ...attachmentBanner(deps.frontend?.attachment, ctx.theme, width),
       ...deps
         .noticeStrip()
         .render(ctx.theme)
@@ -523,25 +513,17 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const cancellable = deps.commandActivity().hasCancellable() && !deps.activity().compacting
     const waiting = deps.queued().length > 0 || deps.steering().length > 0
     const stop = cancellable ? "cancel command" : waiting ? "send queued" : "stop"
-    // A viewer cannot stop the controller's turn: the hint says how to get control instead.
-    const viewer = deps.frontend?.attachment?.role === "viewer"
     return [
-      // A viewer cannot change the mode, so its key is not offered.
-      !viewer && item(keys.label("permissions.mode"), "mode", 5),
+      item(keys.label("permissions.mode"), "mode", 5),
       deps.dock?.()
         ? item(keyLabel({ name: "escape" }), "close dock", 6)
-        : viewer && !cancellable
-          ? (working || deps.activity().compacting) && item("/take", "read-only, take control", 6)
-          : (working || cancellable || deps.activity().compacting) && item(interruptKey, stop, 6),
+        : (working || cancellable || deps.activity().compacting) && item(interruptKey, stop, 6),
       item(keys.label("tool-output"), "detail", 5),
       item(keys.label("help"), "keys", 5),
       !editor.isEmpty && item(newlineKey, "newline", 1),
       (working || cancellable) && item(keys.label("submit"), working ? enterDoes : "send", 4),
       working && item(queueKey, otherWay(enterDoes), 3),
-      working &&
-        !viewer &&
-        deps.canRewind() &&
-        item(interruptKey && `${interruptKey} ${interruptKey}`, "rewind", 2),
+      working && deps.canRewind() && item(interruptKey && `${interruptKey} ${interruptKey}`, "rewind", 2),
       panelsCollapsed && panelsShown && item(keys.label("panels.toggle"), "unfold panels", 4),
     ]
   }

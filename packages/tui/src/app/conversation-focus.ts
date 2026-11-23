@@ -1,8 +1,6 @@
 import type { AnyEvent, EventMap, OwnedConversation } from "@amira/api"
-import { type AgentPort, frontendIdentity } from "@amira/core"
 import type { Editor, EditorPart } from "@amira/tui-kit"
 import { truncateToWidth } from "@amira/tui-kit"
-import { bindLocalConversation } from "../../../core/src/frontend/operations.ts"
 import {
   conversationHoldId,
   conversationIncarnation,
@@ -31,11 +29,9 @@ type Entry = {
   send?: { turnId: string; reconciled: boolean }
   sending?: boolean
   turnId?: string
-  unbind?: () => void
 }
 
 interface FocusDeps {
-  port?: AgentPort
   editor: Editor
   mainView: TranscriptView
   mainHistory: PromptHistory
@@ -220,17 +216,15 @@ export class ConversationFocus {
         const activity = createTurnActivity()
         if (conversation.status().busy) activity.beginSend()
         const view = this.deps.createView(conversation)
-        const binding = this.deps.port ? bindLocalConversation(this.deps.port, conversation) : undefined
         entry = {
           conversation,
-          incarnation: binding?.incarnation ?? conversationIncarnation(conversation),
+          incarnation: conversationIncarnation(conversation),
           iterator,
           history,
           activity,
           view,
           draft: [],
           disposed: false,
-          unbind: binding,
         }
       } catch {
         void iterator.return?.()
@@ -353,8 +347,6 @@ export class ConversationFocus {
     const images = message.content?.flatMap((b) => (b.type === "image" ? [b] : []))
     const receipt = { turnId: crypto.randomUUID(), reconciled: false }
     entry.send = receipt
-    const port = this.deps.port
-    const sessionGeneration = port ? frontendIdentity(port).sessionGeneration : undefined
     entry.sending = true
     const options = {
       ...(images ? { images } : {}),
@@ -362,30 +354,10 @@ export class ConversationFocus {
     }
     void Promise.resolve()
       .then(async () => {
-        await (port
-          ? port.execute(
-              "conversation.send",
-              {
-                conversationId: entry.conversation.id,
-                incarnation: entry.incarnation,
-                turnId: receipt.turnId,
-                message: {
-                  role: "user",
-                  content: message.content ?? (body ? [{ type: "text", text: body }] : []),
-                  ...(options.display ? { display: options.display } : {}),
-                },
-              },
-              { sessionGeneration },
-            )
-          : sendConversation(entry.conversation, body, options, receipt.turnId))
+        await sendConversation(entry.conversation, body, options, receipt.turnId)
       })
       .catch((error) => {
-        if (
-          entry.disposed ||
-          receipt.reconciled ||
-          (port && frontendIdentity(port).sessionGeneration !== sessionGeneration)
-        )
-          return
+        if (entry.disposed || receipt.reconciled) return
         if (this.current === entry) {
           if (this.deps.editor.isEmpty) this.deps.editor.setParts(parts)
         } else if (this.empty(entry.draft)) entry.draft = parts
@@ -432,10 +404,7 @@ export class ConversationFocus {
     },
   ): () => void {
     const root = owner?.sessionId ?? this.rootSession(sessionId ?? "host")
-    const port = this.deps.port
-    const sessionGeneration = port ? frontendIdentity(port).sessionGeneration : undefined
-    const current = () =>
-      !this.disposed && (!port || frontendIdentity(port).sessionGeneration === sessionGeneration)
+    const current = () => !this.disposed
     if (root === this.deps.mainId()) {
       const turnId = owner ? owner.turnId : this.deps.mainTurnId?.()
       return () => {
@@ -480,8 +449,6 @@ export class ConversationFocus {
   }
 
   private stopEntry(entry: Entry, expectedTurnId?: string, expectedHoldId?: string) {
-    const port = this.deps.port
-    const sessionGeneration = port ? frontendIdentity(port).sessionGeneration : undefined
     void Promise.resolve()
       .then(async () => {
         if (
@@ -491,21 +458,10 @@ export class ConversationFocus {
             : !expectedHoldId || conversationHoldId(entry.conversation) !== expectedHoldId)
         )
           return
-        await (port
-          ? port.execute(
-              "conversation.stop",
-              {
-                conversationId: entry.conversation.id,
-                incarnation: entry.incarnation,
-                reason: "Interrupted from composer",
-                ...(expectedTurnId ? { expectedTurnId } : { expectedHoldId }),
-              },
-              { sessionGeneration },
-            )
-          : entry.conversation.stop("Interrupted from composer"))
+        await entry.conversation.stop("Interrupted from composer")
       })
       .catch((error) => {
-        if (entry.disposed || (port && frontendIdentity(port).sessionGeneration !== sessionGeneration)) return
+        if (entry.disposed) return
         entry.view.notice("error", String(error))
         entry.view.requestRender()
       })
@@ -592,7 +548,6 @@ export class ConversationFocus {
       this.released.add(entry.conversation)
       this.entries.delete(entry.conversation)
       entry.disposed = true
-      entry.unbind?.()
       entry.view.stop()
     }
   }
@@ -607,7 +562,6 @@ export class ConversationFocus {
     this.deps.mainView.setVisible(true)
     for (const entry of this.entries.values()) {
       entry.disposed = true
-      entry.unbind?.()
       void entry.iterator.return?.()
       entry.view.setVisible(false)
       entry.view.stop()

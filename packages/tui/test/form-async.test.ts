@@ -2,11 +2,7 @@ import { expect, test } from "bun:test"
 import { type MarkdownRenderResult, toFormSchema } from "@amira/api"
 import { EventBus, UiRequests } from "@amira/core"
 import { key, textKey } from "@amira/tui-kit"
-import type {
-  FormEvaluation,
-  FrontendFormBackend,
-  UiResponseAck,
-} from "../../core/src/frontend/form-backend.ts"
+import type { FormEvaluation, FrontendFormBackend, UiResponseAck } from "../../core/src/form-backend.ts"
 import { plain } from "../../tui-kit/test/context.ts"
 import { ExtensionSettingsView, uiExtensionSettingsBackend } from "../src/extension-settings-view.ts"
 import { operationFormBackend } from "../src/form-operation-backend.ts"

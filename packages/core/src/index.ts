@@ -29,38 +29,7 @@ export {
   type FormRequest,
   type FrontendFormBackend,
   type UiResponseAck,
-} from "./frontend/form-backend.ts"
-export { createLocalAgentPort, type LocalAgentPortOptions } from "./frontend/local-port.ts"
-export {
-  bindLocalCommandContext,
-  bindLocalConversation,
-  type FrontendAcknowledgement,
-  type FrontendCommandParams,
-  type FrontendErrorCode,
-  type FrontendExecuteOptions,
-  type FrontendMutations,
-  FrontendOperationError,
-  isFrontendError,
-  type LocalConversationBinding,
-} from "./frontend/operations.ts"
-export {
-  type AgentPort,
-  type FrontendAttachment,
-  type FrontendConnectionIssue,
-  type FrontendOperations,
-  type FrontendSessionIdentity,
-  type FrontendUpdate,
-  frontendIdentity,
-} from "./frontend/port.ts"
-export type {
-  FrontendDisplayEntry,
-  FrontendJson,
-  FrontendMessage,
-  FrontendMessageEntry,
-  FrontendSnapshot,
-  FrontendState,
-  FrontendTranscript,
-} from "./frontend/snapshot.ts"
+} from "./form-backend.ts"
 export * from "./git.ts"
 export * from "./home.ts"
 export * from "./instructions.ts"

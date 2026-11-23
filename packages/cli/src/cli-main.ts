@@ -1,7 +1,6 @@
-// Every command except the hidden `amira server`, which main.ts dispatches before this graph loads.
 import type { AnyEvent, TuiSettings } from "@amira/api"
 import { DEFAULT_TUI_MODE } from "@amira/api"
-import { type Agent, amiraPath, createLocalAgentPort, listSessions, SessionStore } from "@amira/core"
+import { type Agent, amiraPath, listSessions, SessionStore } from "@amira/core"
 import { contentGeometry, loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import { ProcessTerminal } from "@amira/tui-kit"
 import { consoleCodePage } from "@amira/tui-kit/console-code-page"
@@ -57,10 +56,6 @@ async function run(argv: string[]): Promise<number> {
   const io = {
     stdout: (s: string) => void process.stdout.write(s),
     stderr: (s: string) => void process.stderr.write(s),
-  }
-  if (argv[0] === "remote") {
-    const { runRemoteCli } = await import("./remote/main.ts")
-    return runRemoteCli(argv.slice(1))
   }
   if (argv[0] === "sessions") {
     process.stdout.write(runSessionsCommand(argv.slice(1)))
@@ -299,9 +294,7 @@ async function run(argv: string[]): Promise<number> {
     }
     terminal = new ProcessTerminal()
     const running = () => session.tree.children.length
-    const frontend = createLocalAgentPort({ agent, commands })
     const code = await runInteractive({
-      frontend,
       terminal,
       bindTerminal: (terminal) => host.bindTerminal(terminal),
       agent,
@@ -333,7 +326,7 @@ async function run(argv: string[]): Promise<number> {
       // Preserve legacy inline requests so the fullscreen UI can show its removal notice.
       mode: args.mode ?? config.settings.tui?.mode ?? DEFAULT_TUI_MODE,
       runningJobs: () => host.backgroundJobs.running().length,
-    }).finally(() => frontend.detach())
+    })
     const columns = process.stdout.columns || 80
     process.stdout.write(
       exitNote(agentRef ?? agent, running(), args.cwd, host.backgroundJobs.running().length, {

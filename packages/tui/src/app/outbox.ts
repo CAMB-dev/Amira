@@ -1,6 +1,6 @@
 // Owns queued and steering messages, interrupt flushing and the pending-notice strip.
 import type { SendOptions, UserMessage } from "@amira/api"
-import { type AgentPort, frontendIdentity, isFrontendError, newTurnId } from "@amira/core"
+import { type Agent, AgentBusyError, newTurnId } from "@amira/core"
 import {
   type Editor,
   type EditorPart,
@@ -15,8 +15,6 @@ import { CONTENT_INSET, contentRoom } from "../grid.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { TranscriptView } from "../view.ts"
 import type { TurnActivity } from "./activity.ts"
-import { VIEWER_STOP_NOTICE } from "./attachment-banner.ts"
-import type { DisplayModel } from "./frontend-display.ts"
 import { DOUBLE_ESC_MS } from "./startup.ts"
 
 /** A message on its way: the text the model gets, and what the transcript shows when that differs. */
@@ -99,8 +97,7 @@ export interface Outbox {
 }
 
 export interface OutboxDeps {
-  agent: () => { model: DisplayModel; turnId?: string; holdId?: string }
-  frontend: AgentPort
+  agent: () => Agent
   editor: Pick<Editor, "getParts" | "setParts" | "isEmpty">
   activity: Pick<TurnActivity, "working" | "compacting" | "beginSend" | "sendFailed">
   spinner: Pick<Spinner, "stop">
@@ -195,18 +192,12 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     pendingPromptId = admission.turnId
     deps.changed?.()
     view.requestRender()
-    deps.frontend
-      .execute(
-        "turn.prompt",
-        {
-          message: toPrompt(message),
-          turnId: admission.turnId,
-          ...(deps.agent().holdId ? { expectedHoldId: deps.agent().holdId } : {}),
-        },
-        {
-          sessionGeneration: frontendIdentity(deps.frontend).sessionGeneration,
-        },
-      )
+    const agent = deps.agent()
+    const attempt =
+      agent.busy && !agent.holdingFor
+        ? Promise.reject(new AgentBusyError("a turn or compaction is already running"))
+        : agent.prompt(toPrompt(message), { turnId: admission.turnId })
+    attempt
       .catch((err) => {
         if (disposed || admission.reconciled) return
         if (pendingPromptId === admission.turnId) {
@@ -222,7 +213,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
           view.requestRender()
           return
         }
-        const busy = isFrontendError(err, "agent_busy")
+        const busy = err instanceof AgentBusyError
         activity.sendFailed(clock, busy)
         if (busy) {
           // A turn we did not know about is running; send this one after it, and keep its clock.
@@ -330,36 +321,16 @@ export function createOutbox(deps: OutboxDeps): Outbox {
    * Esc or Ctrl+C while working. With steering or queued messages waiting, the turn stops and
    * they go out at once, merged in the order they were typed (on turn.end).
    */
-  const viewing = () => deps.frontend.attachment?.role === "viewer"
-
   function interrupt(expectedTurnId?: string) {
     const agent = deps.agent()
     if (expectedTurnId !== undefined && agent.turnId !== expectedTurnId) return
     const turnId = expectedTurnId ?? agent.turnId
     const holdId = turnId === undefined ? agent.holdId : undefined
     if (turnId === undefined && holdId === undefined) return
-    // A viewer stops nothing: the turn is the controller's, so nothing is marked interrupted.
-    if (viewing()) {
-      view.notice("warning", VIEWER_STOP_NOTICE)
-      view.requestRender()
-      return
-    }
-    const target = turnId !== undefined ? { turnId } : { holdId }
-    const sessionGeneration = frontendIdentity(deps.frontend).sessionGeneration
     deps.onInterrupt()
     if (activity.working && !flush && (queued.length || steering.length))
       flush = { dropped: [], rewind: false }
-    void deps.frontend.execute("turn.abort", target, { sessionGeneration }).catch((error) => {
-      const current = deps.agent()
-      if (
-        disposed ||
-        frontendIdentity(deps.frontend).sessionGeneration !== sessionGeneration ||
-        (turnId !== undefined ? current.turnId !== turnId : current.holdId !== holdId)
-      )
-        return
-      view.notice("error", error instanceof Error ? error.message : String(error))
-      view.requestRender()
-    })
+    agent.abort()
   }
 
   return {
@@ -409,38 +380,24 @@ export function createOutbox(deps: OutboxDeps): Outbox {
     },
     dispatch(message, parts, how) {
       if (activity.working && how === "steer") {
+        const active = deps.agent()
+        if (!active.busy) {
+          send(message)
+          return
+        }
         steered.push(message)
         const sentIn = generation
-        const admission = { message, reconciled: false, turnId: newTurnId() }
-        const active = deps.agent()
-        const target = active.turnId
-          ? { expectedTurnId: active.turnId }
-          : active.holdId
-            ? { expectedHoldId: active.holdId }
-            : { expectedIdle: true }
-        admissions.add(admission)
         deps.changed?.()
-        void deps.frontend
-          .execute(
-            "turn.steer",
-            { message: toPrompt(message), turnId: admission.turnId, ...target },
-            {
-              sessionGeneration: frontendIdentity(deps.frontend).sessionGeneration,
-            },
-          )
-          .catch((error) => {
-            if (disposed || admission.reconciled) return
-            const index = steered.indexOf(message)
-            if (index !== -1) steered.splice(index, 1)
-            if (!recoverRejected(message)) putBack([message])
-            if (sentIn === generation)
-              view.notice("error", error instanceof Error ? error.message : String(error))
-            view.requestRender()
-          })
-          .finally(() => {
-            admissions.delete(admission)
-            deps.changed?.()
-          })
+        try {
+          active.steer(toPrompt(message))
+        } catch (error) {
+          const index = steered.indexOf(message)
+          if (index !== -1) steered.splice(index, 1)
+          if (!recoverRejected(message)) putBack([message])
+          if (sentIn === generation)
+            view.notice("error", error instanceof Error ? error.message : String(error))
+          view.requestRender()
+        }
       } else if (activity.working) {
         queued.push(message)
         deps.changed?.()
@@ -602,8 +559,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       const now = Date.now()
       const double = now - lastInterruptAt < DOUBLE_ESC_MS
       lastInterruptAt = double ? 0 : now
-      // A viewer neither stops nor rewinds: interrupt only says so.
-      if (!double || viewing()) {
+      if (!double) {
         if (activity.working || activity.compacting) interrupt()
         return
       }

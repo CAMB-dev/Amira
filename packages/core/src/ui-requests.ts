@@ -34,7 +34,7 @@ import {
 import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import { checkAskAnswers } from "./ask-answers.ts"
 import type { EventBus } from "./event-bus.ts"
-import type { UiResponseAck } from "./frontend/form-backend.ts"
+import type { UiResponseAck } from "./form-backend.ts"
 import { InputSuggestions } from "./input-suggestions.ts"
 import { type SelectLive, selectPresentation, watchLiveSelect } from "./live-select.ts"
 import { captureUiRequest, releaseUiRequestOwner } from "./ui-request-capture.ts"

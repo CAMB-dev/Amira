@@ -1,32 +1,20 @@
 // Owns submission validation and routing to commands, skills, input handlers or the outbox.
 import { isNoModel } from "@amira/ai"
-import {
-  type AgentPort,
-  type CommandHost,
-  type CommandRunOptions,
-  frontendIdentity,
-  parseCommandLine,
-} from "@amira/core"
+import { type Agent, type CommandHost, type CommandRunOptions, parseCommandLine } from "@amira/core"
 import type { Editor, EditorPart } from "@amira/tui-kit"
-import { bindLocalCommandContext } from "../../../core/src/frontend/operations.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { PromptHistory } from "../prompt-history.ts"
 import type { TranscriptView } from "../view.ts"
-import { VIEWER_INPUT_NOTICE } from "./attachment-banner.ts"
 import type { CommandRunner, CommandRunnerOptions } from "./command-runner.ts"
 import type { Composer } from "./composer.ts"
-import type { DisplayModel } from "./frontend-display.ts"
 import type { Outbox, WhileWorking } from "./outbox.ts"
 
 interface SubmissionDeps {
-  agent: () => { model: DisplayModel }
+  agent: () => Pick<Agent, "model">
   editor: Pick<Editor, "setParts" | "clear" | "getText" | "getParts" | "getDisplayText">
   history: Pick<PromptHistory, "add">
   commands?: CommandHost
-  skillLine?: CommandHost["skillLine"]
-  port?: AgentPort
   captureFrontend?: CommandRunnerOptions["captureFrontend"]
-  bindCommandFrontend?: (invocationId: string, options: CommandRunOptions) => () => void
   composer: Pick<Composer, "clipboardPending" | "resetHistory">
   commandRunner: Pick<CommandRunner, "run">
   outbox: Pick<Outbox, "prepare" | "dispatch"> & Partial<Pick<Outbox, "commandSend">>
@@ -102,23 +90,12 @@ export function createSubmission(deps: SubmissionDeps) {
       return
     }
     if (!trimmed && !hasImages) return
-    // A viewer sends nothing: only slash commands run, such as /take; the draft stays put.
-    if (deps.port?.attachment?.role === "viewer" && (hasImages || !parseCommandLine(trimmed))) {
-      editor.setParts(parts)
-      const visible = deps.composerView?.() ?? view
-      visible.notice("warning", VIEWER_INPUT_NOTICE)
-      visible.requestRender()
-      return
-    }
     editor.clear()
     history.add(parts)
     composer.resetHistory()
     const message = outbox.prepare(trimmed, parts, display)
-    const commandPort = deps.port && deps.port.supportedOperations?.includes("command.run") !== false
-    if (!hasImages && (commands || commandPort) && parseCommandLine(trimmed))
-      void commandRunner.run(trimmed, message.seq)
-    else if (!hasImages && (commands?.skillLine(trimmed) || deps.skillLine?.(trimmed)))
-      runSkill(trimmed, message.seq)
+    if (!hasImages && commands && parseCommandLine(trimmed)) void commandRunner.run(trimmed, message.seq)
+    else if (!hasImages && commands?.skillLine(trimmed)) runSkill(trimmed, message.seq)
     else if (!hasImages && commands?.inputLine(trimmed)) runInput(trimmed, display, message.seq)
     else outbox.dispatch(message, parts, how)
     view.requestRender()
@@ -161,37 +138,16 @@ export function createSubmission(deps: SubmissionDeps) {
           },
         }
       : origin
-    const generation = deps.port ? frontendIdentity(deps.port).sessionGeneration : undefined
-    const invocationId = crypto.randomUUID()
-    let unbind: (() => void) | undefined
     void Promise.resolve()
       .then(async () => {
-        if (deps.port) {
-          unbind = deps.bindCommandFrontend
-            ? deps.bindCommandFrontend(invocationId, context)
-            : bindLocalCommandContext(deps.port, invocationId, context)
-          await deps.port.execute(
-            operation,
-            {
-              line,
-              invocationId,
-              ...(context.keys ? { keys: [...context.keys()] } : {}),
-              ...(context.glyphs ? { glyphs: context.glyphs() } : {}),
-            },
-            { signal: context.signal, sessionGeneration: generation },
-          )
-        } else if (operation === "skill.run") await commands!.runSkill(line, context)
+        if (operation === "skill.run") await commands!.runSkill(line, context)
         else await commands!.runInput(line, context)
       })
       .catch((error) => {
-        if (
-          (context.isFrontendCurrent?.() ?? true) &&
-          (!deps.port || frontendIdentity(deps.port).sessionGeneration === generation)
-        )
+        if (context.isFrontendCurrent?.() ?? true)
           view.notice("error", error instanceof Error ? error.message : String(error))
       })
       .finally(() => {
-        unbind?.()
         if (context.isFrontendCurrent?.() ?? true) view.requestRender()
       })
   }

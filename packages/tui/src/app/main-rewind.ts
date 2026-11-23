@@ -1,6 +1,6 @@
 // Main-local rewind work waits across owned focus, but never across unrelated session replacement.
 import { AsyncLocalStorage } from "node:async_hooks"
-import { type Agent, frontendIdentity } from "@amira/core"
+import type { Agent } from "@amira/core"
 import { RewindFlow, type RewindFlowDeps } from "./rewind.ts"
 
 type MainRewindDeps = RewindFlowDeps & {
@@ -11,7 +11,7 @@ type MainRewindDeps = RewindFlowDeps & {
 
 export function createMainRewind(deps: MainRewindDeps) {
   let generation = 0
-  type Root = { agent: Agent | undefined; generation: number; frontendGeneration?: number }
+  type Root = { agent: Agent; generation: number }
   type Operation = { root: Root; current: () => boolean }
   const roots = new WeakMap<() => boolean, Root>()
   const operations = new AsyncLocalStorage<Operation>()
@@ -23,15 +23,8 @@ export function createMainRewind(deps: MainRewindDeps) {
     const root: Root = {
       agent: deps.agent(),
       generation,
-      frontendGeneration:
-        deps.port && !deps.agent() ? frontendIdentity(deps.port).sessionGeneration : undefined,
     }
-    const check = () =>
-      !deps.quitting() &&
-      deps.agent() === root.agent &&
-      generation === root.generation &&
-      (root.frontendGeneration === undefined ||
-        frontendIdentity(deps.port!).sessionGeneration === root.frontendGeneration)
+    const check = () => !deps.quitting() && deps.agent() === root.agent && generation === root.generation
     roots.set(check, root)
     return check
   }
@@ -42,8 +35,6 @@ export function createMainRewind(deps: MainRewindDeps) {
     activeOperation = operation
     try {
       await operations.run(operation, run)
-      // A successful remote mutation owns its acknowledged snapshot replacement.
-      if (!root.agent && deps.port) root.frontendGeneration = frontendIdentity(deps.port).sessionGeneration
     } finally {
       if (activeOperation === operation) activeOperation = undefined
     }
@@ -61,9 +52,7 @@ export function createMainRewind(deps: MainRewindDeps) {
     return false
   }
   const flow = new RewindFlow({ ...deps, onMain, current, runOperation })
-  const canRewind = () =>
-    deps.commands?.control.rewind !== undefined ||
-    (!deps.agent() && !!deps.port && deps.port.supportedOperations?.includes("session.rewind") !== false)
+  const canRewind = () => deps.commands?.control.rewind !== undefined
   return {
     canRewind,
     openRewind: () => flow.openRewind(),

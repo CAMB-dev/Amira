@@ -1,8 +1,7 @@
 // Owns slash-command execution, cancellation, key help and command echo correlation.
 import type { FrontendView, KeyHelp, OwnedConversation, SendOptions, UserMessage } from "@amira/api"
-import { type AgentPort, type CommandHost, type CommandRunOptions, frontendIdentity } from "@amira/core"
+import type { CommandHost, CommandRunOptions } from "@amira/core"
 import { type RenderContext, Spinner } from "@amira/tui-kit"
-import { bindLocalCommandContext } from "../../../core/src/frontend/operations.ts"
 import { userText } from "../format.ts"
 import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { ACTIONS, type Action, type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
@@ -44,13 +43,10 @@ export interface CommandRunner {
 
 export interface CommandRunnerOptions {
   commands?: CommandHost
-  port?: AgentPort
   captureFrontend?: () => Pick<
     CommandRunOptions,
     "isFrontendCurrent" | "openView" | "focusConversation" | "unfocusConversation"
   >
-  /** Local-only presentation callbacks, registered outside the serializable operation. */
-  bindCommandFrontend?: (invocationId: string, options: CommandRunOptions) => () => void
   keys: Keybindings
   reaches: (spec: KeySpec) => boolean
   commandEcho: (line: string) => void
@@ -127,16 +123,14 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
   return {
     async run(line, sequence) {
       const commands = options.commands
-      if ((!commands && !options.port) || options.guardCommand?.(line)) return
-      const echo = commands?.shouldEcho(line) ?? true
+      if (!commands || options.guardCommand?.(line)) return
+      const echo = commands.shouldEcho(line)
       if (echo) options.commandEcho(line)
       const abort = new AbortController()
-      const invocationId = crypto.randomUUID()
-      const generation = options.port ? frontendIdentity(options.port).sessionGeneration : undefined
       const sessionId = options.sessionId()
       const origin = options.captureFrontend?.()
       commandAborts.set(abort, {
-        name: commands?.commandName(line),
+        name: commands.commandName(line),
         startedAt: Date.now(),
         sessionId: options.sessionId(),
         current: origin?.isFrontendCurrent,
@@ -166,39 +160,21 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
           }
         },
       }
-      let unbind: (() => void) | undefined
       const settled = () => {
         if (!commandAborts.delete(abort)) return
         syncAnimation()
         if (origin?.isFrontendCurrent?.() ?? true) options.requestRender()
       }
       try {
-        if (options.port) {
-          unbind = options.bindCommandFrontend
-            ? options.bindCommandFrontend(invocationId, frontend)
-            : bindLocalCommandContext(options.port, invocationId, frontend, settled)
-          await options.port.execute(
-            "command.run",
-            {
-              line,
-              invocationId,
-              keys: keyHelp(),
-              glyphs: { separator: glyphs.separator, more: viewEllipsis() },
-            },
-            { signal: abort.signal, sessionGeneration: generation },
-          )
-        } else await commands!.run(line, frontend)
+        await commands.run(line, frontend)
       } catch (error) {
-        // A transport rejection is distinct from a command outcome (printed by the host).
         if (
           !abort.signal.aborted &&
           (origin?.isFrontendCurrent?.() ?? true) &&
-          options.sessionId() === sessionId &&
-          (!options.port || frontendIdentity(options.port).sessionGeneration === generation)
+          options.sessionId() === sessionId
         )
           options.commandOutput("error", error instanceof Error ? error.message : String(error))
       } finally {
-        unbind?.()
         // A successful send may still be waiting to join a busy turn after its command ends.
         settled()
       }

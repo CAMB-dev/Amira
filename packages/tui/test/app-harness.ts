@@ -15,7 +15,7 @@ import {
   type TuiSettings,
   textResult,
 } from "@amira/api"
-import type { AgentPort, SessionStore } from "@amira/core"
+import type { SessionStore } from "@amira/core"
 import {
   Agent,
   AgentTree,
@@ -55,9 +55,6 @@ export async function waitFor(check: () => boolean, what: string, timeoutMs = 30
 }
 
 export interface SetupOptions {
-  frontend?: (agent: Agent, commands?: CommandHost) => AgentPort
-  /** Exercise DTO-only frontend presentation without handing the app the local agent. */
-  remote?: boolean
   parentSessionId?: string
   requests?: InteractiveOptions["requests"]
   cwd?: string
@@ -222,10 +219,9 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
   if (o.history) agent.messages.push(...o.history)
   await o.prepare?.(agent)
   const exited = runInteractive({
-    ...(o.frontend ? { frontend: o.frontend(agent, commands) } : {}),
     ...(o.requests ? { requests: o.requests } : {}),
     bindTerminal: (terminal) => host.bindTerminal(terminal),
-    ...(o.remote ? {} : { agent }),
+    agent,
     status: host.status,
     theme: o.theme,
     themes: o.themes,

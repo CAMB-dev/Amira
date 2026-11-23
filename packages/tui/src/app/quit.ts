@@ -1,11 +1,5 @@
-import type { AgentPort } from "@amira/core"
 import { chromeText } from "../glyphs.ts"
 import { INTERRUPTED_NOTICE } from "../transcript.ts"
-
-/** Remote quit releases the frontend only; background work is not an exit hazard. */
-export function detachesOnQuit(port: AgentPort): boolean {
-  return port.quitBehavior === "detach"
-}
 
 export function runningJobCount(read?: () => number): number {
   try {

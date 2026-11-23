@@ -1,8 +1,16 @@
 // Owns expected/delivered notices, inbox handover and failed-turn retries.
 import { type UserMessage, userMessage } from "@amira/ai"
 import type { PendingNotice } from "@amira/api"
-import { freezeSnapshot } from "../frontend/json.ts"
 import { joinMessages } from "./messages.ts"
+
+function freezeSnapshot<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const item of Object.values(value)) freezeSnapshot(item)
+    Object.freeze(value)
+  }
+  return value
+}
+
 import {
   addNoticeInput,
   clearNoticeInput,

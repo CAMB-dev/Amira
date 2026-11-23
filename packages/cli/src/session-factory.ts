@@ -73,9 +73,7 @@ export interface SessionOptions {
    * function is asked again on each reload, so packages installed or removed since load then.
    */
   packages?: ActivePackages | (() => ActivePackages)
-  /** Server composition keeps package skills but never executes package/explicit extensions. */
-  executionOnly?: boolean
-  /** Local wrapper supplies theme loading; absent in the server graph. */
+  /** Local wrapper supplies theme loading. */
   loadThemes?: (host: ExtensionHost, packages: ActivePackages | undefined, bus: EventBus) => void
   noBuiltins: boolean
   /** Tools hidden from the model. */
@@ -295,7 +293,6 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     bus,
     noBuiltins: opts.noBuiltins,
     builtins: opts.builtins ?? (async () => []),
-    executionOnly: opts.executionOnly,
     getPackages: () => packages,
     extensions: opts.extensions,
     cwd: opts.cwd,
@@ -395,7 +392,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     }
     normalizeShimmer(value.tui?.shimmer, (text) => warn(`Settings tui.shimmer: ${text}`))
   }
-  if (!opts.executionOnly) noticeThemeSettings(settings)
+  noticeThemeSettings(settings)
   const { names: requested = [], from = "" } = opts.requestedDisabled ?? {}
   for (const name of requested) {
     if (tools.has(name)) continue
@@ -471,7 +468,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       } finally {
         host.replayOnLoad(undefined)
       }
-      if (!opts.executionOnly) noticeThemeSettings(normalized.settings)
+      noticeThemeSettings(normalized.settings)
       initializeTools(normalized.settings, current, reconcileTools)
       opts.onSettingsReload?.(normalized.settings)
       const after = new Set(host.loaded)

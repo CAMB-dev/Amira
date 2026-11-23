@@ -1,5 +1,5 @@
 import type { EventMap, PrintOptions } from "@amira/api"
-import type { FrontendSnapshot } from "@amira/core"
+import type { Agent } from "@amira/core"
 import type { NoticeLevel } from "./transcript.ts"
 import type { TranscriptView } from "./view.ts"
 
@@ -19,7 +19,27 @@ export interface DisplayHistory {
   options: PrintOptions
 }
 
-/** Display anchors are projected by the host, not reconstructed from a local store. */
-export function displayHistory(snapshot: FrontendSnapshot): readonly DisplayHistory[] {
-  return snapshot.transcript.displays
+/** Anchors saved display entries (e.g. /btw) to their message positions across compaction. */
+export function displayHistory(agent: Agent): DisplayHistory[] {
+  const branch = agent.session?.branch() ?? []
+  const positions = new Map(agent.messages.map((message, i) => [agent.entryId(message), i]))
+  let before = agent.messages.length
+  const out: DisplayHistory[] = []
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const entry = branch[i]!
+    const position = positions.get(entry.id)
+    if (position !== undefined) before = position
+    if (entry.type === "display") {
+      out.push({
+        before,
+        level: entry.level,
+        text: entry.text,
+        options: {
+          ...(entry.details !== undefined ? { details: entry.details } : {}),
+          ...(entry.markdown !== undefined ? { markdown: entry.markdown } : {}),
+        },
+      })
+    }
+  }
+  return out.reverse()
 }

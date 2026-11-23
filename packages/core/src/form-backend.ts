@@ -1,5 +1,5 @@
 import type { EventMap, FormActionResult, FormSchema, FormValues } from "@amira/api"
-import type { UiRequests } from "../ui-requests.ts"
+import type { UiRequests } from "./ui-requests.ts"
 
 export type FormRequest = Extract<EventMap["ui.request"], { kind: "form" }>
 

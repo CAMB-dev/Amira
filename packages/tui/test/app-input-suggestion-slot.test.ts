@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { UiControl } from "@amira/api"
-import { Agent, createLocalAgentPort } from "@amira/core"
+import { Agent } from "@amira/core"
 import { PromptHistory } from "../src/prompt-history.ts"
 import { closeImageApp, paste, setup, testCommands, waitFor } from "./app-harness.ts"
 import { focusFixture } from "./conversation-focus-fixture.ts"
@@ -233,17 +233,11 @@ for (const placement of ["dock", "fullscreen"] as const) {
   })
 }
 
-for (const mode of ["remote", "child"] as const) {
-  test(`${mode} apps never attach suggestion slots even when given local UI requests`, async () => {
-    const s = await setup([], {
-      ...(mode === "remote"
-        ? { remote: true, frontend: (agent) => createLocalAgentPort({ agent }) }
-        : { parentSessionId: "parent-session" }),
-    })
-    try {
-      expect(s.host.ui.api("slot-test").acquireInputSuggestionSlot()).toBeUndefined()
-    } finally {
-      await closeImageApp(s)
-    }
-  })
-}
+test("child apps never attach suggestion slots even when given local UI requests", async () => {
+  const s = await setup([], { parentSessionId: "parent-session" })
+  try {
+    expect(s.host.ui.api("slot-test").acquireInputSuggestionSlot()).toBeUndefined()
+  } finally {
+    await closeImageApp(s)
+  }
+})

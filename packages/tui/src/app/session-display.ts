@@ -1,75 +1,38 @@
-import type { Message } from "@amira/ai"
-import type { CompactionInfo } from "@amira/api"
-import type { AgentPort, FrontendSnapshot } from "@amira/core"
+import { statSync } from "node:fs"
+import type { Agent } from "@amira/core"
 import { displayHistory } from "../display-history.ts"
 import { rememberMessageTime } from "../format.ts"
 import type { TranscriptView } from "../view.ts"
 
-/** Keeps failed switches pending until their first valid projection, without replaying live turns. */
-export function createSessionDisplay(
-  frontend: AgentPort,
-  view: Pick<TranscriptView, "notice" | "requestRender" | "openSession">,
-  options: { follow?: boolean; reset?: () => void } = {},
-) {
-  let generation = frontend.snapshot.sessionGeneration
-  let valid = true
-  let pending: { sessionId: string; switched: boolean } | undefined
-  const off = frontend.subscribe((update) => {
-    if (update.kind === "error") {
-      valid = false
-      view.notice("warning", update.error.message)
-    } else {
-      valid = true
-      if (options.follow && (update.reset || update.snapshot.sessionGeneration !== generation)) {
-        generation = update.snapshot.sessionGeneration
-        options.reset?.()
-        showAgentSession(view, update.snapshot, true)
-        pending = undefined
-      } else if (pending?.sessionId === update.snapshot.state.sessionId) {
-        showAgentSession(view, update.snapshot, pending.switched)
-        pending = undefined
-      }
-    }
-    view.requestRender()
-  })
-  return {
-    show(sessionId: string, switched: boolean) {
-      pending = { sessionId, switched }
-      if (valid && frontend.snapshot.state.sessionId === sessionId) {
-        showAgentSession(view, frontend.snapshot, switched)
-        pending = undefined
-      }
-    },
-    dispose() {
-      pending = undefined
-      off()
-    },
-  }
-}
-
-/** Shows host-projected history without filesystem, store or Agent reads in the renderer. */
+/** Loads the active local agent's transcript history and timestamps into the view. */
 export function showAgentSession(
   view: Pick<TranscriptView, "openSession">,
-  snapshot: FrontendSnapshot,
+  agent: Agent,
   switched: boolean,
-) {
-  const { state, transcript } = snapshot
-  const messages = transcript.messages.map((entry) => entry.message)
-  const compactions = new Map<Message, CompactionInfo | undefined>(
-    transcript.messages.map((entry) => [entry.message, entry.compaction]),
-  )
-  for (const entry of transcript.messages) {
-    if (entry.ts !== undefined) rememberMessageTime(entry.message, entry.ts)
+): void {
+  const messages = [...agent.messages]
+  const branch = agent.session?.branch() ?? []
+  const times = new Map(branch.filter((entry) => entry.type === "message").map((e) => [e.id, e.ts]))
+  for (const message of messages) {
+    const entryId = agent.entryId(message)
+    const ts = entryId ? times.get(entryId) : undefined
+    if (ts !== undefined) rememberMessageTime(message, ts)
   }
+  const displays = displayHistory(agent)
+  const resumed = messages.length > 0 || displays.length > 0
+  let updatedAt: number | undefined
+  try {
+    if (agent.session?.file && resumed) updatedAt = statSync(agent.session.file).mtimeMs
+  } catch {}
   view.openSession(
     {
-      id: state.sessionId,
-      resumed: state.resumed,
-      ...(state.updatedAt !== undefined ? { updatedAt: state.updatedAt } : {}),
+      id: agent.sessionId,
+      resumed,
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
     },
     messages,
     switched,
-    (message) => compactions.get(message),
-    displayHistory(snapshot),
+    (message) => agent.compactionInfo(message),
+    displays,
   )
 }

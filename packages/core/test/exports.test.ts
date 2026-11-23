@@ -1,13 +1,5 @@
 import { expect, test } from "bun:test"
 import { tmpdir } from "node:os"
-import type {
-  AgentPort,
-  CommandOutcome,
-  FrontendConnectionIssue,
-  FrontendMessageEntry,
-  FrontendState,
-  FrontendUpdate,
-} from "../src/index.ts"
 import {
   ArtifactStore,
   type ArtifactStoreOptions,
@@ -15,7 +7,6 @@ import {
   type FormEditor,
   type ListFiles,
   type ListOptions,
-  type LocalConversationBinding,
   listProjectFiles,
   MAX_FILES,
   type SessionEntry,
@@ -48,62 +39,6 @@ test("local suggestion attachment is a host-only composer seam", () => {
   `)
   detach()
   expect(ui.api().acquireInputSuggestionSlot()).toBeUndefined()
-})
-
-test("frontend transport metadata remains a host-library contract", () => {
-  const state: FrontendState = {
-    sessionId: "s",
-    cwd: "/remote",
-    resumed: false,
-    status: "working",
-    children: 0,
-    model: { provider: "p", id: "m", contextWindow: 1000, caps: { images: true } },
-    turnId: "t",
-    holdId: "h",
-    permissionMode: "plan",
-    thinking: "high",
-    fastMode: { requested: true, applied: false },
-  }
-  const update: FrontendUpdate = {
-    kind: "snapshot",
-    snapshot: { state, sessionGeneration: 1, transcript: { messages: [], displays: [] } },
-    reset: true,
-  }
-  const message: FrontendMessageEntry = {
-    id: "m",
-    turnId: "t",
-    message: { role: "user", content: [{ type: "text", text: "prompt" }] },
-  }
-  expect(Object.keys(message).sort()).toEqual(["id", "message", "turnId"])
-  const outcome: CommandOutcome = { ok: true, output: [], effectWatermark: 7 }
-  const issue: FrontendConnectionIssue = {
-    code: "consent_required",
-    message: "Target changed",
-    recovery: "Approve setup again",
-    retryable: false,
-  }
-  const connection: Pick<
-    AgentPort,
-    "connection" | "connectionIssue" | "subscribeConnection" | "subscribeEvents"
-  > = {
-    connectionIssue: issue,
-    connection: "reconnecting",
-    subscribeConnection: () => () => {},
-    subscribeEvents: () => () => {},
-  }
-  expect(Object.keys(connection.connectionIssue!).sort()).toEqual([
-    "code",
-    "message",
-    "recovery",
-    "retryable",
-  ])
-  expect({
-    reset: update.reset,
-    cursor: outcome.effectWatermark,
-    connection: connection.connection,
-    targets: [state.turnId, state.holdId],
-    images: state.model.caps?.images,
-  }).toEqual({ reset: true, cursor: 7, connection: "reconnecting", targets: ["t", "h"], images: true })
 })
 
 test("finished subagent public types carry an opaque accounting destination, not a transcript", () => {
@@ -195,19 +130,6 @@ test("form editor identity and resumed revision remain host-library exports", ()
       "revision": 7,
     }
   `)
-})
-
-test("local conversation bindings retain callable cleanup and host-issued incarnation metadata", () => {
-  let released = false
-  const binding: LocalConversationBinding = Object.assign(
-    () => {
-      released = true
-    },
-    { incarnation: "host-token" },
-  )
-  expect(binding.incarnation).toMatchInlineSnapshot(`"host-token"`)
-  binding()
-  expect(released).toBe(true)
 })
 
 test("tool enablement can check captured capabilities without changing the registration identity", () => {
@@ -421,7 +343,6 @@ test("the public core exports stay stable", async () => {
     "FILE_REWIND_COVERAGE",
     "FileRewind",
     "FileRewindConflictError",
-    "FrontendOperationError",
     "INSTRUCTION_FILES",
     "ImageProviderRegistry",
     "InputRegistry",
@@ -475,8 +396,6 @@ test("the public core exports stay stable", async () => {
     "askTitle",
     "assertPublicHost",
     "authFile",
-    "bindLocalCommandContext",
-    "bindLocalConversation",
     "builtinWrittenPaths",
     "checkArgs",
     "checkpointOf",
@@ -484,7 +403,6 @@ test("the public core exports stay stable", async () => {
     "commandName",
     "contextTokens",
     "copyFileHistory",
-    "createLocalAgentPort",
     "createToolSession",
     "createUiFormBackend",
     "deepMerge",
@@ -500,7 +418,6 @@ test("the public core exports stay stable", async () => {
     "fileHistoryDir",
     "findSession",
     "forkHistory",
-    "frontendIdentity",
     "fuzzyScore",
     "gitInfo",
     "guardedFetch",
@@ -509,7 +426,6 @@ test("the public core exports stay stable", async () => {
     "instructionsSection",
     "intermediate",
     "isCommandAliasName",
-    "isFrontendError",
     "isPrivateAddress",
     "isProcessAlive",
     "isSummaryMessage",
@@ -546,7 +462,6 @@ test("the public core exports stay stable", async () => {
     "renderPrompt",
     "renderTranscript",
     "resolvePermissions",
-    "resolveRemoteSettings",
     "resolveShimmer",
     "restrictToCurrentUser",
     "resultText",

@@ -1,4 +1,4 @@
-import type { Agent, AgentPort, CommandRunOptions, UiRequests } from "@amira/core"
+import type { Agent, CommandRunOptions, UiRequests } from "@amira/core"
 import type { Editor } from "@amira/tui-kit"
 import { registerCommandViewContext } from "../../../core/src/command-view-context.ts"
 import { sessionScopeContains } from "../../../core/src/session-routing.ts"
@@ -28,8 +28,7 @@ export function createNativeFocus(deps: {
   editor: Editor
   mainView: TranscriptView
   mainHistory: PromptHistory
-  agent: () => Agent | undefined
-  port?: AgentPort
+  agent: () => Agent
   ui?: UiRequests
   activity: TurnActivity
   interruptMain: (turnId?: string) => void
@@ -46,19 +45,16 @@ export function createNativeFocus(deps: {
 }) {
   const { overlays, composer } = deps
   const focus = new ConversationFocus({
-    port: deps.port,
     editor: deps.editor,
     mainView: deps.mainView,
     mainHistory: deps.mainHistory,
-    mainId: () => deps.agent()?.sessionId ?? deps.port!.snapshot.state.sessionId,
+    mainId: () => deps.agent().sessionId,
     mainContainsSession: (id) => {
       const agent = deps.agent()
-      return agent
-        ? sessionScopeContains(agent.tree, id, agent.sessionId)
-        : id === deps.port?.snapshot.state.sessionId
+      return sessionScopeContains(agent.tree, id, agent.sessionId)
     },
     mainWorking: () => deps.activity.working || deps.activity.compacting,
-    mainTurnId: () => deps.agent()?.turnId ?? deps.port?.snapshot.state.turnId,
+    mainTurnId: () => deps.agent().turnId,
     requireApprovalOwner: true,
     approvalOwner: (requestId) => deps.ui && uiRequestOwner(deps.ui, requestId),
     mainAttention: deps.mainAttention,
