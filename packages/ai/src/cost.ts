@@ -1,6 +1,6 @@
-import { hasUnpricedSearch as sharedHasUnpricedSearch } from "@amira/ai-shared"
 import { sameFastTier } from "./fast-mode.ts"
 import { NATIVE_WEB_SEARCH } from "./server-tools.ts"
+import { hasUnpricedSearch as sharedHasUnpricedSearch } from "./shared.ts"
 import type { AssistantMessage, ModelInfo, StreamEvent, Usage } from "./types.ts"
 
 /** A reported search or server search block whose total cost could not be priced. */

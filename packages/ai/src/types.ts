@@ -1,5 +1,5 @@
-import * as shared from "@amira/ai-shared"
 import type { ModelErrorKind } from "./errors.ts"
+import * as shared from "./shared.ts"
 // Unified message model. Amira's own format is the source of truth;
 // dialect adapters translate to and from the wire format at the edge.
 

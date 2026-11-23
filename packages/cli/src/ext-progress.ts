@@ -1,5 +1,5 @@
 import { type ExtensionStatusMetadata, extensionStatusNotice } from "@amira/api"
-import type { InstallProgress } from "@amira/packages"
+import type { InstallProgress } from "@amira/extensions"
 import { cyan, dim, green, red, truncateToWidth, visibleWidth, yellow } from "@amira/tui-kit"
 
 /**

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import os from "node:os"
 import path from "node:path"
 import { tryFileLock } from "@amira/core"
-import { gitCacheKey, packageScope, writeLock } from "@amira/packages"
+import { gitCacheKey, packageScope, writeLock } from "@amira/extensions"
 import { runExtCommand } from "../src/ext-command.ts"
 
 let dir: string

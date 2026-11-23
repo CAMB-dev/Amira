@@ -4,7 +4,6 @@ import { type Component, CURSOR_MARKER } from "../src/component.ts"
 import { ScrollView } from "../src/components/scroll-view.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
 import { key } from "../src/keys.ts"
-import { LiveRenderer } from "../src/renderer.ts"
 import { pauseFullScreen } from "../src/renderer-controls.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { plain } from "./context.ts"
@@ -146,101 +145,6 @@ test("a resize redraws the whole screen at the new size", () => {
   full.render()
   expect(screen.lines).toEqual(["alpha", "beta"])
   full.close()
-})
-
-test("the live region is suspended while a full-screen view is open and comes back exactly", () => {
-  const { term, screen } = setup(20, 6)
-  const live = new Lines(["› draft", "status"])
-  const inline = new LiveRenderer(term, live)
-  inline.start()
-  inline.commit(["first"])
-  const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
-  inline.suspend()
-  // Suspending clears the live region: the hidden main screen holds only committed lines.
-  const before = screen.mainText
-  expect(before).toBe("first")
-  full.open()
-  expect(inline.isSuspended).toBe(true)
-  // Commits and frames while suspended write nothing; the lines are held in order.
-  term.clearWrites()
-  inline.commit(["second"])
-  live.lines = ["› draft2", "status"]
-  inline.render()
-  inline.requestRender()
-  inline.commit(["third"])
-  expect(term.output).toBe("")
-  expect(screen.lines[0]).toBe("VIEW")
-  expect(screen.mainText).toBe(before)
-  full.close()
-  inline.resume()
-  expect(screen.inAltScreen).toBe(false)
-  expect(screen.mainText).toBe("first\nsecond\nthird\n› draft2\nstatus")
-  expect(screen.mainText).not.toContain("VIEW")
-})
-
-test("a resize while suspended is handled when resuming", () => {
-  const { term, screen, resize } = setup(20, 6)
-  const inline = new LiveRenderer(term, new Lines(["live one", "live two"]))
-  inline.start()
-  inline.commit(["kept"])
-  const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
-  inline.suspend()
-  full.open()
-  resize(20, 9)
-  full.close()
-  inline.resume()
-  // Only the height changed: nothing was re-wrapped, so the live region is redrawn in place.
-  expect(screen.mainText).toBe("kept\nlive one\nlive two")
-})
-
-test("after a width change while suspended the live region is drawn once, with no stale copy above", () => {
-  const { term, screen, resize } = setup(20, 8)
-  // The caret sits above the last row, as in an input box with a status bar below it.
-  const inline = new LiveRenderer(term, new Lines(["● tool", `│ › draft${CURSOR_MARKER}`, "status"]))
-  inline.start()
-  inline.commit(["history 1", "history 2"])
-  const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
-  inline.suspend()
-  full.open()
-  inline.commit(["while away"])
-  resize(30, 8)
-  full.close()
-  inline.resume()
-  expect(screen.mainText).toBe("history 1\nhistory 2\nwhile away\n● tool\n│ › draft\nstatus")
-  // And it goes on drawing in place.
-  inline.render()
-  inline.commit(["later"])
-  expect(screen.mainText).toBe("history 1\nhistory 2\nwhile away\nlater\n● tool\n│ › draft\nstatus")
-})
-
-test("opening a view twice, with a resize each time, leaves the transcript intact", () => {
-  const { term, screen, resize } = setup(20, 8)
-  const inline = new LiveRenderer(term, new Lines(["● tool", `› draft${CURSOR_MARKER}`, "status"]))
-  inline.start()
-  inline.commit(["history"])
-  const full = new FullScreenRenderer(term, new Lines(["VIEW"]))
-  for (const [cols, echo] of [
-    [26, "› /agents view 1"],
-    [22, "› /agents view 2"],
-  ] as const) {
-    inline.commit([echo])
-    inline.suspend()
-    full.open()
-    resize(cols, 8)
-    full.close()
-    inline.resume()
-  }
-  expect(screen.mainText).toBe("history\n› /agents view 1\n› /agents view 2\n● tool\n› draft\nstatus")
-})
-
-test("stop resumes a suspended renderer, so held lines are not lost", () => {
-  const { term, screen } = setup(20, 6)
-  const inline = new LiveRenderer(term, new Lines(["live"]))
-  inline.start()
-  inline.suspend()
-  inline.commit(["held"])
-  inline.stop({ clear: true })
-  expect(screen.mainText).toBe("held")
 })
 
 function scrollView(n: number, height: number) {

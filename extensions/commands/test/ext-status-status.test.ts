@@ -14,7 +14,7 @@ import statusExtension, {
   formatCost,
   formatTokens,
   placeLabel,
-} from "../src/index.ts"
+} from "../src/status.ts"
 
 test("formats token counts compactly, rounding before picking the unit", () => {
   expect([999, 1234, 9_999, 45_600, 999_950, 2_500_000].map(formatTokens)).toEqual([

@@ -6,7 +6,7 @@ import { createAi, createCatalog, createMockDialect, type MockStep, NO_MODEL } f
 import { defineTool, type Extension, textResult } from "@amira/api"
 import { type Agent, SessionStore } from "@amira/core"
 import commandsExtension from "../../../extensions/commands/src/index.ts"
-import statusExtension from "../../../extensions/status/src/index.ts"
+import statusExtension from "../../../extensions/commands/src/status.ts"
 import { createCommandHost } from "../src/control.ts"
 import { runPrint } from "../src/print.ts"
 import { createSession } from "../src/session.ts"

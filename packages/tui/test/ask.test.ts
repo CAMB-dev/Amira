@@ -12,7 +12,7 @@ import {
   ToolRegistry,
 } from "@amira/core"
 import { FakeTerminal, setColorEnabled } from "@amira/tui-kit"
-import statusExtension from "../../../extensions/status/src/index.ts"
+import statusExtension from "../../../extensions/commands/src/status.ts"
 import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { builtinToolsWithoutWarmup as builtinTools } from "../../../scripts/test-builtin-tools.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"

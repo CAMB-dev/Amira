@@ -6,7 +6,7 @@ import {
   InterceptorRegistry,
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
-import statusExtension from "../src/index.ts"
+import statusExtension from "../src/status.ts"
 
 async function setup() {
   const bus = new EventBus()

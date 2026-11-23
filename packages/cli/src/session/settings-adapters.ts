@@ -1,7 +1,7 @@
 import type { Ai, ModelInfo, RetryOptions } from "@amira/ai"
 import type { Settings, ToolDefinition } from "@amira/api"
 import { type CompactionOptions, type ContextOptions, toolTraits } from "@amira/core"
-import type { ActivePackages } from "@amira/packages"
+import type { ActivePackages } from "@amira/extensions"
 import { UsageError } from "../args.ts"
 import { withProviderHint } from "../provider-command.ts"
 

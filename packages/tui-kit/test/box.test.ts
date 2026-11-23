@@ -4,7 +4,7 @@ import { CURSOR_MARKER } from "../src/component.ts"
 import { Box } from "../src/components/box.ts"
 import { Editor } from "../src/components/editor.ts"
 import { Text } from "../src/components/text.ts"
-import { LiveRenderer } from "../src/renderer.ts"
+import { FullScreenRenderer } from "../src/fullscreen.ts"
 import { defaultTheme, red } from "../src/style.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { visibleWidth } from "../src/width.ts"
@@ -69,8 +69,8 @@ test("the caret sits inside the box, after wide characters too, and colors can b
   const { term, screen } = screenFor(20, 6)
   const editor = new Editor({ prompt: "> " })
   editor.setText("你好 ok")
-  const r = new LiveRenderer(term, new Box(editor), { color: false })
-  r.render()
+  const r = new FullScreenRenderer(term, new Box(editor), { color: false })
+  r.open()
   expect(screen.lines.slice(0, 3)).toEqual([
     "╭──────────────────╮",
     "│ > 你好 ok        │",
@@ -89,6 +89,7 @@ test("the caret sits inside the box, after wide characters too, and colors can b
     "╰──────────────────╯",
   ])
   expect({ x: screen.x, y: screen.y }).toEqual({ x: 6, y: 2 })
+  r.close()
 })
 
 test("the caret marker survives the padding", () => {

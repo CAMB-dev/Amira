@@ -11,7 +11,7 @@ import {
   type ResolvedPermissions,
   resolvePermissions,
 } from "@amira/core"
-import { projectScopeIsUser, projectTrust } from "@amira/packages"
+import { projectScopeIsUser, projectTrust } from "@amira/extensions"
 import type { CliArgs } from "./args.ts"
 
 export interface Config {

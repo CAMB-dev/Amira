@@ -7,7 +7,7 @@ import {
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
 import { JobRegistry } from "../../../packages/proc/src/index.ts"
-import statusExtension from "../src/index.ts"
+import statusExtension from "../src/status.ts"
 
 function child(id: string, status: SubagentInfo["status"]): SubagentInfo {
   return {

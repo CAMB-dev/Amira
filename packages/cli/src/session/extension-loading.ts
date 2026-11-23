@@ -2,7 +2,7 @@ import path from "node:path"
 import type { AnyEvent, EventEnvelope, Extension, ExtensionStatusMetadata } from "@amira/api"
 import { extensionStatusMetadata } from "@amira/api/internal/extension-status"
 import type { Agent, EventBus, ExtensionHost } from "@amira/core"
-import type { ActivePackages } from "@amira/packages"
+import type { ActivePackages } from "@amira/extensions"
 
 export interface ExtensionLoaderOptions {
   host: ExtensionHost

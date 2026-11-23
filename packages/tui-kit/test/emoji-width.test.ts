@@ -4,7 +4,6 @@ import { type Component, CURSOR_MARKER } from "../src/component.ts"
 import { Box } from "../src/components/box.ts"
 import { Text } from "../src/components/text.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
-import { LiveRenderer } from "../src/renderer.ts"
 import { FakeTerminal } from "../src/terminal.ts"
 import { presentEmoji, textWidth, truncateToWidth, visibleWidth, wrapText } from "../src/width.ts"
 import { plain } from "./context.ts"
@@ -158,76 +157,51 @@ function setup(cols: number, rows: number) {
 /** The column of each cell holding `g` in a row of the screen. */
 const columnsOf = (row: string[], g: string) => row.flatMap((c, i) => (c === g ? [i] : []))
 
-test("the inline renderer writes VS16 after ✉, not after symbols kept as text", () => {
+test("the full-screen renderer writes VS16 after ✉, not after symbols kept as text", () => {
   const { term, screen } = setup(20, 5)
-  const r = new LiveRenderer(term, new Lines(["✉ new ♥ ©"]))
-  r.start()
+  const r = new FullScreenRenderer(term, new Lines(["✉ new ♥ ©", "☑ done"]))
+  r.open()
   expect(term.output).toContain(`✉${VS16} new ♥ ©`)
   expect(term.output).not.toContain(`♥${VS16}`)
   expect(term.output).not.toContain(`©${VS16}`)
   expect(screen.lines[0]).toBe(`✉${VS16} new ♥ ©`)
-  // Committed lines go the same way.
-  r.commit(["☑ done"])
-  expect(screen.text).toContain(`☑${VS16} done`)
-  r.stop()
+  expect(screen.lines[1]).toBe(`☑${VS16} done`)
+  r.close()
 })
 
-test("a box around ✉ stays aligned on screen, inline and full-screen", () => {
+test("a box around ✉ stays aligned on screen", () => {
   const box = new Box(new Text("✉ mail ⚠"))
   const expected = box.render(14, plain)
   expect(expected.map(visibleWidth)).toEqual([14, 14, 14])
-  const check = (screen: VirtualScreen) => {
-    const rows = screen.grid.slice(0, 3)
-    // The right border lands in the last column on every row, the text row included.
-    expect(columnsOf(rows[1]!, "│")).toEqual([0, 13])
-    expect(rows[0]![13]).toBe("╮")
-    expect(rows[2]![13]).toBe("╯")
-  }
-  {
-    const { term, screen } = setup(14, 5)
-    const r = new LiveRenderer(term, box, { color: false })
-    r.start()
-    check(screen)
-    r.stop()
-  }
-  {
-    const { term, screen } = setup(14, 5)
-    const f = new FullScreenRenderer(term, box, { color: false })
-    f.open()
-    check(screen)
-    expect(term.output).toContain(`✉${VS16}`)
-    f.close()
-  }
+  const { term, screen } = setup(14, 5)
+  const f = new FullScreenRenderer(term, box, { color: false })
+  f.open()
+  const rows = screen.grid.slice(0, 3)
+  // The right border lands in the last column on every row, the text row included.
+  expect(columnsOf(rows[1]!, "│")).toEqual([0, 13])
+  expect(rows[0]![13]).toBe("╮")
+  expect(rows[2]![13]).toBe("╯")
+  expect(term.output).toContain(`✉${VS16}`)
+  f.close()
 })
 
 test("a truncated row with ✉ ends where it was measured to", () => {
   const { term, screen } = setup(10, 3)
-  const r = new LiveRenderer(term, new Lines(["abcdefgh✉xyz", "✉✉✉✉✉✉"]))
-  r.start()
+  const r = new FullScreenRenderer(term, new Lines(["abcdefgh✉xyz", "✉✉✉✉✉✉"]))
+  r.open()
   expect(stripAnsi(screen.lines[0]!)).toBe("abcdefgh✉\uFE0F")
   expect(screen.grid[1]!.filter((c) => c !== "").length).toBe(5)
-  expect(screen.y).toBe(1)
-  r.stop()
+  r.close()
 })
 
-test("the cursor after ✉ lands where the terminal put the text, inline and full-screen", () => {
+test("the cursor after ✉ lands where the terminal put the text", () => {
   const line = `✉ ⚠${CURSOR_MARKER}x`
-  {
-    const { term, screen } = setup(20, 5)
-    const r = new LiveRenderer(term, new Lines([line]))
-    r.start()
-    expect(screen.x).toBe(5)
-    expect(screen.grid[0]![screen.x]).toBe("x")
-    r.stop()
-  }
-  {
-    const { term, screen } = setup(20, 5)
-    const f = new FullScreenRenderer(term, new Lines([line]))
-    f.open()
-    expect(screen.x).toBe(5)
-    expect(screen.grid[0]![screen.x]).toBe("x")
-    f.close()
-  }
+  const { term, screen } = setup(20, 5)
+  const f = new FullScreenRenderer(term, new Lines([line]))
+  f.open()
+  expect(screen.x).toBe(5)
+  expect(screen.grid[0]![screen.x]).toBe("x")
+  f.close()
 })
 
 test("presentEmoji judges a grapheme whole when an escape splits it", () => {

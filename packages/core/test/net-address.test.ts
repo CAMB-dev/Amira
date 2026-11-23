@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { assertPublicHost, isPrivateAddress } from "../src/address.ts"
+import { assertPublicHost, isPrivateAddress } from "../src/net/address.ts"
 
 const publicResolver =
   (overrides: Record<string, string[]> = {}) =>

@@ -28,7 +28,7 @@ import { FakeTerminal, type GraphicsReplies, visibleWidth } from "@amira/tui-kit
 import { agentsCommand } from "../../../extensions/agent/src/index.ts"
 import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
-import statusExtension from "../../../extensions/status/src/index.ts"
+import statusExtension from "../../../extensions/commands/src/status.ts"
 import { fakePayload } from "../../tui-kit/test/fake-images.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"

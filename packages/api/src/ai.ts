@@ -1,5 +1,5 @@
 import type { AssistantMessage, ServerToolBlock, Usage } from "@amira/ai"
-import * as shared from "@amira/ai-shared"
+import * as shared from "@amira/ai/shared"
 
 // One implementation, shared with @amira/ai through a dependency-free leaf, typed with ai's types.
 

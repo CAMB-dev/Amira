@@ -21,13 +21,6 @@
         "@amira/api": "workspace:*",
       },
     },
-    "extensions/auto-title": {
-      "name": "@amira/ext-auto-title",
-      "version": "0.0.0",
-      "dependencies": {
-        "@amira/api": "workspace:*",
-      },
-    },
     "extensions/builtin-tools": {
       "name": "@amira/builtin-tools",
       "version": "0.0.0",
@@ -56,13 +49,6 @@
         "@amira/api": "workspace:*",
       },
     },
-    "extensions/status": {
-      "name": "@amira/ext-status",
-      "version": "0.0.0",
-      "dependencies": {
-        "@amira/api": "workspace:*",
-      },
-    },
     "extensions/terminal-status": {
       "name": "@amira/ext-terminal-status",
       "version": "0.0.0",
@@ -84,22 +70,11 @@
     "packages/ai": {
       "name": "@amira/ai",
       "version": "0.0.0",
-      "dependencies": {
-        "@amira/ai-shared": "workspace:*",
-      },
-    },
-    "packages/ai-shared": {
-      "name": "@amira/ai-shared",
-      "version": "0.0.0",
     },
     "packages/api": {
       "name": "@amira/api",
       "version": "0.0.0",
       "dependencies": {
-        "@amira/ai-shared": "workspace:*",
-        "@amira/text-width": "workspace:*",
-      },
-      "devDependencies": {
         "@amira/ai": "workspace:*",
       },
     },
@@ -113,8 +88,7 @@
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
-        "@amira/net": "workspace:*",
-        "@amira/packages": "workspace:*",
+        "@amira/extensions": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui": "workspace:*",
         "@amira/tui-kit": "workspace:*",
@@ -126,16 +100,11 @@
       "dependencies": {
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
-        "@amira/net": "workspace:*",
         "@amira/proc": "workspace:*",
       },
     },
-    "packages/net": {
-      "name": "@amira/net",
-      "version": "0.0.0",
-    },
-    "packages/packages": {
-      "name": "@amira/packages",
+    "packages/extensions": {
+      "name": "@amira/extensions",
       "version": "0.0.0",
       "dependencies": {
         "@amira/api": "workspace:*",
@@ -145,10 +114,6 @@
     },
     "packages/proc": {
       "name": "@amira/proc",
-      "version": "0.0.0",
-    },
-    "packages/text-width": {
-      "name": "@amira/text-width",
       "version": "0.0.0",
     },
     "packages/tui": {
@@ -166,14 +131,12 @@
       "name": "@amira/tui-kit",
       "version": "0.0.0",
       "dependencies": {
-        "@amira/text-width": "workspace:*",
+        "@amira/api": "workspace:*",
       },
     },
   },
   "packages": {
     "@amira/ai": ["@amira/ai@workspace:packages/ai"],
-
-    "@amira/ai-shared": ["@amira/ai-shared@workspace:packages/ai-shared"],
 
     "@amira/api": ["@amira/api@workspace:packages/api"],
 
@@ -183,27 +146,19 @@
 
     "@amira/ext-agent": ["@amira/ext-agent@workspace:extensions/agent"],
 
-    "@amira/ext-auto-title": ["@amira/ext-auto-title@workspace:extensions/auto-title"],
-
     "@amira/ext-commands": ["@amira/ext-commands@workspace:extensions/commands"],
 
     "@amira/ext-mcp": ["@amira/ext-mcp@workspace:extensions/mcp"],
 
     "@amira/ext-skills": ["@amira/ext-skills@workspace:extensions/skills"],
 
-    "@amira/ext-status": ["@amira/ext-status@workspace:extensions/status"],
-
     "@amira/ext-terminal-status": ["@amira/ext-terminal-status@workspace:extensions/terminal-status"],
 
     "@amira/ext-web": ["@amira/ext-web@workspace:extensions/web"],
 
-    "@amira/net": ["@amira/net@workspace:packages/net"],
-
-    "@amira/packages": ["@amira/packages@workspace:packages/packages"],
+    "@amira/extensions": ["@amira/extensions@workspace:packages/extensions"],
 
     "@amira/proc": ["@amira/proc@workspace:packages/proc"],
-
-    "@amira/text-width": ["@amira/text-width@workspace:packages/text-width"],
 
     "@amira/tui": ["@amira/tui@workspace:packages/tui"],
 

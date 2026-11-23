@@ -27,7 +27,7 @@ import {
 } from "@amira/core"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
-import statusExtension from "../../../extensions/status/src/index.ts"
+import statusExtension from "../../../extensions/commands/src/status.ts"
 import terminalStatusExtension from "../../../extensions/terminal-status/src/index.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { type InteractiveOptions, runInteractive } from "../src/app.ts"

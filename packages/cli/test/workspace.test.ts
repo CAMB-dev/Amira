@@ -6,7 +6,7 @@ import { createAi, createMockDialect } from "@amira/ai"
 import type { AnyEvent, Extension, WorkspaceFacts } from "@amira/api"
 import { Agent, EventBus } from "@amira/core"
 import agentExtension from "../../../extensions/agent/src/index.ts"
-import statusExtension from "../../../extensions/status/src/index.ts"
+import statusExtension from "../../../extensions/commands/src/status.ts"
 import {
   SPAWN_TEST_TIMEOUT_MS,
   waitForSpawnCondition,

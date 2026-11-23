@@ -3,7 +3,6 @@ import * as api from "../src/index.ts"
 
 test("the package exports its public API and not its internals", () => {
   for (const name of [
-    "LiveRenderer",
     "InputReader",
     "ProcessTerminal",
     "Editor",

@@ -26,7 +26,6 @@ import {
   type SettingsLayers,
   type TerminalApi,
 } from "@amira/api"
-import { fetchPublic, guardedFetch, isPrivateAddress, NetError, parseHttpUrl, readCapped } from "@amira/net"
 import {
   backgroundJobs,
   DEFAULT_MAX_OUTPUT_CHARS,
@@ -53,6 +52,14 @@ import {
 import { amiraHome } from "./home.ts"
 import type { InterceptorRegistry } from "./interceptors.ts"
 import { forgetModule, PackageModules } from "./module-cache.ts"
+import {
+  fetchPublic,
+  guardedFetch,
+  isPrivateAddress,
+  NetError,
+  parseHttpUrl,
+  readCapped,
+} from "./net/index.ts"
 import { OwnedConversationManager, type OwnedConversationManagerOptions } from "./owned-conversations.ts"
 import { PanelRegistry } from "./panel-registry.ts"
 import { openExtensionPipe } from "./pipes.ts"

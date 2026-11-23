@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { guardedFetch, NetError, parseHttpUrl } from "../src/index.ts"
+import { guardedFetch, NetError, parseHttpUrl } from "../src/net/index.ts"
 
 const resolve = async (host: string) => (host === "inside.test" ? ["10.0.0.7"] : ["93.184.215.14"])
 

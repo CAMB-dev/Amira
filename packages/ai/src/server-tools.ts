@@ -1,10 +1,10 @@
-import * as shared from "@amira/ai-shared"
+import * as shared from "./shared.ts"
 import type { AssistantContent, Citation, ModelInfo, ServerToolBlock, StreamEvent } from "./types.ts"
 
 /** Dialects with a hosted web search the provider runs itself (ids spelled out: the dialects import this file). */
 const WEB_SEARCH_DIALECTS = new Set(["openai-responses", "anthropic-messages", "google-gemini"])
 
-export { NATIVE_WEB_SEARCH } from "@amira/ai-shared"
+export { NATIVE_WEB_SEARCH } from "./shared.ts"
 
 /**
  * Whether requests for `model` offer the provider's hosted web search: its caps say so

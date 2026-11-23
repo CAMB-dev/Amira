@@ -73,4 +73,4 @@ export const queries = {
 }
 
 // One escape-sequence matcher for the workspace, shared with the width code.
-export { ANSI_PATTERN, stripAnsi } from "@amira/text-width"
+export { ANSI_PATTERN, stripAnsi } from "@amira/api/internal/text-width"

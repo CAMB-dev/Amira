@@ -1,7 +1,7 @@
 import { cp, lstat, mkdir, realpath } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { engineMismatch, readManifest } from "../../packages/packages/src/manifest.ts"
+import { engineMismatch, readManifest } from "../../packages/extensions/src/manifest.ts"
 
 function within(parent: string, target: string): boolean {
   const relative = path.relative(parent, target)

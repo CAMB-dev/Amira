@@ -1,7 +1,6 @@
 import type { CommandCompleteContext, Extension } from "@amira/api"
 import { defineExtension } from "@amira/api"
 import agent from "../../../../extensions/agent/src/index.ts"
-import autoTitle from "../../../../extensions/auto-title/src/index.ts"
 import {
   builtinPresenters,
   builtinTools,
@@ -10,11 +9,12 @@ import {
 import { createMonitorTool } from "../../../../extensions/builtin-tools/src/monitor.ts"
 import { availableShellTools } from "../../../../extensions/builtin-tools/src/shell.ts"
 import { toolSearchExtension } from "../../../../extensions/builtin-tools/src/tool-search.ts"
+import autoTitle from "../../../../extensions/commands/src/auto-title.ts"
 import commands from "../../../../extensions/commands/src/index.ts"
 import { safeProviderUrl } from "../../../../extensions/commands/src/provider-url.ts"
+import status from "../../../../extensions/commands/src/status.ts"
 import mcp from "../../../../extensions/mcp/src/index.ts"
 import skills from "../../../../extensions/skills/src/index.ts"
-import status from "../../../../extensions/status/src/index.ts"
 import web from "../../../../extensions/web/src/index.ts"
 
 // No provider/package administration through a remote model-proxy frontend. Local theme,

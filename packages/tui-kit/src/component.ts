@@ -3,7 +3,7 @@ import type { ImagePlacement } from "./images/screen.ts"
 import type { InputEvent } from "./keys.ts"
 import type { Theme } from "./style.ts"
 
-export { CURSOR_MARKER } from "@amira/text-width"
+export { CURSOR_MARKER } from "@amira/api/internal/text-width"
 
 /** What a component needs to know to draw itself, handed down on every render. */
 export interface RenderContext {

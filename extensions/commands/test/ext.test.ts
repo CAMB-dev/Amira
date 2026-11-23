@@ -27,7 +27,7 @@ import {
   DEFAULT_INDEX_URL,
   packageScope,
   readLock,
-} from "../../../packages/packages/src/index.ts"
+} from "../../../packages/extensions/src/index.ts"
 import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit } from "../../../scripts/spawn-test.ts"
 import { spawnWorkScope, waitForSpawnWork } from "../../builtin-tools/test/util.ts"
 import { extensionProgressLines, extensionRows, parseExtArgs } from "../src/ext-command.ts"

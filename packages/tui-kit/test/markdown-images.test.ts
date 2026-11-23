@@ -4,13 +4,8 @@ import { stripAnsi } from "../src/ansi.ts"
 import type { RenderContext } from "../src/component.ts"
 import { type MarkdownNodes, MarkdownStream } from "../src/components/markdown-stream.ts"
 import { findImageMarker, imageState, pendingBlock } from "../src/images/placement.ts"
-import { ImageStore } from "../src/images/store.ts"
 import type { ImageBlock } from "../src/images/types.ts"
-import { LiveRenderer } from "../src/renderer.ts"
-import { FakeTerminal } from "../src/terminal.ts"
 import { plain } from "./context.ts"
-import { fakeProvider } from "./fake-images.ts"
-import { VirtualScreen } from "./screen.ts"
 
 const block = (seq = "IMG"): ImageBlock => ({ seq, cols: 2, rows: 2 })
 
@@ -80,40 +75,6 @@ test("a long line starting with an image is not committed in pieces before it en
   m.append(")\n\n")
   m.render(12, ctx)
   expect(findImageMarker(committed[0]!)).toBeDefined()
-})
-
-test("through the renderer: the image is drawn in order, between the text around it", async () => {
-  const term = new FakeTerminal(30, 12)
-  const screen = new VirtualScreen(30, 12)
-  const write = term.write.bind(term)
-  term.write = (d: string) => {
-    write(d)
-    screen.write(d)
-  }
-  const store = new ImageStore({
-    support: { protocol: "sixel", cell: { width: 10, height: 20 } },
-    open: fakeProvider().open,
-    cwd: "/work",
-    maxRows: () => 5,
-  })
-  const m = new MarkdownStream({ hyperlinks: false, images: store })
-  const r = new LiveRenderer(term, m)
-  r.start()
-  try {
-    m.append("before\n\n![cat](cat-40x60.png)\n\nafter\n\nmore")
-    r.render()
-    const deadline = performance.now() + 3000
-    while (!screen.images.length) {
-      if (performance.now() > deadline) throw new Error("timed out waiting for the rendered image")
-      await Bun.sleep(5)
-      r.render()
-    }
-    // 40×60 pixels: 4 columns, 3 rows.
-    expect(screen.images).toEqual([{ protocol: "sixel", row: 2, col: 0, rows: 3, cols: 4 }])
-    expect(screen.lines.slice(0, 8)).toEqual(["before", "", "▓▓▓▓", "▓▓▓▓", "▓▓▓▓", "", "after", ""])
-  } finally {
-    r.stop()
-  }
 })
 
 /** Nodes rendering ```diagram blocks: `render` says what each becomes, and is recorded. */
@@ -211,34 +172,7 @@ test("a claimed block the text ends inside is rendered too; in a list it keeps i
   ])
 })
 
-test("through the renderer: a rendering still on its way holds what follows, then goes in its place", async () => {
-  const term = new FakeTerminal(30, 12)
-  const screen = new VirtualScreen(30, 12)
-  const write = term.write.bind(term)
-  term.write = (d: string) => {
-    write(d)
-    screen.write(d)
-  }
-  let finish: (rows: string[] | undefined) => void = () => {}
-  const late = new Promise<string[] | undefined>((r) => {
-    finish = r
-  })
-  const { nodes } = diagrams((_code, commit) =>
-    commit ? [pendingBlock(late, ["(fallback)"], 3000)] : undefined,
-  )
-  const m = new MarkdownStream({ hyperlinks: false, highlight: false, nodes })
-  const r = new LiveRenderer(term, m)
-  r.start()
-  m.append("before\n\n```diagram\nA\n```\n\nafter\n")
-  r.render()
-  // Waiting: what follows is held back, drawn live with the fallback in its place.
-  expect(screen.lines.slice(0, 5)).toEqual(["before", "", "(fallback)", "", "after"])
-  finish(["┌─┐", "│A│", "  └─┘"])
-  await Bun.sleep(10)
-  r.render()
-  expect(screen.lines.slice(0, 7)).toEqual(["before", "", "┌─┐", "│A│", "  └─┘", "", "after"])
-  r.stop()
-  // One that fails goes as its fallback, once.
+test("pendingBlock resolves failures to fallback and sanitizes rows", async () => {
   const failed = findImageMarker(pendingBlock(Promise.resolve(undefined), ["fb"]))!
   await Bun.sleep(0)
   expect(imageState(failed.id)).toEqual({ kind: "fallback", fallback: ["fb"] })

@@ -10,6 +10,6 @@
     "./math-source": "./src/markdown/math-source.ts"
   },
   "dependencies": {
-    "@amira/text-width": "workspace:*"
+    "@amira/api": "workspace:*"
   }
 }

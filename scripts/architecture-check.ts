@@ -22,15 +22,12 @@ const packageDependencyFields = [
 const sourceLineLimit = 900
 
 const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
-  "packages/ai-shared": [],
-  "packages/ai": ["@amira/ai-shared"],
-  "packages/net": [],
+  "packages/ai": [],
   "packages/proc": [],
-  "packages/text-width": [],
-  "packages/tui-kit": ["@amira/text-width"],
-  "packages/api": ["@amira/ai-shared", "@amira/text-width"],
-  "packages/core": ["@amira/ai", "@amira/api", "@amira/net", "@amira/proc"],
-  "packages/packages": ["@amira/api", "@amira/core", "@amira/proc"],
+  "packages/api": ["@amira/ai"],
+  "packages/tui-kit": ["@amira/api"],
+  "packages/core": ["@amira/ai", "@amira/api", "@amira/proc"],
+  "packages/extensions": ["@amira/api", "@amira/core", "@amira/proc"],
   "packages/tui": ["@amira/ai", "@amira/api", "@amira/core", "@amira/proc", "@amira/tui-kit"],
   // The CLI is the composition root and may reach every workspace package. It bundles the
   // extensions by source path from its bundling root (D50), never as package dependencies.
@@ -38,8 +35,7 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
     "@amira/ai",
     "@amira/api",
     "@amira/core",
-    "@amira/net",
-    "@amira/packages",
+    "@amira/extensions",
     "@amira/proc",
     "@amira/tui",
     "@amira/tui-kit",
@@ -51,9 +47,7 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
  * Packages a directory may import with `import type` / `export type` only, on top of its table
  * entry. They are erased at runtime, so they must be declared under devDependencies.
  */
-const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> = {
-  "packages/api": ["@amira/ai"],
-}
+const allowedTypeOnlyDependenciesByDirectory: Record<string, readonly string[]> = {}
 
 // Internal API subpaths are workspace implementation boundaries, not extension-facing API.
 // Status parsing is host-only. The API renderer and agent extension share transcript helpers;
@@ -65,11 +59,11 @@ const internalApiSubpathConsumers = new Map<string, ReadonlySet<string>>([
       "packages/cli/src/session/extension-loading.ts",
       "packages/core/src/extension-settings.ts",
       "packages/core/src/ui-requests.ts",
-      "packages/packages/src/admin.ts",
-      "packages/packages/src/index-file.ts",
-      "packages/packages/src/install.ts",
-      "packages/packages/src/installed.ts",
-      "packages/packages/src/manifest.ts",
+      "packages/extensions/src/admin.ts",
+      "packages/extensions/src/index-file.ts",
+      "packages/extensions/src/install.ts",
+      "packages/extensions/src/installed.ts",
+      "packages/extensions/src/manifest.ts",
     ]),
   ],
   [
@@ -79,6 +73,15 @@ const internalApiSubpathConsumers = new Map<string, ReadonlySet<string>>([
   [
     "@amira/api/internal/subagent-transcript",
     new Set(["extensions/agent/src/agents-command.ts", "extensions/agent/src/subagent-view.ts"]),
+  ],
+  [
+    "@amira/api/internal/text-width",
+    new Set([
+      "packages/tui-kit/src/ansi.ts",
+      "packages/tui-kit/src/component.ts",
+      "packages/tui-kit/src/style.ts",
+      "packages/tui-kit/src/width.ts",
+    ]),
   ],
 ])
 
@@ -91,7 +94,7 @@ const hostBackgroundJobsAllowlist = new Set([
   "packages/core/src/extensions.ts",
   "extensions/builtin-tools/src/jobs-ui.ts",
   // The status extension displays host-wide live task counts, not its own process jobs.
-  "extensions/status/src/index.ts",
+  "extensions/commands/src/status.ts",
 ])
 
 function gitOutput(args: string[]): string | undefined {

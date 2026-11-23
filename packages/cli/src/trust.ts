@@ -10,7 +10,7 @@ import {
   projectScopeIsUser,
   projectTrust,
   rememberProjectTrust,
-} from "@amira/packages"
+} from "@amira/extensions"
 
 export interface PackagePlan {
   /** The packages to load, read again on each /reload. */

@@ -1,6 +1,6 @@
 import { isNoModel } from "@amira/ai"
 import type { SessionControl } from "@amira/api"
-import { createExtensionAdmin } from "@amira/packages"
+import { createExtensionAdmin } from "@amira/extensions"
 import { createProviderAdmin } from "../provider-admin.ts"
 import type { ControlContext } from "./context.ts"
 

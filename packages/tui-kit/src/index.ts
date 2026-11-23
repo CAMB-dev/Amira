@@ -53,7 +53,7 @@ export { Spinner, type SpinnerOptions } from "./components/spinner.ts"
 export { Stack } from "./components/stack.ts"
 export { StreamText } from "./components/stream-text.ts"
 export { Text } from "./components/text.ts"
-export { FullScreenRenderer } from "./fullscreen.ts"
+export { FullScreenRenderer, type RendererOptions } from "./fullscreen.ts"
 export { type ChromeGlyphs, chromeGlyphs, defaultGlyphs, type Glyphs } from "./glyphs.ts"
 export {
   type HitActivation,
@@ -96,7 +96,6 @@ export {
 } from "./keys.ts"
 export { focusReporting, osc, type ProgressState, progressSupported } from "./osc.ts"
 export { InputReader, type InputReaderOptions } from "./reader.ts"
-export { LiveRenderer, type RendererOptions } from "./renderer.ts"
 export {
   bg256,
   black,

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { fetchPublic } from "../src/index.ts"
+import { fetchPublic } from "../src/net/index.ts"
 
 const publicDns = async (host: string) => (host === "intranet.test" ? ["192.168.1.20"] : ["93.184.215.14"])
 

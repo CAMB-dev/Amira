@@ -1,11 +1,23 @@
 import { cursor, erase, modes, syncOutput } from "./ansi.ts"
 import { type Component, CURSOR_MARKER, type RenderContext } from "./component.ts"
+import type { Glyphs } from "./glyphs.ts"
 import { type ImagePlacement, ScreenImageLayer } from "./images/screen.ts"
-import type { RendererOptions } from "./renderer.ts"
 import { registerFullscreenControl } from "./renderer-controls.ts"
-import { defaultTheme, isColorEnabled, stripColors } from "./style.ts"
+import { defaultTheme, isColorEnabled, stripColors, type Theme } from "./style.ts"
 import type { Terminal } from "./terminal.ts"
 import { closeStyles, presentEmoji, sanitize, truncateToWidth, visibleWidth } from "./width.ts"
+
+export interface RendererOptions {
+  /** Wrap frames in synchronized-output sequences (mode 2026). */
+  synchronizedOutput?: boolean
+  /** Minimum time between frames scheduled with `requestRender()`. */
+  frameIntervalMs?: number
+  /** Handed to components in the render context. Defaults to `defaultTheme`. */
+  theme?: Theme
+  glyphs?: Glyphs
+  /** Whether colors reach the terminal. Defaults to `isColorEnabled()`, which follows NO_COLOR. */
+  color?: boolean
+}
 
 /**
  * Draws a component over the whole terminal on the alternate screen, for views that own the
@@ -20,8 +32,7 @@ import { closeStyles, presentEmoji, sanitize, truncateToWidth, visibleWidth } fr
  * when they appear, move or change (see `ScreenImageLayer`), and cleared from rows they leave.
  *
  * Leaving the alternate screen gives the main screen back exactly as it was, cursor
- * included, so an inline `LiveRenderer` can be suspended while this one is open and resumed
- * after it closes. Entering goes through `Terminal.enterAltScreen()`, so a crash while open
+ * included. Entering goes through `Terminal.enterAltScreen()`, so a crash while open
  * still restores the main screen.
  */
 export class FullScreenRenderer {

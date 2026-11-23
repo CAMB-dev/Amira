@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { UsageCounts } from "@amira/ai-shared"
+import type { UsageCounts } from "@amira/ai/shared"
 import type { Ai, CompactReceipt, ModelRequest, StreamEvent } from "../src/index.ts"
 
 test("local-only request approval and resolution helpers have an explicit package subpath", async () => {
@@ -8,6 +8,7 @@ test("local-only request approval and resolution helpers have an explicit packag
     ".": "./src/index.ts",
     "./accounting": "./src/accounting.ts",
     "./local": "./src/local.ts",
+    "./shared": "./src/shared.ts",
   })
   expect(Object.keys(await import("@amira/ai/local")).sort()).toEqual([
     "resolvedEndpointCredentials",

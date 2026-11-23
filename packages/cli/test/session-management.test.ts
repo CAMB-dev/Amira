@@ -5,7 +5,7 @@ import path from "node:path"
 import { createAi, createMockDialect, type MockStep, userMessage } from "@amira/ai"
 import { defineExtension, type Extension, type ExtensionAPI, type Settings } from "@amira/api"
 import { Agent, projectKey, SessionStore, sessionLockFile, validateSettings } from "@amira/core"
-import autoTitleExtension from "../../../extensions/auto-title/src/index.ts"
+import autoTitleExtension from "../../../extensions/commands/src/auto-title.ts"
 import commandsExtension, { costReport } from "../../../extensions/commands/src/index.ts"
 import {
   SPAWN_TEST_TIMEOUT_MS,

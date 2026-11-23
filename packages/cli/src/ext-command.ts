@@ -33,7 +33,7 @@ import {
   setPackageDisabled,
   type UpdateResult,
   updatePackages,
-} from "@amira/packages"
+} from "@amira/extensions"
 import { UsageError } from "./args.ts"
 import { clean, ExtProgress, type Outcome, progressMode, shortReason } from "./ext-progress.ts"
 import type { PrintIO } from "./print.ts"

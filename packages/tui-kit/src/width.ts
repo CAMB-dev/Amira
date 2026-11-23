@@ -10,4 +10,4 @@ export {
   truncateToWidth,
   visibleWidth,
   wrapText,
-} from "@amira/text-width"
+} from "@amira/api/internal/text-width"

@@ -245,13 +245,13 @@ all green. These are not claimed fixed by choosing three workers:
 - The later six-worker runs took **149.76 s** and **148.84 s**. The latter also failed
   `extensions/commands/test/ext.test.ts`'s `/ext local file git install, reinstall, update,
   disable, enable and remove use the core` with **`EPERM ... uv_spawn 'git'`**, and
-  `packages/packages/test/git-cache.test.ts`'s `the first install makes a blobless cache
+  `packages/extensions/test/git-cache.test.ts`'s `the first install makes a blobless cache
   of the repository; an update fetches into it` with **`PackageError: cannot download
   file:///...: Cloning into bare repository ...`**. Their causes remain unconfirmed;
   do not promote six workers based on its best timing. No retries were added.
 
 A seeded **four-worker** release check also failed (165.96 s):
-`packages/packages/test/packages.test.ts`'s `update follows the index when a package moved
+`packages/extensions/test/packages.test.ts`'s `update follows the index when a package moved
 to another directory of its repository` received `git fetch failed (exit 1)` instead of
 a successful update. The unexplained native failures are therefore **not specific to six
 workers**. Four was rejected as the default, rather than rerun until three checks passed.
@@ -406,8 +406,8 @@ final serial verification run. Individual-test durations below are from baseline
 | File | Before (s) | Final serial #1 (s) |
 |---|---:|---:|
 | `extensions/builtin-tools/test/powershell.test.ts` | 70.57 | 63.58 |
-| `packages/packages/test/git-cache.test.ts` | 45.07 | 38.53 |
-| `packages/packages/test/packages.test.ts` | 24.47 | 23.57 |
+| `packages/extensions/test/git-cache.test.ts` | 45.07 | 38.53 |
+| `packages/extensions/test/packages.test.ts` | 24.47 | 23.57 |
 | `extensions/builtin-tools/test/jobs.test.ts` | 20.69 | 20.04 |
 | `extensions/agent/test/worktree.test.ts` | 19.37 | 15.57 |
 | `extensions/commands/test/commands.test.ts` | 18.65 | 2.70 |
@@ -442,29 +442,29 @@ final serial verification run. Individual-test durations below are from baseline
 |---:|---|---|
 | 9.08 | `packages/proc/test/standby.test.ts` | an idle standby does not keep the process alive, and dies with it |
 | 6.54 | `extensions/builtin-tools/test/powershell.test.ts` | PowerShell 7 (pwsh) > a returning try records the status after its finally blocks |
-| 6.33 | `packages/packages/test/packages.test.ts` | update keeps going past a package that fails, which keeps its files and pin; unchanged ones stay as they are |
+| 6.33 | `packages/extensions/test/packages.test.ts` | update keeps going past a package that fails, which keeps its files and pin; unchanged ones stay as they are |
 | 5.95 | `extensions/agent/test/agents-command.test.ts` | /agents lists the worktrees sub-agents kept, to merge, keep or discard each over its diff |
-| 5.80 | `packages/packages/test/git-cache.test.ts` | many packages from one repository: one ls-remote and one download per command |
-| 5.79 | `packages/packages/test/git-cache.test.ts` | a tag that moved or went away upstream is followed without cloning again |
+| 5.80 | `packages/extensions/test/git-cache.test.ts` | many packages from one repository: one ls-remote and one download per command |
+| 5.79 | `packages/extensions/test/git-cache.test.ts` | a tag that moved or went away upstream is followed without cloning again |
 | 5.64 | `extensions/builtin-tools/test/powershell.test.ts` | PowerShell 7 (pwsh) > declarations and dot-sourced state work as natively |
-| 5.05 | `packages/packages/test/git-cache.test.ts` | two amira processes share the cache: the second waits for the lock and downloads nothing |
-| 4.94 | `packages/packages/test/packages.test.ts` | installs from a git repository, pins the commit, restores the pin and updates past it |
-| 4.27 | `packages/packages/test/git-cache.test.ts` | an annotated tag, a branch and an abbreviated commit resolve like a clone would |
-| 4.21 | `packages/packages/test/git-cache.test.ts` | a fetch that fails keeps the cache: a later offline restore still works |
+| 5.05 | `packages/extensions/test/git-cache.test.ts` | two amira processes share the cache: the second waits for the lock and downloads nothing |
+| 4.94 | `packages/extensions/test/packages.test.ts` | installs from a git repository, pins the commit, restores the pin and updates past it |
+| 4.27 | `packages/extensions/test/git-cache.test.ts` | an annotated tag, a branch and an abbreviated commit resolve like a clone would |
+| 4.21 | `packages/extensions/test/git-cache.test.ts` | a fetch that fails keeps the cache: a later offline restore still works |
 | 4.21 | `packages/cli/test/rpc.test.ts` | amira --rpc drops deltas when the client stops reading stdout |
 | 4.20 | `packages/cli/test/session-management.test.ts` | amira sessions rm refuses a session leased by another process |
 | 4.14 | `extensions/builtin-tools/test/powershell.test.ts` | Windows PowerShell 5.1 > declarations and dot-sourced state work as natively |
 | 4.08 | `extensions/builtin-tools/test/powershell.test.ts` | Windows PowerShell 5.1 > a returning try records the status after its finally blocks |
-| 4.04 | `packages/packages/test/packages.test.ts` | update leaves a package in a repository's subdirectory alone when only other parts changed |
+| 4.04 | `packages/extensions/test/packages.test.ts` | update leaves a package in a repository's subdirectory alone when only other parts changed |
 | 4.01 | `extensions/commands/test/commands.test.ts` | /permissions lists the mode and the rules with their sources; /status counts them |
 | 4.01 | `extensions/commands/test/commands.test.ts` | /cost and /status keep unpriced searches unknown after priced replies |
-| 3.91 | `packages/packages/test/git-cache.test.ts` | offline: pinned commits come from the cache; an update fails and keeps the old version |
-| 3.88 | `packages/packages/test/git-cache.test.ts` | cache clean and prune: unused caches go, used and busy ones stay |
+| 3.91 | `packages/extensions/test/git-cache.test.ts` | offline: pinned commits come from the cache; an update fails and keeps the old version |
+| 3.88 | `packages/extensions/test/git-cache.test.ts` | cache clean and prune: unused caches go, used and busy ones stay |
 | 3.60 | `extensions/builtin-tools/test/powershell.test.ts` | PowerShell 7 (pwsh) > a top-level return exits on $? as pwsh -Command does, not on errors handled before it |
 | 3.57 | `packages/proc/test/pipe.test.ts` | long-lived piped processes never hold a short command's pipes open |
 | 3.53 | `extensions/commands/test/ext.test.ts` | /ext local file git install, reinstall, update, disable, enable and remove use the core |
 | 3.45 | `extensions/builtin-tools/test/bash.test.ts` | the first call in a fresh process times out with no surviving grandchildren |
-| 3.43 | `packages/packages/test/git-cache.test.ts` | the first install makes a blobless cache of the repository; an update fetches into it |
+| 3.43 | `packages/extensions/test/git-cache.test.ts` | the first install makes a blobless cache of the repository; an update fetches into it |
 | 3.36 | `packages/tui/test/app-rendering.test.ts` | an image slower than its time is committed as its alt text, and what follows goes on |
 | 3.04 | `packages/cli/test/jobs-subagent.test.ts` | a sub-agent's background job runs while it works and is stopped when it ends; the top-level session's keeps running |
 | 3.04 | `extensions/builtin-tools/test/shell.test.ts` | through cmd, an empty or missing gate line runs nothing |

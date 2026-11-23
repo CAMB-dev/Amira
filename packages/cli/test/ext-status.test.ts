@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { ExtensionStatus } from "@amira/api"
-import { packageDir, packageScope, readLock, writeLock } from "@amira/packages"
+import { packageDir, packageScope, readLock, writeLock } from "@amira/extensions"
 import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { runExtCommand } from "../src/ext-command.ts"
 

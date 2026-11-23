@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test"
-import * as sharedAccounting from "@amira/ai-shared/accounting"
 import * as accounting from "../src/accounting.ts"
 import * as ai from "../src/index.ts"
 
@@ -13,7 +12,6 @@ test("wire receipts are available only through existing host accounting exports"
     "transferUsageAccounting",
   ]
   expect(Object.keys(accounting).sort()).toEqual(expected)
-  expect(Object.keys(sharedAccounting).sort()).toEqual(expected)
   expect(Object.hasOwn(ai, "encodeUsageReceipt")).toBe(false)
   expect(Object.hasOwn(ai, "decodeUsageReceipt")).toBe(false)
 })

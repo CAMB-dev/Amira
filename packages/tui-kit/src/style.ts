@@ -1,4 +1,4 @@
-import { sgrAttributes, sgrGroup } from "@amira/text-width"
+import { sgrAttributes, sgrGroup } from "@amira/api/internal/text-width"
 import {
   type Background,
   backgroundFromEnv,

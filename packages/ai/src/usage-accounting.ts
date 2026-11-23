@@ -1,4 +1,4 @@
-import type { UsageCounts } from "./index.ts"
+import type { UsageCounts } from "./shared.ts"
 
 export interface UsageReceipt {
   readonly aggregate: boolean

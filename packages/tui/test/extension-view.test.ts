@@ -22,7 +22,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import statusExtension from "../../../extensions/status/src/index.ts"
+import statusExtension from "../../../extensions/commands/src/status.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import { ExtensionViewer, wrapViewLines } from "../src/extension-view.ts"

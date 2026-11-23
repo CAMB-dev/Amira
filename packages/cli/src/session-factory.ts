@@ -31,7 +31,7 @@ import {
   TraceRecorder,
   validateSettings,
 } from "@amira/core"
-import type { ActivePackages } from "@amira/packages"
+import type { ActivePackages } from "@amira/extensions"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
 import { installProviderModelCache } from "./provider-models.ts"

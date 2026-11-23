@@ -228,7 +228,7 @@ test("coverage flags disappearing from an aggregate cannot erase its known subto
 })
 
 test("accounting helpers are available only on the declared internal subpaths", async () => {
-  const shared = await import("@amira/ai-shared")
+  const shared = await import("@amira/ai/shared")
   expect(Object.keys(shared).sort()).toEqual([
     "NATIVE_WEB_SEARCH",
     "addUsage",
@@ -237,7 +237,7 @@ test("accounting helpers are available only on the declared internal subpaths", 
     "hasUnpricedSearch",
     "serverToolText",
   ])
-  const internal = await import("@amira/ai-shared/accounting")
+  const internal = await import("@amira/ai/accounting")
   expect(Object.keys(internal).sort()).toEqual([
     "decodeUsageReceipt",
     "encodeUsageReceipt",

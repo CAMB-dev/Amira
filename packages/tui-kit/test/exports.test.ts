@@ -53,7 +53,6 @@ test("the public theme exports are part of the stable package surface", async ()
     "InputParser",
     "InputReader",
     "LineInput",
-    "LiveRenderer",
     "MULTI_CLICK_MS",
     "MarkdownStream",
     "PASSIVE_SIGNAL_LISTENER",

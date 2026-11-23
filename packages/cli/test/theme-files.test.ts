@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { DEFAULT_THEME_GLYPHS, THEME_PALETTE_TOKENS, textCells } from "@amira/api"
 import { ThemeRegistry, validateSettings } from "@amira/core"
-import { readManifest } from "@amira/packages"
+import { readManifest } from "@amira/extensions"
 import { builtinThemes, loadThemeFiles } from "../src/theme-files.ts"
 
 let dir: string

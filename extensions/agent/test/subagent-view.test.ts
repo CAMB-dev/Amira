@@ -15,7 +15,7 @@ import {
   type ViewTextSegment,
   type ViewTextTone,
 } from "@amira/api"
-import statusExtension from "../../../extensions/status/src/index.ts"
+import statusExtension from "../../../extensions/commands/src/status.ts"
 import terminalStatusExtension from "../../../extensions/terminal-status/src/index.ts"
 import { createAi, createMockDialect, type MockStep, userMessage } from "../../../packages/ai/src/index.ts"
 import {

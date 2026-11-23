@@ -1,4 +1,4 @@
-import { setUserAgentVersion } from "@amira/net"
+import { setUserAgentVersion } from "@amira/core"
 import { version } from "./version.ts"
 
 export const USER_AGENT = `Amira/${version}`

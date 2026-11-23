@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import type { ExtensionSettingsHandle, Settings } from "@amira/api"
 import { loadSettings } from "@amira/core"
-import { activePackages, packageScope, writeLock } from "@amira/packages"
+import { activePackages, packageScope, writeLock } from "@amira/extensions"
 import { createCommandHost } from "../src/control.ts"
 import { createSession } from "../src/session.ts"
 
