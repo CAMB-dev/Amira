@@ -1036,7 +1036,7 @@ describe("Form", () => {
     form.setActionState("go", { running: true, text: "fetching" })
     form.handleInput(key("enter"))
     expect(log).toEqual(["action go"])
-    expect(view()).toContain("… fetching · esc stops it")
+    expect(view()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] fetching · esc stops it/)
     expect(view().split("\n").at(-1)).toBe("esc stop · tab/↑↓ move · ctrl+s save")
     form.handleInput(key("escape"))
     expect(log).toEqual(["action go", "stop go"])

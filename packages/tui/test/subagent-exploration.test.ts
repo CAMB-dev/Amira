@@ -180,7 +180,9 @@ test("/agents does not batch over running calls, replies or associated children 
   ])
   expect(rows.some((line) => line.kind === "text" && line.text.includes("live.ts  running"))).toBe(true)
   const child = rows.findIndex(
-    (line) => line.kind === "segments" && line.parts.some((part) => part.text.includes("Nested check")),
+    (line) =>
+      line.kind === "segments" &&
+      line.parts.some((part) => "text" in part && part.text.includes("Nested check")),
   )
   expect(child).toBeGreaterThan(rows.findIndex((line) => line.kind === "text" && line.text === "started"))
   expect(child).toBeLessThan(rows.findIndex((line) => line.kind === "text" && line.text === "third"))

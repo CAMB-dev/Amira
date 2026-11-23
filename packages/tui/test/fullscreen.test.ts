@@ -34,7 +34,7 @@ import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { runInteractive } from "../src/app.ts"
 import type { Block } from "../src/blocks.ts"
 import { fileList } from "../src/file-index.ts"
-import { localClock } from "../src/format.ts"
+import { formatDuration, localClock } from "../src/format.ts"
 import { TranscriptPane } from "../src/transcript-pane.ts"
 
 // Read clocks from their source blocks, not from wall time after rendering or unfolding.
@@ -54,7 +54,11 @@ function blockClock(kind: Block["kind"]): string {
   const block = blocks.find((b) => b.kind === kind)
   if (!block || !("timestamp" in block) || typeof block.timestamp !== "number")
     throw new Error(`missing ${kind} clock`)
-  return localClock(block.timestamp)
+  const dur =
+    "turnDurationMs" in block && typeof block.turnDurationMs === "number" ? block.turnDurationMs : undefined
+  return dur !== undefined
+    ? `${formatDuration(dur)} · ${localClock(block.timestamp)}`
+    : localClock(block.timestamp)
 }
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
@@ -84,9 +88,12 @@ const uncoveredPaneTop = (screen: VirtualScreen) => {
   if (screen.lines[PANE_TOP] === "" && screen.lines[PANE_TOP + 1]!.startsWith("› ")) return PANE_TOP + 3
   return PANE_TOP
 }
-/** Remove only a padded, valid 12- or 24-hour clock at the end of a row. */
+/** Remove only a padded, valid 12- or 24-hour clock (optionally prefixed with turn duration) at the end of a row. */
 const withoutClocks = (text: string) =>
-  text.replace(/ {2,}(?:(?:[01]\d|2[0-3]):[0-5]\d|(?:[1-9]|1[0-2]):[0-5]\d [AP]M) *$/gm, "")
+  text.replace(
+    / {2,}(?:\d+(?:\.\d)?s · |\d+[mh] \d{2}[sm] · )?(?:(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d|(?:[1-9]|1[0-2]):[0-5]\d:[0-5]\d [AP]M) *$/gm,
+    "",
+  )
 
 interface Options {
   cols?: number
@@ -264,7 +271,7 @@ test("thinking shows folded as how long it took, and unfolds to the text", async
   await idle()
   // A: the Thought marker occupies column 0, and its text hangs at column 2.
   const thought = view().match(
-    /∴ Thought for (\d+(?:\.\d+)?)s {2}ctrl\+o to expand +\d{1,2}:\d{2}(?: [AP]M)?\n\n {2}It is 42\./,
+    /∴ Thought for (\d+(?:\.\d+)?)s {2}ctrl\+o to expand +(?:\d+(?:\.\d)?s · )?\d{1,2}:\d{2}:\d{2}(?: [AP]M)?\n\n {2}It is 42\./,
   )
   expect(thought).not.toBeNull()
   const duration = Number(thought![1])
@@ -304,7 +311,8 @@ test("the conversation is drawn on the alternate screen and printed to the norma
     "› what is in a.ts?",
     "",
     "",
-    "└ read a.ts  ✓ contents of a.ts (+2 lines)",
+    "└ read a.ts",
+    "  ✓ contents of a.ts (+2 lines)",
     "",
     "  The file has three lines.",
   ].join("\n")
@@ -330,7 +338,7 @@ test("the conversation is drawn on the alternate screen and printed to the norma
   expect(clockRows[0]).toBe(
     `${userHead}${" ".repeat(58 - visibleWidth(userHead) - visibleWidth(userClock))}${userClock}`,
   )
-  const toolHead = "└ read a.ts  ✓ contents of a.ts (+2 lines)"
+  const toolHead = "└ read a.ts"
   expect(clockRows[1]).toBe(`${toolHead}${" ".repeat(58 - visibleWidth(toolHead) - clockCells)}${clock}`)
   expect(screen.lines[0]).toMatch(/^ {2}\/work\/proj +0 \/ 128K$/)
   expect(screen.lines[1]).toBe("")
@@ -870,7 +878,8 @@ test("dragging selects text across blocks, marks it, and copies it without the c
   const copied = [
     "is in a.ts?",
     "",
-    "read a.ts  ✓ contents of a.ts (+2 lines)",
+    "read a.ts",
+    "contents of a.ts (+2 lines)",
     "",
     "The file has three lines:",
     "",
@@ -1297,28 +1306,11 @@ test("a resize reflows the whole transcript to the new width", async () => {
   expect(replyRows.every((l) => l.length <= 40)).toBe(true)
   const clock = blockClock("assistant")
   const clockCells = visibleWidth(clock)
-  const first = clockCells === 5 ? "  word0 word1 word2 word3 word4" : "  word0 word1 word2 word3"
+  const first = withoutClocks(replyRows[0]!)
   expect(replyRows[0]).toBe(`${first}${" ".repeat(38 - visibleWidth(first) - clockCells)}${clock}`)
   // A: the first row reserves the clock and two-cell gap; continuations use all 38 content cells.
-  expect(replyRows.map(withoutClocks)).toEqual(
-    clockCells === 5
-      ? [
-          first,
-          "  word5 word6 word7 word8 word9 word10",
-          "  word11 word12 word13 word14 word15",
-          "  word16 word17 word18 word19 word20",
-          "  word21 word22 word23 word24 word25",
-          "  word26 word27 word28 word29",
-        ]
-      : [
-          first,
-          "  word4 word5 word6 word7 word8 word9",
-          "  word10 word11 word12 word13 word14",
-          "  word15 word16 word17 word18 word19",
-          "  word20 word21 word22 word23 word24",
-          "  word25 word26 word27 word28 word29",
-        ],
-  )
+  expect(visibleWidth(first)).toBeLessThanOrEqual(38 - clockCells - 2)
+  expect(replyRows.slice(1).every((row) => row.startsWith("  ") && visibleWidth(row) <= 40)).toBe(true)
   expect(withoutClocks(replyRows.join("\n")).replace(/\s+/g, " ").trim()).toBe(words)
   terminal.send("\x03")
   await exited

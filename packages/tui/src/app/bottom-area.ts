@@ -24,6 +24,7 @@ import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { badgeSymbol, spinnerFrameAt, statusBadge } from "../status-badge.ts"
 import { type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
+import { visibleAnimation } from "../view-animation.ts"
 import { renderViewLines } from "../view-lines.ts"
 import type { TurnActivity } from "./activity.ts"
 import { attachmentBanner, attachmentStatus } from "./attachment-banner.ts"
@@ -102,14 +103,21 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       return { lines: (w, ctx, maxRows) => filePicker.render(w, ctx, maxRows), hint: fileHint }
     return undefined
   }
-  /** A redraw a working badge asked for, so its spinner turns while nothing else draws. */
+  /** A redraw a working badge or live panel segment asked for, so animations turn while idle. */
   let badgeTick: ReturnType<typeof setTimeout> | undefined
-  const spinNext = () => {
-    if (badgeTick !== undefined) return
+  let badgeTickInterval: number | undefined
+  const spinNext = (intervalMs = Spinner.INTERVAL_MS) => {
+    if (bottomBudget <= 0) return
+    if (badgeTick !== undefined) {
+      if ((badgeTickInterval ?? Infinity) <= intervalMs) return
+      clearTimeout(badgeTick)
+    }
+    badgeTickInterval = intervalMs
     badgeTick = setTimeout(() => {
       badgeTick = undefined
+      badgeTickInterval = undefined
       deps.view().requestRender()
-    }, Spinner.INTERVAL_MS)
+    }, intervalMs)
   }
   /**
    * Extension status text in the host's glyphs: field separators follow the theme, and a
@@ -194,6 +202,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let commandRows: string[] = []
   /** Rows the last frame's panels took. */
   let panelRows = 0
+  let panelCommandRows: string[] = []
+  let panelUsedCommandSpinner = false
   /** The most rows the list below the input had since it opened (full screen keeps them). */
   let listRows = 0
   let listRoom = Number.POSITIVE_INFINITY
@@ -219,15 +229,22 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const room = Math.max(1, width - inset.length)
     const now = Date.now()
     let spinning = false
+    let usedCommandSpinner = false
+    const frame = spinnerFrameAt(now)
+    const rawSpinner = deps.commandActivity().spinner
+    const formattedSpinner = rawSpinner ? Spinner.forGlyphs(rawSpinner, ctx.glyphs ?? glyphs) : ""
     const rows = (
       deps.panels?.size && deps.agent()
         ? deps.panels.snapshot({
             width: room,
             now,
-            spinner: deps.commandActivity().spinner,
+            get spinner() {
+              if (formattedSpinner) usedCommandSpinner = true
+              return formattedSpinner
+            },
             statusBadge: (state, options) => {
               if (state === "working") spinning = true
-              return statusBadge(state, spinnerFrameAt(now), options)
+              return statusBadge(state, frame, options)
             },
             glyphs: { separator: glyphs.separator, more: viewEllipsis() },
             sessionId: deps.agent()!.sessionId,
@@ -236,10 +253,15 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
           })
         : []
     )
-      .map((p) => renderViewLines(p.lines, ctx.theme, room).map((row) => inset + row))
+      .map((p) =>
+        renderViewLines(p.lines, ctx.theme, room, { spinner: frame, now, render: ctx }).map(
+          (row) => inset + row,
+        ),
+      )
       .filter((rows) => rows.length > 0)
       .flatMap((rows, i) => (i > 0 && !collapsed ? ["", ...rows] : rows))
-    if (spinning) spinNext()
+    panelUsedCommandSpinner = usedCommandSpinner && rows.length > 0
+    if (spinning && rows.length > 0) spinNext()
     return rows
   }
 
@@ -276,10 +298,15 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
     // They give way to everything else under the transcript: folded, then cut, when rows are short.
     new View((width, ctx) => {
+      panelUsedCommandSpinner = false
       let lines = panelRoom < 1 ? [] : panelLines(width, ctx, panelsCollapsed)
       if (!panelsCollapsed && lines.length + 1 > panelRoom) lines = panelLines(width, ctx, true)
       if (lines.length > panelRoom) lines = lines.slice(0, Math.max(0, panelRoom))
+      const visible = visibleAnimation(lines)
+      lines = visible.rows
+      if (visible.refreshIntervalMs !== undefined) spinNext(visible.refreshIntervalMs)
       panelsShown = lines.length > 0
+      panelCommandRows = panelUsedCommandSpinner ? lines : []
       // An intact composer already separates a one-row folded panel on a short screen.
       const gap = panelsShown && lines.length < panelRoom ? [""] : []
       panelRows = panelsShown ? lines.length + gap.length : 0
@@ -468,7 +495,11 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     pointerVisible = budget > 0
     listInset = inputBox.framed(width) ? 2 : 0
     deps.activityVisible?.(budget > 0 && activityRows.some((row) => visible.includes(row)), ctx)
-    deps.commandVisible?.(budget > 0 && commandRows.some((row) => visible.includes(row)))
+    deps.commandVisible?.(
+      budget > 0 &&
+        (commandRows.some((row) => visible.includes(row)) ||
+          panelCommandRows.some((row) => visible.includes(row))),
+    )
     return visible
   }
 

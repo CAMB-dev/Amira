@@ -3,7 +3,13 @@ import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
 import { keyLabel } from "../keys.ts"
 import { truncateToWidth, visibleWidth } from "../width.ts"
 import type { FormStatusTone } from "./form.ts"
-import { type FormFieldState, formActionStopHint, formButton, formToneStyle } from "./form-field.ts"
+import {
+  type FormFieldState,
+  formActionStopHint,
+  formButton,
+  formSpinnerGlyph,
+  formToneStyle,
+} from "./form-field.ts"
 import { wrapFormHint } from "./form-hint.ts"
 import type { FormHit } from "./form-mouse.ts"
 
@@ -78,7 +84,7 @@ export function renderFormFooter(
     if (action?.running || action?.text) {
       const stop = formActionStopHint(f.def, state.focus === f.def.id)
       const progress = truncateToWidth(
-        `${chrome.more} ${action.text ?? "working"}`,
+        `${formSpinnerGlyph(ctx)} ${action.text ?? "working"}`,
         Math.max(0, width - visibleWidth(stop) - visibleWidth(separator(ctx)) - 2),
         chrome.more,
       )

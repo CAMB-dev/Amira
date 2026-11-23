@@ -379,9 +379,15 @@ marker. The frontend truncates either form to the available title space.
 
 `ViewLine` supports semantic content without ANSI escape codes. Frontends own its styling:
 
-- `{ kind: "segments", parts: ViewSegment[] }` combines styled text into one line,
-  truncated by the frontend rather than wrapped. The exported `ViewSegment` type is
-  `{ text: string, kind: "text" | "dim" | "muted" | "accent" | "success" | "warning" | "error" }`.
+- `{ kind: "segments", parts: ViewSegment[] }` combines styled text and live primitives into one line,
+  truncated by the frontend rather than wrapped. The exported `ViewSegment` union accepts:
+  - `{ text: string, kind: ViewTextTone }` where `ViewTextTone` is `"text" | "dim" | "muted" | "accent" | "success" | "warning" | "error"`.
+  - `{ kind: "chip", text: string, tone?: "neutral" | "info" | "success" | "warning" | "danger" | "accent" }`.
+  - `{ kind: "spinner", tone?: ViewTextTone }` — live host spinner glyph (Unicode/ASCII-adapted, default `"accent"`).
+  - `{ kind: "shimmer", text: string, startedAt?: number, tone?: ViewTextTone }` — text lit by the active theme's shimmer effect, falling back to static text (`tone`, default `"muted"`) when shimmer is off or monochrome.
+  - `{ kind: "badge", state: AgentStatusState, label?: string, pad?: boolean }` — declarative status badge (host symbol + semantic role; working badges spin automatically).
+  - `{ kind: "elapsed", since: number, tone?: ViewTextTone }` — live elapsed duration formatted with host rules (e.g. `4s`, `1m 05s`), ticking once per second.
+  All live segments (`spinner`, `shimmer`, working `badge`, `elapsed`) work across views, docks, declarative `UiNode` widgets, and live panels, and are visibility-gated: they schedule redraws only while visible on screen and sleep when clipped, scrolled offscreen, or covered.
 - `{ kind: "user-message", text: string, note?: string }` renders like a transcript user
   message, including wrapping, background and spacing. Supply only the message text; do
   not add a `›` marker yourself. An optional note appears below it, inside the same band.
@@ -650,7 +656,7 @@ The exported `UiNode` union uses `type` as its discriminator. All content is sem
 | `tabs` | `id`, `tabs: { key, label, body }[]`, `style?: "brackets" \| "divided"` (default `"brackets"`); only the active body is laid out |
 | `table` | Optional `id`, `columns: { key, label, size?, align?: "left" \| "right" }[]`, `rows: { key, cells: Record<string, string \| ViewSegment[]> }[]` |
 | `bar` | `left: ViewSegment[]`, optional `right: ViewSegment[]` |
-| `progress` | `value` from 0 to 1 (clamped), optional maximum bar `width` and `label` |
+| `progress` | Optional `value` from 0 to 1 (clamped; omit for an animated indeterminate bar), optional maximum bar `width` and `label` |
 | `rule` | Optional `label` |
 | `input` | `id`, optional `placeholder`, `hint` and `activate?: string` (for example, `"i"` or `"/"`); use a visible label such as a box title |
 | `button` | `id`, `label`, optional `key` (defaults to `id`), `tone?: "normal" \| "accent"`; renders `[label]` |

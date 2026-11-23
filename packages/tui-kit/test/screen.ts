@@ -298,6 +298,10 @@ export class VirtualScreen {
         break
       case "K":
         if (params === "2") this.grid[this.y] = this.blank()
+        else if (params === "" || params === "0") {
+          const row = this.grid[this.y]!
+          for (let x = this.x; x < this.cols; x++) row[x] = " "
+        }
         break
       case "H": {
         const [r, c] = params.split(";").map((p) => Number.parseInt(p, 10) || 1)

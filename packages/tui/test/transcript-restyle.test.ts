@@ -54,8 +54,8 @@ const assistant: AssistantMessage & { timestamp: number } = {
 }
 
 test("clocks use the local timezone and the injected hour cycle", () => {
-  expect(localClock(at)).toBe("20:09")
-  expect(localClock(new Date(2026, 9, 10, 0, 4).getTime())).toBe("00:04")
+  expect(localClock(at)).toBe("20:09:00")
+  expect(localClock(new Date(2026, 9, 10, 0, 4).getTime())).toBe("00:04:00")
   expect(messageTimestamp(user)).toBe(at)
   expect(messageTimestamp({ timestamp: 0 })).toBe(0)
   for (const message of [{}, { timestamp: "20:09" }, { timestamp: Number.NaN }])
@@ -246,7 +246,10 @@ for (const mode of ["fullscreen"] as const) {
       app.terminal.send("go\r")
       await app.idle()
       const rows = app.all().split("\n")
-      expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(30 - clockCells - 6)}  ${clock}`)
+      const stamp = `0.0s · ${clock}`
+      expect(rows.map((r) => r.trimEnd())).toContain(
+        `  ${"x".repeat(30 - visibleWidth(stamp) - 6)}  ${stamp}`,
+      )
       expect(rows.map((r) => r.trimEnd())).toContain(`  ${"x".repeat(28)}`)
       // VirtualScreen.text trims cell padding; the direct block oracle above keeps exact fills.
       const codeTop = rows.indexOf(`${" ".repeat(27)}txt`)

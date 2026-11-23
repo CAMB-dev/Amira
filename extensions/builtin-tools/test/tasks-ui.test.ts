@@ -29,7 +29,7 @@ function agent(id: string, status: SubagentInfo["status"] = "running"): Subagent
 
 /** A panel row as plain text, its segments joined. */
 const rowText = (line: PanelLine) =>
-  line.kind === "segments" ? line.parts.map((part) => part.text).join("") : line.text
+  line.kind === "segments" ? line.parts.map((part) => ("text" in part ? part.text : "")).join("") : line.text
 
 function fixture() {
   const registry = new JobRegistry({

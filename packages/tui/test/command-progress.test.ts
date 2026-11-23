@@ -60,7 +60,7 @@ async function setup(admin: ExtensionAdmin, extra: Partial<SessionControl> = {})
         ...p,
         lines: p.lines.map((l) => ({
           ...l,
-          text: "text" in l ? l.text : l.parts.map((part) => part.text).join(""),
+          text: "text" in l ? l.text : l.parts.map((part) => ("text" in part ? part.text : "")).join(""),
         })),
       }))
   return { host, runner, rows, output, renders: () => renders, switchSession: () => (sessionId = "s2") }

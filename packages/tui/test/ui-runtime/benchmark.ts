@@ -91,7 +91,7 @@ for (const [detailLabel, data] of [
     runtime.setState({ expanded: { tree: [...keys] } })
     render()
     measure(`runtime ${name}`, (i) => {
-      items[0]!.row[0]!.text = `Phase 0 · update ${i}`
+      items[0]!.row[0] = { kind: "accent", text: `Phase 0 · update ${i}` }
       runtime.handleInput(key(i % 80 < 40 ? "down" : "up"))
       render()
     })
@@ -115,7 +115,7 @@ for (const [detailLabel, data] of [
     viewer.handleInput(key("i"))
     viewer.render(180, ctx)
     measure(`ExtensionViewer ${name} (49 content rows + footer)`, (i) => {
-      items[0]!.row[0]!.text = `Phase 0 · update ${i}`
+      items[0]!.row[0] = { kind: "accent", text: `Phase 0 · update ${i}` }
       viewer.handleInput(key(i % 80 < 40 ? "down" : "up"))
       viewer.render(180, ctx)
     })

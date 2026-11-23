@@ -3,6 +3,7 @@ import type { KeyHelp } from "@amira/api"
 import { type InputEvent, type RenderContext, themeToken, translateMouse, visibleWidth } from "@amira/tui-kit"
 import type { ExtensionViewer } from "../extension-view.ts"
 import type { Keybindings } from "../keybindings.ts"
+import { inheritShimmer } from "./shimmer.ts"
 
 /** Rows include title, header and host controls, and never displace the input. */
 export function dockHeight(screenRows: number, available: number, requested?: number): number {
@@ -61,6 +62,7 @@ export class DockedView {
     const surface = ctx.color ? themeToken(ctx.theme, "codeBg") : undefined
     const readable = surface && themeToken(ctx.theme, "surfaceMuted")
     const theme = readable ? { ...ctx.theme, muted: readable } : ctx.theme
+    if (theme !== ctx.theme) inheritShimmer(ctx.theme, theme)
     const rows = this.viewer.render(width, { ...ctx, theme, rows: this.height })
     while (rows.length < this.height) rows.push("")
     // Use the existing code surface, not the user-message band; margins remain unpainted.

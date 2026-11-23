@@ -25,7 +25,8 @@ import {
 
 const SPINNER = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]"
 const ELAPSED = "\\d+(?:\\.\\d+)?s"
-const TIMESTAMP = "(?:[01]\\d|2[0-3]):[0-5]\\d"
+const TIMESTAMP = "(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d"
+const TURN_STAMP = `(?:\\d+(?:\\.\\d)?s · )?${TIMESTAMP}`
 
 /** A: the activity spinner uses the root marker column; right-side stats retain their spacing. */
 const activity = (label: string, hasOutput = true) =>
@@ -45,9 +46,9 @@ test("a conversation: user message, tool call and reply end up in the transcript
   await idle()
   const text = all()
   // Clocks share one right edge, two cells in: the user band's and the tool row's.
-  expect(text).toMatch(new RegExp(`^› what is in a\\.ts\\? {35}${TIMESTAMP}$`, "m"))
+  expect(text).toMatch(new RegExp(`^› what is in a\\.ts\\? {32}${TIMESTAMP}$`, "m"))
   expect(text).toMatch(
-    new RegExp(`^└ read a\\.ts {2}✓ contents of a\\.ts \\(\\+2 lines\\) {11}${TIMESTAMP}$`, "m"),
+    new RegExp(`^└ read a\\.ts +${TURN_STAMP}\\n {2}✓ contents of a\\.ts \\(\\+2 lines\\)$`, "m"),
   )
   expect(text.indexOf("└ read")).toBeLessThan(text.indexOf("The file has three lines."))
   // One blank line between blocks, and the reply indented so it reads apart from the rest. The
@@ -60,10 +61,11 @@ test("a conversation: user message, tool call and reply end up in the transcript
         "  @ files · \\? keys",
         "",
         "",
-        `› what is in a\\.ts\\? {35}${TIMESTAMP}`,
+        `› what is in a\\.ts\\? {32}${TIMESTAMP}`,
         "",
         "",
-        `└ read a\\.ts  ✓ contents of a\\.ts \\(\\+2 lines\\) {11}${TIMESTAMP}`,
+        `└ read a\\.ts +${TURN_STAMP}`,
+        "  ✓ contents of a\\.ts \\(\\+2 lines\\)",
         "",
         "  The file has three lines\\.",
         "",
@@ -205,7 +207,7 @@ test("parallel tool calls reach the transcript in call order, whichever finishes
   await idle()
   expect(all()).toMatch(
     new RegExp(
-      `^├ slow a\\.ts {2}✓ slow result +${TIMESTAMP}\\n└ fast b\\.ts {2}✓ fast result\\n\\n {2}done$`,
+      `^├ slow a\\.ts {2}✓ slow result +${TURN_STAMP}\\n└ fast b\\.ts {2}✓ fast result\\n\\n {2}done$`,
       "m",
     ),
   )
@@ -330,7 +332,7 @@ test("the built-in presenters: an edit shows its diff with line numbers", async 
   await idle()
   expect(all()).toMatch(
     new RegExp(
-      `^└ Edited src/a\\.ts {2}\\+1 / -1 +${TIMESTAMP}\\n {2}11 {3}keep\\n {2}12 - old\\n {2}12 \\+ new\\n\\n {2}ok$`,
+      `^└ Edited src/a\\.ts {2}\\+1 / -1 +${TURN_STAMP}\\n {2}11 {3}keep\\n {2}12 - old\\n {2}12 \\+ new\\n\\n {2}ok$`,
       "m",
     ),
   )
@@ -355,7 +357,7 @@ test("successful reads in a row, over steps too, go to the scrollback as one Exp
   terminal.send("go\r")
   await shows("done")
   await idle()
-  expect(all()).toMatch(new RegExp(`^└ Read 3 files {2}▸ +${TIMESTAMP}\\n\\n {2}done$`, "m"))
+  expect(all()).toMatch(new RegExp(`^└ Read 3 files {2}▸ +${TURN_STAMP}\\n\\n {2}done$`, "m"))
   expect(all()).not.toContain("└ Read a.ts")
   terminal.send("\x03")
   await exited
@@ -806,7 +808,8 @@ test("a reply with only thinking shows that it thought, not that there was no re
   const { terminal, idle, all, exited } = await setup([{ thinking: "hmm" }])
   terminal.send("go\r")
   await waitFor(
-    () => /^∴ Thought for \d+(?:\.\d+)?s {2}ctrl\+o to expand +(?:[01]\d|2[0-3]):[0-5]\d$/m.test(all()),
+    () =>
+      new RegExp(`^∴ Thought for \\d+(?:\\.\\d+)?s {2}ctrl\\+o to expand +${TURN_STAMP}$`, "m").test(all()),
     "thinking summary with a timestamp",
   )
   await idle()
@@ -823,7 +826,10 @@ test("a reply's thinking goes before its text", async () => {
   await shows("Answer.")
   await idle()
   expect(all()).toMatch(
-    /^∴ Thought for \d+(?:\.\d+)?s {2}ctrl\+o to expand +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}Answer\.$/m,
+    new RegExp(
+      `^∴ Thought for \\d+(?:\\.\\d+)?s {2}ctrl\\+o to expand +${TURN_STAMP}\\n\\n {2}Answer\\.$`,
+      "m",
+    ),
   )
   terminal.send("\x03")
   await exited

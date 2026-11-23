@@ -18,14 +18,62 @@ import type { UiContext, UiControl, UiEvent, UiNode, UiState } from "./views-ui.
  * Fullscreen forms and views retain priority while covering a dock.
  */
 
-/** A piece of a line, styled by meaning rather than by a frontend-specific color. */
+/** Semantic text roles styled by the frontend without exposing terminal colors. */
+export type ViewTextTone = "text" | "dim" | "muted" | "accent" | "success" | "warning" | "error"
+
+/** A plain text segment styled by semantic role. */
+export type ViewTextSegment = { text: string; kind: ViewTextTone }
+
+/**
+ * A piece of a line, styled by meaning rather than by a frontend-specific color.
+ * Live segments (`spinner`, `shimmer`, working `badge`, `elapsed`) are host-owned, glyph- and
+ * theme-adapted, and visibility-gated: they schedule redraws only while visible on screen and
+ * sleep automatically when clipped, scrolled offscreen, or covered.
+ */
 export type ViewSegment =
-  | { text: string; kind: "text" | "dim" | "muted" | "accent" | "success" | "warning" | "error" }
+  | ViewTextSegment
   /** A pill with half-block ends in color, or ▏text▕ without colors. Defaults to neutral. */
   | {
       kind: "chip"
       text: string
       tone?: "neutral" | "info" | "success" | "warning" | "danger" | "accent"
+    }
+  /** Live host spinner glyph (Unicode/ASCII-adapted). Defaults to tone "accent". */
+  | {
+      kind: "spinner"
+      tone?: ViewTextTone
+    }
+  /**
+   * Text lit by the active theme's shimmer effect, matching the main activity row. Falls back
+   * to static text (`tone`, default "muted") when shimmer is disabled or monochrome.
+   */
+  | {
+      kind: "shimmer"
+      text: string
+      /** Epoch ms when the activity started, for phase continuity across redraws. */
+      startedAt?: number
+      /** Static fallback tone when shimmer is disabled or monochrome; defaults to "muted". */
+      tone?: ViewTextTone
+    }
+  /**
+   * Declarative status badge (host symbol + semantic role + optional custom label).
+   * Working badges spin automatically while visible without threading render helpers.
+   */
+  | {
+      kind: "badge"
+      state: AgentStatusState
+      /** Custom label after the symbol; pass "" for the symbol or spinner alone. */
+      label?: string
+      /** Right-pad the label to a common width; defaults to unpadded. */
+      pad?: boolean
+    }
+  /** Live elapsed duration formatted with host rules (e.g. "4s", "1m 05s"), ticking once a second while visible. */
+  | {
+      kind: "elapsed"
+      /** Epoch ms when the timed work started. */
+      since: number
+      /** Text tone; defaults to "muted". */
+      tone?: ViewTextTone
     }
 
 /** Lines styled by the frontend; text and parts contain no raw styling. */
@@ -35,6 +83,13 @@ export type ViewLine =
   | { kind: "segments"; parts: ViewSegment[] }
   /** A user message, with the transcript's marker, wrapping and background band. */
   | { kind: "user-message"; text: string; note?: string }
+
+export interface StatusBadgeOptions {
+  /** Right-pad the label to a common width; defaults to unpadded. */
+  pad?: boolean
+  /** Custom label after the symbol; pass "" for the symbol or spinner alone. */
+  label?: string
+}
 
 export interface ViewRenderOptions {
   /**
@@ -84,9 +139,10 @@ export interface ViewRenderOptions {
   ) => ViewLine[]
   /**
    * Shared symbol + label, with host glyphs, semantic color and spinner cadence.
-   * Set pad to true to right-pad labels to a common width; defaults to unpadded.
+   * Set pad to true to right-pad labels to a common width; pass label to customize the text
+   * (or "" for the symbol/spinner alone).
    */
-  statusBadge?: (state: AgentStatusState, options?: { pad?: boolean }) => ViewSegment[]
+  statusBadge?: (state: AgentStatusState, options?: StatusBadgeOptions) => ViewTextSegment[]
   /** Transcript Markdown with its standard content inset, without view chrome. */
   renderReply?: (text: string) => ViewLine[]
 }

@@ -76,6 +76,8 @@ export interface ToolViewOptions {
   expanded?: boolean
   /** Only the first visible assistant row of a turn owns a clock. */
   timestamp?: number
+  /** Total elapsed turn duration, shown beside the finish clock once the turn ends. */
+  turnDurationMs?: number
   /** Host-only continuation boundaries, with the separator removed by wrapping. */
   onWrap?: (row: number, join: "" | " ") => void
   /** Host-only content columns, excluding only chrome this renderer added. */
@@ -488,7 +490,7 @@ export function finishedToolLines(
   // Interrupted while it ran (not before it started): what it printed so far still shows.
   const cutShort = outcome === "interrupted" && call.rejected !== "aborted" && view.text !== ""
   const continuation = treeContinuation(theme, opts.last)
-  const headWidth = timestampRoom(width, opts.timestamp)
+  const headWidth = timestampRoom(width, opts.timestamp, opts.turnDurationMs)
   const out = [
     headLine(theme, treeHead(theme, opts.last), call.name, summary, headWidth, {
       muted: !ran,
@@ -637,7 +639,7 @@ export function finishedToolLines(
   )
   const cut = opts.markers?.ellipsis ?? viewEllipsis()
   for (const line of bodyRows) out.push(truncateToWidth(`${continuation}${line}`, width, cut))
-  return stampRows(out, theme, width, opts.timestamp)
+  return stampRows(out, theme, width, opts.timestamp, opts.turnDurationMs)
 }
 
 export { formatElapsed }
@@ -811,10 +813,11 @@ export function exploredLines(
   if (eligible && !expanded) {
     opts.onRow?.(0, MARKER_WIDTH)
     return stampRows(
-      [exploredLine(theme, explored, timestampRoom(width, opts.timestamp), opts)],
+      [exploredLine(theme, explored, timestampRoom(width, opts.timestamp, opts.turnDurationMs), opts)],
       theme,
       width,
       opts.timestamp,
+      opts.turnDurationMs,
     )
   }
   let offset = 0
@@ -823,6 +826,7 @@ export function exploredLines(
     const rows = finishedToolLines(theme, presenter, call, expanded ? "full" : detail, width, {
       ...opts,
       timestamp: i === 0 ? opts.timestamp : undefined,
+      turnDurationMs: i === 0 ? opts.turnDurationMs : undefined,
       ...(eligible && expanded ? { expanded: true } : {}),
       last: i === calls.length - 1 && opts.last,
       onRow: opts.onRow && ((row, from) => opts.onRow!(start + row, from)),

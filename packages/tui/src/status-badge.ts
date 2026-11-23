@@ -1,4 +1,9 @@
-import { AGENT_STATUS_BADGES, type AgentStatusState, type ViewSegment } from "@amira/api"
+import {
+  AGENT_STATUS_BADGES,
+  type AgentStatusState,
+  type StatusBadgeOptions,
+  type ViewTextSegment,
+} from "@amira/api"
 import { chromeGlyphs, Spinner, type Theme } from "@amira/tui-kit"
 import { glyphs } from "./glyphs.ts"
 
@@ -26,11 +31,13 @@ export function badgeSymbol(state: AgentStatusState, spinner = new Spinner().gly
 export function statusBadge(
   state: AgentStatusState,
   spinner = new Spinner().glyph,
-  options: { pad?: boolean } = {},
-): ViewSegment[] {
+  options: StatusBadgeOptions = {},
+): ViewTextSegment[] {
   const badge = AGENT_STATUS_BADGES[state]
-  const label = options.pad ? badge.label.padEnd(7) : badge.label
-  return [{ kind: badge.role, text: `${badgeSymbol(state, spinner)} ${label}` }]
+  const raw = options.label ?? badge.label
+  const label = options.pad && raw ? raw.padEnd(7) : raw
+  const symbol = badgeSymbol(state, spinner)
+  return [{ kind: badge.role, text: label ? `${symbol} ${label}` : symbol }]
 }
 
 /** The same badge for transcript and picker rows. */
@@ -38,7 +45,7 @@ export function styledStatusBadge(
   state: AgentStatusState,
   theme: Theme,
   spinner?: string,
-  options?: { pad?: boolean },
+  options?: StatusBadgeOptions,
 ): string {
   return statusBadge(state, spinner, options)
     .map((part) => theme[AGENT_STATUS_BADGES[state].role](part.text))

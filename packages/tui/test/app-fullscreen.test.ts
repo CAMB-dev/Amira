@@ -301,7 +301,7 @@ test("messages queued together are sent as one turn but shown one by one", async
   await shows("queued › two")
   await shows("second answer")
   await idle()
-  expect(all()).toMatch(/› one +\d{2}:\d{2}\n\n\n\n› two +\d{2}:\d{2}/)
+  expect(all()).toMatch(/› one +\d{2}:\d{2}:\d{2}\n\n\n\n› two +\d{2}:\d{2}:\d{2}/)
   expect(all()).not.toContain("  two")
   const prompts = agent.messages.filter((m) => m.role === "user")
   expect(prompts.length).toBe(2)

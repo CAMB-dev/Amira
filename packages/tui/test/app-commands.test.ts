@@ -414,7 +414,7 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   terminal.send("123\r")
   await shows("Reviewing.")
   await idle()
-  expect(all()).toMatch(/› \$review-pr 123 +\d{2}:\d{2}\n└ Loaded skill review-pr \(3 lines\)/)
+  expect(all()).toMatch(/› \$review-pr 123 +\d{2}:\d{2}:\d{2}\n└ Loaded skill review-pr \(3 lines\)/)
   expect(all()).not.toContain("SKILL review-pr BODY")
   expect(mock.requests[0]!.messages[0]).toEqual({
     role: "user",
@@ -527,7 +527,7 @@ test("the $ list takes its keys from the keybindings like the / list", async () 
   terminal.send("\x19")
   await shows("Deployed.")
   await idle()
-  expect(all()).toMatch(/› \$deploy +\d{2}:\d{2}\n└ Loaded skill deploy \(3 lines\)/)
+  expect(all()).toMatch(/› \$deploy +\d{2}:\d{2}:\d{2}\n└ Loaded skill deploy \(3 lines\)/)
   terminal.send("\x03")
   await exited
 })

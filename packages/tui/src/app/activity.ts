@@ -1,6 +1,7 @@
 // Owns turn activity, retry labels and the activity line's clocks and rendering.
 import type { RenderContext, Spinner } from "@amira/tui-kit"
 import { glyphs } from "../glyphs.ts"
+import type { TurnEndSummary } from "../view.ts"
 import { activityRow } from "./activity-row.ts"
 
 /** A model request waiting to be sent again: model.retry, and when the wait ends. */
@@ -116,7 +117,7 @@ export interface TurnActivity {
   toolCallDelta(argsLength: number, name: string | undefined): void
   messageEnded(outputTokens: number | undefined): void
   toolStarted(): void
-  turnEnded(): void
+  turnEnded(report?: boolean): TurnEndSummary | undefined
   setRetrying(retrying: string | undefined): void
   startCompaction(onServer: boolean): void
   endCompaction(): void
@@ -258,11 +259,17 @@ export function createTurnActivity(): TurnActivity {
     toolStarted() {
       preparing = undefined
     },
-    turnEnded() {
+    turnEnded(report = false) {
+      let summary: TurnEndSummary | undefined
+      if (report && working && turnStartedAt > 0) {
+        const finishedAt = Date.now()
+        summary = { durationMs: Math.max(0, finishedAt - turnStartedAt), finishedAt }
+      }
       working = false
       preparing = undefined
       retrying = undefined
       reasoning = ""
+      return summary
     },
     setRetrying(next) {
       retrying = next

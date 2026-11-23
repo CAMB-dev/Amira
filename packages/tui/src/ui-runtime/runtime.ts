@@ -2,6 +2,7 @@ import type { UiEvent, UiNode, UiState, ViewKeyName, ViewLine } from "@amira/api
 import { type InputEvent, isSubmitKey, LineInput, matchesKey, type Theme } from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
 import { defaultKeybindings, isTypingKey, type Keybindings, viewScrollAction } from "../keybindings.ts"
+import type { SegmentRenderContext } from "../view-lines.ts"
 import { cells, inside } from "./layout.ts"
 import { WidgetHits } from "./mouse.ts"
 import { expandable, type TreeIndex, type TreeRow } from "./tree.ts"
@@ -99,6 +100,7 @@ export class UiRuntime {
     lines: (ls: ViewLine[], w: number) => string[],
     cursor = true,
     focused = true,
+    segments?: SegmentRenderContext,
   ): string[] {
     this.reconciled = false
     const host: WidgetHost = {
@@ -107,6 +109,7 @@ export class UiRuntime {
         this.reconciled = true
       },
       theme,
+      segments,
       lines,
       cursor: cursor && focused,
       focused,

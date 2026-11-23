@@ -47,4 +47,45 @@ for (const mode of ["fullscreen"] as const) {
       await app.exited
     }
   })
+
+  test(`${mode}: a visible extension progress panel animates its spinner and adapts glyphs`, async () => {
+    let release = () => {}
+    let started = false
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const app = await setup([], {
+      cols: 60,
+      rows: 20,
+      settings: { mode },
+      commands: [
+        {
+          name: "extwork",
+          description: "Fixture",
+          run: async () => {
+            started = true
+            await gate
+          },
+        },
+      ],
+    })
+    app.host.panels.register({
+      id: "ext-progress-fixture",
+      render: (opts) =>
+        started ? [{ kind: "accent", text: `${opts.spinner ? `${opts.spinner} ` : ""}pkg · fetching` }] : [],
+    })
+    try {
+      app.terminal.send("/extwork\r")
+      await waitFor(() => started && app.live().includes("pkg · fetching"), "panel visible")
+      const frame = () => app.live().match(/([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]) pkg · fetching/)?.[1]
+      const first = frame()
+      expect(first).toBeDefined()
+      await waitFor(() => frame() !== first, "panel spinner advances", 600)
+    } finally {
+      release()
+      await Bun.sleep(30)
+      app.terminal.send("\x03\x03")
+      await app.exited
+    }
+  })
 }

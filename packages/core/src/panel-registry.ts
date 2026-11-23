@@ -1,10 +1,13 @@
 import {
+  AGENT_STATUS_BADGES,
+  type AgentStatusState,
   PANEL_MAX_LINES,
   type PanelDefinition,
   type PanelLine,
   type PanelRenderOptions,
   type ToolLine,
   type ViewSegment,
+  type ViewTextTone,
 } from "@amira/api"
 
 /** A panel's lines as a frontend draws them: cut to PANEL_MAX_LINES, one row each. */
@@ -33,19 +36,65 @@ const KINDS = new Set<ToolLine["kind"]>([
   "diff-hunk",
 ])
 
-const SEGMENT_KINDS = new Set(["text", "dim", "muted", "accent", "success", "warning", "error", "chip"])
+const TEXT_SEGMENT_KINDS = new Set<ViewTextTone>([
+  "text",
+  "dim",
+  "muted",
+  "accent",
+  "success",
+  "warning",
+  "error",
+])
 const CHIP_TONES = new Set(["neutral", "info", "success", "warning", "danger", "accent"])
+const BADGE_STATES = new Set(Object.keys(AGENT_STATUS_BADGES))
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
 const plain = (text: string) => text.replace(/[\x00-\x1f\x7f]/g, " ")
 
-/** Segment parts with a known kind and text; anything else is left out. */
+/** Segment parts with a known kind and valid fields; anything else is left out. */
 function segments(parts: unknown): ViewSegment[] {
   if (!Array.isArray(parts)) return []
   return parts.flatMap((p): ViewSegment[] => {
-    if (!p || typeof p !== "object" || typeof p.text !== "string" || !SEGMENT_KINDS.has(p.kind)) return []
-    if (p.kind !== "chip") return [{ kind: p.kind, text: plain(p.text) }]
-    return [{ kind: "chip", text: plain(p.text), ...(CHIP_TONES.has(p.tone) ? { tone: p.tone } : {}) }]
+    if (!p || typeof p !== "object") return []
+    if (p.kind === "spinner") {
+      return [{ kind: "spinner", ...(TEXT_SEGMENT_KINDS.has(p.tone) ? { tone: p.tone } : {}) }]
+    }
+    if (p.kind === "shimmer") {
+      if (typeof p.text !== "string") return []
+      return [
+        {
+          kind: "shimmer",
+          text: plain(p.text),
+          ...(typeof p.startedAt === "number" && Number.isFinite(p.startedAt)
+            ? { startedAt: p.startedAt }
+            : {}),
+          ...(TEXT_SEGMENT_KINDS.has(p.tone) ? { tone: p.tone } : {}),
+        },
+      ]
+    }
+    if (p.kind === "badge") {
+      if (typeof p.state !== "string" || !BADGE_STATES.has(p.state)) return []
+      return [
+        {
+          kind: "badge",
+          state: p.state as AgentStatusState,
+          ...(typeof p.label === "string" ? { label: plain(p.label) } : {}),
+          ...(p.pad === true ? { pad: true } : {}),
+        },
+      ]
+    }
+    if (p.kind === "elapsed") {
+      if (typeof p.since !== "number" || !Number.isFinite(p.since)) return []
+      return [
+        { kind: "elapsed", since: p.since, ...(TEXT_SEGMENT_KINDS.has(p.tone) ? { tone: p.tone } : {}) },
+      ]
+    }
+    if (typeof p.text !== "string") return []
+    if (p.kind === "chip") {
+      return [{ kind: "chip", text: plain(p.text), ...(CHIP_TONES.has(p.tone) ? { tone: p.tone } : {}) }]
+    }
+    if (!TEXT_SEGMENT_KINDS.has(p.kind)) return []
+    return [{ kind: p.kind, text: plain(p.text) }]
   })
 }
 

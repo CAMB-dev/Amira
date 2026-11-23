@@ -216,7 +216,11 @@ export class OverlayManager {
   }
 
   private renderContent(width: number, ctx: RenderContext): string[] {
-    if (this.form) return this.form.render(width, ctx)
+    if (this.form) {
+      const rows = this.form.render(width, ctx)
+      this.syncAnimation()
+      return rows
+    }
     if (this.viewer instanceof ExtensionViewer) {
       const budget = Math.max(1, Math.min(Math.floor(ctx.rows / 3), ctx.rows - 2))
       const input = this.deps.renderInput(width, ctx, budget)
@@ -424,7 +428,13 @@ export class OverlayManager {
     const demands = this.disposed
       ? []
       : this.hasFullscreen
-        ? [this.viewer instanceof ExtensionViewer && !this.form ? this.viewer.refreshIntervalMs : undefined]
+        ? [
+            this.form
+              ? this.form.refreshIntervalMs
+              : this.viewer instanceof ExtensionViewer
+                ? this.viewer.refreshIntervalMs
+                : undefined,
+          ]
         : [
             this.dock?.visible ? this.dock.viewer.refreshIntervalMs : undefined,
             this.bottomVisible ? this.dialogs[0]?.refreshIntervalMs : undefined,

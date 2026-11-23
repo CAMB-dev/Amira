@@ -68,6 +68,7 @@ export class ToolBlock extends Block {
   readonly kind = "tool"
   startedAt: number | undefined
   timestamp: number | undefined
+  turnDurationMs: number | undefined
   partial: ToolResult | undefined
   end:
     | {
@@ -167,6 +168,7 @@ export class ToolBlock extends Block {
     const opts = {
       last: this.last,
       timestamp: this.timestamp,
+      turnDurationMs: this.turnDurationMs,
       ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
       onRow: record.onRow,
       onWrap: record.onWrap,
@@ -326,6 +328,10 @@ export class ExploredBlock extends Block {
     return this.calls.find((call) => call.timestamp !== undefined)?.timestamp
   }
 
+  get turnDurationMs(): number | undefined {
+    return this.calls.find((call) => call.turnDurationMs !== undefined)?.turnDurationMs
+  }
+
   override copyRows(plain: readonly string[], lines: readonly string[] = plain): CopyRow[] {
     const rows = chromeRows(plain)
     const stamp = timestampIn(lines)
@@ -347,6 +353,7 @@ export class ExploredBlock extends Block {
     const opts = {
       last: this.last,
       timestamp: this.timestamp,
+      turnDurationMs: this.turnDurationMs,
       ...(env.outputLines !== undefined ? { outputLines: env.outputLines } : {}),
       onRow: record.onRow,
       onWrap: record.onWrap,

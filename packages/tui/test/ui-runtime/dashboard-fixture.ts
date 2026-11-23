@@ -1,4 +1,4 @@
-import type { UiNode, UiState, ViewDefinition, ViewSegment } from "@amira/api"
+import type { UiNode, UiState, ViewDefinition, ViewSegment, ViewTextTone } from "@amira/api"
 
 /** Independent extension-style proof: semantic widgets only, not a production dashboard. */
 export interface DashboardData {
@@ -43,7 +43,7 @@ export const dashboardState: Partial<UiState> = {
   inputValues: { message: "Review the keyboard paths" },
 }
 
-const part = (text: string, kind: ViewSegment["kind"] = "text"): ViewSegment => ({ text, kind })
+const part = (text: string, kind: ViewTextTone = "text"): ViewSegment => ({ text, kind })
 
 function workerCard(worker: DashboardData["workers"][number]): UiNode {
   return {

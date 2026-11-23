@@ -11,11 +11,11 @@ for (const cycle of ["h11", "h12", "h23", "h24"] as const) {
     const restore = setClockPreference({ locale: "en-US", hourCycle: cycle })
     try {
       const twelve = cycle === "h11" || cycle === "h12"
-      expect(localClock(at)).toBe(twelve ? "8:09 PM" : "20:09")
+      expect(localClock(at)).toBe(twelve ? "8:09:00 PM" : "20:09:00")
       // The clock ends two cells in, at the shared clock edge.
-      expect(timestampRoom(30, at)).toBe(twelve ? 19 : 21)
+      expect(timestampRoom(30, at)).toBe(twelve ? 16 : 18)
       const midnight = new Date(2026, 9, 10, 0, 4).getTime()
-      expect(localClock(midnight)).toBe(twelve ? "12:04 AM" : "00:04")
+      expect(localClock(midnight)).toBe(twelve ? "12:04:00 AM" : "00:04:00")
     } finally {
       restore()
     }
@@ -23,8 +23,8 @@ for (const cycle of ["h11", "h12", "h23", "h24"] as const) {
 }
 
 for (const [locale, expected] of [
-  ["en-US", "8:09 PM"],
-  ["en-GB", "20:09"],
+  ["en-US", "8:09:00 PM"],
+  ["en-GB", "20:09:00"],
 ] as const) {
   test(`clock detects ${locale}'s default hour cycle without a global Intl override`, () => {
     expect(createLocalClock({ locale })(at)).toBe(expected)
@@ -32,8 +32,8 @@ for (const [locale, expected] of [
 }
 
 test("clock defaults to 12-hour time when the hour cycle or locale data is unavailable", () => {
-  expect(createLocalClock({ locale: "en-US", hourCycle: null })(at)).toBe("8:09 PM")
-  expect(createLocalClock({ locale: "invalid_locale" })(at)).toBe("8:09 PM")
+  expect(createLocalClock({ locale: "en-US", hourCycle: null })(at)).toBe("8:09:00 PM")
+  expect(createLocalClock({ locale: "invalid_locale" })(at)).toBe("8:09:00 PM")
 })
 
 test("the default clock uses the system locale and local timezone", () => {
@@ -42,12 +42,13 @@ test("the default clock uses the system locale and local timezone", () => {
   const expected = new Intl.DateTimeFormat(undefined, {
     hour: hour12 ? "numeric" : "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hour12,
   })
   expect(createLocalClock()(at)).toBe(expected.format(at).replace(/[\u00a0\u202f]/g, " "))
 })
 
-test("24-hour clocks reserve five cells and preserve the full wrapped content", () => {
+test("24-hour clocks reserve eight cells and preserve the full wrapped content", () => {
   const restore = setClockPreference({ locale: "en-GB", hourCycle: "h23" })
   try {
     const rows = userLines(
@@ -56,15 +57,15 @@ test("24-hour clocks reserve five cells and preserve the full wrapped content", 
       30,
       at,
     ).map(stripAnsi)
-    expect(timestampRoom(30, at)).toBe(21)
-    expect(rows).toEqual([`› ${"x".repeat(19)}  20:09`, `  ${"x".repeat(21)}`])
-    expect(rows.map(visibleWidth)).toEqual([28, 23])
+    expect(timestampRoom(30, at)).toBe(18)
+    expect(rows).toEqual([`› ${"x".repeat(16)}  20:09:00`, `  ${"x".repeat(24)}`])
+    expect(rows.map(visibleWidth)).toEqual([28, 26])
   } finally {
     restore()
   }
 })
 
-test("12:45 PM reserves its actual cells plus the two-cell clock gap", () => {
+test("12:45:00 PM reserves its actual cells plus the two-cell clock gap", () => {
   const restore = setClockPreference({ locale: "en-US", hourCycle: "h12" })
   try {
     const noon = new Date(2026, 9, 10, 12, 45).getTime()
@@ -74,10 +75,10 @@ test("12:45 PM reserves its actual cells plus the two-cell clock gap", () => {
       30,
       noon,
     ).map(stripAnsi)
-    expect(localClock(noon)).toBe("12:45 PM")
-    expect(timestampRoom(30, noon)).toBe(18)
-    expect(rows).toEqual([`› ${"x".repeat(16)}  12:45 PM`, `  ${"x".repeat(24)}`])
-    expect(rows.map(visibleWidth)).toEqual([28, 26])
+    expect(localClock(noon)).toBe("12:45:00 PM")
+    expect(timestampRoom(30, noon)).toBe(15)
+    expect(rows).toEqual([`› ${"x".repeat(13)}  12:45:00 PM`, `  ${"x".repeat(27)}`])
+    expect(rows.map(visibleWidth)).toEqual([28, 29])
     expect(timestampRoom(15, noon)).toBe(15)
     expect(timestampRoom(30, undefined)).toBe(30)
     expect(timestampRoom(Infinity, noon)).toBe(Infinity)
@@ -94,12 +95,12 @@ test("tui.clock forces the hour cycle for 12h and 24h and leaves auto to the loc
     expect(localClock(at)).toBe(before)
     restoreAuto()
     const restore24 = applyClockSetting("24h")
-    expect(localClock(at)).toMatch(/^20[:.]09$/)
+    expect(localClock(at)).toMatch(/^20[:.]09[:.]00$/)
     restore24()
     expect(localClock(at)).toBe(before)
     const restore12 = applyClockSetting("12h")
     // Forced 12-hour time reads as the English interface does, whatever the locale.
-    expect(localClock(at)).toBe("8:09 PM")
+    expect(localClock(at)).toBe("8:09:00 PM")
     restore12()
     const restoreUnset = applyClockSetting(undefined)
     expect(localClock(at)).toBe(before)
@@ -117,7 +118,7 @@ test("a reloaded tui.clock changes the running session's clock; auto goes back t
     expect(localClock(at)).toBe(before)
     const restore = applyClockSetting("auto")
     reloadClockSetting("24h")
-    expect(localClock(at)).toMatch(/^20[:.]09$/)
+    expect(localClock(at)).toMatch(/^20[:.]09[:.]00$/)
     reloadClockSetting("auto")
     expect(localClock(at)).toBe(before)
     reloadClockSetting("12h")

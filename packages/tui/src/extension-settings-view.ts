@@ -21,6 +21,7 @@ import {
   type MouseInput,
   matchesKey,
   type RenderContext,
+  Spinner,
   type Theme,
   truncateToWidth,
   visibleWidth,
@@ -29,6 +30,7 @@ import {
 import { styledExtensionStatusBadge } from "./extension-status.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { imageFallback, nodeRows } from "./markdown-nodes.ts"
+import { spinnerFrameAt } from "./status-badge.ts"
 
 export type ExtensionSettingsRequest = Extract<EventMap["ui.request"], { kind: "extension-settings" }>
 
@@ -116,6 +118,7 @@ export class ExtensionSettingsView implements Component {
   #preview: MarkdownRenderResult | undefined
   #previewError: string | undefined
   #previewRunning = false
+  #refreshIntervalMs: number | undefined
   #controller: AbortController | undefined
   #watching = new WeakSet<object>()
   #hits = new HitRegions()
@@ -132,6 +135,10 @@ export class ExtensionSettingsView implements Component {
 
   get closed(): boolean {
     return this.#closed
+  }
+
+  get refreshIntervalMs(): number | undefined {
+    return this.#closed ? undefined : this.#refreshIntervalMs
   }
 
   get values(): ExtensionSettingsValues {
@@ -358,11 +365,14 @@ export class ExtensionSettingsView implements Component {
     this.#hits.clear()
     this.#mouseActions.clear()
     this.#fieldArea = undefined
+    this.#refreshIntervalMs = undefined
     if (this.#closed) return []
     const room = Math.max(1, width)
     const height = Math.max(1, ctx.rows)
     const { theme } = ctx
     const ascii = /^[\x20-\x7e]+$/.test(glyphs.pointer)
+    const spin = Spinner.forGlyphs(spinnerFrameAt(Date.now()), ctx.glyphs ?? glyphs)
+    if (this.#saving) this.#refreshIntervalMs = Spinner.INTERVAL_MS
     const focused = this.#backend.request.fields[this.#focus]
     const editHint =
       focused?.type === "number"
@@ -373,7 +383,7 @@ export class ExtensionSettingsView implements Component {
             ? "space toggle"
             : "type to edit"
     const footerText = this.#saving
-      ? "saving settings"
+      ? `${spin} saving settings`
       : this.#choosingScope
         ? "left/right scope · enter save · esc discard"
         : `${ascii ? "up/down" : "↑↓"} focus · ${editHint} · enter save · esc discard · ctrl+r reset`
@@ -629,16 +639,23 @@ export class ExtensionSettingsView implements Component {
         )
     }
     const result = this.#preview
-    if (!result)
+    if (!result) {
+      if (!this.#previewError && this.#previewRunning) this.#refreshIntervalMs = Spinner.INTERVAL_MS
+      const spin = Spinner.forGlyphs(spinnerFrameAt(Date.now()), ctx.glyphs ?? glyphs)
       return [
         ctx.theme.muted(
           truncateToWidth(
-            this.#previewError ? `preview: ${this.#previewError}` : this.#previewRunning ? "previewing" : "",
+            this.#previewError
+              ? `preview: ${this.#previewError}`
+              : this.#previewRunning
+                ? `${spin} previewing`
+                : "",
             width,
             viewEllipsis(),
           ),
         ),
       ]
+    }
     if ("lines" in result) return nodeRows(result.lines.slice(0, 900), ctx.theme, width).slice(0, budget)
     if ("segments" in result)
       return [

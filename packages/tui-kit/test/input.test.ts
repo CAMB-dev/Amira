@@ -164,6 +164,23 @@ describe("escape timeout", () => {
     expect(alt.flush()).toEqual([key("]", { alt: true })])
   })
 
+  test("APC (late kitty graphics reply) and DCS strings are swallowed while Alt+_ and Alt+Shift+P stay keys", () => {
+    expectSplitSafe("a\x1b_Gi=31;OK\x1b\\b", [textKey("a"), textKey("b")])
+    expectSplitSafe("a\x1bP1$r0m\x1b\\b", [textKey("a"), textKey("b")])
+    expect(parse("\x1b_Gi=31\x1b[A")).toEqual([key("up")])
+    const cut = new InputParser()
+    expect(cut.feed("\x1b_Gi=31;")).toEqual([])
+    expect(cut.flush()).toEqual([])
+    expect(cut.flush(true)).toEqual([])
+    expect(cut.feed("z")).toEqual([textKey("z")])
+    const altUnder = new InputParser()
+    expect(altUnder.feed("\x1b_")).toEqual([])
+    expect(altUnder.flush()).toEqual([key("_", { alt: true })])
+    const altP = new InputParser()
+    expect(altP.feed("\x1bP")).toEqual([])
+    expect(altP.flush()).toEqual([key("p", { alt: true, shift: true })])
+  })
+
   test("a control character aborts a sequence cut short without being swallowed", () => {
     expectSplitSafe("\x1b[1;5\x1b[A", [key("up")])
     expectSplitSafe("\x1b[1;5\rb", [key("enter"), textKey("b")])

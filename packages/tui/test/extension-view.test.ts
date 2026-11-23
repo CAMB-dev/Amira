@@ -333,7 +333,11 @@ test("long text lines wrap under their text; code lines are cut", () => {
     ],
     30,
   )
-  expect(lines.map((l) => (l.kind === "segments" ? l.parts.map((p) => p.text).join("") : l.text))).toEqual([
+  expect(
+    lines.map((l) =>
+      l.kind === "segments" ? l.parts.map((p) => ("text" in p ? p.text : "")).join("") : l.text,
+    ),
+  ).toEqual([
     "✗ Verify failed: the reviewer",
     "  ran out of time the reviewer",
     "  ran out of time the reviewer",

@@ -12,6 +12,8 @@ import {
   type ViewDefinition,
   type ViewLine,
   type ViewSegment,
+  type ViewTextSegment,
+  type ViewTextTone,
 } from "@amira/api"
 import statusExtension from "../../../extensions/status/src/index.ts"
 import terminalStatusExtension from "../../../extensions/terminal-status/src/index.ts"
@@ -206,7 +208,19 @@ async function waitForMain(s: Awaited<ReturnType<typeof setup>>) {
 function lineText(line: string | ViewLine): string {
   if (typeof line === "string") return line
   return line.kind === "segments"
-    ? line.parts.map((part) => (part.kind === "chip" ? `[${part.text}]` : part.text)).join("")
+    ? line.parts
+        .map((part) =>
+          part.kind === "chip"
+            ? `[${part.text}]`
+            : part.kind === "badge"
+              ? (part.label ?? part.state)
+              : part.kind === "spinner"
+                ? "⠋"
+                : part.kind === "elapsed"
+                  ? `${part.since}`
+                  : part.text,
+        )
+        .join("")
     : line.text
 }
 
@@ -622,7 +636,7 @@ const statuses: {
   state: AgentStatusState
   symbol: string
   text: string
-  kind: Exclude<ViewSegment["kind"], "chip">
+  kind: ViewTextTone
 }[] = [
   { status: "running", state: "working", symbol: "⠋", text: "working", kind: "accent" },
   { status: "queued", state: "queued", symbol: "·", text: "queued", kind: "dim" },
@@ -716,7 +730,7 @@ for (const { status, state, symbol, text, kind } of statuses) {
     s.list[1]!.status = status
     s.list[1]!.parentSessionId = "a"
     const requested: AgentStatusState[] = []
-    const badge: ViewSegment[] = [
+    const badge: ViewTextSegment[] = [
       { kind, text: "host symbol" },
       { kind: "text", text: ` host ${text}` },
     ]
@@ -852,7 +866,7 @@ for (const status of ["paused", "queued", "idle"] as const) {
       try {
         let running = 0
         const requested: AgentStatusState[] = []
-        const parts: ViewSegment[] = [{ kind: "warning", text: `host ${status}` }]
+        const parts: ViewTextSegment[] = [{ kind: "warning", text: `host ${status}` }]
         const rows = s.definition.render(s.data, {
           width: 80,
           now: 6500,

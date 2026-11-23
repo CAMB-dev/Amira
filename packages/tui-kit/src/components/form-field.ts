@@ -8,6 +8,12 @@ import type { Editor } from "./editor.ts"
 import type { FormChoice, FormFieldView, FormInputValue, FormStatusTone } from "./form.ts"
 import { renderFormList } from "./form-list.ts"
 import type { LineInput } from "./line-input.ts"
+import { Spinner } from "./spinner.ts"
+
+export function formSpinnerGlyph(ctx: RenderContext, now = Date.now()): string {
+  const frames = chromeGlyphs(ctx.glyphs).spinnerFrames
+  return frames[Math.floor(now / Spinner.INTERVAL_MS) % frames.length] ?? chromeGlyphs(ctx.glyphs).more
+}
 
 export interface FormFieldState {
   def: FormFieldView
@@ -216,7 +222,7 @@ export function renderFormField(
       for (const action of lists.actions ?? []) {
         if (action.action?.running)
           hint(
-            `${chrome.more} ${action.action.text ?? "working"} ${separator(ctx)} ${formActionStopHint(action.def, action.def.id === lists.actionFocus)}`,
+            `${formSpinnerGlyph(ctx)} ${action.action.text ?? "working"} ${separator(ctx)} ${formActionStopHint(action.def, action.def.id === lists.actionFocus)}`,
           )
         else if (action.action?.text) hint(action.action.text, formToneStyle(theme, action.action.tone))
       }
@@ -257,7 +263,7 @@ export function renderFormField(
       first(formButton(f.def.buttonLabel ?? f.def.label, focused, ctx))
       if (action.running)
         hint(
-          `${chrome.more} ${action.text ?? "working"} ${separator(ctx)} ${formActionStopHint(f.def, focused, keyLabel({ name: "escape" }))}`,
+          `${formSpinnerGlyph(ctx)} ${action.text ?? "working"} ${separator(ctx)} ${formActionStopHint(f.def, focused, keyLabel({ name: "escape" }))}`,
         )
       else if (action.text) hint(action.text, formToneStyle(theme, action.tone))
       break

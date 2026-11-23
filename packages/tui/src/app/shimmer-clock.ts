@@ -2,7 +2,7 @@
 import type { RenderContext, Terminal } from "@amira/tui-kit"
 import type { TurnActivity } from "./activity.ts"
 import type { OverlayManager } from "./overlays.ts"
-import { hasAnimatedShimmer } from "./shimmer.ts"
+import { hasAnimatedShimmer, SHIMMER_INTERVAL_MS } from "./shimmer.ts"
 import type { RuntimeThemes } from "./themes.ts"
 
 type ClockTimer = ReturnType<typeof setInterval> | number
@@ -58,7 +58,7 @@ export function createShimmerClock(deps: {
       timer = schedule(() => {
         sync()
         if (eligible()) deps.requestRender()
-      }, 33)
+      }, SHIMMER_INTERVAL_MS)
     }
   }
   const suspend = deps.terminal.suspend

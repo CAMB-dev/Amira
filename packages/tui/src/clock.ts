@@ -16,10 +16,16 @@ export function createLocalClock(preference: ClockPreference = {}): (at: number)
     formatter = new Intl.DateTimeFormat(preference.locale, {
       hour: hour12 ? "numeric" : "2-digit",
       minute: "2-digit",
+      second: "2-digit",
       hour12,
     })
   } catch {
-    formatter = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+    formatter = new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: true,
+    })
   }
   return (at) => formatter.format(at).replace(/[\u00a0\u202f]/g, " ")
 }
@@ -41,14 +47,14 @@ type ClockSetting = "auto" | "12h" | "24h" | undefined
 let runBase: typeof clock | undefined
 
 function useClockSetting(setting: ClockSetting): void {
-  // A forced 12-hour clock reads as the English interface does ("8:19 PM"), whatever the locale.
+  // A forced 12-hour clock reads as the English interface does ("8:19:00 PM"), whatever the locale.
   if (setting === "12h") clock = createLocalClock({ locale: "en-US", hourCycle: "h12" })
   else if (setting === "24h") clock = createLocalClock({ hourCycle: "h23" })
   else clock = runBase ?? clock
 }
 
 /**
- * Applies the tui.clock setting for one interactive run: "12h" ("8:19 PM") and "24h" ("20:19")
+ * Applies the tui.clock setting for one interactive run: "12h" ("8:19:00 PM") and "24h" ("20:19:00")
  * force the hour cycle; "auto" (the default) leaves the system locale's clock alone.
  */
 export function applyClockSetting(setting: ClockSetting): () => void {
@@ -66,7 +72,7 @@ export function reloadClockSetting(setting: ClockSetting): void {
   if (runBase) useClockSetting(setting)
 }
 
-/** Display times use the local timezone and the selected locale's hour cycle. */
+/** Display times use the local timezone and the selected locale's hour cycle, including seconds. */
 export function localClock(at: number): string {
   return clock(at)
 }

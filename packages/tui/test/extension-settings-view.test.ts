@@ -596,3 +596,35 @@ test.each(["experimental", "wip", "deprecated"] as const)(
     }
   },
 )
+
+test("async previews and saving settings render a spinner and request animation only while active", async () => {
+  let resolvePreview!: (result: MarkdownRenderResult) => void
+  let resolveSave!: (error: string | undefined) => void
+  const p = page({
+    preview: () =>
+      new Promise((resolve) => {
+        resolvePreview = resolve
+      }),
+    submit: () =>
+      new Promise((resolve) => {
+        resolveSave = resolve
+      }),
+  })
+  const previewing = p.plain()
+  expect(previewing).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] previewing/)
+  expect(p.view.refreshIntervalMs).toBeGreaterThan(0)
+  await tick()
+  resolvePreview({ lines: [{ kind: "text", text: "ready" }] })
+  await tick()
+  expect(p.plain()).toContain("ready")
+  expect(p.view.refreshIntervalMs).toBeUndefined()
+
+  p.view.handleInput(key("enter"))
+  p.view.handleInput(key("enter"))
+  const saving = p.plain()
+  expect(saving).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] saving settings/)
+  expect(p.view.refreshIntervalMs).toBeGreaterThan(0)
+  resolveSave(undefined)
+  await tick()
+  expect(p.view.refreshIntervalMs).toBeUndefined()
+})

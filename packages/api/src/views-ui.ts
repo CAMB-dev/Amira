@@ -77,8 +77,8 @@ export type UiNode =
       rows: { key: string; cells: Record<string, string | ViewSegment[]> }[]
     }
   | { type: "bar"; left: ViewSegment[]; right?: ViewSegment[] }
-  /** Value is a fraction from 0 to 1, clamped; width is the bar's maximum cell count. */
-  | { type: "progress"; value: number; width?: number; label?: string }
+  /** Value is a fraction from 0 to 1, clamped; omit value for an animated indeterminate bar. */
+  | { type: "progress"; value?: number; width?: number; label?: string }
   | { type: "rule"; label?: string }
   | {
       type: "input"

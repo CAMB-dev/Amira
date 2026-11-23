@@ -1,7 +1,7 @@
 import type { AgentStatusState, ThemeGlyphs } from "./themes.ts"
 import type { ToolLine } from "./tool-renderers.ts"
 import type { SessionData } from "./tools.ts"
-import type { ViewSegment } from "./views.ts"
+import type { StatusBadgeOptions, ViewSegment, ViewTextSegment } from "./views.ts"
 
 /**
  * Experimental: live panels, a few lines an extension keeps on screen while the user works,
@@ -24,9 +24,10 @@ export interface PanelRenderOptions {
   /**
    * The shared status badge (symbol and label, host glyphs, semantic color), as in agent trees
    * and pickers; a working badge spins and keeps the panel redrawing while it is shown. Set pad
-   * to true to right-pad labels to a common width. Unset where the frontend has none.
+   * to true to right-pad labels to a common width, or pass label to customize the text ("" for
+   * the symbol/spinner alone). Unset where the frontend has none.
    */
-  statusBadge?: (state: AgentStatusState, options?: { pad?: boolean }) => ViewSegment[]
+  statusBadge?: (state: AgentStatusState, options?: StatusBadgeOptions) => ViewTextSegment[]
   /**
    * Host symbols for text the panel composes: the separator between fields, and the marker
    * for cut text (three periods in ASCII glyph sets). Unset where the frontend has none.

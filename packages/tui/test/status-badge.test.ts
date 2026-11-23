@@ -78,3 +78,21 @@ test("ASCII themes get readable badges and matching animated ASCII frames", () =
     setGlyphs(before)
   }
 })
+
+test("custom badge labels and symbol-only spinners respect Unicode and ASCII glyphs", () => {
+  const before = { ...glyphs }
+  try {
+    expect(statusBadge("working", "⠋", { label: "Thinking…" })).toEqual([
+      { kind: "accent", text: "⠋ Thinking…" },
+    ])
+    expect(statusBadge("working", "⠙", { label: "" })).toEqual([{ kind: "accent", text: "⠙" }])
+    expect(statusBadge("queued", "⠋", { label: "Waiting for an agent slot…" })).toEqual([
+      { kind: "dim", text: `${AGENT_STATUS_BADGES.queued.symbol} Waiting for an agent slot…` },
+    ])
+    setGlyphs({ pointer: ">" })
+    expect(statusBadge("working", "⠋", { label: "Thinking…" })[0]?.text).toBe("| Thinking…")
+    expect(statusBadge("working", "⠙", { label: "" })[0]?.text).toBe("/")
+  } finally {
+    setGlyphs(before)
+  }
+})

@@ -14,6 +14,7 @@ export class ReasoningBlock extends Block {
   readonly kind = "reasoning"
   /** Set by folding it: whether its text shows, whatever the level. */
   expanded: boolean | undefined
+  turnDurationMs: number | undefined
   #thinking: boolean
   #textVersion = 0
 
@@ -23,7 +24,7 @@ export class ReasoningBlock extends Block {
     public durationMs: number | undefined,
     readonly startedAt: number | undefined = undefined,
     thinking = false,
-    readonly timestamp?: number,
+    public timestamp?: number,
   ) {
     super()
     this.#thinking = thinking
@@ -66,6 +67,7 @@ export class ReasoningBlock extends Block {
         ...(this.durationMs !== undefined ? { durationMs: this.durationMs } : {}),
         thinking: this.#thinking,
         timestamp: this.timestamp,
+        turnDurationMs: this.turnDurationMs,
         expanded: this.shows(env),
         // A manually folded block keeps its override when global detail changes.
         expandKey:

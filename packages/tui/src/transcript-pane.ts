@@ -103,6 +103,9 @@ export class TranscriptPane {
   /** Images of the last frame, by rows of the viewport. */
   placements: ImagePlacement[] = []
   private drawn = new WeakMap<Block, Drawn[]>()
+  private rowCounts = new WeakMap<Block, number>()
+  private streamingToolsFrame = -1
+  private streamingTools: ToolBlock[] = []
   private anchor: Position | undefined
   /** The first row of the last frame. */
   private top: Position | undefined
@@ -545,6 +548,47 @@ export class TranscriptPane {
     return n
   }
 
+  /**
+   * Bounded version of `rowsBelow` for the live scroll indicator: keeps viewport-cost rendering
+   * when many uncached blocks sit below the viewport (e.g. after resizing a huge transcript).
+   */
+  rowsBelowSummary(uncachedLimit = 64): { rows: number; exact: boolean } {
+    const env = this.env
+    const last = this.layout[this.layout.length - 1]
+    if (!env || !last || this.following || last.block.index < 0) return { rows: 0, exact: true }
+    let rows = this.lines(last.block, env).length - 1 - last.line
+    let prevKind: Block["kind"] | undefined = last.block.kind
+    let uncached = 0
+    let exact = true
+    for (let k = last.block.index + 1; k < this.blocks.length; k++) {
+      const block = this.blocks[k]!
+      const cached = this.cached(block, env)
+      if (cached) {
+        if (cached.length) {
+          rows += cached.length + (prevKind && gapBetween(prevKind, block.kind) ? 1 : 0)
+          prevKind = block.kind
+        }
+        continue
+      }
+      if (uncached < uncachedLimit) {
+        uncached++
+        const len = this.lines(block, env).length
+        if (len) {
+          rows += len + (prevKind && gapBetween(prevKind, block.kind) ? 1 : 0)
+          prevKind = block.kind
+        }
+      } else {
+        exact = false
+        const est = this.rowCounts.get(block) ?? 1
+        if (est > 0) {
+          rows += est + (prevKind && gapBetween(prevKind, block.kind) ? 1 : 0)
+          prevKind = block.kind
+        }
+      }
+    }
+    return { rows, exact }
+  }
+
   // --- text selection
 
   /** Whether text is selected with the mouse. */
@@ -661,8 +705,16 @@ export class TranscriptPane {
 
   private draw(block: Block, env: BlockEnv): Drawn {
     if (block instanceof ToolBlock && !block.end) {
-      const streaming = this.blocks.filter((b) => b instanceof ToolBlock && b.started && !b.end && b.partial)
-      env = { ...env, liveOutputLines: runningOutputLimit(streaming.indexOf(block), streaming.length) }
+      if (this.streamingToolsFrame !== this.frame) {
+        this.streamingToolsFrame = this.frame
+        this.streamingTools = this.blocks.filter(
+          (b): b is ToolBlock => b instanceof ToolBlock && b.started && !b.end && !!b.partial,
+        )
+      }
+      env = {
+        ...env,
+        liveOutputLines: runningOutputLimit(this.streamingTools.indexOf(block), this.streamingTools.length),
+      }
     }
     const width = env.width
     const list = this.drawn.get(block) ?? []
@@ -693,6 +745,7 @@ export class TranscriptPane {
     }
     // The width now, and the one before (a resize back and forth).
     this.drawn.set(block, [d, ...list.filter((x) => x.width !== width)].slice(0, 2))
+    this.rowCounts.set(block, lines.length)
     return d
   }
 

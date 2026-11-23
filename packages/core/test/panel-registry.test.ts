@@ -105,3 +105,40 @@ test("extensions register panels through the API; a taken id is reported and unl
   host.unload("a")
   expect(host.panels.size).toBe(0)
 })
+
+test("segment rows preserve and sanitize declarative live segments (spinner, shimmer, badge, elapsed)", () => {
+  const r = new PanelRegistry()
+  r.register({
+    id: "live",
+    render: () => [
+      {
+        kind: "segments",
+        parts: [
+          { kind: "spinner" },
+          { kind: "spinner", tone: "warning" },
+          { kind: "spinner", tone: "loud" },
+          { kind: "shimmer", text: "Thinking\x1b[31m\n…", startedAt: 100, tone: "dim" },
+          { kind: "shimmer", text: "BadStart", startedAt: Number.NaN },
+          { kind: "badge", state: "working", label: "Custom\nLabel", pad: true },
+          { kind: "badge", state: "bogus" },
+          { kind: "elapsed", since: 500, tone: "dim" },
+          { kind: "elapsed", since: Number.POSITIVE_INFINITY },
+        ],
+      } as never,
+    ],
+  })
+  expect(r.snapshot(opts())[0]!.lines).toEqual([
+    {
+      kind: "segments",
+      parts: [
+        { kind: "spinner" },
+        { kind: "spinner", tone: "warning" },
+        { kind: "spinner" },
+        { kind: "shimmer", text: "Thinking [31m …", startedAt: 100, tone: "dim" },
+        { kind: "shimmer", text: "BadStart" },
+        { kind: "badge", state: "working", label: "Custom Label", pad: true },
+        { kind: "elapsed", since: 500, tone: "dim" },
+      ],
+    },
+  ])
+})

@@ -27,7 +27,7 @@ for (const mode of ["fullscreen"] as const) {
       const frames = output.match(/Working…/g)!.length
       expect(frames).toBeGreaterThanOrEqual(3)
       // biome-ignore lint/suspicious/noControlCharactersInRegex: count renderer line-diff rewrites
-      expect(written.match(/\x1b\[2K/g)!.length).toBe(frames)
+      expect(written.match(/\x1b\[\d+;1H/g)!.length).toBe(frames)
       expect(output).not.toContain("Message Amira")
       expect(output).not.toContain("/work/proj")
       expect(output).not.toContain("shift+tab")

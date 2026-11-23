@@ -592,8 +592,7 @@ async function runFullscreen(
       case "turn.end":
         termStatus.setRunning(false, e.data.reason === "aborted")
         serverRows.clear()
-        if (view.turnEnd()) turnShowedOutput = true
-        activity.turnEnded()
+        if (view.turnEnd(activity.turnEnded(e.data.reason === "done"))) turnShowedOutput = true
         if (!themes.previewing) spinner.stop()
         outbox.clearSteering()
         activity.setRetry(undefined)

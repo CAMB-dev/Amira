@@ -57,14 +57,16 @@ test("without an image provider, one that cannot open it, or tui.images off, an 
   const local = await run("![secret](https://img.test/secret.png)\n\ndone", {})
   expect(local.images).toBe(0)
   // Windows Terminal makes links clickable: the URL is in the link, not shown.
-  expect(local.text).toMatch(/^ {2}🖼\uFE0F secret +(?:[01]\d|2[0-3]):[0-5]\d\n\n {2}done$/m)
+  expect(local.text).toMatch(
+    /^ {2}🖼\uFE0F secret +(?:\d+(?:\.\d)?s · )?(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\n\n {2}done$/m,
+  )
   const failing = await run("![gone](https://img.test/404.png)\n\ndone", {
     images: testImages(async () => {
       throw new Error("HTTP 404")
     }),
   })
   expect(failing.images).toBe(0)
-  expect(failing.text).toMatch(/^ {2}🖼\uFE0F gone +\d{2}:\d{2}\n\n {2}done$/m)
+  expect(failing.text).toMatch(/^ {2}🖼\uFE0F gone +(?:\d+(?:\.\d)?s · )?\d{2}:\d{2}:\d{2}\n\n {2}done$/m)
   const off = await run("![chart](https://img.test/chart.png)\n\ndone", {
     settings: { images: "off" },
     images: testImages(async () => CHART),

@@ -275,9 +275,10 @@ function parseSequence(s: string, at: number): Parsed | undefined {
   let i = at + 2
   while (i < s.length && s.charCodeAt(i) >= 0x20 && s.charCodeAt(i) <= 0x3f) i++
   if (i >= s.length) return undefined
-  // A control character (ESC starting the next sequence, say) aborts a sequence cut short: the
-  // partial is dropped and the control character is left for the next parse.
-  if (s.charCodeAt(i) < 0x20) return { len: i - at, events: [] }
+  // A control or non-ASCII character aborts a sequence cut short: the partial is dropped and
+  // the aborting character is left for the next parse.
+  const finalCode = s.charCodeAt(i)
+  if (finalCode < 0x20 || finalCode > 0x7e) return { len: i - at, events: [] }
   return { len: i + 1 - at, ...decodeCsi(s.slice(at + 2, i), s[i]!) }
 }
 
@@ -316,12 +317,17 @@ function parseEscape(s: string, flush: Flush): Parsed | undefined {
     // A sequence cut short (say, a late reply to a query) is never typed out as text.
     return flush === "drop" ? { len: s.length, events: [] } : undefined
   }
-  // Alt+] and the start of an OSC string are told apart by what follows, as for Alt+[.
-  if (second === "]" && s.length === 2 && flush === "wait") return undefined
-  if (second === "]" && s[2] !== undefined && s[2] >= "0" && s[2] <= "9") {
-    // An OSC string, such as a late reply to the background color query: never typed out.
+  // Alt+], Alt+_ and Alt+Shift+P are told apart from OSC/APC/DCS strings by what follows.
+  if ((second === "]" || second === "_" || second === "P") && s.length === 2 && flush === "wait")
+    return undefined
+  if (
+    (second === "]" && s[2] !== undefined && s[2] >= "0" && s[2] <= "9") ||
+    ((second === "_" || second === "P") && s.length > 2)
+  ) {
+    // An OSC, APC (e.g. late kitty graphics reply) or DCS string: never typed out as text.
+    const allowBel = second === "]"
     for (let i = 2; i < s.length; i++) {
-      if (s[i] === "\x07") return { len: i + 1, events: [] }
+      if (allowBel && s[i] === "\x07") return { len: i + 1, events: [] }
       if (s[i] !== ESC) continue
       if (s[i + 1] === "\\") return { len: i + 2, events: [] }
       // Cut short by another sequence: the part before it is dropped.
@@ -344,10 +350,6 @@ function parseEscape(s: string, flush: Flush): Parsed | undefined {
   // ESC followed by a key is Alt+key.
   const inner = parseKey(s, 1)
   return { len: inner.len + 1, events: inner.events!.map(altKey) }
-}
-
-function parseOne(s: string, flush: Flush): Parsed | undefined {
-  return s[0] === ESC ? parseEscape(s, flush) : parseKey(s, 0)
 }
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: escape sequences
@@ -504,8 +506,17 @@ export class InputParser {
   private drain(flush: Flush, closeAt?: number): InputEvent[] {
     const out: InputEvent[] = []
     let consumed = 0
-    while (this.buf.length > 0) {
+    let at = 0
+    const sliceFrom = () => (at === 0 ? this.buf : this.buf.slice(at))
+    const compact = () => {
+      if (at > 0) {
+        this.buf = this.buf.slice(at)
+        at = 0
+      }
+    }
+    while (at < this.buf.length) {
       if (this.paste !== undefined) {
+        compact()
         const end = this.buf.indexOf(PASTE_END)
         if (end === -1) {
           const keep = partialSuffix(this.buf, PASTE_END)
@@ -527,11 +538,11 @@ export class InputParser {
         if (text !== "") out.push(pasteEvent(text))
         continue
       }
-      if (this.buf.startsWith(PASTE_END)) this.timedOutPaste = false
+      if (this.buf.startsWith(PASTE_END, at)) this.timedOutPaste = false
       const origin = this.timedOutPaste
-      const parsed = parseOne(this.buf, flush)
+      const parsed = this.buf[at] === ESC ? parseEscape(sliceFrom(), flush) : parseKey(this.buf, at)
       if (!parsed) break
-      this.buf = this.buf.slice(parsed.len)
+      at += parsed.len
       const discard = this.discardOpening
       this.discardOpening = false
       if (parsed.pasteStart) {
@@ -556,6 +567,7 @@ export class InputParser {
         this.timedOutTail = ""
       }
     }
+    compact()
     return out
   }
 

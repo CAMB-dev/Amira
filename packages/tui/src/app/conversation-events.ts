@@ -212,8 +212,7 @@ export function createConversationEvents(
       case "turn.end":
         serverRows.clear()
         clearStream(true)
-        if (view.turnEnd()) turnShowedOutput = true
-        activity.turnEnded()
+        if (view.turnEnd(activity.turnEnded(e.data.reason === "done"))) turnShowedOutput = true
         activity.setRetry(undefined)
         if (e.data.reason === "error") errorNotice(e.data)
         else if (e.data.reason === "aborted") view.notice("interrupted", INTERRUPTED_NOTICE)

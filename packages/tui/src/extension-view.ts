@@ -54,7 +54,7 @@ import {
   usableViewKey as usable,
   viewInputHint,
 } from "./view-keys.ts"
-import { renderViewLines, viewTitle, viewToolChrome } from "./view-lines.ts"
+import { renderViewLines, type SegmentRenderContext, viewTitle, viewToolChrome } from "./view-lines.ts"
 import { confirmationText, ViewPromptHits } from "./view-pointer.ts"
 
 export { wrapViewLines } from "./extension-view-rendering.ts"
@@ -139,6 +139,7 @@ export class ExtensionViewer implements Component {
   }
   #spinner = new Spinner()
   #spinnerFrame: number | undefined
+  #frameCtx: SegmentRenderContext | undefined
   #now: () => number
   #uiOffset = 0
   #uiFrame: { width: number; ctx: RenderContext } | undefined
@@ -510,7 +511,13 @@ export class ExtensionViewer implements Component {
     this.#animating = false
     this.#refreshIntervalMs = undefined
     this.#footerText = ""
+    const now = this.#now()
+    const frame = Math.floor(now / Spinner.INTERVAL_MS)
+    if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
+    this.#spinnerFrame = frame
+    this.#frameCtx = { spinner: this.#spinner.glyph, now, render: ctx }
     const rows = this.#finishFrame(this.#ui ? this.#renderUi(width, ctx) : this.#renderBody(width, ctx))
+    this.#frameCtx = undefined
     this.#promptHits.prepare(rows, width, this.#footerText, this.#confirm, this.#prompt?.title)
     return rows
   }
@@ -518,6 +525,8 @@ export class ExtensionViewer implements Component {
   #finishFrame(rows: string[]): string[] {
     const visible = visibleAnimation(rows)
     this.#animating ||= visible.animating
+    if (visible.refreshIntervalMs !== undefined)
+      this.#refreshIntervalMs = Math.min(this.#refreshIntervalMs ?? Infinity, visible.refreshIntervalMs)
     return visible.rows
   }
 
@@ -540,7 +549,7 @@ export class ExtensionViewer implements Component {
             Math.max(1, room),
             viewEllipsis(),
           )
-        : viewTitle(title, theme, Math.max(1, room))
+        : viewTitle(title, theme, Math.max(1, room), this.#frameCtx)
     head.push(aside ? fitted + " ".repeat(Math.max(0, room - visibleWidth(fitted))) + aside : fitted)
     const extra = this.#view.header
       ? (this.#call("header", () => this.#view.header?.(this.#data, opts)) ?? [])
@@ -593,6 +602,7 @@ export class ExtensionViewer implements Component {
           (lines, w) => this.#renderLines(lines, w, ctx.theme),
           this.focused && !this.#prompt && !this.#confirm,
           this.focused,
+          this.#frameCtx,
         )
         if (!runtime.reconciled) return frame
       }
@@ -647,13 +657,9 @@ export class ExtensionViewer implements Component {
   }
 
   #renderOptions(width: number, theme: Theme, markdownGlyphs?: RenderContext["glyphs"]): ViewRenderOptions {
-    const now = this.#now()
+    const now = this.#frameCtx?.now ?? this.#now()
     let finished = false
     let separated = false
-    // Existing redraws drive the spinner at its usual cadence; no view-specific timer.
-    const frame = Math.floor(now / Spinner.INTERVAL_MS)
-    if (this.#spinnerFrame !== undefined && frame !== this.#spinnerFrame) this.#spinner.tick()
-    this.#spinnerFrame = frame
     return {
       width,
       now,
@@ -743,7 +749,7 @@ export class ExtensionViewer implements Component {
     const out: string[] = []
     let plain: ViewLine[] = []
     const flush = () => {
-      out.push(...renderViewLines(plain, theme, width))
+      out.push(...renderViewLines(plain, theme, width, this.#frameCtx))
       plain = []
     }
     for (const line of wrapViewLines(lines, width)) {
@@ -763,13 +769,8 @@ export class ExtensionViewer implements Component {
   }
 
   get #footerHeight(): number {
-    if (
-      this.#opts.hostFocus &&
-      (this.#opts.placement !== "dock" || this.selectable) &&
-      !this.#prompt &&
-      !this.#confirm
-    )
-      return 0
+    const hostManaged = this.#opts.hostFocus && (this.#opts.placement !== "dock" || this.selectable)
+    if (hostManaged && !this.#prompt && !this.#confirm) return 0
     return this.#opts.placement === "dock" || this.#prompt || this.#confirm || this.#view.hostKeys !== "none"
       ? 1
       : 0

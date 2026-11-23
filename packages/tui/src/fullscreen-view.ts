@@ -100,6 +100,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   let pendingReplyWhitespace = ""
   /** The first visible assistant row owns the turn's clock, even when it is not text. */
   let assistantSeen = false
+  let turnHead: ReasoningBlock | ReplyBlock | ToolBlock | undefined
   const firstAssistantTime = () => {
     if (assistantSeen) return undefined
     assistantSeen = true
@@ -219,8 +220,8 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     // Image coordinates are transcript-relative; the fixed header stays above them.
     for (const p of pane.placements) ctx.place?.({ ...p, row: p.row + paneTop })
     // The row under the transcript says how much is below.
-    const n = pane.rowsBelow
-    const rowsBelow = `${n} row${n === 1 ? "" : "s"} below`
+    const { rows: n, exact } = pane.rowsBelowSummary()
+    const rowsBelow = `${n}${exact ? "" : "+"} row${n === 1 && exact ? "" : "s"} below`
     const below = pane.following
       ? ""
       : truncateToWidth(
@@ -236,12 +237,15 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
   // Cache the terminal frame after transcript margins; only cards bypass those margins.
   // Streaming and overlay redraws cannot move the frozen backdrop; a resize draws it again at
   // the new size, so it never shows the old layout cut by the card.
-  let backdrop: string[] = []
+  let backdropRaw: string[] = []
+  let backdrop: string[] | undefined
   let backdropSize = ""
   const freeze = (frame: string[], width: number, rows: number) => {
-    backdrop = frame.map((line) => line.replaceAll(CURSOR_MARKER, ""))
+    backdropRaw = frame
+    backdrop = undefined
     backdropSize = `${width}x${rows}`
   }
+  const frozenBackdrop = () => (backdrop ??= backdropRaw.map((line) => line.replaceAll(CURSOR_MARKER, "")))
   const root = new View((width, ctx) => {
     if (!overlay) {
       const frame = margined.render(width, ctx)
@@ -262,8 +266,9 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     const cardWidth = Math.min(width - 8, 88)
     const left = Math.floor((width - cardWidth) / 2)
     const right = left + cardWidth
+    const behindRows = frozenBackdrop()
     return Array.from({ length: ctx.rows }, (_, i) => {
-      const behind = backdrop[i] ?? ""
+      const behind = behindRows[i] ?? ""
       const row = rows[i]
       if (!row) return theme.dim(backdropSlice(behind, 0, width))
       // Form indents nonempty card rows with spaces; its interior is already padded to cardWidth.
@@ -475,6 +480,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
           reply = undefined
         }
         reasoning = new ReasoningBlock("", undefined, Date.now(), true, firstAssistantTime())
+        if (reasoning.timestamp !== undefined) turnHead = reasoning
         pane.add(reasoning)
       }
       reasoning.append(text)
@@ -491,6 +497,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       endReasoning()
       if (!reply) {
         reply = new ReplyBlock("", true, host.hyperlinks, firstAssistantTime())
+        if (reply.timestamp !== undefined) turnHead = reply
         pane.add(reply)
         markToolTrees()
       }
@@ -527,7 +534,10 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       }
       b.name = name
       b.args = args
-      if (!b.started) b.timestamp = firstAssistantTime()
+      if (!b.started) {
+        b.timestamp = firstAssistantTime()
+        if (b.timestamp !== undefined) turnHead = b
+      }
       b.startedAt = at
       b.touch()
       markToolTrees()
@@ -543,7 +553,10 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       const b = callBlocks.get(id)
       if (!b) return false
       // A rejected call can become visible without ever starting.
-      if (!b.started) b.timestamp = firstAssistantTime()
+      if (!b.started) {
+        b.timestamp = firstAssistantTime()
+        if (b.timestamp !== undefined) turnHead = b
+      }
       b.end = end
       b.touch()
       pane.changed()
@@ -552,10 +565,20 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       markToolTrees()
       return true
     },
-    turnEnd() {
+    turnEnd(summary) {
       pendingReplyWhitespace = ""
       assistantSeen = false
       settleStep()
+      if (summary && turnHead) {
+        turnHead.timestamp = summary.finishedAt
+        turnHead.turnDurationMs = summary.durationMs
+        turnHead.touch()
+        for (const block of pane.blocks) {
+          if (block instanceof ExploredBlock && block.calls.includes(turnHead as ToolBlock)) block.touch()
+        }
+        pane.changed()
+      }
+      turnHead = undefined
       subagents.tick()
       return false
     },
@@ -597,6 +620,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
     leaveSession() {
       pendingReplyWhitespace = ""
       assistantSeen = false
+      turnHead = undefined
       settleStep()
       endReasoning()
       reply?.finish()

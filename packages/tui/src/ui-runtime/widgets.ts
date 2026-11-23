@@ -4,6 +4,7 @@ import {
   chromeGlyphs,
   inverse,
   type LineInput,
+  Spinner,
   stripColors,
   type Theme,
   themeToken,
@@ -12,7 +13,8 @@ import {
 } from "@amira/tui-kit"
 import { terminalText } from "../diff-view.ts"
 import { glyphs, viewEllipsis } from "../glyphs.ts"
-import { segmentText, viewTitle } from "../view-lines.ts"
+import { markAnimated } from "../view-animation.ts"
+import { type SegmentRenderContext, segmentText, viewTitle } from "../view-lines.ts"
 import { detailContent } from "./detail.ts"
 import { allocate, cells, fit, type Rect, sides } from "./layout.ts"
 import { expandable, TreeIndex, treeIndent } from "./tree.ts"
@@ -34,6 +36,7 @@ export interface WidgetHost {
   state: UiState
   changed(): void
   theme: Theme
+  segments?: SegmentRenderContext
   inputs: Map<string, LineInput>
   trees: Map<string, TreeIndex>
   expand(node: Extract<UiNode, { type: "tree" }>): void
@@ -133,7 +136,7 @@ export function prepare(
             },
           }
         },
-        (parts) => visibleWidth(segmentText(parts, host.theme)),
+        (parts) => visibleWidth(segmentText(parts, host.theme, host.segments)),
       )
       plan.tree = tree
       plan.total = tree.total
@@ -303,7 +306,7 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
             ? ""
             : typeof node.title === "string"
               ? terminalText(node.title)
-              : viewTitle(node.title, theme, w - 2)
+              : viewTitle(node.title, theme, w - 2, host.segments)
         const strong = node.tone === "focus"
         const rule = strong && glyphs.rule === "─" ? "━" : glyphs.rule
         const aside = node.aside
@@ -344,9 +347,9 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
         if (row.start >= offset) {
           const selected = state.selected[node.id] === row.item.key
           const marker = selected ? `${glyphs.pointer} ` : focused && out.length === 0 ? focusMarker : "  "
-          const lead = fit(segmentText(row.item.lead ?? [], theme), tree.leadWidth)
+          const lead = fit(segmentText(row.item.lead ?? [], theme, host.segments), tree.leadWidth)
           const disclosure = row.item.node
-            ? fit(segmentText(row.item.node, theme), 2)
+            ? fit(segmentText(row.item.node, theme, host.segments), 2)
             : expandable(row.item)
               ? row.open
                 ? `${chrome.disclosureOpen} `
@@ -354,8 +357,8 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
               : row.item.rail
                 ? `${glyphs.output} `
                 : "  "
-          const left = marker + lead + pad + disclosure + segmentText(row.item.row, theme)
-          const line = sides(left, segmentText(row.item.aside ?? [], theme), w)
+          const left = marker + lead + pad + disclosure + segmentText(row.item.row, theme, host.segments)
+          const line = sides(left, segmentText(row.item.aside ?? [], theme, host.segments), w)
           out.push(selected ? selection(line) : line)
         }
         const prefix = () =>
@@ -397,7 +400,9 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
           row(
             node.columns.map((c) => {
               const value = Object.hasOwn(r.cells, c.key) ? (r.cells[c.key] ?? "") : ""
-              return typeof value === "string" ? terminalText(value) : segmentText(value, theme)
+              return typeof value === "string"
+                ? terminalText(value)
+                : segmentText(value, theme, host.segments)
             }),
           )
         out.push(selected ? selection(text) : text)
@@ -411,9 +416,42 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
       if (!out.length && focused) out.push(marker)
       break
     case "bar":
-      out.push(sides(segmentText(node.left, theme), segmentText(node.right ?? [], theme), w))
+      out.push(
+        sides(
+          segmentText(node.left, theme, host.segments),
+          segmentText(node.right ?? [], theme, host.segments),
+          w,
+        ),
+      )
       break
     case "progress": {
+      if (node.value === undefined) {
+        const label = terminalText(node.label ?? "")
+        const size = Math.min(cells(node.width ?? 20), Math.max(0, w - (label ? visibleWidth(label) + 1 : 0)))
+        if (size <= 0) {
+          const fallback =
+            label ||
+            Spinner.forGlyphs(
+              host.segments?.spinner ?? new Spinner().glyph,
+              host.segments?.render?.glyphs ?? glyphs,
+            )
+          out.push(theme.accent(markAnimated(fallback, "spinner")))
+        } else {
+          const pulse = Math.max(1, Math.min(3, Math.ceil(size / 4)))
+          const span = Math.max(1, size - pulse)
+          const step = Math.floor((host.segments?.now ?? Date.now()) / Spinner.INTERVAL_MS)
+          const cycle = span * 2
+          const offset = step % cycle
+          const pos = size <= pulse ? 0 : offset <= span ? offset : cycle - offset
+          const fill = glyphs.rule === "─" ? "━" : glyphs.rule
+          const track =
+            theme.muted(glyphs.rule.repeat(pos)) +
+            theme.accent(fill.repeat(pulse)) +
+            theme.muted(glyphs.rule.repeat(Math.max(0, size - pos - pulse)))
+          out.push(markAnimated(track, "spinner") + (label ? ` ${label}` : ""))
+        }
+        break
+      }
       const value = Number.isFinite(node.value) ? Math.max(0, Math.min(1, node.value)) : 0
       const label = terminalText(node.label ?? `${Math.round(value * 100)}%`)
       const size = Math.min(cells(node.width ?? 20), Math.max(0, w - visibleWidth(label) - 1))

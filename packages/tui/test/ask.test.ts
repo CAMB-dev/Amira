@@ -31,7 +31,7 @@ const ESC = "\x1b[27u"
 const UP = "\x1b[A"
 const DOWN = "\x1b[B"
 const LEFT = "\x1b[D"
-const TIMESTAMP = "(?:[01]\\d|2[0-3]):[0-5]\\d"
+const TIMESTAMP = "(?:\\d+(?:\\.\\d)?s · )?(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d"
 
 async function waitFor(check: () => boolean, what: string, timeoutMs = 3000) {
   const deadline = performance.now() + timeoutMs
@@ -386,9 +386,9 @@ for (const mode of MODES) {
       await s.shows("b")
       await s.idle()
       // The echo wraps like any line: the answer follows the question.
-      expect(s.all()).toMatch(new RegExp(`^└ Asked 你想用哪…功能？ {2}${TIMESTAMP}\\n {2}✓ 修补$`, "m"))
+      expect(s.all()).toMatch(new RegExp(`^└ Asked 你想… {2}${TIMESTAMP}\\n {2}✓ 修补$`, "m"))
       expect(s.all()).toMatch(
-        new RegExp(`^└ Asked Which a…prefer\\? {2}${TIMESTAMP}\\n {2}✓ Rewrite \\(Recommended\\)$`, "m"),
+        new RegExp(`^└ Asked Whic… {2}${TIMESTAMP}\\n {2}✓ Rewrite \\(Recommended\\)$`, "m"),
       )
       s.terminal.send("\x03")
       await s.exited

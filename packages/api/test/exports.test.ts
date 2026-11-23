@@ -43,6 +43,8 @@ import type {
   UiRequest,
   UiRequestOptions,
   Usage,
+  ViewSegment,
+  ViewTextTone,
 } from "../src/index.ts"
 
 test("monitor jobs add an optional kind to the public job contract", () => {
@@ -926,6 +928,49 @@ test("owned conversation types are public and the extension capability remains o
         "busy": false,
         "state": "idle",
       },
+    }
+  `)
+})
+
+test("declarative live segments and indeterminate progress are additive public contracts", () => {
+  const tone: ViewTextTone = "accent"
+  const parts: ViewSegment[] = [
+    { kind: "spinner", tone },
+    { kind: "shimmer", text: "Thinking…", startedAt: 1000, tone: "muted" },
+    { kind: "badge", state: "working", label: "Thinking…", pad: false },
+    { kind: "elapsed", since: 1000, tone: "dim" },
+  ]
+  const indeterminate: UiNode = { type: "progress", width: 12, label: "Loading…" }
+  expect({ parts, indeterminate }).toMatchInlineSnapshot(`
+    {
+      "indeterminate": {
+        "label": "Loading…",
+        "type": "progress",
+        "width": 12,
+      },
+      "parts": [
+        {
+          "kind": "spinner",
+          "tone": "accent",
+        },
+        {
+          "kind": "shimmer",
+          "startedAt": 1000,
+          "text": "Thinking…",
+          "tone": "muted",
+        },
+        {
+          "kind": "badge",
+          "label": "Thinking…",
+          "pad": false,
+          "state": "working",
+        },
+        {
+          "kind": "elapsed",
+          "since": 1000,
+          "tone": "dim",
+        },
+      ],
     }
   `)
 })

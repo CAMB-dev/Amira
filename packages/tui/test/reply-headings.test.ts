@@ -115,7 +115,7 @@ test("mouse heading copy retains the same markers as full reply copy, without th
 test("heading wraps keep timestamp widths and stream parity without repeating markers", () => {
   const source = "### Heading text with wide 界 characters and a long continuation"
   const reply = new ReplyBlock("", true, false, 0)
-  const e = { ...env, width: 24 }
+  const e = { ...env, width: 28 }
   for (const char of source) {
     reply.append(char)
     reply.lines(e)

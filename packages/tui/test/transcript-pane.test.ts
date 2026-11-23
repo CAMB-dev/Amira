@@ -249,9 +249,31 @@ test("rows below the view are counted once scrolled up", () => {
   const { pane: p } = pane(4, 3)
   p.render(env(), 4)
   expect(p.rowsBelow).toBe(0)
+  expect(p.rowsBelowSummary()).toEqual({ rows: 0, exact: true })
   p.scrollBy(-5)
   p.render(env(), 4)
   expect(p.rowsBelow).toBe(5)
+  expect(p.rowsBelowSummary()).toEqual({ rows: 5, exact: true })
+})
+
+test("rowsBelowSummary bounds offscreen layout when many uncached blocks sit below the viewport", () => {
+  const p = new TranscriptPane()
+  const blocks: Counted[] = []
+  for (let i = 0; i < 40; i++) {
+    const block = new Counted("user", [`line ${i}`])
+    blocks.push(block)
+    p.add(block)
+  }
+  const e = env(40)
+  p.render(e, 4)
+  p.toTop()
+  p.invalidate()
+  for (const b of blocks) b.draws = 0
+  p.render(e, 4)
+  const summary = p.rowsBelowSummary(5)
+  expect(summary.exact).toBe(false)
+  expect(summary.rows).toBeGreaterThan(5)
+  expect(blocks.filter((b) => b.draws > 0).length).toBeLessThanOrEqual(10)
 })
 
 test("find matches text that wraps over rows, and so at any width", () => {

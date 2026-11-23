@@ -40,7 +40,7 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working US market trend · explorer · \d+s · 4\.1k tok\n {2}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\.ts\n {2}└ · queued {2}Add status bar test · coder\n/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2}:\d{2})\n {2}├ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working US market trend · explorer · \d+s · 4\.1k tok\n {2}│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] read a\.ts\n {2}└ · queued {2}Add status bar test · coder\n/m.exec(
         live(),
       )
     if (!match) return false
@@ -59,11 +59,9 @@ test("sub-agents show under their call: title, role, time, tokens, current tool,
   const shiftedClock = spyOn(Date, "now").mockImplementation(() => now() + 60_000)
   try {
     // Each one's rows became its end line, committed with the call right under its head, in order.
+    expect(firstReplyClock).toMatch(/^\d{2}:\d{2}:\d{2}$/)
     expect(text).toMatch(
-      new RegExp(
-        `^└ delegate {2}✓ trend is up \\(\\+1 line\\) · \\d+\\.\\ds +${firstReplyClock}\\n {2}├ ✓ done    US market trend · explorer · \\d+\\.\\ds · 4\\.1k tok\\n {2}└ ✓ done    Add status bar test · coder · \\d+\\.\\ds · 1\\.2k tok$`,
-        "m",
-      ),
+      /^└ delegate {2}✓ trend is up \(\+1 line\) · \d+\.\ds +\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}\n {2}├ ✓ done {4}US market trend · explorer · \d+\.\ds · 4\.1k tok\n {2}└ ✓ done {4}Add status bar test · coder · \d+\.\ds · 1\.2k tok$/m,
     )
   } finally {
     shiftedClock.mockRestore()
@@ -152,7 +150,7 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s {2}(\d{2}:\d{2})\n└ delegate {2}✓ child answer\n {2}└ ✓ done {4}Look around · explorer · \d+\.\ds · 0 tok/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] slow big\.log +\d+s {2}(\d{2}:\d{2}:\d{2})\n└ delegate {2}✓ child answer\n {2}└ ✓ done {4}Look around · explorer · \d+\.\ds · 0 tok/m.exec(
         live(),
       )
     if (!match) return false
@@ -163,11 +161,9 @@ test("a sub-agent's end line stays with its call when that call is held behind a
   await shows("all done")
   await idle()
   const text = all()
+  expect(firstReplyClock).toMatch(/^\d{2}:\d{2}:\d{2}$/)
   expect(text).toMatch(
-    new RegExp(
-      `^├ slow big\\.log {2}✓ slow result +${firstReplyClock}\\n└ delegate {2}✓ child answer\\n {2}└ ✓ done    Look around · explorer · \\d+\\.\\ds · 0 tok$`,
-      "m",
-    ),
+    /^├ slow big\.log {2}✓ slow result +\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}\n└ delegate {2}✓ child answer\n {2}└ ✓ done {4}Look around · explorer · \d+\.\ds · 0 tok$/m,
   )
   expect(text.match(/✓ done {4}Look around ·/g)).toHaveLength(1)
   terminal.send("\x03")
@@ -194,7 +190,7 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working First pass · explorer · \d+s · 0 tok\n[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Second pass · explorer · \d+s · 0 tok$/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2}:\d{2})\n│ └ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working First pass · explorer · \d+s · 0 tok\n[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Second pass · explorer · \d+s · 0 tok$/m.exec(
         live(),
       )
     if (!match) return false
@@ -203,11 +199,9 @@ test("parallel calls each keep their own sub-agents, matched by call id, not by 
   }, "each under its own call")
   await shows("all done")
   await idle()
+  expect(firstReplyClock).toMatch(/^\d{2}:\d{2}:\d{2}$/)
   expect(all()).toMatch(
-    new RegExp(
-      `^├ delegate {2}✓ one +${firstReplyClock}\\n│ └ ✓ done    First pass · explorer · \\d+\\.\\ds · 0 tok\\n└ delegate {2}✓ two\\n {2}└ ✓ done    Second pass · explorer · \\d+\\.\\ds · 0 tok$`,
-      "m",
-    ),
+    /^├ delegate {2}✓ one +\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}\n│ └ ✓ done {4}First pass · explorer · \d+\.\ds · 0 tok\n└ delegate {2}✓ two\n {2}└ ✓ done {4}Second pass · explorer · \d+\.\ds · 0 tok$/m,
   )
   terminal.send("\x03")
   await exited
@@ -229,7 +223,7 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   let firstReplyClock = ""
   await waitFor(() => {
     const match =
-      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2})\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Outer task · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Inner check · explorer · \d+s · 0 tok\n/m.exec(
+      /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate +\d+s {2}(\d{2}:\d{2}:\d{2})\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Outer task · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] delegate\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Inner check · explorer · \d+s · 0 tok\n/m.exec(
         live(),
       )
     if (!match) return false
@@ -238,11 +232,9 @@ test("nested sub-agents sit one level deeper under their parent's row", async ()
   }, "nested rows")
   await shows("all done")
   await idle()
+  expect(firstReplyClock).toMatch(/^\d{2}:\d{2}:\d{2}$/)
   expect(all()).toMatch(
-    new RegExp(
-      `^└ delegate {2}✓ outer done · \\d+\\.\\ds +${firstReplyClock}\\n {2}└ ✓ done    Outer task · explorer · \\d+\\.\\ds · 0 tok\\n {4}└ ✓ done    Inner check · explorer · \\d+\\.\\ds · 0 tok$`,
-      "m",
-    ),
+    /^└ delegate {2}✓ outer done · \d+\.\ds +\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}\n {2}└ ✓ done {4}Outer task · explorer · \d+\.\ds · 0 tok\n {4}└ ✓ done {4}Inner check · explorer · \d+\.\ds · 0 tok$/m,
   )
   terminal.send("\x03")
   await exited
@@ -318,7 +310,9 @@ test("sub-agents that outlive their call stay attached and retain their complete
     tree: true,
     onWrite: (screen) => {
       firstReplyClock ||=
-        /^└ launch {2}✓ Started in the background +(\d{2}:\d{2})$/m.exec(screen.text)?.[1] ?? ""
+        /^└ launch {2}✓ Started in the background +(\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2})$/m.exec(
+          screen.text,
+        )?.[1] ?? ""
     },
   })
   const gate = new Promise<void>((r) => {
@@ -353,11 +347,11 @@ test("sub-agents that outlive their call stay attached and retain their complete
   await shows("started it")
   await idle()
   // The completed call keeps its still-working sub-agent in the retained transcript.
-  expect(firstReplyClock).toMatch(/^\d{2}:\d{2}$/)
-  expect(all()).toMatch(new RegExp(`^└ launch {2}✓ Started in the background +${firstReplyClock}$`, "m"))
+  expect(firstReplyClock).toMatch(/^(?:\d+(?:\.\d)?s · )?\d{2}:\d{2}:\d{2}$/)
+  expect(all()).toMatch(/^└ launch {2}✓ Started in the background +\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}$/m)
   await waitFor(
     () =>
-      /^└ launch {2}✓ Started in the background +\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Scan the logs · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(
+      /^└ launch {2}✓ Started in the background +\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working Scan the logs · explorer · \d+s · 0 tok\n {4}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] scan logs\/app\.log\n/m.test(
         live(),
       ),
     "background rows",
@@ -427,7 +421,7 @@ test("a compact spawn group shows as one line with its owner's status, not a row
   await idle()
   await waitFor(
     () =>
-      /^└ flow {2}✓ Started in the background +\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working workflow demo · 3 working · \S+ tok · Explore · 0\/3 agents\n/m.test(
+      /^└ flow {2}✓ Started in the background +\d+(?:\.\d)?s · \d{2}:\d{2}:\d{2}\n {2}└ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] working workflow demo · 3 working · \S+ tok · Explore · 0\/3 agents\n/m.test(
         live(),
       ),
     "one line for the group",

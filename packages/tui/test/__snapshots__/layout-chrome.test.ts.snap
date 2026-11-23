@@ -4,12 +4,12 @@ exports[`a composed batch2 frame at 100 columns keeps the chosen layout 1`] = `
 "  ⎇ main*  ~/dev/Amira  ·  remember last model                               $0.42  ·  124K / 200K  
 
                                                                                                     
-› The status bar feels cramped, can you make it clearer?                                   8:19 PM  
+› The status bar feels cramped, can you make it clearer?                                8:19:00 PM  
                                                                                                     
 
 ∴ Thought for 4.2s  ctrl+o to expand
 
-  # Status bar layout                                                                      8:19 PM
+  # Status bar layout                                                                   8:19:00 PM
   The header now carries context and cost.
 
 ├ Edited packages/tui/src/status-bar.ts  +12 / -3
@@ -26,13 +26,13 @@ exports[`a composed batch2 frame at 50 columns keeps the chosen layout 1`] = `
 "  ⎇ main*  ~/dev/Amira     $0.42  ·  124K / 200K  
 
                                                   
-› The status bar feels cramped, can you  8:19 PM  
-  make it clearer?                                
+› The status bar feels cramped, can   8:19:00 PM  
+  you make it clearer?                            
                                                   
 
 ∴ Thought for 4.2s  ctrl+o to expand
 
-  # Status bar layout                    8:19 PM
+  # Status bar layout                 8:19:00 PM
   The header now carries context and cost.
 
 ├ Edited packages/tui/src/status-bar.ts  +12 / -3

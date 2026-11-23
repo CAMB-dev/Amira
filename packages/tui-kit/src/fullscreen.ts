@@ -37,6 +37,8 @@ export class FullScreenRenderer {
   private active = true
   /** Where the cursor was shown by the last frame; undefined when hidden. */
   private cursorAt: { row: number; col: number } | undefined
+  /** Terminal cursor visibility as of the last frame; starts visible when entering alt screen. */
+  private cursorVisible = true
   private images = new ScreenImageLayer()
 
   constructor(
@@ -65,6 +67,7 @@ export class FullScreenRenderer {
     this.opened = true
     this.prev = undefined
     this.cursorAt = undefined
+    this.cursorVisible = true
     this.offResize = this.terminal.onResize(() => {
       if (!this.active) return
       this.prev = undefined
@@ -81,6 +84,7 @@ export class FullScreenRenderer {
     this.timer = undefined
     this.prev = undefined
     this.cursorAt = undefined
+    this.cursorVisible = true
     if (!active) {
       const free = this.images.close()
       if (free && this.opened) this.terminal.write(free)
@@ -160,18 +164,31 @@ export class FullScreenRenderer {
       columns,
       changed: (i) => !prev || prev[i] !== lines[i],
     })
-    let body = (full ? erase.screen : "") + images.before
+    let body = images.before
     for (let i = 0; i < rows; i++) {
-      if (!full && prev![i] === lines[i] && !images.repaint.has(i)) continue
-      body += `${cursor.to(i)}${erase.line}${lines[i]}`
+      const repaint = images.repaint.has(i)
+      if (!full && prev![i] === lines[i] && !repaint) continue
+      if (repaint) body += `${cursor.to(i)}${erase.line}${lines[i]}`
+      else body += `${cursor.to(i)}${lines[i]}${visibleWidth(lines[i]!) < columns ? erase.toLineEnd : ""}`
     }
+    if (full) body += erase.toScreenEnd
     body += images.after
     this.prev = lines
     this.size = { columns, rows }
     const moved = at?.row !== this.cursorAt?.row || at?.col !== this.cursorAt?.col
     if (!body && !moved) return
     this.cursorAt = at
-    const out = cursor.hide + body + (at ? cursor.to(at.row, at.col) + cursor.show : "")
+    let out = ""
+    if (body) {
+      if (this.cursorVisible) out += cursor.hide
+      out += body
+      if (at) out += cursor.to(at.row, at.col) + cursor.show
+    } else if (at) {
+      out += cursor.to(at.row, at.col) + (this.cursorVisible ? "" : cursor.show)
+    } else if (this.cursorVisible) {
+      out += cursor.hide
+    }
+    this.cursorVisible = !!at
     this.terminal.write(this.synchronizedOutput ? syncOutput.begin + out + syncOutput.end : out)
   }
 

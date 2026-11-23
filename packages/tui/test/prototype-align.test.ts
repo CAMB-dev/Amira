@@ -222,8 +222,8 @@ test(
       expect(frame).toContain("  Status bar layout")
       expect(frame).toContain("⠋ Running git diff --stat")
       expect(frame).toContain("│  1 file changed, 12 insertions(+), 3 deletions(-)")
-      expect(frame).toMatch(/∴ Thought for 4\.2s +8:19 PM/m)
-      expect(frame.split("\n").filter((row) => row.includes("8:19 PM"))).toHaveLength(2)
+      expect(frame).toMatch(/∴ Thought for 4\.2s +8:19:00 PM/m)
+      expect(frame.split("\n").filter((row) => row.includes("8:19:00 PM"))).toHaveLength(2)
       expect(frame).toContain("shift+tab mode  ·  esc stop  ·  ctrl+o detail  ·  ? keys")
       const rows = screen.lines
       const index = rows.indexOf("  ───")

@@ -1,10 +1,39 @@
 import { userMessage } from "@amira/ai"
-import type { ToolLine, ViewLine, ViewSegment } from "@amira/api"
-import { type Theme, themeToken, truncateToWidth } from "@amira/tui-kit"
+import {
+  AGENT_STATUS_BADGES,
+  formatElapsed,
+  type ToolLine,
+  type ViewLine,
+  type ViewSegment,
+  type ViewTextTone,
+} from "@amira/api"
+import { type RenderContext, Spinner, type Theme, themeToken, truncateToWidth } from "@amira/tui-kit"
+import { hasAnimatedShimmer, paintShimmer } from "./app/shimmer.ts"
 import { renderToolLines, terminalText, type ViewMarkers } from "./diff-view.ts"
 import { userLines } from "./format.ts"
-import { asciiGlyphs, viewEllipsis, viewGap, viewSeparator } from "./glyphs.ts"
-import { animationText } from "./view-animation.ts"
+import { asciiGlyphs, glyphs, viewEllipsis, viewGap, viewSeparator } from "./glyphs.ts"
+import { statusBadge } from "./status-badge.ts"
+import { animationText, markAnimated } from "./view-animation.ts"
+
+/** Optional live-frame context for declarative animated segments (spinner, shimmer, badge, elapsed). */
+export interface SegmentRenderContext {
+  spinner?: string
+  now?: number
+  render?: RenderContext
+}
+
+const TEXT_TONES: ReadonlySet<ViewTextTone> = new Set([
+  "text",
+  "dim",
+  "muted",
+  "accent",
+  "success",
+  "warning",
+  "error",
+])
+
+const resolveTone = (tone: ViewTextTone | undefined, fallback: ViewTextTone): ViewTextTone =>
+  tone && TEXT_TONES.has(tone) ? tone : fallback
 
 const CHIP_TOKENS = {
   neutral: "chipNeutral",
@@ -33,10 +62,43 @@ const ASCII_CHIP_TOKENS = {
  * is drawn as given: it often carries user or model content, so the host never rewrites its
  * "·" or "…" (extensions pick separators and cut marks from the glyphs in their render options).
  */
-export function segmentText(parts: ViewSegment[], theme: Theme): string {
+export function segmentText(parts: ViewSegment[], theme: Theme, ctx?: SegmentRenderContext): string {
   const ascii = asciiGlyphs()
   return parts
     .map((part) => {
+      if (part.kind === "spinner") {
+        const raw = ctx?.spinner ?? new Spinner().glyph
+        const glyph = Spinner.forGlyphs(raw, ctx?.render?.glyphs ?? glyphs)
+        return theme[resolveTone(part.tone, "accent")](markAnimated(glyph, "spinner"))
+      }
+      if (part.kind === "shimmer") {
+        const safe = terminalText(part.text)
+        if (!safe) return ""
+        const render = ctx?.render
+        if (render && hasAnimatedShimmer(render)) {
+          const now = ctx.now ?? Date.now()
+          const elapsed =
+            part.startedAt !== undefined && Number.isFinite(part.startedAt)
+              ? Math.max(0, now - part.startedAt)
+              : now
+          return markAnimated(paintShimmer(safe, render, elapsed), "shimmer")
+        }
+        return theme[resolveTone(part.tone, "muted")](safe)
+      }
+      if (part.kind === "badge") {
+        if (!(part.state in AGENT_STATUS_BADGES)) return ""
+        const rendered = statusBadge(part.state, ctx?.spinner, { pad: part.pad, label: part.label })[0]
+        if (!rendered) return ""
+        const safe = terminalText(rendered.text)
+        const text = part.state === "working" ? markAnimated(safe, "spinner") : safe
+        return theme[resolveTone(rendered.kind, "muted")](text)
+      }
+      if (part.kind === "elapsed") {
+        if (!Number.isFinite(part.since)) return ""
+        const now = ctx?.now ?? Date.now()
+        const text = formatElapsed(Math.max(0, now - part.since))
+        return theme[resolveTone(part.tone, "muted")](markAnimated(text, "elapsed"))
+      }
       const text = animationText(part, terminalText(part.text))
       if (part.kind !== "chip") return theme[part.kind](text)
       const tone = part.tone ?? "neutral"
@@ -64,7 +126,12 @@ export const viewToolChrome = () => ({
 })
 
 /** View lines shared by full-screen views, panels and Markdown renderers. */
-export function renderViewLines(lines: ViewLine[], theme: Theme, width: number): string[] {
+export function renderViewLines(
+  lines: ViewLine[],
+  theme: Theme,
+  width: number,
+  ctx?: SegmentRenderContext,
+): string[] {
   const out: string[] = []
   let plain: ToolLine[] = []
   const flush = () => {
@@ -74,7 +141,7 @@ export function renderViewLines(lines: ViewLine[], theme: Theme, width: number):
   for (const line of lines) {
     if (line.kind === "segments") {
       flush()
-      out.push(truncateToWidth(segmentText(line.parts, theme), width, viewEllipsis()))
+      out.push(truncateToWidth(segmentText(line.parts, theme, ctx), width, viewEllipsis()))
     } else if (line.kind === "user-message") {
       flush()
       const message = userMessage(line.text.split("\n").map(terminalText).join("\n"))
@@ -87,8 +154,9 @@ export function renderViewLines(lines: ViewLine[], theme: Theme, width: number):
 }
 
 /** A semantic title is one row, even when its body equivalent would wrap or have a band. */
-export function viewTitle(line: ViewLine, theme: Theme, width: number): string {
-  if (line.kind === "segments") return truncateToWidth(segmentText(line.parts, theme), width, viewEllipsis())
+export function viewTitle(line: ViewLine, theme: Theme, width: number, ctx?: SegmentRenderContext): string {
+  if (line.kind === "segments")
+    return truncateToWidth(segmentText(line.parts, theme, ctx), width, viewEllipsis())
   if (line.kind === "user-message")
     return truncateToWidth(
       userLines(theme, userMessage(terminalText(line.text)))[0] ?? "",

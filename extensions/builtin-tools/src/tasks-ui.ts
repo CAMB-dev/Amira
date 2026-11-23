@@ -134,10 +134,10 @@ function taskSegments(
 ): ViewSegment[] {
   const separator = ` ${opts.glyphs?.separator ?? "·"} `
   const badge = AGENT_STATUS_BADGES[task.state]
-  const head: ViewSegment[] = [
+  const head = [
     ...(opts.statusBadge?.(task.state, { pad: true }) ?? [{ kind: badge.role, text: badge.label.padEnd(7) }]),
-    { kind: "muted", text: ` ${taskName(task).padEnd(columns.name)}${separator}` },
-    { kind: "muted", text: `${taskTime(task, opts.now).padStart(columns.time)}${separator}` },
+    { kind: "muted" as const, text: ` ${taskName(task).padEnd(columns.name)}${separator}` },
+    { kind: "muted" as const, text: `${taskTime(task, opts.now).padStart(columns.time)}${separator}` },
   ]
   // Badge, name and time are one cell per character.
   const room = Math.max(0, opts.width - head.reduce((n, part) => n + part.text.length, 0))

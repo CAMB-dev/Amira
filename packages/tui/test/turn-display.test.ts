@@ -379,3 +379,43 @@ for (const mode of ["fullscreen"] as const) {
     }
   })
 }
+
+test("turnEnd summary updates the turn's right-edge stamp with elapsed duration and finish time", () => {
+  const clock = spyOn(Date, "now").mockReturnValue(at)
+  const finishedAt = at + 12_400
+  const { view, screen, text } = setup("fullscreen")
+  try {
+    view.user({ role: "user", content: [{ type: "text", text: "Hello" }] })
+    view.replyDelta("Done answering.")
+    view.replyEnd([])
+    view.turnEnd({ durationMs: 12_400, finishedAt })
+    view.render()
+    const replyRow = text()
+      .split("\n")
+      .find((row) => row.includes("Done answering."))!
+    expect(replyRow).toEndWith(`12.4s · ${localClock(finishedAt)}`)
+    expect(visibleWidth(replyRow)).toBe(98)
+  } finally {
+    view.stop()
+    clock.mockRestore()
+  }
+  expect(screen.mainText).toContain(`12.4s · ${localClock(finishedAt)}`)
+})
+
+test("full interactive turn displays total elapsed duration and finish clock with seconds on the right edge", async () => {
+  const app = await setupApp([{ text: "All set." }], {
+    settings: { mode: "fullscreen" },
+    cols: 100,
+    rows: 30,
+  })
+  try {
+    app.terminal.send("check\r")
+    await app.idle()
+    await waitFor(
+      () => /All set\.\s+\d+(?:\.\d)?s · \d{1,2}:\d{2}:\d{2}/.test(app.live()),
+      "right-edge turn timing",
+    )
+  } finally {
+    await closeImageApp(app)
+  }
+})

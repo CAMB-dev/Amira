@@ -14,6 +14,7 @@ export const cursor = {
 
 export const erase = {
   line: "\x1b[2K",
+  toLineEnd: "\x1b[K",
   toScreenEnd: "\x1b[J",
   screen: "\x1b[2J",
 }

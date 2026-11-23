@@ -37,6 +37,7 @@ import {
   ProcessTerminal,
   type RenderContext,
   type SetupResult,
+  Spinner,
   setupTerminalInput,
   type Terminal,
   type Theme,
@@ -235,6 +236,13 @@ export class FormView implements Component {
 
   get closed(): boolean {
     return this.#closed
+  }
+
+  /** Running actions show a spinner in the form body or footer and need periodic redraws. */
+  get refreshIntervalMs(): number | undefined {
+    return !this.#closed && (this.#running.size > 0 || this.#pendingActions.size > 0)
+      ? Spinner.INTERVAL_MS
+      : undefined
   }
 
   /** Closing cancels local work; detaching releases presentation without cancelling host operations. */
@@ -727,13 +735,34 @@ export async function runFormScreen(
     finish = r
   })
   let answer: FormValues | undefined
+  let animTimer: ReturnType<typeof setInterval> | undefined
+  let animMs: number | undefined
+  const syncAnimation = () => {
+    const ms = view.refreshIntervalMs
+    if (animTimer !== undefined && animMs === ms) return
+    clearInterval(animTimer)
+    animTimer = undefined
+    animMs = ms
+    if (ms === undefined) return
+    animTimer = setInterval(() => {
+      syncAnimation()
+      if (animTimer !== undefined) screen.requestRender()
+    }, ms)
+  }
   const view = new FormView(
     specFormBackend(spec, (v) => {
       answer = v
     }),
     {
-      requestRender: () => screen.requestRender(),
-      onClose: () => finish(answer),
+      requestRender: () => {
+        syncAnimation()
+        screen.requestRender()
+      },
+      onClose: () => {
+        clearInterval(animTimer)
+        animTimer = undefined
+        finish(answer)
+      },
     },
   )
   const screen = new FullScreenRenderer(terminal, view, {
@@ -744,15 +773,18 @@ export async function runFormScreen(
     const hint = mousePasteHint(e)
     if (hint) view.form.setStatus(hint)
     else view.handleInput(e)
+    syncAnimation()
     screen.requestRender()
   })
   screen.open()
+  syncAnimation()
   terminal.enableMode(modes.mouse)
   reader.start()
   if (leftoverInput) reader.feed(leftoverInput)
   try {
     return await done
   } finally {
+    clearInterval(animTimer)
     reader.stop()
     terminal.disableMode(modes.mouse)
     screen.close()

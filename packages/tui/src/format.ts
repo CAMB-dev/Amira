@@ -90,12 +90,19 @@ function showsClock(width: number, at: number | undefined): at is number {
   return at !== undefined && Number.isFinite(width) && width - CLOCK_INSET >= 16
 }
 
+/** Right-edge timestamp text, optionally prefixed with total turn duration (e.g. "12.4s · 20:09:14"). */
+function timestampText(at: number, durationMs?: number): string {
+  return durationMs !== undefined
+    ? `${formatDuration(durationMs)} ${glyphs.separator} ${localClock(at)}`
+    : localClock(at)
+}
+
 /**
  * Room for content before a row's clock: two cells between content and the clock, which ends
  * at the shared clock edge. Without a clock the row keeps its full width.
  */
-export function timestampRoom(width: number, at: number | undefined): number {
-  return showsClock(width, at) ? width - CLOCK_INSET - visibleWidth(localClock(at)) - 2 : width
+export function timestampRoom(width: number, at: number | undefined, durationMs?: number): number {
+  return showsClock(width, at) ? width - CLOCK_INSET - visibleWidth(timestampText(at, durationMs)) - 2 : width
 }
 
 interface TimestampDecoration {
@@ -128,22 +135,39 @@ export function timestampRow(
   width: number,
   at: number | undefined,
   record?: (stamp: TimestampDecoration) => void,
+  durationMs?: number,
 ): string {
   if (!showsClock(width, at)) return row
-  const text = localClock(at)
-  const cells = visibleWidth(text)
-  const gap = width - CLOCK_INSET - visibleWidth(row) - cells
+  let text = timestampText(at, durationMs)
+  let cells = visibleWidth(text)
+  let gap = width - CLOCK_INSET - visibleWidth(row) - cells
+  if (gap < 2 && durationMs !== undefined) {
+    text = localClock(at)
+    cells = visibleWidth(text)
+    gap = width - CLOCK_INSET - visibleWidth(row) - cells
+  }
   if (gap < 2) return row
   record?.({ line: 0, text, width: gap + cells, to: visibleWidth(row.trimEnd()) })
   return `${row}${" ".repeat(gap)}${theme.muted(text)}`
 }
 
 /** Stamp the first content row, retaining the actual decoration for selection/copying. */
-export function stampRows(lines: string[], theme: Theme, width: number, at: number | undefined): string[] {
+export function stampRows(
+  lines: string[],
+  theme: Theme,
+  width: number,
+  at: number | undefined,
+  durationMs?: number,
+): string[] {
   const line = userBandPaddingIn(lines)
   if (lines[line] !== undefined)
-    lines[line] = timestampRow(lines[line]!, theme, width, at, (stamp) =>
-      rowTimestamps.set(lines, { ...stamp, line }),
+    lines[line] = timestampRow(
+      lines[line]!,
+      theme,
+      width,
+      at,
+      (stamp) => rowTimestamps.set(lines, { ...stamp, line }),
+      durationMs,
     )
   return lines
 }
@@ -245,6 +269,7 @@ export function reasoningLines(
     expanded?: boolean
     expandKey?: string
     timestamp?: number
+    turnDurationMs?: number
   },
   width: number,
 ): string[] {
@@ -258,10 +283,17 @@ export function reasoningLines(
     body && !opts.expanded && opts.expandKey ? `  ${theme.muted(`${opts.expandKey} to expand`)}` : ""
   const head = `${markerPrefix(thinking(glyphs.thought))}${thinking(opts.thinking ? "Thinking" : `Thought${time}`)}${hint}`
   const lines = stampRows(
-    [truncateToWidth(head, Math.max(1, timestampRoom(width, opts.timestamp)), viewEllipsis())],
+    [
+      truncateToWidth(
+        head,
+        Math.max(1, timestampRoom(width, opts.timestamp, opts.turnDurationMs)),
+        viewEllipsis(),
+      ),
+    ],
     theme,
     width,
     opts.timestamp,
+    opts.turnDurationMs,
   )
   if (!opts.expanded || !body) return lines
   const style = (s: string) => theme.muted(italic(s))

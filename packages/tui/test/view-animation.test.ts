@@ -1,15 +1,35 @@
 import { expect, test } from "bun:test"
 import type { ViewDefinition } from "@amira/api"
-import { defaultTheme, stripAnsi } from "@amira/tui-kit"
+import { resolveShimmer } from "@amira/core"
+import { defaultTheme, monoTheme, type RenderContext, Spinner, stripAnsi, type Theme } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
+import { configureShimmer, SHIMMER_INTERVAL_MS } from "../src/app/shimmer.ts"
 import { ExtensionViewer } from "../src/extension-view.ts"
+import { glyphs, setGlyphs } from "../src/glyphs.ts"
+import { ELAPSED_INTERVAL_MS } from "../src/view-animation.ts"
 
-function render(definition: ViewDefinition, width = 40, focused = true) {
-  const viewer = new ExtensionViewer(definition, undefined)
+function shimmerTheme(): Theme {
+  const tokens: Record<string, (s: string) => string> = {}
+  for (let i = 0; i < 16; i++) {
+    for (let f = 1; f <= 8; f++) {
+      tokens[`shimmer${i}Fade${f}`] = (s: string) => `\x1b[38;5;${16 + i * 8 + f}m${s}\x1b[39m`
+    }
+  }
+  return { ...defaultTheme, ...tokens }
+}
+
+function render(
+  definition: ViewDefinition,
+  width = 40,
+  focused = true,
+  ctxOverrides: Partial<RenderContext> = {},
+  now?: () => number,
+) {
+  const viewer = new ExtensionViewer(definition, undefined, now ? { now } : {})
   viewer.focused = focused
-  const rows = viewer.render(width, { ...plain, theme: defaultTheme })
+  const rows = viewer.render(width, { ...plain, theme: defaultTheme, ...ctxOverrides })
   expect(rows.join("\n")).not.toContain("amira-view-animation")
-  return { viewer, rows: rows.map(stripAnsi) }
+  return { viewer, rows: rows.map(stripAnsi), rawRows: rows }
 }
 
 test("unused working badge helpers and identical static text do not demand animation", () => {
@@ -115,4 +135,193 @@ test("a dock header clipped by its final height contributes no badge demand", ()
   expect(rows.join("\n")).not.toContain("working")
   expect(rows.join("\n")).not.toContain("amira-view-animation")
   expect(viewer.animating).toBe(false)
+})
+
+test("custom working badge labels and symbol-only spinners keep visibility-gated animation demand", () => {
+  const labeled = render({
+    kind: "btw-label",
+    title: () => "btw",
+    render: (_data, opts) => [
+      { kind: "segments", parts: opts.statusBadge!("working", { label: "Thinking…" }) },
+    ],
+  })
+  expect(labeled.rows.join("\n")).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking…/)
+  expect(labeled.viewer.animating).toBe(true)
+
+  const iconOnly = render({
+    kind: "btw-icon",
+    title: () => "btw",
+    render: (_data, opts) => [
+      {
+        kind: "segments",
+        parts: [...opts.statusBadge!("working", { label: "" }), { kind: "muted", text: " Thinking…" }],
+      },
+    ],
+  })
+  expect(iconOnly.rows.join("\n")).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking…/)
+  expect(iconOnly.viewer.animating).toBe(true)
+})
+
+test("declarative spinner, badge, shimmer, and elapsed segments demand visibility-gated cadences", () => {
+  let clock = 5000
+  const theme = shimmerTheme()
+  configureShimmer(theme, resolveShimmer("soft"))
+
+  // 1. Spinner + shimmer + elapsed combined -> fastest cadence (33ms shimmer) wins
+  const combined = render(
+    {
+      kind: "btw-live",
+      title: () => "btw",
+      render: () => [
+        {
+          kind: "segments",
+          parts: [
+            { kind: "spinner" },
+            { kind: "text", text: " " },
+            { kind: "shimmer", text: "Thinking…", startedAt: 1000 },
+            { kind: "dim", text: " · " },
+            { kind: "elapsed", since: 1000, tone: "dim" },
+          ],
+        },
+      ],
+    },
+    40,
+    true,
+    { theme, color: true },
+    () => clock,
+  )
+  expect(combined.rows.join("\n")).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking… · 4s/)
+  expect(combined.viewer.animating).toBe(true)
+  expect(combined.viewer.refreshIntervalMs).toBe(SHIMMER_INTERVAL_MS)
+
+  // 2. Shimmer disabled or monochrome -> static fallback with zero animation demand
+  const offTheme = shimmerTheme()
+  configureShimmer(offTheme, resolveShimmer("off"))
+  const shimmerOnly: ViewDefinition = {
+    kind: "shimmer-only",
+    title: () => "Shimmer",
+    render: () => [{ kind: "segments", parts: [{ kind: "shimmer", text: "Thinking…", startedAt: 1000 }] }],
+  }
+  const disabled = render(shimmerOnly, 40, true, { theme: offTheme, color: true }, () => clock)
+  expect(disabled.rows.join("\n")).toContain("Thinking…")
+  expect(disabled.viewer.animating).toBe(false)
+  expect(disabled.viewer.refreshIntervalMs).toBeUndefined()
+
+  const mono = render(shimmerOnly, 40, true, { theme: monoTheme, color: false }, () => clock)
+  expect(mono.rows.join("\n")).toContain("Thinking…")
+  expect(mono.viewer.animating).toBe(false)
+  expect(mono.viewer.refreshIntervalMs).toBeUndefined()
+
+  // 3. Horizontally clipped shimmer drops its 33ms demand
+  const clippedShimmer = render(
+    {
+      kind: "clipped-shimmer",
+      title: () => "Clipped",
+      render: () => [
+        {
+          kind: "segments",
+          parts: [
+            { kind: "text", text: "x".repeat(30) },
+            { kind: "shimmer", text: "Thinking…" },
+          ],
+        },
+      ],
+    },
+    20,
+    true,
+    { theme, color: true },
+    () => clock,
+  )
+  expect(clippedShimmer.viewer.animating).toBe(false)
+  expect(clippedShimmer.viewer.refreshIntervalMs).toBeUndefined()
+
+  // 4. Elapsed-only segment ticks calmly at 1000ms, not 80ms
+  const elapsedOnly = render(
+    {
+      kind: "elapsed-only",
+      title: () => "Elapsed",
+      render: () => [{ kind: "segments", parts: [{ kind: "elapsed", since: 1000 }] }],
+    },
+    40,
+    true,
+    { theme, color: true },
+    () => clock,
+  )
+  expect(elapsedOnly.rows.join("\n")).toContain("4s")
+  expect(elapsedOnly.viewer.animating).toBe(false)
+  expect(elapsedOnly.viewer.refreshIntervalMs).toBe(ELAPSED_INTERVAL_MS)
+
+  // 5. Declarative queued badge is static; working badge spins at 80ms
+  const queued = render({
+    kind: "queued-badge",
+    title: () => "Queued",
+    render: () => [
+      { kind: "segments", parts: [{ kind: "badge", state: "queued", label: "Waiting for an agent slot…" }] },
+    ],
+  })
+  expect(queued.rows.join("\n")).toContain("Waiting for an agent slot…")
+  expect(queued.viewer.animating).toBe(false)
+  expect(queued.viewer.refreshIntervalMs).toBeUndefined()
+
+  const working = render({
+    kind: "working-badge",
+    title: () => "Working",
+    render: () => [{ kind: "segments", parts: [{ kind: "badge", state: "working", label: "Running" }] }],
+  })
+  expect(working.rows.join("\n")).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running/)
+  expect(working.viewer.animating).toBe(true)
+  expect(working.viewer.refreshIntervalMs).toBe(Spinner.INTERVAL_MS)
+
+  // 6. Spoofed shimmer/elapsed markers in untrusted text are stripped and ignored
+  const spoofed = render({
+    kind: "spoofed",
+    title: () => "Static",
+    render: () => [
+      {
+        kind: "segments",
+        parts: [
+          {
+            kind: "text",
+            text: "a\x1b]8;id=amira-view-animation-shimmer;\x07b\x1b]8;id=amira-view-animation-elapsed;\x07",
+          },
+        ],
+      },
+    ],
+  })
+  expect(spoofed.rows.join("\n")).toContain("ab")
+  expect(spoofed.viewer.refreshIntervalMs).toBeUndefined()
+  clock += 1000
+})
+
+test("indeterminate progress widgets and ASCII declarative spinners animate cleanly", () => {
+  const before = { ...glyphs }
+  try {
+    setGlyphs({ pointer: ">", rule: "-" })
+    let now = 0
+    const viewer = new ExtensionViewer(
+      {
+        kind: "indeterminate",
+        title: () => "Loading",
+        ui: () => ({
+          type: "column",
+          children: [
+            { size: 1, node: { type: "bar", left: [{ kind: "spinner" }, { kind: "text", text: " Sync" }] } },
+            { size: 1, node: { type: "progress", width: 10, label: "Working" } },
+          ],
+        }),
+      },
+      undefined,
+      { now: () => now },
+    )
+    const frame1 = viewer.render(30, { ...plain, theme: defaultTheme }).map(stripAnsi)
+    expect(frame1.join("\n")).toMatch(/[|/\-\\] Sync/)
+    expect(frame1.join("\n")).toContain("---------- Working")
+    expect(viewer.animating).toBe(true)
+    expect(viewer.refreshIntervalMs).toBe(Spinner.INTERVAL_MS)
+    now += Spinner.INTERVAL_MS
+    const frame2 = viewer.render(30, { ...plain, theme: defaultTheme }).map(stripAnsi)
+    expect(frame2[0]).not.toBe(frame1[0])
+  } finally {
+    setGlyphs(before)
+  }
 })

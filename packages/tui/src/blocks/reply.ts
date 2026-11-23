@@ -157,11 +157,13 @@ export class ReplyBlock extends Block {
     this.lastRenders?.changed()
   }
 
+  turnDurationMs: number | undefined
+
   constructor(
     source: string,
     streaming: boolean,
     private hyperlinks: boolean | "web",
-    readonly timestamp?: number,
+    public timestamp?: number,
   ) {
     super()
     this.source = source
@@ -194,7 +196,7 @@ export class ReplyBlock extends Block {
     const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
     const firstRowWidth = Math.max(
       1,
-      timestampRoom(env.width, this.timestamp) - visibleWidth(glyphs.assistant),
+      timestampRoom(env.width, this.timestamp, this.turnDurationMs) - visibleWidth(glyphs.assistant),
     )
     // Folded, images are their alt text.
     const images = this.folded ? undefined : env.images
@@ -256,8 +258,18 @@ export class ReplyBlock extends Block {
       rows = renderMarkdown(text, width, env.theme, opts)
     }
     const lines = this.layOut(replyRows(rows, this.markerRows), images !== undefined)
-    codeSurfaces.set(lines, this.surfaceFrames(lines, width, env.theme))
-    return stampRows(lines, env.theme, env.width, this.timestamp)
+    const first = lines[0]
+    const source = this.source
+    const folded = this.folded
+    const streaming = this.#streaming
+    const assistant = this.lastAssistant
+    const columns = [...this.codeColumns]
+    const theme = env.theme
+    codeSurfaces.set(lines, () => {
+      const target = first !== undefined && lines[0] !== first ? [first, ...lines.slice(1)] : lines
+      return surfaceFramesOf(target, source, folded, streaming, assistant, columns, width, theme)
+    })
+    return stampRows(lines, env.theme, env.width, this.timestamp, this.turnDurationMs)
   }
 
   /**
@@ -384,49 +396,6 @@ export class ReplyBlock extends Block {
     if (kind === "top") this.codeColumns.add(col)
   }
 
-  /** Match each source fence's complete row sequence, never infer provenance from blank text. */
-  private surfaceFrames(lines: readonly string[], width: number, theme: Theme): CodeFrame[] {
-    const plain = lines.map(stripAnsi)
-    const assistant = this.lastAssistant
-    const inset = visibleWidth(assistant)
-    const frames: CodeFrame[] = []
-    let next = 0
-    for (const fence of fencedCode(foldMarkdown(this.source, this.folded).text)) {
-      let found: CodeFrame | undefined
-      for (const col of this.codeColumns) {
-        const open = this.#streaming && !fence.closed
-        const body = `${fence.mark}${fence.lang}\n${fence.shown.join("\n")}`
-        const source = open ? body : `${body}${fence.shown.length ? "\n" : ""}${fence.mark}`
-        const stream = new MarkdownStream({ highlight: false })
-        stream.append(source)
-        const room = Math.max(1, width - col)
-        const preview = stream.render(room, { theme, color: true, rows: Number.POSITIVE_INFINITY })
-        const rendered = (open ? preview : stream.take(room)).map(stripAnsi)
-        const prefix = assistant + " ".repeat(col)
-        const expected = rendered.map((row) => prefix + row)
-        for (let top = next; top + expected.length <= plain.length; top++) {
-          if (!expected.every((row, index) => row === plain[top + index])) continue
-          const bottom = this.#streaming && !fence.closed ? undefined : top + expected.length - 1
-          const textCol = assistant.length + col
-          const column = inset + col
-          const end = bottom ?? top + expected.length
-          found = {
-            top,
-            ...(bottom === undefined ? {} : { bottom }),
-            rows: Array.from({ length: Math.max(0, end - top - 1) }, (_, index) => top + index + 1),
-            col: column,
-            ...(textCol !== column ? { textCol } : {}),
-          }
-          next = top + expected.length
-          break
-        }
-        if (found) break
-      }
-      if (found) frames.push(found)
-    }
-    return frames
-  }
-
   copyText(): string {
     return this.alternatives.copy(this.source).trim()
   }
@@ -517,7 +486,7 @@ export class ReplyBlock extends Block {
     const width = Math.max(1, env.width - visibleWidth(glyphs.assistant))
     const firstRowWidth = Math.max(
       1,
-      timestampRoom(env.width, this.timestamp) - visibleWidth(glyphs.assistant),
+      timestampRoom(env.width, this.timestamp, this.turnDurationMs) - visibleWidth(glyphs.assistant),
     )
     const { text } = foldMarkdown(this.source, false)
     const lines = replyRows(
@@ -532,7 +501,7 @@ export class ReplyBlock extends Block {
       }),
       this.markerRows,
     )
-    return stampRows(lines, env.theme, env.width, this.timestamp)
+    return stampRows(lines, env.theme, env.width, this.timestamp, this.turnDurationMs)
   }
 }
 
@@ -547,7 +516,59 @@ export interface CodeFrame {
   textCol?: number
 }
 
-const codeSurfaces = new WeakMap<readonly string[], CodeFrame[]>()
+const codeSurfaces = new WeakMap<readonly string[], CodeFrame[] | (() => CodeFrame[])>()
+
+/** Match each source fence's complete row sequence lazily when selecting, searching or copying. */
+function surfaceFramesOf(
+  lines: readonly string[],
+  sourceText: string,
+  folded: boolean,
+  streaming: boolean,
+  assistant: string,
+  codeColumns: readonly number[],
+  width: number,
+  theme: Theme,
+): CodeFrame[] {
+  if (!codeColumns.length) return []
+  const plain = lines.map(stripAnsi)
+  const inset = visibleWidth(assistant)
+  const frames: CodeFrame[] = []
+  let next = 0
+  for (const fence of fencedCode(foldMarkdown(sourceText, folded).text)) {
+    let found: CodeFrame | undefined
+    for (const col of codeColumns) {
+      const open = streaming && !fence.closed
+      const body = `${fence.mark}${fence.lang}\n${fence.shown.join("\n")}`
+      const source = open ? body : `${body}${fence.shown.length ? "\n" : ""}${fence.mark}`
+      const stream = new MarkdownStream({ highlight: false })
+      stream.append(source)
+      const room = Math.max(1, width - col)
+      const preview = stream.render(room, { theme, color: true, rows: Number.POSITIVE_INFINITY })
+      const rendered = (open ? preview : stream.take(room)).map(stripAnsi)
+      const prefix = assistant + " ".repeat(col)
+      const expected = rendered.map((row) => prefix + row)
+      for (let top = next; top + expected.length <= plain.length; top++) {
+        if (!expected.every((row, index) => row === plain[top + index])) continue
+        const bottom = streaming && !fence.closed ? undefined : top + expected.length - 1
+        const textCol = assistant.length + col
+        const column = inset + col
+        const end = bottom ?? top + expected.length
+        found = {
+          top,
+          ...(bottom === undefined ? {} : { bottom }),
+          rows: Array.from({ length: Math.max(0, end - top - 1) }, (_, index) => top + index + 1),
+          col: column,
+          ...(textCol !== column ? { textCol } : {}),
+        }
+        next = top + expected.length
+        break
+      }
+      if (found) break
+    }
+    if (found) frames.push(found)
+  }
+  return frames
+}
 
 /** Code surfaces use host metadata; legacy border detection supports existing extension output. */
 export function codeFrames(
@@ -556,8 +577,13 @@ export function codeFrames(
   assistant = "",
   lines?: readonly string[],
 ): CodeFrame[] {
-  const surfaces = lines && codeSurfaces.get(lines)
-  if (surfaces) return surfaces
+  const entry = lines && codeSurfaces.get(lines)
+  if (entry) {
+    if (typeof entry !== "function") return entry
+    const resolved = entry()
+    codeSurfaces.set(lines, resolved)
+    return resolved
+  }
   const { codeTop, codeSide, codeBottom } = markdownGlyphs
   const out: CodeFrame[] = []
   for (let i = 0; i < plain.length; i++) {

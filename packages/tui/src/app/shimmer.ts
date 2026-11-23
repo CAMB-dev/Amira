@@ -5,9 +5,18 @@ type ResolvedShimmer = ReturnType<typeof resolveShimmer>
 const effects = new WeakMap<Theme, ResolvedShimmer>()
 const soft = resolveShimmer()
 
+/** Target frame interval for animated shimmer text (~30 fps). */
+export const SHIMMER_INTERVAL_MS = 33
+
 /** Configuration belongs to a built theme, just like its precomputed colour tokens. */
 export function configureShimmer(theme: Theme, effect: ResolvedShimmer): void {
   effects.set(theme, effect)
+}
+
+/** Preserve a theme's shimmer configuration when deriving a surface-adjusted copy (e.g. a dock). */
+export function inheritShimmer(from: Theme, to: Theme): void {
+  const effect = effects.get(from)
+  if (effect) effects.set(to, effect)
 }
 
 function falloff(distance: number, half: number, edge: ResolvedShimmer["edge"]): number {

@@ -55,6 +55,12 @@ export interface CallEnd {
   approval?: ToolApproval
 }
 
+/** Total elapsed duration and completion clock of a finished turn, shown on its right edge. */
+export interface TurnEndSummary {
+  durationMs: number
+  finishedAt: number
+}
+
 /** A tool call a reply asked for. */
 export interface CallRef {
   id: string
@@ -156,8 +162,8 @@ export interface TranscriptView {
   toolUpdate(id: string, partial: ToolResult): void
   /** True when a call reached the transcript. */
   toolEnd(id: string, end: CallEnd): boolean
-  /** The turn ended: calls still held are shown; true when one was. */
-  turnEnd(): boolean
+  /** The turn ended: calls still held are shown; optional timing updates the turn's right-edge stamp. */
+  turnEnd(summary?: TurnEndSummary): boolean
   /** Follows sub-agents; true when the event was about one. */
   subagentEvent(e: AnyEvent): boolean
   /** `detail` stays folded until asked for (the full tool output level, or unfolding the block). */
