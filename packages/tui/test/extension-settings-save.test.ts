@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os"
 import path from "node:path"
 import type { ExtensionSettingsHandle } from "@amira/api"
-import { EventBus, ExtensionHost, InterceptorRegistry, loadSettings, ToolRegistry } from "@amira/core"
+import { EventBus, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { ExtensionHost, loadSettings } from "@amira/host"
 import { defaultTheme, key, stripAnsi } from "@amira/tui-kit"
 import { ExtensionSettingsView, uiExtensionSettingsBackend } from "../src/extension-settings-view.ts"
 

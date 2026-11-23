@@ -7,14 +7,13 @@ import {
   DEFAULT_BACKGROUND_PRINT_WAIT_MS,
   fallbackTitle,
 } from "@amira/api"
+import type { Agent, TurnResult } from "@amira/core"
 import {
-  type Agent,
   type CommandHost,
   type MarkdownRendererRegistry,
   parseCommandLine,
-  type TurnResult,
   type UiRequests,
-} from "@amira/core"
+} from "@amira/host"
 import { safeJson } from "./json-output.ts"
 import { PrintMarkdown } from "./print-markdown.ts"
 

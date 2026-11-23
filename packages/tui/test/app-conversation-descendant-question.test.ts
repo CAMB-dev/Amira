@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ChildSession, OwnedConversation } from "@amira/api"
 import { askUserTool } from "../../../extensions/builtin-tools/src/ask-user.ts"
-import { OwnedConversationManager } from "../../core/src/owned-conversations.ts"
+import { OwnedConversationManager } from "../../host/src/owned-conversations.ts"
 import { closeImageApp, setup, waitFor } from "./app-harness.ts"
 
 for (const mode of ["fullscreen"] as const) {

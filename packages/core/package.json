@@ -5,11 +5,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./internal": "./src/internal.ts"
   },
   "dependencies": {
     "@amira/ai": "workspace:*",
-    "@amira/api": "workspace:*",
-    "@amira/proc": "workspace:*"
+    "@amira/api": "workspace:*"
   }
 }

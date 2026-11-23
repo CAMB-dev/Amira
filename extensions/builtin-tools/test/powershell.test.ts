@@ -5,7 +5,7 @@ import {
   waitForSpawnCondition,
   waitForSpawnExit,
 } from "../../../scripts/spawn-test.ts"
-import "../../../packages/core/src/index.ts"
+import "../../../packages/host/src/index.ts"
 import { existsSync } from "node:fs"
 import { mkdir, realpath, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { type AskQuestion, defineTool, textResult } from "@amira/api"
-import { EventBus, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { UiRequests } from "@amira/host"
 import { key, Spinner, stripAnsi } from "@amira/tui-kit"
 import { askUserPresenter } from "../../../extensions/builtin-tools/src/ask-user.ts"
 import { plain } from "../../tui-kit/test/context.ts"

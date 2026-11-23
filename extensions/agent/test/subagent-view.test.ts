@@ -18,16 +18,8 @@ import {
 import statusExtension from "../../../extensions/commands/src/status.ts"
 import terminalStatusExtension from "../../../extensions/terminal-status/src/index.ts"
 import { createAi, createMockDialect, type MockStep, userMessage } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  AgentTree,
-  CommandHost,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  listSubagents,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { AgentTree, CommandHost, ExtensionHost, listSubagents } from "../../../packages/host/src/index.ts"
 import { runInteractive } from "../../../packages/tui/src/app.ts"
 import { ExtensionViewer } from "../../../packages/tui/src/extension-view.ts"
 import { userLines } from "../../../packages/tui/src/format.ts"

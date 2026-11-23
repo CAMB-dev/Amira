@@ -1,21 +1,19 @@
 import { statSync } from "node:fs"
 import path from "node:path"
 import type { SessionControl } from "@amira/api"
+import { copyFileHistory, SessionStore, sessionsDir } from "@amira/core"
 import {
-  copyFileHistory,
   deleteSession as deleteStoredSession,
   findSession,
   listSessions,
-  SessionStore,
-  sessionsDir,
   storedHistory,
   subagentsOf,
-} from "@amira/core"
+} from "@amira/host"
 import {
   sessionDeletionDirectory,
   sessionTraceCleanupProof,
   withSessionDeletionDirectory,
-} from "../../../core/src/session-delete.ts"
+} from "@amira/host/internal"
 import type { ControlContext } from "./context.ts"
 
 type SessionsControl = Pick<

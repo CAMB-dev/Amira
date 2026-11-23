@@ -12,7 +12,8 @@ import {
   providerFormSpec,
   runFormDialogs,
 } from "@amira/api"
-import { amiraHome, authFile, loadAuth, loadSettings, providersFromSettings } from "@amira/core"
+import { amiraHome } from "@amira/core"
+import { authFile, loadAuth, loadSettings, providersFromSettings } from "@amira/host"
 import { runFormScreen } from "@amira/tui"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache } from "./catalog.ts"

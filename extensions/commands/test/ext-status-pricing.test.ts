@@ -1,11 +1,7 @@
 import { expect, test } from "bun:test"
 import type { EventMap } from "@amira/api"
-import {
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { ExtensionHost } from "../../../packages/host/src/index.ts"
 import statusExtension from "../src/status.ts"
 
 async function setup() {

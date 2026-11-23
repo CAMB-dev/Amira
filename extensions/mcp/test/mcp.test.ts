@@ -4,13 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import type { AnyEvent, ToolResultMessage } from "@amira/api"
 import { createAi, createMockDialect, type MockStep } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { ExtensionHost } from "../../../packages/host/src/index.ts"
 import { resetCommandWorker } from "../../../packages/proc/src/index.ts"
 import {
   SPAWN_TEST_TIMEOUT_MS,

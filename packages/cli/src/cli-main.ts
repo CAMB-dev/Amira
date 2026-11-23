@@ -1,6 +1,7 @@
 import type { AnyEvent, TuiSettings } from "@amira/api"
 import { DEFAULT_TUI_MODE } from "@amira/api"
-import { type Agent, amiraPath, listSessions, SessionStore } from "@amira/core"
+import { type Agent, amiraPath, SessionStore } from "@amira/core"
+import { listSessions } from "@amira/host"
 import { contentGeometry, loadKeybindings, PromptHistory, runInteractive } from "@amira/tui"
 import { ProcessTerminal } from "@amira/tui-kit"
 import { consoleCodePage } from "@amira/tui-kit/console-code-page"

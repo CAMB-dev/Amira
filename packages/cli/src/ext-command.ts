@@ -2,7 +2,7 @@ import path from "node:path"
 import { parseArgs } from "node:util"
 import type { Settings } from "@amira/api"
 import { DEFAULT_PACKAGES_DISABLED, type ExtensionStatusMetadata, extensionStatusBadge } from "@amira/api"
-import { amiraHome, loadSettings } from "@amira/core"
+import { amiraHome } from "@amira/core"
 import {
   defaultGitCacheDir,
   describeSource,
@@ -34,6 +34,7 @@ import {
   type UpdateResult,
   updatePackages,
 } from "@amira/extensions"
+import { loadSettings } from "@amira/host"
 import { UsageError } from "./args.ts"
 import { clean, ExtProgress, type Outcome, progressMode, shortReason } from "./ext-progress.ts"
 import type { PrintIO } from "./print.ts"

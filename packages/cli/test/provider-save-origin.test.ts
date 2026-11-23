@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "@amira/ai"
 import * as core from "@amira/core"
+import * as hostPkg from "@amira/host"
 import { createCommandHost } from "../src/control.ts"
 import { createSession } from "../src/session.ts"
 
@@ -11,7 +12,7 @@ test("an admitted provider save keeps its durable write but cannot select a mode
   const dir = mkdtempSync(path.join(tmpdir(), "amira-provider-origin-"))
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  const restrict = spyOn(core, "restrictToCurrentUser").mockImplementation(async () => {
+  const restrict = spyOn(hostPkg, "restrictToCurrentUser").mockImplementation(async () => {
     entered.resolve()
     await release.promise
     return undefined

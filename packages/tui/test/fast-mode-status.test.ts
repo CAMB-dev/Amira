@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { ThemeRegistry } from "@amira/core"
+import { ThemeRegistry } from "@amira/host"
 import { visibleWidth } from "@amira/tui-kit"
 import { setup, waitFor } from "./app-harness.ts"
 

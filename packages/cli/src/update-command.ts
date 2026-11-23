@@ -1,5 +1,5 @@
 import { DEFAULT_UPDATE_CHANNEL, type Settings } from "@amira/api"
-import { loadSettings } from "@amira/core"
+import { loadSettings } from "@amira/host"
 import { UsageError } from "./args.ts"
 import { type InstallSource, installSource, upgradeCommand } from "./install-source.ts"
 import type { PrintIO } from "./print.ts"

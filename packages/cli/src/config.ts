@@ -1,17 +1,9 @@
 import type { ProviderConfig } from "@amira/ai"
 import type { Settings, SettingsLayers, ShellMode } from "@amira/api"
 import { DEFAULT_DISABLED_TOOLS, DEFAULT_SHELL } from "@amira/api"
-import {
-  amiraHome,
-  authFile,
-  loadAuth,
-  loadSettings,
-  ProviderSettingsError,
-  providersFromSettings,
-  type ResolvedPermissions,
-  resolvePermissions,
-} from "@amira/core"
+import { amiraHome, type ResolvedPermissions, resolvePermissions } from "@amira/core"
 import { projectScopeIsUser, projectTrust } from "@amira/extensions"
+import { authFile, loadAuth, loadSettings, ProviderSettingsError, providersFromSettings } from "@amira/host"
 import type { CliArgs } from "./args.ts"
 
 export interface Config {

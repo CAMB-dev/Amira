@@ -1,6 +1,7 @@
 import type { Ai } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
-import { type Agent, type CommandHost, newTurnId, UiRequests } from "@amira/core"
+import { type Agent, newTurnId } from "@amira/core"
+import { type CommandHost, UiRequests } from "@amira/host"
 import { safeJson } from "./json-output.ts"
 import { createRpcDispatcher, createRpcOperations, type LastTurn, rpcUiRequest } from "./rpc/operations.ts"
 import type { ErrorCode, Id } from "./rpc/validation.ts"

@@ -4,7 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, userMessage } from "@amira/ai"
 import type { AnyEvent } from "@amira/api"
-import { listSessions, SessionStore } from "@amira/core"
+import { SessionStore } from "@amira/core"
+import { listSessions } from "@amira/host"
 import {
   SPAWN_TEST_TIMEOUT_MS,
   stopSpawn,

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { emptyUsage } from "@amira/api"
-import { ThemeRegistry } from "@amira/core"
+import { ThemeRegistry } from "@amira/host"
 import { agentsCommand } from "../../../extensions/agent/src/index.ts"
 import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"
 import { setup, waitFor } from "./app-harness.ts"

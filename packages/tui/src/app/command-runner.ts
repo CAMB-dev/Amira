@@ -1,6 +1,6 @@
 // Owns slash-command execution, cancellation, key help and command echo correlation.
 import type { FrontendView, KeyHelp, OwnedConversation, SendOptions, UserMessage } from "@amira/api"
-import type { CommandHost, CommandRunOptions } from "@amira/core"
+import type { CommandHost, CommandRunOptions } from "@amira/host"
 import { type RenderContext, Spinner } from "@amira/tui-kit"
 import { userText } from "../format.ts"
 import { glyphs, viewEllipsis } from "../glyphs.ts"

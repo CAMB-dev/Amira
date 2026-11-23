@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import type { FormSpec, FormValues } from "@amira/api"
-import { createUiFormBackend, EventBus, type FormEvaluation, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { createUiFormBackend, type FormEvaluation, UiRequests } from "@amira/host"
 import { key, textKey } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { operationFormBackend } from "../src/form-operation-backend.ts"

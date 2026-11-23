@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect, type ModelRequest } from "@amira/ai"
-import { Agent, AgentTree, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { AgentTree, ExtensionHost } from "@amira/host"
 import { backgroundJobs } from "@amira/proc"
 import {
   SPAWN_TEST_TIMEOUT_MS,

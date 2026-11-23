@@ -5,7 +5,8 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "../packages/ai/src/index.ts"
 import { defineTool, textResult } from "../packages/api/src/index.ts"
-import { Agent, EventBus, SessionStore, TraceRecorder } from "../packages/core/src/index.ts"
+import { Agent, EventBus, SessionStore } from "../packages/core/src/index.ts"
+import { TraceRecorder } from "../packages/host/src/index.ts"
 
 // No catalog, extension, title, or network work. Both arms persist the same 200-call run.
 const directory = mkdtempSync(path.join(tmpdir(), "amira-trace-benchmark-"))

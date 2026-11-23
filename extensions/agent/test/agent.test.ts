@@ -10,14 +10,8 @@ import {
   type MockReply,
   type ModelRequest,
 } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  AgentTree,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { AgentTree, ExtensionHost } from "../../../packages/host/src/index.ts"
 import { runCommand } from "../../../packages/proc/src/index.ts"
 import { SPAWN_TEST_TIMEOUT_MS, waitForSpawnCondition } from "../../../scripts/spawn-test.ts"
 import { cleanupSpawnWork, spawnWorkScope, waitForSpawnWork } from "../../builtin-tools/test/util.ts"

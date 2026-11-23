@@ -1,4 +1,5 @@
-import type { EventBus, TraceRecorder } from "@amira/core"
+import type { EventBus } from "@amira/core"
+import type { TraceRecorder } from "@amira/host"
 
 /**
  * Host-only shutdown: let queued events reach the recorder, then finish its appends.

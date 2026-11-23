@@ -16,7 +16,6 @@ import {
 } from "@amira/ai"
 import type { EventMap, SessionStatus } from "@amira/api"
 import { type CompactionOptions, contextTokens } from "../compaction.ts"
-import type { PauseGate } from "../subagents/pause.ts"
 import { resolveToolName } from "../tool-names.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
 import type { Compactor } from "./compactor.ts"
@@ -27,6 +26,7 @@ import { rememberMessageTurn } from "./message-turn.ts"
 import { joinMessages, modelRef } from "./messages.ts"
 import { modelCall, reportedSpeed, type Thinking } from "./model-call.ts"
 import type { NoticeInbox } from "./notices.ts"
+import type { PauseGate } from "./pause.ts"
 import type { ToolRunner } from "./tool-runner.ts"
 import {
   AgentBusyError,

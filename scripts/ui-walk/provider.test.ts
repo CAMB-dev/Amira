@@ -5,15 +5,8 @@ import path from "node:path"
 import { createAi, type StreamEvent } from "../../packages/ai/src/index.ts"
 import { type AnyEvent, defineTool, type ToolResult, textResult } from "../../packages/api/src/index.ts"
 import { readCatalogCache } from "../../packages/cli/src/catalog.ts"
-import {
-  Agent,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  loadSettings,
-  providersFromSettings,
-  ToolRegistry,
-} from "../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../packages/core/src/index.ts"
+import { ExtensionHost, loadSettings, providersFromSettings } from "../../packages/host/src/index.ts"
 import fixtureExtension from "./fixture-extension.ts"
 import {
   createProvider,

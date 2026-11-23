@@ -13,21 +13,14 @@ import {
   type UiRequest,
 } from "@amira/api"
 import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  CommandHost,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  loadSettings,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
 import {
   createExtensionAdmin,
   DEFAULT_INDEX_URL,
   packageScope,
   readLock,
 } from "../../../packages/extensions/src/index.ts"
+import { CommandHost, ExtensionHost, loadSettings } from "../../../packages/host/src/index.ts"
 import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit } from "../../../scripts/spawn-test.ts"
 import { spawnWorkScope, waitForSpawnWork } from "../../builtin-tools/test/util.ts"
 import { extensionProgressLines, extensionRows, parseExtArgs } from "../src/ext-command.ts"

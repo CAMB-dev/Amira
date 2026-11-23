@@ -1,17 +1,33 @@
 // Owns Agent contracts, shared turn types, errors and notice-retry defaults.
-import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort, UserMessage } from "@amira/ai"
+import type {
+  Ai,
+  Message,
+  ModelErrorInfo,
+  ModelInfo,
+  ModelRef,
+  ReasoningEffort,
+  Usage,
+  UserMessage,
+} from "@amira/ai"
 import type {
   ApprovalRequest,
   AskOutcome,
   AskRequest,
   BackgroundJobHost,
+  Budget,
+  ChildSession,
   EventMap,
   OutputStore,
   ProviderSettings,
   Settings,
+  SpawnGroup,
+  SpawnGroupInfo,
+  SpawnGroupOptions,
+  SpawnOptions,
   ToolApproval,
   TurnEndReason,
 } from "@amira/api"
+import type { Agent } from "../agent.ts"
 import type { CompactionOptions } from "../compaction.ts"
 import type { ContextOptions, ContextView } from "../context.ts"
 import type { EventBus } from "../event-bus.ts"
@@ -20,8 +36,39 @@ import type { InterceptorRegistry } from "../interceptors.ts"
 import type { Permissions } from "../permissions/policy.ts"
 import type { PromptSection } from "../prompt.ts"
 import type { SessionStore } from "../session-store.ts"
-import type { AgentTree } from "../subagents.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
+
+/** Admission & cancellation scope shared by an agent tree's runtime. */
+export interface AgentTreeScope {
+  readonly signal: AbortSignal
+  checkExecution(): void
+  track<T>(op: () => Promise<T>): Promise<T>
+  reopenParent(sessionId: string): void
+  closeParent(sessionId: string): void
+}
+
+/** Minimal tree contract consumed by the core agent loop; implemented by `@amira/host`'s `AgentTree`. */
+export interface AgentTreeHost {
+  readonly maxDepth: number
+  readonly restricted: boolean
+  readonly budgetExceeded: string | undefined
+  readonly usage: Usage
+  readonly budget: Budget | undefined
+  readonly children: readonly ChildSession[]
+  subagent(
+    id: string,
+  ):
+    | { readonly info?: { readonly parentSessionId?: string }; readonly messages?: readonly Message[] }
+    | undefined
+  spawn(parent: Agent, options: SpawnOptions): ChildSession
+  createGroup(parent: Agent, options: SpawnGroupOptions, meta?: { toolCallId?: string }): SpawnGroup
+  groups(): SpawnGroupInfo[]
+  recordUsage(agent: Agent, usage: Usage, model?: ModelRef): void
+  abortAll(reason?: string): void
+  abortChildren(parentSessionId: string, reason?: string): void
+  waitForChildren(parentSessionId?: string): Promise<void>
+  scope?(): AgentTreeScope
+}
 
 export interface HeldInput {
   readonly id: string
@@ -138,7 +185,7 @@ export interface AgentOptions {
   /** Sub-agent nesting depth; 0 (the default) for a top-level session. */
   depth?: number
   /** The agent tree this session belongs to: it spawns sub-agents and keeps the shared budget. */
-  tree?: AgentTree
+  tree?: AgentTreeHost
   /** The host's job implementation; the agent turns it into a caller-scoped view. */
   backgroundJobs?: BackgroundJobHost
   /**

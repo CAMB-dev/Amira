@@ -155,6 +155,8 @@ export function createOutbox(deps: OutboxDeps): Outbox {
   let pendingPrompt: Outgoing | undefined
   let pendingPromptId: string | undefined
   let heldRecovery: { waiting: Set<Outgoing>; dropped: Outgoing[] } | undefined
+  /** Dropped held prompts already restored via rejection before their bus event arrives. */
+  const restoredDrops: Outgoing[] = []
   /**
    * Set when the user stopped a turn while messages waited: the steering it drops is collected
    * here, to go out with the queued messages at turn.end (or back into the editor to rewind).
@@ -292,7 +294,21 @@ export function createOutbox(deps: OutboxDeps): Outbox {
 
   function restoreHeld(): boolean {
     if (!heldRecovery || heldRecovery.waiting.size) return false
-    const next = heldRecovery.dropped.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+    const list = heldRecovery.dropped
+    // Assign external (command-steered) items a seq matching their core drop order relative to local seqs.
+    const ordered = list.map((item, i) => ({ item, seq: item.seq, i }))
+    for (let i = 0; i < ordered.length; i++) {
+      if (ordered[i]!.seq !== undefined) continue
+      const nextWithSeq = ordered.slice(i + 1).find((e) => e.seq !== undefined)
+      const prevWithSeq = ordered.slice(0, i).findLast((e) => e.seq !== undefined)
+      ordered[i]!.seq =
+        nextWithSeq !== undefined
+          ? nextWithSeq.seq! - (ordered.length - i) * 1e-4
+          : prevWithSeq !== undefined
+            ? prevWithSeq.seq! + (i + 1) * 1e-4
+            : ++typed
+    }
+    const next = ordered.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)).map((e) => e.item)
     heldRecovery = undefined
     putBack(next)
     return true
@@ -300,6 +316,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
 
   function recoverRejected(message: Outgoing): boolean {
     if (!heldRecovery?.waiting.delete(message)) return false
+    restoredDrops.push(message)
     heldRecovery.dropped.push(message)
     restoreHeld()
     return true
@@ -343,7 +360,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         steering.length ||
         steered.length ||
         pendingPrompt ||
-        admissions.size ||
+        [...admissions].some((a) => !a.reconciled) ||
         heldRecovery ||
         flush ||
         flushTimer ||
@@ -448,7 +465,7 @@ export function createOutbox(deps: OutboxDeps): Outbox {
         let queued = steered.find((entry) => sameOutgoing(entry, message) && !announced.has(entry))
         if (!queued) {
           const parts = messageParts(message)
-          queued = { ...draftMessage(userText(message), message.display?.text, parts), parts, seq: ++typed }
+          queued = { ...draftMessage(userText(message), message.display?.text, parts), parts }
           steered.push(queued)
         }
         announced.add(queued)
@@ -459,6 +476,11 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       }
       const pendingSteer = steered.find((entry) => sameOutgoing(entry, message))
       if (state === "dropped" && !duringTurn && display) {
+        const already = restoredDrops.findIndex((entry) => sameOutgoing(entry, message))
+        if (already !== -1) {
+          restoredDrops.splice(already, 1)
+          return false
+        }
         // All inputs of the cancelled hold drop without turn.end. Wait for the whole known
         // batch, including acknowledgements already received, instead of prepending each event.
         heldRecovery ??= {

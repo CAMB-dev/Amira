@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test"
-import { resolveShimmer } from "@amira/core"
+import { resolveShimmer } from "@amira/host"
 import { createTheme, FakeTerminal, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { createTurnActivity } from "../src/app/activity.ts"

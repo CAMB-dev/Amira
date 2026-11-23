@@ -1,8 +1,12 @@
-import type { Agent, CommandRunOptions, UiRequests } from "@amira/core"
+import type { Agent } from "@amira/core"
+import type { CommandRunOptions, UiRequests } from "@amira/host"
+import {
+  onUiRequestCreated,
+  registerCommandViewContext,
+  sessionScopeContains,
+  uiRequestOwner,
+} from "@amira/host/internal"
 import type { Editor } from "@amira/tui-kit"
-import { registerCommandViewContext } from "../../../core/src/command-view-context.ts"
-import { sessionScopeContains } from "../../../core/src/session-routing.ts"
-import { onUiRequestCreated, uiRequestOwner } from "../../../core/src/ui-request-capture.ts"
 import { discardPendingPaste } from "../../../tui-kit/src/input-paste-control.ts"
 import type { Keybindings } from "../keybindings.ts"
 import type { PromptHistory } from "../prompt-history.ts"

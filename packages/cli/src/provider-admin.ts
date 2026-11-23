@@ -24,8 +24,8 @@ import type {
   ProviderModelInfo,
   ProviderSettings,
 } from "@amira/api"
+import { amiraHome } from "@amira/core"
 import {
-  amiraHome,
   authFile,
   deepMerge,
   loadAuth,
@@ -35,7 +35,7 @@ import {
   setAuthKey,
   updateProviderInSettings,
   validateSettings,
-} from "@amira/core"
+} from "@amira/host"
 import { type CatalogCacheOptions, refreshCatalog } from "./catalog.ts"
 import { installProviderModelCache } from "./provider-models.ts"
 import { USER_AGENT } from "./user-agent.ts"

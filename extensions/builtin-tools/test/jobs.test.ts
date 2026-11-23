@@ -14,7 +14,7 @@ import type {
   UserMessage,
 } from "@amira/api"
 import { hostBackgroundJobs } from "@amira/api"
-import { SessionBackgroundJobHost } from "../../../packages/core/src/index.ts"
+import { SessionBackgroundJobHost } from "../../../packages/host/src/index.ts"
 import {
   backgroundJobs,
   JobRegistry,

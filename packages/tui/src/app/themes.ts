@@ -1,6 +1,6 @@
 // Owns runtime theme selection, registry reloads and the interactive preview picker.
 import type { CommandContext, CommandDefinition, ShimmerEffect, ThemeDefinition } from "@amira/api"
-import { resolveShimmer, SHIMMER_PRESETS } from "@amira/core"
+import { resolveShimmer, SHIMMER_PRESETS } from "@amira/host"
 import {
   backgroundFromEnv,
   backgroundOf,

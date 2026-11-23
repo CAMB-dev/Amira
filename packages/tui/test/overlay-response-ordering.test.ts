@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { EventMap } from "@amira/api"
-import type { UiResponseAck } from "@amira/core"
+import type { UiResponseAck } from "@amira/host"
 import { key } from "@amira/tui-kit"
 import { plain as ctx } from "../../tui-kit/test/context.ts"
 import { OverlayManager } from "../src/app/overlays.ts"

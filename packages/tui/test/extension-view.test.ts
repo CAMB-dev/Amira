@@ -10,7 +10,8 @@ import {
   type ViewDefinition,
   type ViewLine,
 } from "@amira/api"
-import { Agent, CommandHost, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { CommandHost, ExtensionHost } from "@amira/host"
 import {
   defaultTheme,
   FakeTerminal,

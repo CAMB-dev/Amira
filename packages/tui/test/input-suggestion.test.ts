@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { EventBus, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { UiRequests } from "@amira/host"
 import { CURSOR_MARKER, defaultGlyphs, Editor, key, textKey, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { createPromptInput } from "../src/app/input-suggestion.ts"

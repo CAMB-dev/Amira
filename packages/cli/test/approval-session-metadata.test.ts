@@ -1,15 +1,8 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import { type AskOutcome, defineTool, type EventMap, textResult } from "@amira/api"
-import {
-  Agent,
-  AgentTree,
-  EventBus,
-  InterceptorRegistry,
-  Permissions,
-  ToolRegistry,
-  UiRequests,
-} from "@amira/core"
+import { Agent, EventBus, InterceptorRegistry, Permissions, ToolRegistry } from "@amira/core"
+import { AgentTree, UiRequests } from "@amira/host"
 import { userApprover, userAsker } from "../src/session/approvals.ts"
 
 for (const kind of ["approval", "question"] as const) {

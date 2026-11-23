@@ -2,12 +2,12 @@ import { spyOn } from "bun:test"
 import type { MockStep } from "@amira/ai"
 import type { CommandContext, OwnedConversation } from "@amira/api"
 import { Agent, EventBus } from "@amira/core"
-import { ConversationEvents } from "../../core/src/owned-conversations-events.ts"
+import { ConversationEvents } from "../../host/src/owned-conversations-events.ts"
 import {
   registerConversationHold,
   registerConversationSend,
   registerConversationTurn,
-} from "../../core/src/session-routing.ts"
+} from "../../host/src/session-routing.ts"
 import * as runner from "../src/app/command-runner.ts"
 import { exchange, inputImage, type SetupOptions, setup } from "./app-harness.ts"
 

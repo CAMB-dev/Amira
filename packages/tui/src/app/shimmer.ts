@@ -1,4 +1,4 @@
-import { resolveShimmer } from "@amira/core"
+import { resolveShimmer } from "@amira/host"
 import { graphemes, type RenderContext, type Theme, themeToken, visibleWidth } from "@amira/tui-kit"
 
 type ResolvedShimmer = ReturnType<typeof resolveShimmer>

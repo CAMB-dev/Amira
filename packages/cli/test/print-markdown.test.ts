@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import type { AnyEvent, MarkdownNode, MarkdownRenderContext, MarkdownRendererDefinition } from "@amira/api"
-import { MarkdownRendererRegistry } from "@amira/core"
+import { MarkdownRendererRegistry } from "@amira/host"
 import { runPrint } from "../src/print.ts"
 import { PrintMarkdown } from "../src/print-markdown.ts"
 import { createSession } from "../src/session.ts"

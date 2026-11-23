@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import {
   appendFileSync,
   type BigIntStats,
@@ -8,6 +9,8 @@ import {
   openSync,
   readFileSync,
   readSync,
+  renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -18,7 +21,6 @@ import type { CompactionInfo } from "@amira/api"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
 import { type FileLock, tryFileLock, withTransientFileLock } from "./file-lock.ts"
-import { writeOwnedFile } from "./owned-conversations-lifecycle.ts"
 import type { OwnedSessionIdentity } from "./owned-session.ts"
 import { intersectWriteRoots } from "./permissions/write-roots.ts"
 import {
@@ -299,7 +301,7 @@ export class SessionStore {
     const body = newline < 0 ? Buffer.alloc(0) : bytes.subarray(newline + 1)
     const upgraded = Buffer.concat([Buffer.from(`${JSON.stringify(header)}\n`), body])
     try {
-      writeOwnedFile(this.file, upgraded)
+      writeAtomicFile(this.file, upgraded)
     } finally {
       // Rename may have committed even if the following directory sync failed. Keep this
       // sole writer compatible with its own exact replacement so archive can be retried.
@@ -849,5 +851,30 @@ function sizeOf(file: string): number | undefined {
     return statSync(file).size
   } catch {
     return undefined
+  }
+}
+
+/** Publish a file atomically via a private temp file + fsync + rename. */
+export function writeAtomicFile(file: string, bytes: string | Uint8Array): void {
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    const fd = openSync(temporary, "wx", 0o600)
+    try {
+      writeFileSync(fd, bytes)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+    renameSync(temporary, file)
+    if (process.platform !== "win32") {
+      const dir = openSync(path.dirname(file), "r")
+      try {
+        fsyncSync(dir)
+      } finally {
+        closeSync(dir)
+      }
+    }
+  } finally {
+    rmSync(temporary, { force: true })
   }
 }

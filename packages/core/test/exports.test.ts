@@ -3,39 +3,12 @@ import {
   ArtifactStore,
   type ArtifactStoreOptions,
   EventBus,
-  type FormEditor,
-  type ListFiles,
-  type ListOptions,
-  listProjectFiles,
-  MAX_FILES,
   type SessionEntry,
   type SessionEntryData,
   type SessionHeader,
   SessionStore,
-  streamProjectFiles,
   ToolRegistry,
-  UiRequests,
 } from "../src/index.ts"
-
-test("local suggestion attachment is a host-only composer seam", () => {
-  const ui = new UiRequests(new EventBus())
-  const detach = ui.inputSuggestions.attach(() => ({ revision: 0, ready: true }))
-  expect({
-    attach: typeof ui.inputSuggestions.attach,
-    refresh: typeof ui.inputSuggestions.refresh,
-    invalidate: typeof ui.inputSuggestions.invalidate,
-    acquire: typeof ui.api().acquireInputSuggestionSlot,
-  }).toMatchInlineSnapshot(`
-    {
-      "acquire": "function",
-      "attach": "function",
-      "invalidate": "function",
-      "refresh": "function",
-    }
-  `)
-  detach()
-  expect(ui.api().acquireInputSuggestionSlot()).toBeUndefined()
-})
 
 test("policy-bearing session header types remain exported with an explicit format discriminator", () => {
   const header: SessionHeader = {
@@ -60,7 +33,7 @@ test("policy-bearing session header types remain exported with an explicit forma
   `)
 })
 
-test("owned lifecycle headers and lease-held lifecycle writes remain explicit host-library contracts", () => {
+test("owned lifecycle headers and lease-held lifecycle writes remain explicit core contracts", () => {
   const header: SessionHeader = {
     type: "session-lifecycle",
     v: 3,
@@ -99,16 +72,6 @@ test("owned lifecycle headers and lease-held lifecycle writes remain explicit ho
   `)
 })
 
-test("form editor identity and resumed revision remain host-library exports", () => {
-  const editor: FormEditor = { editor: "editor-1", revision: 7 }
-  expect(editor).toMatchInlineSnapshot(`
-    {
-      "editor": "editor-1",
-      "revision": 7,
-    }
-  `)
-})
-
 test("tool enablement can check captured capabilities without changing the registration identity", () => {
   const tools = new ToolRegistry()
   const tool = {
@@ -131,7 +94,7 @@ test("tool enablement can check captured capabilities without changing the regis
   `)
 })
 
-test("accounting evidence remains serializable through the public core session types", () => {
+test("session entry types remain serializable through the public core session types", () => {
   const receipt: SessionEntry = {
     id: "receipt",
     parentId: null,
@@ -140,29 +103,7 @@ test("accounting evidence remains serializable through the public core session t
     model: { provider: "mock", model: "test" },
     usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, pricingUnknown: true },
     attribution: { sessionId: "private", parentSessionId: "owned", groupId: "group", ephemeral: true },
-    accounting: {
-      knownCostUsd: 0.25,
-      incomplete: true,
-      coverageIncomplete: true,
-      receiptId: "native-attempt",
-      coverage: { v: 1, reported: true, priced: false, fingerprint: "receipt-proof" },
-      source: "request",
-      attempts: [{ id: "physical-attempt", revision: 2 }],
-      statements: [
-        {
-          v: 1,
-          id: "logical-contribution",
-          revision: 2,
-          kind: "snapshot",
-          usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, pricingUnknown: true },
-          knownCostUsd: 0.25,
-          coverage: { v: 1, reported: true, priced: false, fingerprint: "statement-proof" },
-          attempts: [{ id: "physical-attempt", revision: 2 }],
-        },
-      ],
-      seal: "record-proof",
-      journal: { v: 1, sessionId: "owned", fingerprint: "journal-proof" },
-    },
+    accounting: { knownCostUsd: 0.25, incomplete: true },
   }
   const child: SessionEntryData = {
     type: "subagent",
@@ -170,101 +111,13 @@ test("accounting evidence remains serializable through the public core session t
     role: "worker",
     groupId: "group",
   }
-  expect({ receipt, child }).toMatchInlineSnapshot(`
-    {
-      "child": {
-        "childSessionId": "child",
-        "groupId": "group",
-        "role": "worker",
-        "type": "subagent",
-      },
-      "receipt": {
-        "accounting": {
-          "attempts": [
-            {
-              "id": "physical-attempt",
-              "revision": 2,
-            },
-          ],
-          "coverage": {
-            "fingerprint": "receipt-proof",
-            "priced": false,
-            "reported": true,
-            "v": 1,
-          },
-          "coverageIncomplete": true,
-          "incomplete": true,
-          "journal": {
-            "fingerprint": "journal-proof",
-            "sessionId": "owned",
-            "v": 1,
-          },
-          "knownCostUsd": 0.25,
-          "receiptId": "native-attempt",
-          "seal": "record-proof",
-          "source": "request",
-          "statements": [
-            {
-              "attempts": [
-                {
-                  "id": "physical-attempt",
-                  "revision": 2,
-                },
-              ],
-              "coverage": {
-                "fingerprint": "statement-proof",
-                "priced": false,
-                "reported": true,
-                "v": 1,
-              },
-              "id": "logical-contribution",
-              "kind": "snapshot",
-              "knownCostUsd": 0.25,
-              "revision": 2,
-              "usage": {
-                "cacheRead": 0,
-                "cacheWrite": 0,
-                "input": 1,
-                "output": 0,
-                "pricingUnknown": true,
-              },
-              "v": 1,
-            },
-          ],
-        },
-        "attribution": {
-          "ephemeral": true,
-          "groupId": "group",
-          "parentSessionId": "owned",
-          "sessionId": "private",
-        },
-        "id": "receipt",
-        "model": {
-          "model": "test",
-          "provider": "mock",
-        },
-        "parentId": null,
-        "ts": 1,
-        "type": "side_usage",
-        "usage": {
-          "cacheRead": 0,
-          "cacheWrite": 0,
-          "input": 1,
-          "output": 0,
-          "pricingUnknown": true,
-        },
-      },
-    }
-  `)
+  expect(receipt.type).toBe("side_usage")
+  expect(child.type).toBe("subagent")
 })
 
 test("historical session inspection is an explicit structural-only open option", () => {
   const options: Parameters<typeof SessionStore.open>[1] = { historical: true }
-  expect(options).toMatchInlineSnapshot(`
-    {
-      "historical": true,
-    }
-  `)
+  expect(options).toEqual({ historical: true })
 })
 
 test("artifact stores require an independent trusted storage root", () => {
@@ -273,211 +126,123 @@ test("artifact stores require an independent trusted storage root", () => {
     storageRoot: "/sessions",
     sessionId: "s",
   }
-  expect(options).toMatchInlineSnapshot(`
-    {
-      "dir": "/sessions/s.assets/outputs",
-      "sessionId": "s",
-      "storageRoot": "/sessions",
-    }
-  `)
-})
-
-test("project file listing functions and options are host-library exports", () => {
-  const options: ListOptions = { limit: MAX_FILES, timeoutMs: 15_000 }
-  const list: ListFiles = (cwd, emit, signal) => streamProjectFiles(cwd, emit, { ...options, signal })
-  expect({ options, list: typeof list, collect: typeof listProjectFiles }).toMatchInlineSnapshot(`
-    {
-      "collect": "function",
-      "list": "function",
-      "options": {
-        "limit": 250000,
-        "timeoutMs": 15000,
-      },
-    }
-  `)
+  expect(options).toEqual({
+    dir: "/sessions/s.assets/outputs",
+    sessionId: "s",
+    storageRoot: "/sessions",
+  })
 })
 
 test("the public core exports stay stable", async () => {
   const actual = Object.keys(await import("../src/index.ts")).sort()
-  expect(actual).toEqual([
-    "AGING_DEFAULTS",
-    "Agent",
-    "AgentAbortedError",
-    "AgentBusyError",
-    "AgentTree",
-    "ArtifactQuotaError",
-    "ArtifactStore",
-    "BUILTIN_VIEW_KINDS",
-    "CommandConflictError",
-    "CommandHost",
-    "CommandRegistry",
-    "DEFAULT_ARTIFACT_QUOTA_MB",
-    "DEFAULT_SETTINGS",
-    "EventBus",
-    "ExtensionBackgroundJobs",
-    "ExtensionHost",
-    "FAILURE_POLICY",
-    "FILE_REWIND_COVERAGE",
-    "FileRewind",
-    "FileRewindConflictError",
-    "INSTRUCTION_FILES",
-    "ImageProviderRegistry",
-    "InputRegistry",
-    "InterceptorRegistry",
-    "KEEP_USER_TOKENS",
-    "LockBusyError",
-    "MAX_FILES",
-    "MODE_SUMMARY",
-    "MarkdownRendererRegistry",
-    "NON_INTERACTIVE_LINE",
-    "NOTICE_RETRY_MS",
-    "NetError",
-    "OwnedConversationManager",
-    "PERMISSION_MODES",
-    "PanelRegistry",
-    "Permissions",
-    "ProviderSettingsError",
-    "SECTION_ORDER",
-    "SESSION_LOCK_HEARTBEAT_MS",
-    "SESSION_LOCK_STALE_MS",
-    "SHIMMER_PRESETS",
-    "ServiceRegistry",
-    "SessionBackgroundJobHost",
-    "SessionConflictError",
-    "SessionInUseError",
-    "SessionStore",
-    "SettingsError",
-    "SkillConflictError",
-    "SkillRegistry",
-    "SpawnError",
-    "StatusConflictError",
-    "StatusRegistry",
-    "SummaryError",
-    "TOOL_SEARCH",
-    "ThemeRegistry",
-    "ToolConflictError",
-    "ToolRegistry",
-    "ToolRendererRegistry",
-    "TraceRecorder",
-    "USER_AGENT",
-    "UiRequests",
-    "ViewRegistry",
-    "addNonInteractive",
-    "addProviderToSettings",
-    "agedStub",
-    "agingCandidates",
-    "amiraHome",
-    "amiraPath",
-    "artifactDir",
-    "artifactIdsIn",
-    "askTitle",
-    "assertPublicHost",
-    "authFile",
-    "builtinWrittenPaths",
-    "checkArgs",
-    "checkpointOf",
-    "commandAliasWarnings",
-    "commandName",
-    "contextTokens",
-    "copyFileHistory",
-    "createToolSession",
-    "createUiFormBackend",
-    "deepMerge",
-    "defaultSections",
-    "deferredToolsSection",
-    "deleteSession",
-    "dnsResolver",
-    "duplicateView",
-    "estimateAfter",
-    "estimateTokens",
-    "fetchPublic",
-    "fileCompactionMemory",
-    "fileHistoryDir",
-    "findSession",
-    "forkHistory",
-    "fuzzyScore",
-    "gitInfo",
-    "guardedFetch",
-    "hooksPathsIn",
-    "installVirtualApi",
-    "instructionsSection",
-    "intermediate",
-    "isCommandAliasName",
-    "isPrivateAddress",
-    "isProcessAlive",
-    "isSummaryMessage",
-    "isWrapper",
-    "lastSealedIndex",
-    "listProjectFiles",
-    "listSessions",
-    "listSubagents",
-    "loadAuth",
-    "loadInstructions",
-    "loadSettings",
-    "newSessionId",
-    "newTurnId",
-    "normalizeShimmer",
-    "offeredTools",
-    "pairCalls",
-    "parseBash",
-    "parseCommandLine",
-    "parseHttpUrl",
-    "parseParentAnswers",
-    "parsePowerShell",
-    "parseSkillLine",
-    "projectAmiraDir",
-    "projectKey",
-    "projectMessages",
-    "protectedPath",
-    "providersFromSettings",
-    "rankMatches",
-    "readCapped",
-    "readJsonFile",
-    "readTrace",
-    "recentUserMessages",
-    "referencedArtifacts",
-    "renderPrompt",
-    "renderTranscript",
-    "resolvePermissions",
-    "resolveShimmer",
-    "restrictToCurrentUser",
-    "resultText",
-    "ruleLabel",
-    "ruleMatches",
-    "runExtensionCommand",
-    "sessionLockFile",
-    "sessionLockPid",
-    "sessionSnippet",
-    "sessionsDir",
-    "setAuthKey",
-    "setSection",
-    "setUserAgentVersion",
-    "settingsFiles",
-    "splitHistory",
-    "storedHistory",
-    "streamProjectFiles",
-    "stricterMode",
-    "strictest",
-    "subagentMessages",
-    "subagentSessionFiles",
-    "subagentsOf",
-    "summarize",
-    "summaryMessages",
-    "summaryOf",
-    "toolPath",
-    "toolTraits",
-    "trackWorkspace",
-    "tryFileLock",
-    "updateProviderInSettings",
-    "updateSettingsFile",
-    "usageTokens",
-    "validateAuth",
-    "validateSettings",
-    "validateValue",
-    "waitFileLock",
-    "windowGuessNotice",
-    "writtenPaths",
-  ])
+  expect(actual).toEqual(
+    [
+      "AGING_DEFAULTS",
+      "Agent",
+      "AgentAbortedError",
+      "AgentBusyError",
+      "ArtifactQuotaError",
+      "ArtifactStore",
+      "DEFAULT_ARTIFACT_QUOTA_MB",
+      "EventBus",
+      "FAILURE_POLICY",
+      "FILE_REWIND_COVERAGE",
+      "FileRewind",
+      "FileRewindConflictError",
+      "InterceptorRegistry",
+      "KEEP_USER_TOKENS",
+      "LockBusyError",
+      "MODE_SUMMARY",
+      "NON_INTERACTIVE_LINE",
+      "NOTICE_RETRY_MS",
+      "NetError",
+      "PERMISSION_MODES",
+      "Permissions",
+      "SECTION_ORDER",
+      "SESSION_LOCK_HEARTBEAT_MS",
+      "SESSION_LOCK_STALE_MS",
+      "SessionConflictError",
+      "SessionInUseError",
+      "SessionStore",
+      "SummaryError",
+      "TOOL_SEARCH",
+      "ToolConflictError",
+      "ToolRegistry",
+      "USER_AGENT",
+      "addNonInteractive",
+      "agedStub",
+      "agingCandidates",
+      "amiraHome",
+      "amiraPath",
+      "artifactDir",
+      "artifactIdsIn",
+      "assertPublicHost",
+      "builtinWrittenPaths",
+      "checkArgs",
+      "checkpointOf",
+      "commandName",
+      "contextTokens",
+      "copyFileHistory",
+      "createToolSession",
+      "defaultSections",
+      "deferredToolsSection",
+      "dnsResolver",
+      "duplicateView",
+      "estimateAfter",
+      "estimateTokens",
+      "fetchPublic",
+      "fileCompactionMemory",
+      "fileHistoryDir",
+      "guardedFetch",
+      "hooksPathsIn",
+      "intermediate",
+      "isPrivateAddress",
+      "isProcessAlive",
+      "isSummaryMessage",
+      "isWrapper",
+      "lastSealedIndex",
+      "newSessionId",
+      "newTurnId",
+      "offeredTools",
+      "pairCalls",
+      "parseBash",
+      "parsePowerShell",
+      "parseHttpUrl",
+      "projectAmiraDir",
+      "projectKey",
+      "projectMessages",
+      "protectedPath",
+      "readCapped",
+      "recentUserMessages",
+      "referencedArtifacts",
+      "renderPrompt",
+      "renderTranscript",
+      "resolvePermissions",
+      "resultText",
+      "ruleLabel",
+      "ruleMatches",
+      "sessionLockFile",
+      "sessionLockPid",
+      "sessionsDir",
+      "setSection",
+      "setUserAgentVersion",
+      "splitHistory",
+      "stricterMode",
+      "strictest",
+      "subagentSessionFiles",
+      "summarize",
+      "summaryMessages",
+      "summaryOf",
+      "toolPath",
+      "toolTraits",
+      "tryFileLock",
+      "validateValue",
+      "waitFileLock",
+      "windowGuessNotice",
+      "writeAtomicFile",
+      "writtenPaths",
+    ].sort(),
+  )
 })
 
 test("EventBus host capture is additive without changing extension event types", () => {
@@ -486,12 +251,10 @@ test("EventBus host capture is additive without changing extension event types",
     () => {},
     () => {},
   )
-  expect({ capture: typeof bus.capture, release: typeof release }).toMatchInlineSnapshot(`
-    {
-      "capture": "function",
-      "release": "function",
-    }
-  `)
+  expect({ capture: typeof bus.capture, release: typeof release }).toEqual({
+    capture: "function",
+    release: "function",
+  })
   release()
 })
 

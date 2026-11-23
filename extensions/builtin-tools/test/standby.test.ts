@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import "../../../packages/core/src/index.ts"
+import "../../../packages/host/src/index.ts"
 import {
   type ReleaseOptions,
   type RunResult,

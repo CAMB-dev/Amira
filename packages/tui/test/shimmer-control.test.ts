@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { ShimmerEffect, ThemeDefinition } from "@amira/api"
-import { resolveShimmer } from "@amira/core"
+import { resolveShimmer } from "@amira/host"
 import { type InputEvent, stripAnsi, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { ShimmerControl, shimmerColorChoices } from "../src/app/shimmer-control.ts"

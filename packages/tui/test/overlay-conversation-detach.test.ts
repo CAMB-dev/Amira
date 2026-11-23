@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import type { EventMap, UiControl, ViewDefinition } from "@amira/api"
-import { EventBus, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { UiRequests } from "@amira/host"
 import { CURSOR_MARKER, key, textKey } from "@amira/tui-kit"
 import { plain as ctx } from "../../tui-kit/test/context.ts"
 import { OverlayManager } from "../src/app/overlays.ts"

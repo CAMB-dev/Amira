@@ -6,7 +6,7 @@ import {
   isSubagentView,
   type ToolDetailLevel,
 } from "@amira/api"
-import { createUiFormBackend, type UiRequests, type UiResponseAck } from "@amira/core"
+import { createUiFormBackend, type UiRequests, type UiResponseAck } from "@amira/host"
 import {
   type ImageStore,
   type InputEvent,

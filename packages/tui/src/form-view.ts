@@ -24,7 +24,7 @@ import {
   type FormMutationResult,
   type UiRequests,
   type UiResponseAck,
-} from "@amira/core"
+} from "@amira/host"
 import {
   type Component,
   Form,

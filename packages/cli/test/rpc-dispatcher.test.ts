@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
-import { Agent, UiRequests } from "@amira/core"
+import { Agent } from "@amira/core"
+import { UiRequests } from "@amira/host"
 import {
   createRpcDispatcher,
   createRpcOperations,

@@ -11,7 +11,7 @@ import {
   type ProviderDraft,
   providerFormSpec,
 } from "@amira/api"
-import { authFile, loadAuth, loadSettings, providersFromSettings } from "@amira/core"
+import { authFile, loadAuth, loadSettings, providersFromSettings } from "@amira/host"
 import pkg from "../package.json" with { type: "json" }
 import { createProviderAdmin, keyHint, modelNote } from "../src/provider-admin.ts"
 

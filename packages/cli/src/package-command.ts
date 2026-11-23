@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 import { API_VERSION, DEFAULT_PACKAGES_DISABLED, type PackageCommandContext, type Settings } from "@amira/api"
-import { amiraHome, installVirtualApi, loadSettings } from "@amira/core"
+import { amiraHome } from "@amira/core"
 import { findPackageCommand, projectScopeIsUser, projectTrust } from "@amira/extensions"
+import { installVirtualApi, loadSettings } from "@amira/host"
 import { DEFAULT_MAX_OUTPUT_CHARS, runCommand } from "@amira/proc"
 import type { PrintIO } from "./print.ts"
 

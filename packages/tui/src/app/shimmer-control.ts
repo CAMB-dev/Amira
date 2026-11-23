@@ -7,7 +7,7 @@ import type {
   ShimmerStyle,
   ThemeDefinition,
 } from "@amira/api"
-import { normalizeShimmer, resolveShimmer, SHIMMER_PRESETS } from "@amira/core"
+import { normalizeShimmer, resolveShimmer, SHIMMER_PRESETS } from "@amira/host"
 import { bold, type InputEvent, type RenderContext, type Theme, underline } from "@amira/tui-kit"
 import { Dialog } from "../dialog.ts"
 import { dialogFrame } from "../dialog-frame.ts"

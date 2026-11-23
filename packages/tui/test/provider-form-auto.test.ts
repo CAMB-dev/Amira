@@ -8,7 +8,8 @@ import {
   type ProviderTestResult,
   providerFormSpec,
 } from "@amira/api"
-import { EventBus, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { UiRequests } from "@amira/host"
 import { key, stripAnsi, textKey } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { FormView, specFormBackend, uiFormBackend } from "../src/form-view.ts"

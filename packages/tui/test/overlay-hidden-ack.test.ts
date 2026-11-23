@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { EventBus, UiRequests, type UiResponseAck } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { UiRequests, type UiResponseAck } from "@amira/host"
 import { key } from "@amira/tui-kit"
 import { plain as ctx } from "../../tui-kit/test/context.ts"
 import { OverlayManager, type OverlayRequestBackend } from "../src/app/overlays.ts"

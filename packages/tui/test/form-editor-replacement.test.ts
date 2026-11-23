@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import type { FormActionResult } from "@amira/api"
-import { createUiFormBackend, EventBus, type FormDraft, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { createUiFormBackend, type FormDraft, UiRequests } from "@amira/host"
 import { key, textKey } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { OverlayManager } from "../src/app/overlays.ts"

@@ -1,14 +1,8 @@
 // Owns interactive options, shared UI constants and startup helpers.
 import { homedir } from "node:os"
 import type { AnyEvent, CommandDefinition, ShimmerEffect, TerminalApi, TuiSettings } from "@amira/api"
-import type {
-  Agent,
-  CommandHost,
-  PanelRegistry,
-  StatusRegistry,
-  ThemeRegistry,
-  UiRequests,
-} from "@amira/core"
+import type { Agent } from "@amira/core"
+import type { CommandHost, PanelRegistry, StatusRegistry, ThemeRegistry, UiRequests } from "@amira/host"
 import type { InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
 import { applyClockSetting } from "../clock.ts"
 import type { ViewSource } from "../extension-view.ts"

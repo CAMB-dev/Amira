@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { isNoModel, userMessage } from "@amira/ai"
 import { type AssistantMessage, type SessionControl, USER_STOP_REASON } from "@amira/api"
-import { listSubagents, readTrace, subagentMessages } from "@amira/core"
+import { listSubagents, readTrace, subagentMessages } from "@amira/host"
 import { withProviderHint } from "../provider-command.ts"
 import type { ControlContext } from "./context.ts"
 

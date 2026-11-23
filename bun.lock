@@ -89,6 +89,7 @@
         "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
         "@amira/extensions": "workspace:*",
+        "@amira/host": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui": "workspace:*",
         "@amira/tui-kit": "workspace:*",
@@ -100,13 +101,23 @@
       "dependencies": {
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
-        "@amira/proc": "workspace:*",
       },
     },
     "packages/extensions": {
       "name": "@amira/extensions",
       "version": "0.0.0",
       "dependencies": {
+        "@amira/api": "workspace:*",
+        "@amira/core": "workspace:*",
+        "@amira/host": "workspace:*",
+        "@amira/proc": "workspace:*",
+      },
+    },
+    "packages/host": {
+      "name": "@amira/host",
+      "version": "0.0.0",
+      "dependencies": {
+        "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
         "@amira/proc": "workspace:*",
@@ -123,6 +134,7 @@
         "@amira/ai": "workspace:*",
         "@amira/api": "workspace:*",
         "@amira/core": "workspace:*",
+        "@amira/host": "workspace:*",
         "@amira/proc": "workspace:*",
         "@amira/tui-kit": "workspace:*",
       },
@@ -157,6 +169,8 @@
     "@amira/ext-web": ["@amira/ext-web@workspace:extensions/web"],
 
     "@amira/extensions": ["@amira/extensions@workspace:packages/extensions"],
+
+    "@amira/host": ["@amira/host@workspace:packages/host"],
 
     "@amira/proc": ["@amira/proc@workspace:packages/proc"],
 

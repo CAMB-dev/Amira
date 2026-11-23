@@ -1,5 +1,5 @@
 import { type AskAnswer, type ConfirmAnswer, type EventMap, type SelectChoice, sectionOf } from "@amira/api"
-import { rankMatches, sessionSnippet } from "@amira/core"
+import { rankMatches, sessionSnippet } from "@amira/host"
 import {
   bold,
   type Component,

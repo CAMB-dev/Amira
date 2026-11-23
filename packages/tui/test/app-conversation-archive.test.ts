@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { CommandContext, OwnedConversation } from "@amira/api"
-import { OwnedConversationManager, ToolRegistry } from "@amira/core"
+import { ToolRegistry } from "@amira/core"
+import { OwnedConversationManager } from "@amira/host"
 import { closeImageApp, setup, userTexts, waitFor } from "./app-harness.ts"
 
 test("archiving the native focused conversation returns input to main and revokes its incarnation", async () => {

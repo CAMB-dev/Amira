@@ -1,7 +1,7 @@
 // A/B/D deliberate UI oracles: shared two-cell grid, fill-only code, rounded dialogs, › and ·.
 import { expect, test } from "bun:test"
 import type { ShimmerEffect, TuiSettings } from "@amira/api"
-import { ThemeRegistry } from "@amira/core"
+import { ThemeRegistry } from "@amira/host"
 import type { ThemeVariant } from "@amira/tui-kit"
 import { glyphs } from "../src/glyphs.ts"
 import { setup, waitFor } from "./app-harness.ts"

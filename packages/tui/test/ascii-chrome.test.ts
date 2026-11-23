@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { emptyUsage, type ViewDefinition } from "@amira/api"
-import { ThemeRegistry } from "@amira/core"
+import { ThemeRegistry } from "@amira/host"
 import { Editor, key, Spinner, stripAnsi } from "@amira/tui-kit"
 import { agentsCommand } from "../../../extensions/agent/src/index.ts"
 import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"

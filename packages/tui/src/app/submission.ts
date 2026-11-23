@@ -1,6 +1,7 @@
 // Owns submission validation and routing to commands, skills, input handlers or the outbox.
 import { isNoModel } from "@amira/ai"
-import { type Agent, type CommandHost, type CommandRunOptions, parseCommandLine } from "@amira/core"
+import type { Agent } from "@amira/core"
+import { type CommandHost, type CommandRunOptions, parseCommandLine } from "@amira/host"
 import type { Editor, EditorPart } from "@amira/tui-kit"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { PromptHistory } from "../prompt-history.ts"

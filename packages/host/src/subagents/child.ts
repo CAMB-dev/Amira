@@ -1,0 +1,338 @@
+import { emptyUsage, type Message, type Usage, type UserMessage, userMessage } from "@amira/ai"
+import {
+  type AnyEvent,
+  agentStatusState,
+  type ChildSession,
+  type ChildState,
+  type PendingNotice,
+  type SpawnContext,
+  type SpawnGroup,
+  type SpawnGroupInfo,
+  type SpawnGroupOptions,
+  type SpawnGroupState,
+  type SpawnOptions,
+  type SubagentInfo,
+  type SubagentResult,
+} from "@amira/api"
+import type { Agent, EmitMeta, SessionStore } from "@amira/core"
+import { cloneUsage } from "@amira/core/internal"
+import { recordConversationUsage } from "../conversation-usage.ts"
+import type { AgentTree } from "../subagents.ts"
+import { addUsage, overBudget, usageTokens } from "./budget.ts"
+import { metaOf } from "./events.ts"
+import type { ResultSpec } from "./structured-result.ts"
+
+/**
+ * A sub-agent a tree started, as `AgentTree.subagent` gives it. A running one comes with its
+ * live conversation and session; a finished one keeps its session's file, or, without one,
+ * a copy of its conversation.
+ */
+export interface SpawnedSubagent {
+  info: SubagentInfo
+  /** The live array while it runs; copy it to keep a snapshot. */
+  messages?: readonly Message[]
+  session?: SessionStore
+  file?: string
+}
+
+export class Child implements ChildSession {
+  readonly id: string
+  readonly parentSessionId: string
+  readonly depth: number
+  readonly cwd: string
+  readonly usage = emptyUsage()
+  state: ChildState = "queued"
+  turns = 0
+  /** Set once aborted: why. */
+  abortReason: string | undefined
+  /** Set once a persistent child was asked to end cleanly: why. */
+  stopReason: string | undefined
+  /** Its clean end was asked for as finished work: it ends done, without a stopped note. */
+  stopFinished = false
+  /** Why it ended early without failing, e.g. its turn limit. */
+  note: string | undefined
+  /** Given a place to run (it starts a microtask later). */
+  admitted = false
+  started = false
+  /** When its turn started, in ms since the epoch. */
+  startedAt: number | undefined
+  /** Set once it ended. */
+  ended: SubagentResult | undefined
+  /** Ends the wait it is in (idle, or queued for its next turn), for a stop or an abort. */
+  waiting: (() => void) | undefined
+  result$: ResultSpec | undefined
+  #result: Promise<SubagentResult>
+  settle!: (r: SubagentResult) => void
+
+  constructor(
+    readonly agent: Agent,
+    readonly role: string | undefined,
+    readonly title: string,
+    readonly toolCallId: string | undefined,
+    readonly prompt: string,
+    readonly context: SpawnContext,
+    /** Who its subagent.end is sent as: its parent, with the grandparent if there is one. */
+    readonly parentMeta: EmitMeta,
+    private tree: AgentTree,
+    readonly persistent: boolean,
+    readonly ephemeral: boolean,
+    /** Where private replies are charged; inherited by private descendants. */
+    readonly usageStore: SessionStore | undefined,
+    /** Receives only aggregate budget updates, never private conversation events. */
+    readonly usageOwner: Agent | undefined,
+    readonly maxTurns: number | undefined,
+    /** Its own group first, then the groups that one is part of. */
+    readonly groups: Group[],
+  ) {
+    this.id = agent.sessionId
+    this.parentSessionId = agent.parentSessionId!
+    this.depth = agent.depth
+    this.cwd = agent.cwd
+    this.#result = new Promise((resolve) => {
+      this.settle = resolve
+    })
+  }
+
+  /** Private replies count in the owning persisted session without retaining their transcript. */
+  chargeUsage(usage: Usage, model = this.model): void {
+    if (!this.ephemeral) return
+    const attribution = {
+      sessionId: this.id,
+      parentSessionId: this.parentSessionId,
+      ...(this.groupId ? { groupId: this.groupId } : {}),
+      ephemeral: true,
+    }
+    if (!this.usageStore) {
+      recordConversationUsage(this.agent, usage, model, attribution)
+      return
+    }
+    try {
+      this.usageStore.append({
+        type: "side_usage",
+        model,
+        usage: cloneUsage(usage),
+        label: this.title,
+        attribution,
+      })
+    } catch (error) {
+      recordConversationUsage(this.agent, usage, model, attribution, this.usageStore)
+      // Late receipts can outlive the owner's Agent. Report without disabling the resumed
+      // writer or interrupting the tree/group accounting that still books this usage.
+      const owner = this.usageOwner ?? this.agent
+      owner.bus.emit(
+        "extension.notice",
+        {
+          source: "session",
+          level: "warning",
+          text: `Could not save private usage for session ${this.usageStore.id}: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        metaOf(owner),
+      )
+    }
+  }
+
+  /** Group views overlap; charge each view once without adding them to the tree total again. */
+  chargeGroups(usage: Usage, end: (group: Group, reason: string) => void): void {
+    for (const group of this.groups) {
+      addUsage(group.usage, usage)
+      const over = group.state === "active" ? overBudget(group.usage, group.limits.budget) : undefined
+      if (over) {
+        group.exceeded = true
+        end(group, `the group "${group.name}" ran out of budget (${over})`)
+      }
+    }
+  }
+
+  get model() {
+    return { provider: this.agent.model.provider, model: this.agent.model.id }
+  }
+
+  get groupId(): string | undefined {
+    return this.groups[0]?.id
+  }
+
+  get pendingNotices(): number {
+    if (this.ended) return 0
+    return this.agent.expectedNotices + this.agent.waitingNotices
+  }
+
+  get events(): AsyncIterable<AnyEvent> {
+    return this.tree.eventsOf(this)
+  }
+
+  result(): Promise<SubagentResult> {
+    return this.#result
+  }
+
+  abort(reason = "aborted by its parent"): void {
+    this.tree.abortChild(this, reason)
+  }
+
+  stop(reason = "stopped", opts: { finished?: boolean } = {}): void {
+    this.tree.stopChild(this, reason, opts.finished)
+  }
+
+  /** User controls are independent of an extension's own message-holding policy. */
+  message(text: string): boolean {
+    if (!text.trim() || this.ended || this.stopReason || this.abortReason) return false
+    const message = userMessage(text)
+    if (this.persistent) {
+      const sent = this.send(message, true)
+      if (sent && !this.agent.turnId)
+        this.agent.bus.emit("turn.steer", { message, state: "queued" }, metaOf(this.agent))
+      return sent
+    }
+    // steer() on an idle agent starts a turn: buffer queued input without bypassing admission.
+    if (!this.started) this.agent.expectNotice().deliver(message, { wake: false })
+    else if (this.agent.turnId) this.agent.steer(message)
+    else return false
+    return true
+  }
+
+  pause(): boolean {
+    if (this.ended || this.stopReason || this.abortReason || this.state !== "working") return false
+    if (!this.agent.busy || !this.agent.execution.pause()) return false
+    this.#emitState("paused")
+    return true
+  }
+
+  resume(): boolean {
+    if (this.ended || this.stopReason || this.abortReason || !this.agent.execution.resume()) return false
+    this.#emitState("working")
+    return true
+  }
+
+  #emitState(state: "paused" | Exclude<ChildState, "ended">) {
+    this.agent.bus.emit(
+      "subagent.state",
+      { childSessionId: this.id, state, turns: this.turns },
+      this.parentMeta,
+    )
+    this.tree.childStateChanged(this)
+  }
+
+  send(message: string | UserMessage, steer = false): boolean {
+    if (!this.persistent || this.ended || this.stopReason || this.abortReason) return false
+    if (steer && this.agent.turnId) this.agent.steer(message, { notice: true })
+    else this.agent.expectNotice().deliver(typeof message === "string" ? userMessage(message) : message)
+    return true
+  }
+
+  expectNotice(): PendingNotice {
+    if (!this.persistent) throw new Error("only a persistent sub-agent can be sent messages")
+    return this.agent.expectNotice()
+  }
+}
+
+const groupSignals = new WeakMap<SpawnGroup, AbortSignal>()
+
+/** A tool-created group retains the creating turn's cancellation even after later turns start. */
+export function bindGroupSignal(group: SpawnGroup, signal: AbortSignal): SpawnGroup {
+  groupSignals.set(group, signal)
+  return group
+}
+
+/** A spawn group (SpawnGroup): limits and usage of the children started through it. */
+export class Group implements SpawnGroup {
+  readonly id = `g_${crypto.randomUUID().slice(0, 8)}`
+  readonly usage = emptyUsage()
+  state: SpawnGroupState = "active"
+  /** Children started in all. */
+  total = 0
+  /** Its children (and theirs) that have not ended. */
+  readonly live = new Set<Child>()
+  /** Terminal counts survive releasing the finished child and its session. */
+  readonly outcomes = { done: 0, failed: 0, stopped: 0 }
+  endReason: string | undefined
+  exceeded = false
+  /** The owner's line about what the group is doing (setStatus). */
+  status: string | undefined
+  #ended: Promise<SpawnGroupInfo>
+  settle!: (info: SpawnGroupInfo) => void
+
+  constructor(
+    readonly name: string,
+    readonly parent: Agent,
+    /** The group the creating session belongs to: this one's children count against it too. */
+    readonly outer: Group | undefined,
+    readonly limits: Omit<SpawnGroupOptions, "name" | "compact">,
+    readonly compact: boolean,
+    private tree: AgentTree,
+    /** Set on the children it spawns, e.g. the tool call that created the group. */
+    private defaults: { toolCallId?: string },
+    readonly ephemeral: boolean,
+  ) {
+    this.#ended = new Promise((resolve) => {
+      this.settle = resolve
+    })
+  }
+
+  /** This group and the groups it is part of. */
+  get chain(): Group[] {
+    const out: Group[] = []
+    for (let g: Group | undefined = this; g; g = g.outer) out.push(g)
+    return out
+  }
+
+  spawn(opts: SpawnOptions): ChildSession {
+    groupSignals.get(this)?.throwIfAborted()
+    const toolCallId = opts.toolCallId ?? this.defaults.toolCallId
+    return this.tree.spawn(this.parent, { ...opts, ...(toolCallId ? { toolCallId } : {}) }, this)
+  }
+
+  info(): SpawnGroupInfo {
+    const agents: SpawnGroupInfo["agents"] = {
+      total: this.total,
+      queued: 0,
+      working: 0,
+      idle: 0,
+      ended: this.total - this.live.size,
+    }
+    for (const c of this.live) {
+      const state = agentStatusState({
+        end: c.ended,
+        startedAt: c.startedAt,
+        queued: c.state === "queued",
+        idle: c.state === "idle",
+        paused: c.agent.execution.paused,
+      })
+      if (state === "paused") agents.paused = (agents.paused ?? 0) + 1
+      else if (state === "working" || state === "queued" || state === "idle") agents[state]++
+      else agents.ended++
+    }
+    return {
+      id: this.id,
+      name: this.name,
+      parentSessionId: this.parent.sessionId,
+      state: this.state,
+      limits: structuredClone(this.limits),
+      ...(this.compact ? { compact: true } : {}),
+      ...(this.status ? { status: this.status } : {}),
+      usage: { ...this.usage },
+      tokens: usageTokens(this.usage),
+      agents,
+      outcomes: { ...this.outcomes },
+      ...(this.endReason !== undefined ? { endReason: this.endReason } : {}),
+      ...(this.exceeded ? { exceeded: true } : {}),
+    }
+  }
+
+  setStatus(text: string): void {
+    const line = text.replace(/\s+/g, " ").trim() || undefined
+    if (line === this.status || this.state === "ended") return
+    this.status = line
+    this.parent.bus.emit("group.update", { group: this.info() }, metaOf(this.parent))
+  }
+
+  children(): ChildSession[] {
+    return [...this.live].filter((c) => !c.ephemeral)
+  }
+
+  end(reason = "ended by its owner"): void {
+    this.tree.endGroup(this, reason)
+  }
+
+  ended(): Promise<SpawnGroupInfo> {
+    return this.#ended
+  }
+}

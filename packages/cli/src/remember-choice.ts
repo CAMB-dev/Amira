@@ -4,14 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import { isNoModel } from "@amira/ai"
 import type { SessionControl, ShimmerEffect, TuiSettings } from "@amira/api"
-import {
-  type Agent,
-  amiraHome,
-  normalizeShimmer,
-  projectAmiraDir,
-  resolveShimmer,
-  updateSettingsFile,
-} from "@amira/core"
+import { type Agent, amiraHome, projectAmiraDir } from "@amira/core"
+import { normalizeShimmer, resolveShimmer, updateSettingsFile } from "@amira/host"
 
 /** Only the interactive command surface gets this wrapper, never extensions or RPC. */
 export function rememberingControl(

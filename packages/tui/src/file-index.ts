@@ -1,4 +1,4 @@
-import { type ListFiles, MAX_FILES, streamProjectFiles } from "@amira/core"
+import { type ListFiles, MAX_FILES, streamProjectFiles } from "@amira/host"
 
 export {
   type ListFiles,
@@ -6,7 +6,7 @@ export {
   listProjectFiles,
   MAX_FILES,
   streamProjectFiles,
-} from "@amira/core"
+} from "@amira/host"
 
 /**
  * The project's files and directories as far as they are known. While loading it grows in

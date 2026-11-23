@@ -12,7 +12,8 @@ import {
   type Extension,
   textResult,
 } from "@amira/api"
-import { EventBus, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { UiRequests } from "@amira/host"
 import {
   SPAWN_TEST_TIMEOUT_MS,
   stopSpawn,

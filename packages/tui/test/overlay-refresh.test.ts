@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, jest, test } from "bun:test"
 import type { AgentStatusState, UiControl, ViewDefinition } from "@amira/api"
-import { resolveShimmer } from "@amira/core"
+import { resolveShimmer } from "@amira/host"
 import { defaultTheme, key, type RenderContext, Spinner, type Theme } from "@amira/tui-kit"
 import { plain as ctx } from "../../tui-kit/test/context.ts"
 import { OverlayManager } from "../src/app/overlays.ts"

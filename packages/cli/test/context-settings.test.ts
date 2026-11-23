@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { validateSettings } from "@amira/core"
+import { validateSettings } from "@amira/host"
 import { contextFromSettings } from "../src/session.ts"
 
 test("settings context: checked, then handed to the agent with megabytes as bytes", () => {

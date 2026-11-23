@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import type { ThemeDefinition } from "@amira/api"
-import type { ThemeFileEntry, ThemeRegistry } from "@amira/core"
+import type { ThemeFileEntry, ThemeRegistry } from "@amira/host"
 import amber from "../themes/amber.json"
 import amira from "../themes/amira.json"
 import ascii from "../themes/ascii.json"

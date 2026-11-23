@@ -15,8 +15,6 @@ for (const { signal, printing } of [
     const child = Bun.spawn(
       [
         process.execPath,
-        "--preload",
-        path.join(import.meta.dir, "../../core/test/file-lock-worker-preload.ts"),
         path.join(import.meta.dir, "signal-lifecycle-worker.ts"),
         root,
         signal,

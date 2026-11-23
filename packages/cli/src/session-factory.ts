@@ -11,27 +11,29 @@ import type {
 import { DEFAULT_SHELL, DEFAULT_WEB_NATIVE_SEARCH } from "@amira/api"
 import {
   Agent,
-  AgentTree,
   amiraHome,
   amiraPath,
   type CompactionOptions,
-  commandAliasWarnings,
   defaultSections,
   EventBus,
-  ExtensionHost,
   fileCompactionMemory,
   InterceptorRegistry,
-  instructionsSection,
-  loadInstructions,
-  normalizeShimmer,
   Permissions,
   type ResolvedPermissions,
   type SessionStore,
   ToolRegistry,
-  TraceRecorder,
-  validateSettings,
 } from "@amira/core"
 import type { ActivePackages } from "@amira/extensions"
+import {
+  AgentTree,
+  commandAliasWarnings,
+  ExtensionHost,
+  instructionsSection,
+  loadInstructions,
+  normalizeShimmer,
+  TraceRecorder,
+  validateSettings,
+} from "@amira/host"
 import { UsageError } from "./args.ts"
 import { type CatalogCacheOptions, readCatalogCache, refreshCatalog } from "./catalog.ts"
 import { installProviderModelCache } from "./provider-models.ts"

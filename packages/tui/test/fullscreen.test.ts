@@ -14,16 +14,8 @@ import {
   type TuiSettings,
   textResult,
 } from "@amira/api"
-import {
-  Agent,
-  AgentTree,
-  CommandHost,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  listSubagents,
-  ToolRegistry,
-} from "@amira/core"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { AgentTree, CommandHost, ExtensionHost, listSubagents } from "@amira/host"
 import { FakeTerminal, type GraphicsReplies, visibleWidth } from "@amira/tui-kit"
 import { agentsCommand } from "../../../extensions/agent/src/index.ts"
 import { subagentView } from "../../../extensions/agent/src/subagent-view.ts"

@@ -1,4 +1,5 @@
-import type { Agent, UiRequests } from "@amira/core"
+import type { Agent } from "@amira/core"
+import type { UiRequests } from "@amira/host"
 import { Editor, type EditorOptions, type InputEvent } from "@amira/tui-kit"
 import { observeEditorState } from "../../../tui-kit/src/internal/editor-state.ts"
 import { glyphs } from "../glyphs.ts"

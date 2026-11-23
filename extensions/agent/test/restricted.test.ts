@@ -3,14 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  AgentTree,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { AgentTree, ExtensionHost } from "../../../packages/host/src/index.ts"
 import { createAgentExtension } from "../src/index.ts"
 
 test("restricted agent tool refuses explicit and role-default worktrees before calling git", async () => {

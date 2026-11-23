@@ -1,6 +1,7 @@
 // Owns bottom-area layout: panels, activity, pending messages, input, status and hints.
 import { AGENT_STATUS_BADGES } from "@amira/api"
-import type { Agent, PanelRegistry, StatusRegistry } from "@amira/core"
+import type { Agent } from "@amira/core"
+import type { PanelRegistry, StatusRegistry } from "@amira/host"
 import {
   bold,
   type Editor,

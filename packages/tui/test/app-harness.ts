@@ -16,15 +16,8 @@ import {
   textResult,
 } from "@amira/api"
 import type { SessionStore } from "@amira/core"
-import {
-  Agent,
-  AgentTree,
-  CommandHost,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "@amira/core"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { AgentTree, CommandHost, ExtensionHost } from "@amira/host"
 import { FakeTerminal, type GraphicsReplies } from "@amira/tui-kit"
 import { builtinPresenters } from "../../../extensions/builtin-tools/src/index.ts"
 import statusExtension from "../../../extensions/commands/src/status.ts"

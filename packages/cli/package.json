@@ -9,9 +9,10 @@
   },
   "dependencies": {
     "@amira/ai": "workspace:*",
-    "@amira/core": "workspace:*",
     "@amira/api": "workspace:*",
+    "@amira/core": "workspace:*",
     "@amira/extensions": "workspace:*",
+    "@amira/host": "workspace:*",
     "@amira/proc": "workspace:*",
     "@amira/tui": "workspace:*",
     "@amira/tui-kit": "workspace:*"

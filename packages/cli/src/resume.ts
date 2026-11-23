@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline/promises"
-import { findSession, listSessions, SessionStore, type SessionSummary } from "@amira/core"
+import { SessionStore } from "@amira/core"
+import { findSession, listSessions, type SessionSummary } from "@amira/host"
 import { wrapText } from "@amira/tui-kit"
 import { UsageError } from "./args.ts"
 

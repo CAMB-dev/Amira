@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { ShimmerPreset } from "@amira/api"
-import { resolveShimmer, SHIMMER_PRESETS } from "@amira/core"
+import { resolveShimmer, SHIMMER_PRESETS } from "@amira/host"
 import { createTheme, themeToken } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { configureShimmer, paintShimmer } from "../src/app/shimmer.ts"

@@ -35,7 +35,7 @@ test(
       const entry = path.join(dir, "entry.ts")
       const binary = path.join(dir, process.platform === "win32" ? "ua.exe" : "ua")
       const cli = path.resolve(import.meta.dir, "../src/user-agent.ts").replaceAll("\\", "/")
-      const net = path.resolve(import.meta.dir, "../../net/src/index.ts").replaceAll("\\", "/")
+      const net = path.resolve(import.meta.dir, "../../core/src/net/index.ts").replaceAll("\\", "/")
       await writeFile(
         entry,
         `import { USER_AGENT } from ${JSON.stringify(cli)}\n` +

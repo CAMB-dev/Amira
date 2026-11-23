@@ -11,6 +11,7 @@
     "@amira/ai": "workspace:*",
     "@amira/api": "workspace:*",
     "@amira/core": "workspace:*",
+    "@amira/host": "workspace:*",
     "@amira/proc": "workspace:*",
     "@amira/tui-kit": "workspace:*"
   }

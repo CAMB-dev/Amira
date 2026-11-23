@@ -10,14 +10,8 @@ import {
   type SessionControl,
 } from "@amira/api"
 import { createAi, createMockDialect } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  CommandHost,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { CommandHost, ExtensionHost } from "../../../packages/host/src/index.ts"
 import commandsExtension from "../src/index.ts"
 import { ProviderConnectionTests } from "../src/provider-tests.ts"
 

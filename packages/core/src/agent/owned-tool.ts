@@ -1,17 +1,16 @@
 import type { ToolResultMessage } from "@amira/ai"
 import type { SessionStatus, ToolResult } from "@amira/api"
 import type { Agent } from "../agent.ts"
-import type { AgentTree } from "../subagents.ts"
 import type { ToolRunner } from "./tool-runner.ts"
 import type { TurnState } from "./turn-runner.ts"
-import { AgentAbortedError, AgentBusyError, type Turn } from "./types.ts"
+import { AgentAbortedError, AgentBusyError, type AgentTreeHost, type Turn } from "./types.ts"
 
 interface OwnedToolOutcome {
   result: ToolResult
   aborted: boolean
 }
 const runners = new WeakMap<Agent, OwnedToolRunner>()
-const ownedTrees = new WeakSet<AgentTree>()
+const ownedTrees = new WeakSet<AgentTreeHost>()
 
 /** Internal owner binding; do not add an unbound invocation method to Agent's public API. */
 export function runOwnedTool(

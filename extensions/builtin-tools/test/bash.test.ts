@@ -6,7 +6,7 @@ import {
   waitForSpawnCondition,
   waitForSpawnExit,
 } from "../../../scripts/spawn-test.ts"
-import "../../../packages/core/src/index.ts"
+import "../../../packages/host/src/index.ts"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { type ProcessTree, runCommand, trackProcessTree } from "../../../packages/proc/src/index.ts"

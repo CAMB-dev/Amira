@@ -1,5 +1,5 @@
 import type { StatusTone } from "@amira/api"
-import type { ResolvedStatusItem } from "@amira/core"
+import type { ResolvedStatusItem } from "@amira/host"
 import {
   type RenderContext,
   type StyleFn,

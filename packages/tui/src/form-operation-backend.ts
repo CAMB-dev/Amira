@@ -1,4 +1,4 @@
-import type { FrontendFormBackend } from "@amira/core"
+import type { FrontendFormBackend } from "@amira/host"
 import type { FormBackend } from "./form-view.ts"
 
 /** Adapts a local host or transport implementation without making render/input do IO. */

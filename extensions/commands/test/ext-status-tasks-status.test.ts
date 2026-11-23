@@ -1,11 +1,7 @@
 import { expect, spyOn, test } from "bun:test"
 import { hostBackgroundJobs, type SessionControl, type SubagentInfo } from "@amira/api"
-import {
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { ExtensionHost } from "../../../packages/host/src/index.ts"
 import { JobRegistry } from "../../../packages/proc/src/index.ts"
 import statusExtension from "../src/status.ts"
 

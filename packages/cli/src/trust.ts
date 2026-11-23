@@ -1,7 +1,6 @@
 import { createInterface } from "node:readline/promises"
 import type { Settings } from "@amira/api"
 import { DEFAULT_PACKAGES_DISABLED } from "@amira/api"
-import { loadSettings } from "@amira/core"
 import {
   type ActivePackages,
   activePackages,
@@ -11,6 +10,7 @@ import {
   projectTrust,
   rememberProjectTrust,
 } from "@amira/extensions"
+import { loadSettings } from "@amira/host"
 
 export interface PackagePlan {
   /** The packages to load, read again on each /reload. */

@@ -33,7 +33,6 @@ import {
   pruneArtifacts,
   summarizeArtifactUsage,
 } from "./agent/artifact-usage.ts"
-import { scopedBackgroundJobs } from "./agent/background-jobs.ts"
 import type { Compactor } from "./agent/compactor.ts"
 import {
   buildContext,
@@ -44,10 +43,12 @@ import {
 import type { ContextManager } from "./agent/context-manager.ts"
 import { History } from "./agent/history.ts"
 import { SessionHold } from "./agent/hold.ts"
+import { agentHostHooks } from "./agent/host-hooks.ts"
 import { modelRef } from "./agent/messages.ts"
 import { reportedSpeed, Thinking } from "./agent/model-call.ts"
 import { NoticeInbox } from "./agent/notices.ts"
 import { OwnedToolRunner } from "./agent/owned-tool.ts"
+import { PauseGate } from "./agent/pause.ts"
 import {
   callToolSession,
   createSessionArtifacts,
@@ -63,6 +64,7 @@ import { TurnRunner, type TurnState } from "./agent/turn-runner.ts"
 import {
   AgentAbortedError,
   type AgentOptions,
+  type AgentTreeHost,
   type Approver,
   NOTICE_RETRY_MS,
   type PromptOptions,
@@ -76,7 +78,6 @@ export * from "./agent/exports.ts"
 import { withCallableServerTools } from "./callable-server-tools.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions, ContextView } from "./context.ts"
-import { recordConversationUsage } from "./conversation-usage.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FileRewind } from "./file-rewind.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
@@ -90,11 +91,7 @@ import {
   renderPrompt,
   setSection,
 } from "./prompt.ts"
-import { holdsAgentSession, registerAgentSession, unregisterAgentSession } from "./session-routing.ts"
 import { newSessionId, type SessionStore } from "./session-store.ts"
-import { scopeAdmission } from "./subagents/lifecycle.ts"
-import { PauseGate } from "./subagents/pause.ts"
-import type { AgentTree } from "./subagents.ts"
 import { ToolRegistry } from "./tool-registry.ts"
 
 /** One agent session: a conversation, a model and the loop that drives tool use. */
@@ -117,7 +114,7 @@ export class Agent {
   readonly fileRewindSettings: Settings["fileRewind"]
   /** 0 for a top-level session, 1 for its sub-agents, and so on. */
   readonly depth: number
-  readonly tree: AgentTree | undefined
+  readonly tree: AgentTreeHost | undefined
   readonly execution = new PauseGate()
   /** The session-scoped background-job capability, when this host provides it. */
   readonly backgroundJobs: BackgroundJobSession | undefined
@@ -229,7 +226,7 @@ export class Agent {
       const retryMs = opts.noticeRetryMs ?? NOTICE_RETRY_MS
       this.#maxParallelTools = Math.max(1, opts.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)
       this.tree = opts.tree
-      this.backgroundJobs = scopedBackgroundJobs(
+      this.backgroundJobs = agentHostHooks.scopeBackgroundJobs(
         opts.backgroundJobs?.forSession({
           sessionId: this.sessionId,
           depth: this.depth,
@@ -414,8 +411,8 @@ export class Agent {
       this.#releaseSessionLease?.()
       throw error
     }
-    registerAgentSession(this)
-    if (this.tree) scopeAdmission(this.tree).reopenParent(this.sessionId)
+    agentHostHooks.registerSession(this)
+    if (this.tree) agentHostHooks.treeScope(this.tree)?.reopenParent(this.sessionId)
   }
 
   /**
@@ -741,13 +738,14 @@ export class Agent {
     if (this.#disposePromise) return this.#disposePromise
     this.#disposed = true
     // A replacement for the same session (rewind, same-session switch) keeps spawning.
-    if (this.tree && holdsAgentSession(this)) scopeAdmission(this.tree).closeParent(this.sessionId)
+    if (this.tree && agentHostHooks.holdsSession(this))
+      agentHostHooks.treeScope(this.tree)?.closeParent(this.sessionId)
     this.#disposePromise = this.#dispose(reason)
     return this.#disposePromise
   }
 
   async #dispose(reason: EventMap["session.end"]["reason"]): Promise<void> {
-    unregisterAgentSession(this)
+    agentHostHooks.unregisterSession(this)
     this.#inbox.cancelRetry()
     this.#turnState.abort?.abort()
     this.#turnState.steerAbort?.abort()
@@ -880,7 +878,7 @@ export class Agent {
   /** Compaction and retries settle their receipts before stopping, without a tool batch. */
   #recordUsage(usage: Usage, auxiliary = false): void {
     if (this.tree) this.tree.recordUsage(this, usage)
-    else recordConversationUsage(this, usage)
+    else agentHostHooks.recordStandaloneUsage(this, usage)
     if (!auxiliary) return
     if (this.tree?.budgetExceeded) this.abort()
   }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { MarkdownRenderResult } from "@amira/api"
-import { MarkdownRendererRegistry } from "@amira/core"
+import { MarkdownRendererRegistry } from "@amira/host"
 import { defaultTheme, ImageStore, stripAnsi } from "@amira/tui-kit"
 import { fakeProvider } from "../../tui-kit/test/fake-images.ts"
 import { type BlockEnv, imagesIn, ReplyBlock } from "../src/blocks.ts"

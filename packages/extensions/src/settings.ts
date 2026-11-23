@@ -1,7 +1,8 @@
 import path from "node:path"
 import type { Settings } from "@amira/api"
 import { DEFAULT_PACKAGES_TRUSTED_PROJECTS, DEFAULT_PACKAGES_UNTRUSTED_PROJECTS } from "@amira/api"
-import { amiraHome, updateSettingsFile } from "@amira/core"
+import { amiraHome } from "@amira/core"
+import { updateSettingsFile } from "@amira/host"
 
 /**
  * Whether the user said a project's own packages may load: true or false once asked (for the

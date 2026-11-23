@@ -22,16 +22,8 @@ import {
   type MockReply,
   type ModelRequest,
 } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  AgentTree,
-  CommandHost,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  listSubagents,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { AgentTree, CommandHost, ExtensionHost, listSubagents } from "../../../packages/host/src/index.ts"
 import { runCommand } from "../../../packages/proc/src/index.ts"
 import { ExtensionViewer } from "../../../packages/tui/src/extension-view.ts"
 import { monoTheme, stripAnsi } from "../../../packages/tui-kit/src/index.ts"

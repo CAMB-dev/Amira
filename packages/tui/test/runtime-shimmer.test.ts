@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { ShimmerEffect, ThemeDefinition } from "@amira/api"
-import { ThemeRegistry } from "@amira/core"
+import { ThemeRegistry } from "@amira/host"
 import type { ThemeVariant } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { shimmerLabel } from "../src/app/activity-row.ts"

@@ -24,20 +24,20 @@ function fixture() {
 }
 
 for (const boundary of ["resume", "startup"] as const) {
-  test(`awaited CLI ${boundary} waits for requested gate retirement and restores current disk history`, async () => {
+  test(`awaited CLI ${boundary} waits for transient lock sharing error and restores current disk history`, async () => {
     const { dir, store, mock, options } = fixture()
     const session = await createSession({ ...options, store })
     store.appendMessage(userMessage("saved"))
     const stale = SessionStore.open(store.file)
     store.appendMessage(userMessage("new on disk"))
-    const gate = `${sessionLockFile(store.file)}.lease-gate`
-    const rename = fs.renameSync
+    const lock = sessionLockFile(store.file)
+    const link = fs.linkSync
     let blocked = true
-    const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
-      if (blocked && String(from) === gate && String(to).includes(".retired-")) {
-        throw Object.assign(new Error("reader denies deletion"), { code: "EPERM" })
+    const hook = spyOn(fs, "linkSync").mockImplementation((from, to) => {
+      if (blocked && String(to) === lock) {
+        throw Object.assign(new Error("reader denies link"), { code: "EPERM" })
       }
-      return rename(from, to)
+      return link(from, to)
     })
     let resumed: Awaited<ReturnType<typeof session.resume>> | undefined
     let acquiring: Promise<NonNullable<typeof resumed>> | undefined
@@ -55,11 +55,10 @@ for (const boundary of ["resume", "startup"] as const) {
       })
       // Observe early failures while checking the timer; awaiting acquisition below still throws.
       void acquiring.catch(() => {})
-      // Keep retirement blocked until an unrelated timer runs. Scheduler latency is
-      // irrelevant: acquisition must yield and cannot complete while the gate is held.
+      // Keep publication blocked until an unrelated timer runs. Scheduler latency is
+      // irrelevant: acquisition must yield and cannot complete while blocked.
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
       expect(settled).toBe(false)
-      expect(fs.existsSync(gate)).toBe(true)
       expect(atomicWait).not.toHaveBeenCalled()
       expect(sleepSync).not.toHaveBeenCalled()
       blocked = false
@@ -77,9 +76,6 @@ for (const boundary of ["resume", "startup"] as const) {
       resumed ??= await acquiring?.catch(() => undefined)
       await resumed?.dispose()
       await session.agent.dispose()
-      // Drive any exact release-requested cleanup before removing this fixture.
-      store.claim()
-      store.release()
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
@@ -99,21 +95,16 @@ for (const command of ["resume", "clear", "fork"] as const) {
     })
     const handover = spyOn(session.host.backgroundJobs, "handoverRoot")
     const cancel = spyOn(old, "cancelNoticeRetry")
-    const rename = fs.renameSync
-    const oldGate = `${sessionLockFile(store.file)}.lease-gate`
-    let denied = true
+    const link = fs.linkSync
+    const oldLock = sessionLockFile(store.file)
+    let denied = false
     const atomicWait = spyOn(Atomics, "wait")
     const sleepSync = spyOn(Bun, "sleepSync")
-    const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
-      if (
-        denied &&
-        String(from) !== oldGate &&
-        String(from).endsWith(".lease-gate") &&
-        String(to).includes(".retired-")
-      ) {
-        throw Object.assign(new Error("requested gate reader"), { code: "EPERM" })
+    const hook = spyOn(fs, "linkSync").mockImplementation((from, to) => {
+      if (denied && String(to) !== oldLock && String(to).endsWith(".lock")) {
+        throw Object.assign(new Error("transient sharing violation"), { code: "EPERM" })
       }
-      return rename(from, to)
+      return link(from, to)
     })
     const create = SessionStore.create
     const acquire = SessionStore.prototype.withClaim
@@ -123,23 +114,16 @@ for (const command of ["resume", "clear", "fork"] as const) {
       construct: () => T,
       opts?: Parameters<SessionStore["withClaim"]>[1],
     ) {
+      denied = true
       callback = new Promise<void>((resolve) => setTimeout(resolve, 0))
       return (acquire<T>).call(this, construct, opts)
     })
-    let created: ReturnType<typeof spyOn> | undefined
     let switching: Promise<unknown> | undefined
     try {
       let target: SessionStore | undefined
       if (command === "resume") {
         target = create({ cwd: dir, dir })
         target.appendMessage(userMessage("destination"))
-      } else if (command === "clear") {
-        created = spyOn(SessionStore, "create").mockImplementation((opts) => {
-          const next = create(opts)
-          next.claim()
-          next.release()
-          return next
-        })
       }
       const pending =
         command === "resume"
@@ -149,7 +133,7 @@ for (const command of ["resume", "clear", "fork"] as const) {
             : host.control.fork!()
       switching = pending
       void pending.catch(() => {})
-      // The timer must run before gate release, without synchronous acquisition sleeps.
+      // The timer must run before release, without synchronous acquisition sleeps.
       expect(callback).toBeDefined()
       await callback
       expect(atomicWait).not.toHaveBeenCalled()
@@ -170,7 +154,6 @@ for (const command of ["resume", "clear", "fork"] as const) {
       hook.mockRestore()
       atomicWait.mockRestore()
       sleepSync.mockRestore()
-      created?.mockRestore()
       acquisition.mockRestore()
       handover.mockRestore()
       cancel.mockRestore()
@@ -187,16 +170,14 @@ test("failed CLI switch preserves the old agent's notices and job scope", async 
   const session = await createSession({ ...options, store })
   const target = SessionStore.create({ cwd: dir, dir })
   target.appendMessage(userMessage("destination"))
-  const gate = `${sessionLockFile(target.file)}.lease-gate`
-  fs.mkdirSync(gate)
-  fs.writeFileSync(path.join(gate, "owner.json"), "corrupt owner")
+  fs.writeFileSync(sessionLockFile(target.file), `${process.pid}\nforeign-holder\n`)
   const old = session.agent
   const host = createCommandHost({ session, cwd: dir })
   const cancel = spyOn(old, "cancelNoticeRetry")
   const handover = spyOn(session.host.backgroundJobs, "handoverRoot")
   const timers = spyOn(globalThis, "setTimeout")
   try {
-    await expect(host.control.resume!(target.id)).rejects.toThrow(gate)
+    await expect(host.control.resume!(target.id)).rejects.toThrow("is open in another Amira process")
     expect(timers).not.toHaveBeenCalled()
     expect(host.agent).toBe(old)
     expect(cancel).not.toHaveBeenCalled()

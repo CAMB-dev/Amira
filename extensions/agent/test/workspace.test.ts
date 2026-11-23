@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises
 import os from "node:os"
 import path from "node:path"
 import type { ExtensionAPI, RunCommandResult } from "@amira/api"
-import { runExtensionCommand } from "../../../packages/core/src/extensions.ts"
+import { runExtensionCommand } from "../../../packages/host/src/extensions.ts"
 import { SPAWN_TEST_TIMEOUT_MS, stopSpawn, waitForSpawnExit } from "../../../scripts/spawn-test.ts"
 import { spawnWorkScope } from "../../builtin-tools/test/util.ts"
 import { gitWorkspaceProvider, gitInfo as probeInfo } from "../src/workspace.ts"

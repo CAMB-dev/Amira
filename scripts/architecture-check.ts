@@ -26,9 +26,10 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
   "packages/proc": [],
   "packages/api": ["@amira/ai"],
   "packages/tui-kit": ["@amira/api"],
-  "packages/core": ["@amira/ai", "@amira/api", "@amira/proc"],
-  "packages/extensions": ["@amira/api", "@amira/core", "@amira/proc"],
-  "packages/tui": ["@amira/ai", "@amira/api", "@amira/core", "@amira/proc", "@amira/tui-kit"],
+  "packages/core": ["@amira/ai", "@amira/api"],
+  "packages/host": ["@amira/ai", "@amira/api", "@amira/core", "@amira/proc"],
+  "packages/extensions": ["@amira/api", "@amira/core", "@amira/host", "@amira/proc"],
+  "packages/tui": ["@amira/ai", "@amira/api", "@amira/core", "@amira/host", "@amira/proc", "@amira/tui-kit"],
   // The CLI is the composition root and may reach every workspace package. It bundles the
   // extensions by source path from its bundling root (D50), never as package dependencies.
   "packages/cli": [
@@ -36,6 +37,7 @@ const allowedDependenciesByDirectory: Record<string, readonly string[]> = {
     "@amira/api",
     "@amira/core",
     "@amira/extensions",
+    "@amira/host",
     "@amira/proc",
     "@amira/tui",
     "@amira/tui-kit",
@@ -57,8 +59,8 @@ const internalApiSubpathConsumers = new Map<string, ReadonlySet<string>>([
     "@amira/api/internal/extension-status",
     new Set([
       "packages/cli/src/session/extension-loading.ts",
-      "packages/core/src/extension-settings.ts",
-      "packages/core/src/ui-requests.ts",
+      "packages/host/src/extension-settings.ts",
+      "packages/host/src/ui-requests.ts",
       "packages/extensions/src/admin.ts",
       "packages/extensions/src/index-file.ts",
       "packages/extensions/src/install.ts",
@@ -91,7 +93,7 @@ const hostBackgroundJobsPattern = /\bhostBackgroundJobs\b/
 const hostBackgroundJobsAllowlist = new Set([
   "packages/api/src/index.ts",
   "packages/api/src/process.ts",
-  "packages/core/src/extensions.ts",
+  "packages/host/src/extensions.ts",
   "extensions/builtin-tools/src/jobs-ui.ts",
   // The status extension displays host-wide live task counts, not its own process jobs.
   "extensions/commands/src/status.ts",

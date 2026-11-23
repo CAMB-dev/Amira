@@ -1,13 +1,13 @@
 import type { AnyEvent, EventMap, OwnedConversation } from "@amira/api"
-import type { Editor, EditorPart } from "@amira/tui-kit"
-import { truncateToWidth } from "@amira/tui-kit"
 import {
   conversationHoldId,
   conversationIncarnation,
   conversationScopeContains,
   conversationTurnId,
   sendConversation,
-} from "../../../core/src/session-routing.ts"
+} from "@amira/host/internal"
+import type { Editor, EditorPart } from "@amira/tui-kit"
+import { truncateToWidth } from "@amira/tui-kit"
 import { restoreEditorState } from "../../../tui-kit/src/internal/editor-state.ts"
 import { chromeText, viewEllipsis } from "../glyphs.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"

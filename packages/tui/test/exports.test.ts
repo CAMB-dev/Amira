@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { listProjectFiles, MAX_FILES, streamProjectFiles } from "@amira/core"
+import { listProjectFiles, MAX_FILES, streamProjectFiles } from "@amira/host"
 import * as fileIndex from "../src/file-index.ts"
 import type { ExtensionViewerOptions } from "../src/index.ts"
 

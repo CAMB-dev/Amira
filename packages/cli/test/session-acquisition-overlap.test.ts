@@ -36,20 +36,18 @@ async function fixture(steps: MockStep[] = []) {
 }
 
 function holdAcquisition(target: SessionStore) {
-  const gate = `${sessionLockFile(target.file)}.lease-gate`
-  const rename = fs.renameSync
+  const lock = sessionLockFile(target.file)
+  const link = fs.linkSync
   let blocked = true
-  const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
-    if (blocked && String(from) === gate && String(to).includes(".retired-"))
-      throw Object.assign(new Error("own gate reader"), { code: "EPERM" })
-    return rename(from, to)
+  const hook = spyOn(fs, "linkSync").mockImplementation((from, to) => {
+    if (blocked && String(to) === lock)
+      throw Object.assign(new Error("temporary sharing violation"), { code: "EPERM" })
+    return link(from, to)
   })
-  target.claim()
-  target.release()
   // A failed assertion must not leave an acquisition waiting for the two-second budget.
   const timer = setTimeout(() => {
     blocked = false
-  }, 100)
+  }, 500)
   return () => {
     blocked = false
     clearTimeout(timer)

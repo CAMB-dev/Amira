@@ -1,5 +1,7 @@
 import type { ApprovalPermission, ToolLine, ToolPresenter } from "@amira/api"
-import type { AgentTree, Approver, Asker, UiRequests } from "@amira/core"
+import type { Approver, Asker } from "@amira/core"
+import type { AgentTreeHost } from "@amira/core/internal"
+import type { AgentTree, UiRequests } from "@amira/host"
 
 export interface ApproverOptions {
   /** Where tools' presenters are, to show what a call would do (a command, a diff). */
@@ -7,7 +9,7 @@ export interface ApproverOptions {
   /** Tells the user something, e.g. that a call is allowed for the rest of the session. */
   notify?: (text: string) => void
   /** The agent tree, to say which sub-agent a question comes from. */
-  tree?: Pick<AgentTree, "subagent">
+  tree?: AgentTreeHost | Pick<AgentTree, "subagent">
 }
 
 /** Which mode or rule made the permission policy ask, for the dialog. */
@@ -38,7 +40,7 @@ export function userApprover(ui: UiRequests, opts: ApproverOptions = {}): Approv
     // "Don't ask again" covers this tool asked about for this reason; the message says so
     // without repeating the reason, which is right above it.
     const scope = `"Don't ask again" covers ${request.name} for this reason, this session.`
-    const sub = opts.tree?.subagent(request.sessionId)
+    const sub = (opts.tree as Partial<Pick<AgentTree, "subagent">> | undefined)?.subagent?.(request.sessionId)
     const permission = request.permission ? permissionLine(request.permission) : undefined
     // A reason that already names the mode makes the bare mode line a repeat.
     const repeated =

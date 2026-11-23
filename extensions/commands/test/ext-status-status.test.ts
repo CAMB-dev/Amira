@@ -1,13 +1,8 @@
 import { expect, test } from "bun:test"
 import type { AnyEvent, ReasoningEffort, SessionControl, SessionInfo } from "@amira/api"
 import { createAi, createMockDialect, NO_MODEL } from "../../../packages/ai/src/index.ts"
-import {
-  Agent,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "../../../packages/core/src/index.ts"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "../../../packages/core/src/index.ts"
+import { ExtensionHost } from "../../../packages/host/src/index.ts"
 import statusExtension, {
   contextTone,
   formatContext,

@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test"
 import type { FormOption, FormSpec } from "@amira/api"
-import { createUiFormBackend, EventBus, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { createUiFormBackend, UiRequests } from "@amira/host"
 import { key, textKey } from "@amira/tui-kit"
 import { operationFormBackend } from "../src/form-operation-backend.ts"
 import { FormView, uiFormBackend } from "../src/form-view.ts"

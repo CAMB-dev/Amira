@@ -10,7 +10,7 @@ import {
   type OwnedConversation,
   textResult,
 } from "@amira/api"
-import { OwnedConversationManager } from "@amira/core"
+import { OwnedConversationManager } from "@amira/host"
 import { closeImageApp, setup, waitFor } from "../../tui/test/app-harness.ts"
 import { userApprover } from "../src/session/approvals.ts"
 

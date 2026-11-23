@@ -2,15 +2,8 @@
 import { afterEach, expect, test } from "bun:test"
 import { createAi, createMockDialect, type MockStep } from "@amira/ai"
 import { type AskQuestion, defineTool, textResult } from "@amira/api"
-import {
-  Agent,
-  type Approver,
-  type Asker,
-  EventBus,
-  ExtensionHost,
-  InterceptorRegistry,
-  ToolRegistry,
-} from "@amira/core"
+import { Agent, type Approver, type Asker, EventBus, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { ExtensionHost } from "@amira/host"
 import { FakeTerminal, setColorEnabled } from "@amira/tui-kit"
 import statusExtension from "../../../extensions/commands/src/status.ts"
 import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"

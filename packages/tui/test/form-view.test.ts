@@ -9,7 +9,8 @@ import {
   type FormValues,
   textResult,
 } from "@amira/api"
-import { Agent, EventBus, ExtensionHost, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { Agent, EventBus, InterceptorRegistry, ToolRegistry } from "@amira/core"
+import { ExtensionHost } from "@amira/host"
 import {
   defaultGlyphs,
   FakeTerminal,

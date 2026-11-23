@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { ViewDefinition } from "@amira/api"
-import { resolveShimmer } from "@amira/core"
+import { resolveShimmer } from "@amira/host"
 import { defaultTheme, monoTheme, type RenderContext, Spinner, stripAnsi, type Theme } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { configureShimmer, SHIMMER_INTERVAL_MS } from "../src/app/shimmer.ts"

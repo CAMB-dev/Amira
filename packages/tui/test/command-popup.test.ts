@@ -2,15 +2,8 @@
 import { expect, test } from "bun:test"
 import { createAi, createMockDialect } from "@amira/ai"
 import type { CommandCandidate, CommandInfo, SessionControl } from "@amira/api"
-import {
-  Agent,
-  CommandHost,
-  CommandRegistry,
-  EventBus,
-  rankMatches,
-  SkillRegistry,
-  UiRequests,
-} from "@amira/core"
+import { Agent, EventBus } from "@amira/core"
+import { CommandHost, CommandRegistry, rankMatches, SkillRegistry, UiRequests } from "@amira/host"
 import { key, visibleWidth } from "@amira/tui-kit"
 import ascii from "../../cli/themes/ascii.json"
 import { plain } from "../../tui-kit/test/context.ts"

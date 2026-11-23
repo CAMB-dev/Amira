@@ -1,7 +1,8 @@
 // B/D deliberate oracles: rounded title/footer borders, normal bold titles, › cursors and filter: label.
 import { expect, spyOn, test } from "bun:test"
 import type { AgentStatusState, AskQuestion } from "@amira/api"
-import { EventBus, UiRequests } from "@amira/core"
+import { EventBus } from "@amira/core"
+import { UiRequests } from "@amira/host"
 import { CURSOR_MARKER, defaultTheme, key, stripAnsi, textKey, visibleWidth } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { Dialog, type DialogAnswer, type DialogRequest, dialogEchoLines } from "../src/dialog.ts"

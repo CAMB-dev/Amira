@@ -12,18 +12,16 @@ import type { EventBus } from "../event-bus.ts"
 import { FILE_REWIND_COVERAGE, type FileRewind } from "../file-rewind.ts"
 import type { InterceptorRegistry } from "../interceptors.ts"
 import type { SessionStore } from "../session-store.ts"
-import { bindGroupSignal } from "../subagents/child.ts"
-import { scopeAdmission } from "../subagents/lifecycle.ts"
-import type { PauseGate } from "../subagents/pause.ts"
-import type { AgentTree } from "../subagents.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
 import type { ApprovalGate } from "./approvals.ts"
 import { Compactor } from "./compactor.ts"
 import type { buildContext } from "./context-builder.ts"
 import { ContextManager } from "./context-manager.ts"
 import { type History, keptHistoryViews } from "./history.ts"
+import { agentHostHooks } from "./host-hooks.ts"
 import { modelRef } from "./messages.ts"
-import type { Emit, Turn } from "./types.ts"
+import type { PauseGate } from "./pause.ts"
+import type { AgentTreeHost, AgentTreeScope, Emit, Turn } from "./types.ts"
 
 /** Recovery failures leave the session open so its owner can resolve or abandon the restore. */
 export function recoverFileRewind(fileRewind: FileRewind | undefined, source: { fileRewind?: FileRewind }) {
@@ -180,18 +178,19 @@ export function setupContext(deps: ContextSetup, tokens: number | undefined) {
 }
 
 /** Retained tool capabilities share their agent incarnation's admission fence. */
-export function toolSessionScope(tree: AgentTree | undefined, agent: Agent, disposed: () => boolean) {
+export function toolSessionScope(tree: AgentTreeHost | undefined, agent: Agent, disposed: () => boolean) {
+  const scope = tree ? agentHostHooks.treeScope(tree) : undefined
   return {
-    scope: tree ? scopeAdmission(tree) : undefined,
+    scope,
     assertActive: () => {
       if (disposed()) throw new Error("the tool session has been released")
-      if (tree) scopeAdmission(tree).checkExecution()
+      scope?.checkExecution()
     },
     spawning: tree
       ? {
           restricted: tree.restricted,
-          spawn: (o: Parameters<AgentTree["spawn"]>[1]) => tree.spawn(agent, o),
-          createGroup: (o: Parameters<AgentTree["createGroup"]>[1]) => tree.createGroup(agent, o),
+          spawn: (o: Parameters<AgentTreeHost["spawn"]>[1]) => tree.spawn(agent, o),
+          createGroup: (o: Parameters<AgentTreeHost["createGroup"]>[1]) => tree.createGroup(agent, o),
           groups: () => tree.groups(),
         }
       : undefined,
@@ -199,7 +198,7 @@ export function toolSessionScope(tree: AgentTree | undefined, agent: Agent, disp
 }
 
 interface ToolSessionSetup {
-  scope?: ReturnType<typeof scopeAdmission>
+  scope?: AgentTreeScope
   assertActive: () => void
   sessionId: string
   tools: ToolRegistry
@@ -311,7 +310,7 @@ export function callToolSession(
     props.createGroup = {
       value: (o: Parameters<typeof createGroup>[0]) => {
         turn.signal.throwIfAborted()
-        return bindGroupSignal(createGroup(o), turn.signal)
+        return agentHostHooks.bindGroupSignal(createGroup(o), turn.signal)
       },
       enumerable: true,
     }

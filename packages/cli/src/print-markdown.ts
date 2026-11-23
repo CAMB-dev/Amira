@@ -1,5 +1,5 @@
 import type { MarkdownNode } from "@amira/api"
-import type { MarkdownRendererRegistry } from "@amira/core"
+import type { MarkdownRendererRegistry } from "@amira/host"
 import { mathCodeLine, mathSources } from "@amira/tui-kit/math-source"
 
 interface Fence {

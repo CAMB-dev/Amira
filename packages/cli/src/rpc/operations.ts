@@ -1,6 +1,7 @@
 import { type Ai, type Message, type UserContent, type UserMessage, userMessage } from "@amira/ai"
 import { type EventMap, modelLabel, type TurnEndReason } from "@amira/api"
-import type { Agent, CommandHost, UiRequests } from "@amira/core"
+import type { Agent } from "@amira/core"
+import type { CommandHost, UiRequests } from "@amira/host"
 import type { COMMAND_PARAMS } from "../rpc-schema.ts"
 import {
   attachments,

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os"
 import path from "node:path"
 import { type FormSpec, runFormDialogs } from "@amira/api"
-import * as core from "@amira/core"
+import * as host from "@amira/host"
 import { UsageError } from "../src/args.ts"
 import type { CatalogCacheOptions } from "../src/catalog.ts"
 import { lineDialogs, runProviderAdminCommand } from "../src/provider-cli.ts"
@@ -16,11 +16,11 @@ setDefaultTimeout(30_000)
 let home: string
 let cwd: string
 let networkFetch: ReturnType<typeof spyOn<typeof globalThis, "fetch">>
-let restrict: ReturnType<typeof spyOn<typeof core, "restrictToCurrentUser">>
+let restrict: ReturnType<typeof spyOn<typeof host, "restrictToCurrentUser">>
 beforeEach(() => {
   // ACL enforcement has a real-process integration test in core/provider-config.
   // These dialog tests only need the save contract, not an incidental icacls spawn.
-  restrict = spyOn(core, "restrictToCurrentUser").mockResolvedValue(undefined)
+  restrict = spyOn(host, "restrictToCurrentUser").mockResolvedValue(undefined)
   networkFetch = spyOn(globalThis, "fetch").mockImplementation(
     Object.assign(
       async () => {

@@ -6,7 +6,7 @@ import {
   type MarkdownRenderResult,
   validateExtensionSetting,
 } from "@amira/api"
-import type { UiRequests, UiResponseAck } from "@amira/core"
+import type { UiRequests, UiResponseAck } from "@amira/host"
 import {
   bold,
   type Component,

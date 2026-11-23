@@ -13,12 +13,11 @@ import {
 import {
   Agent,
   type AgentOptions,
-  CommandHost,
   EventBus,
-  ExtensionHost,
   InterceptorRegistry,
   ToolRegistry,
 } from "../../../packages/core/src/index.ts"
+import { CommandHost, ExtensionHost } from "../../../packages/host/src/index.ts"
 import {
   createSkillsExtension,
   discoverSkills,

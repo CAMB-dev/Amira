@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test"
 import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
-import "../../../packages/core/src/index.ts"
+import "../../../packages/host/src/index.ts"
 import * as apiHost from "@amira/api"
 import { type ExtensionAPI, hostBackgroundJobs, type ToolDefinition } from "@amira/api"
 import extension from "../src/index.ts"

@@ -1,6 +1,6 @@
 import path from "node:path"
 import { parseArgs } from "node:util"
-import { deleteSession } from "@amira/core"
+import { deleteSession } from "@amira/host"
 import { UsageError } from "./args.ts"
 
 export function runSessionsCommand(argv: string[], cwd = process.cwd()): string {
