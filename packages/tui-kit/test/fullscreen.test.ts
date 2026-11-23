@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { cursor, modes, RESET } from "../src/ansi.ts"
-import { type Component, CURSOR_MARKER } from "../src/component.ts"
+import type { Component } from "../src/component.ts"
 import { ScrollView } from "../src/components/scroll-view.ts"
 import { FullScreenRenderer } from "../src/fullscreen.ts"
 import { key } from "../src/keys.ts"

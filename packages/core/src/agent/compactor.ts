@@ -14,7 +14,6 @@ import {
 } from "@amira/ai"
 import type { CompactionInfo, CompactionReason, CompactionUsage } from "@amira/api"
 import { DEFAULT_COMPACT_LAYOUT, DEFAULT_COMPACT_THRESHOLD } from "@amira/api"
-import { addAccountingUsage, incompleteUsage, markAccountingIncomplete } from "../accounting-receipts.ts"
 import {
   type CompactionOptions,
   checkpointOf,
@@ -33,6 +32,7 @@ import { projectMessages } from "../context.ts"
 import { amiraPath } from "../home.ts"
 import type { InterceptOutcome, InterceptorRegistry } from "../interceptors.ts"
 import type { SessionStore } from "../session-store.ts"
+import { addAccountingUsage, incompleteUsage } from "../session-usage.ts"
 import type { PauseGate } from "../subagents/pause.ts"
 import type { ContextManager } from "./context-manager.ts"
 import type { History } from "./history.ts"
@@ -344,7 +344,7 @@ export class Compactor {
         ...(nativeRef ? { native: nativeRef, layout } : {}),
         ...(fallback ? { fallback } : {}),
       }
-      if (usageIncomplete) markAccountingIncomplete(usage)
+      if (usageIncomplete) usage.pricingUnknown = true
       const entryId = this.#deps.history.store({
         type: "compaction",
         summary,
@@ -388,7 +388,7 @@ export class Compactor {
       return true
     } catch (err) {
       if (err instanceof SummaryError) latchTransportFailure(signal, err.failure)
-      if (usageIncomplete) markAccountingIncomplete(usage)
+      if (usageIncomplete) usage.pricingUnknown = true
       if (counted && !recorded) this.#recordCompactionUsage(usage, modelRef(writer), false)
       this.#deps.emit(turn, "compact.failed", {
         error: err instanceof Error ? err.message : String(err),

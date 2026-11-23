@@ -11,7 +11,6 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { relocateReleasedGateCleanup } from "./file-lock-gate.ts"
 import { fileHistoryDir } from "./file-rewind.ts"
 
 interface DirectoryProof {
@@ -196,22 +195,16 @@ export function withSessionDeletionDirectory<T>(
     if (inspect(directory)) throw new Error(`unsafe session restoration conflict: ${directory}`)
     renameSync(root, directory)
     restored = true
-    try {
-      for (const move of [...moves, ...containers]) move.from = rebase(move.from, root, directory)
-      for (const [file, identity] of [...directories]) {
-        const rebased = rebase(file, root, directory)
-        if (rebased !== file) {
-          directories.delete(file)
-          directories.set(rebased, identity)
-        }
+    for (const move of [...moves, ...containers]) move.from = rebase(move.from, root, directory)
+    for (const [file, identity] of [...directories]) {
+      const rebased = rebase(file, root, directory)
+      if (rebased !== file) {
+        directories.delete(file)
+        directories.set(rebased, identity)
       }
-      requireIdentity(directory, movedRoot)
-      checkParents(proof)
-    } finally {
-      // Rename-back has already published the gates. Preserve their retryable rebinding
-      // intent even if post-restore verification fails; the gate's own proofs still apply.
-      relocateReleasedGateCleanup(root, directory)
     }
+    requireIdentity(directory, movedRoot)
+    checkParents(proof)
   }
   const container = (original: string): string => {
     const existing = detached.get(original)

@@ -12,13 +12,11 @@ import {
   type Usage,
 } from "@amira/ai"
 import { defineTool, textResult } from "@amira/api"
-import { reportedUsage } from "../src/accounting-receipts.ts"
 import { Agent } from "../src/agent.ts"
+import { conversationUsage } from "../src/conversation-usage.ts"
 import { EventBus } from "../src/event-bus.ts"
-import { conversationUsage } from "../src/owned-conversations-usage.ts"
 import { SessionStore } from "../src/session-store.ts"
 import { subagentsOf } from "../src/subagent-list.ts"
-import { consultationUsageRecorder } from "../src/subagents/consultation-usage.ts"
 import { AgentTree } from "../src/subagents.ts"
 import { ToolRegistry } from "../src/tool-registry.ts"
 
@@ -80,7 +78,7 @@ function setup(reply: (request: ModelRequest) => MockReply = () => ({ text: "don
 }
 
 function priced(cost: number): Usage {
-  return reportedUsage({ ...emptyUsage(), input: 10, output: 2, cost })
+  return { ...emptyUsage(), input: 10, output: 2, cost }
 }
 
 function side(session: SessionStore, usage: Usage) {
@@ -226,35 +224,6 @@ test("known subtotal and estimate coverage survive JSON and mixed aggregate pers
   expect(snapshot.total.usage.cost).toBeUndefined()
 })
 
-test("signed late corrections advance durable revisions even when totals decrease", () => {
-  const { agent, tree, session } = setup()
-  const record = consultationUsageRecorder((usage) => tree.recordUsage(agent, reportedUsage(usage)))
-  record.observe?.(priced(5))
-  const first = conversationUsage(agent)
-  record(priced(2))
-  const late = conversationUsage(agent)
-  expect(late.revision).toBeGreaterThan(first.revision)
-  expect(first.total.knownCostUsd).toBe(5)
-  expect(late.total.knownCostUsd).toBe(2)
-  expect(late.total.complete).toBe(true)
-  expect(conversationUsage(SessionStore.open(session.file))).toEqual(late)
-})
-
-test("resolving an unknown search replaces its receipt rather than double counting", () => {
-  const { agent, tree, session } = setup()
-  const record = consultationUsageRecorder((usage) => tree.recordUsage(agent, reportedUsage(usage)))
-  record.observe?.({ ...emptyUsage(), input: 10, webSearchRequests: 1 })
-  expect(conversationUsage(agent).own.complete).toBe(false)
-  record({ ...priced(2), output: 0, webSearchRequests: 1, webSearchCost: 0.1 })
-  const snapshot = conversationUsage(agent)
-  expect(snapshot.own).toMatchObject({
-    complete: true,
-    knownCostUsd: 2,
-    usage: { input: 10, output: 0, webSearchRequests: 1, cost: 2 },
-  })
-  expect(conversationUsage(SessionStore.open(session.file))).toEqual(snapshot)
-})
-
 test("snapshots are frozen and detached, independent of event delivery", () => {
   const { agent, tree } = setup()
   tree.recordUsage(agent, priced(1))
@@ -305,54 +274,4 @@ test("persisted receipt identity survives reused mutable provider usage objects"
   tree.recordUsage(agent, usage)
   expect(conversationUsage(agent).total.knownCostUsd).toBe(3)
   expect(conversationUsage(SessionStore.open(session.file))).toEqual(conversationUsage(agent))
-})
-
-test("legacy request intents without receipt manifests remain incomplete across restart", () => {
-  const { session } = setup()
-  session.append({
-    type: "custom",
-    ext: "amira.accounting-requests",
-    data: { v: 1, phase: "start", requestId: "one" },
-  })
-  const interrupted = conversationUsage(SessionStore.open(session.file))
-  expect(interrupted.total.knownCostUsd).toBe(0)
-  expect(interrupted.total.complete).toBe(false)
-  side(session, priced(2))
-  session.append({
-    type: "custom",
-    ext: "amira.accounting-requests",
-    data: { v: 1, phase: "end", requestId: "one" },
-  })
-  const finished = conversationUsage(SessionStore.open(session.file))
-  expect(finished.total.knownCostUsd).toBe(2)
-  expect(finished.total.complete).toBe(false)
-  expect(finished.revision).toBeGreaterThan(interrupted.revision)
-})
-
-test("interrupted private intent reconstructs an incomplete private row without charging own", () => {
-  const { session } = setup()
-  session.append({
-    type: "custom",
-    ext: "amira.accounting-requests",
-    data: {
-      v: 1,
-      phase: "start",
-      requestId: "private",
-      attribution: {
-        sessionId: "private_child",
-        parentSessionId: session.id,
-        ephemeral: true,
-        groupId: "group",
-      },
-    },
-  })
-  const snapshot = conversationUsage(SessionStore.open(session.file))
-  expect(snapshot.own).toMatchObject({ knownCostUsd: 0, complete: true })
-  expect(snapshot.total.complete).toBe(false)
-  expect(snapshot.descendants[0]).toMatchObject({
-    sessionId: "private_child",
-    ephemeral: true,
-    groupId: "group",
-    usage: { complete: false },
-  })
 })

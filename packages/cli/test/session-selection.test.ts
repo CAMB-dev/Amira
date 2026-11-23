@@ -335,9 +335,7 @@ for (const outcome of ["success", "cancel", "superseded", "timeout", "foreign"] 
     const remove = spyOn(abort.signal, "removeEventListener")
     const claims = ["cancel", "superseded", "timeout"].includes(outcome) ? blockClaims([b]) : undefined
     if (outcome === "foreign") {
-      const gate = `${sessionLockFile(b.file)}.lease-gate`
-      fs.mkdirSync(gate)
-      fs.writeFileSync(path.join(gate, "owner.json"), "unverifiable foreign gate")
+      fs.writeFileSync(sessionLockFile(b.file), `${process.pid}\nforeign-holder\n`)
     }
     const timers = spyOn(globalThis, "setTimeout")
     try {
@@ -353,7 +351,7 @@ for (const outcome of ["success", "cancel", "superseded", "timeout", "foreign"] 
         await expect(result).rejects.toThrow("temporary acquisition sharing violation")
         expect(fs.existsSync(sessionLockFile(b.file))).toBe(false)
       } else if (outcome === "foreign") {
-        await expect(result).rejects.toThrow("busy or unverifiable")
+        await expect(result).rejects.toThrow("is open in another Amira process")
         expect(timers).not.toHaveBeenCalled()
       } else await result
       expect(add).toHaveBeenCalledTimes(1)

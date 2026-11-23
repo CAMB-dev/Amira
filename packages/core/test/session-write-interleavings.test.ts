@@ -14,7 +14,6 @@ import {
 } from "@amira/ai"
 import type { AnyEvent, CommandContext, SessionControl } from "@amira/api"
 import { defineTool, textResult } from "@amira/api"
-import { accountingCleanup } from "../src/accounting-requests.ts"
 import { Agent } from "../src/agent.ts"
 import { CommandHost, CommandRegistry } from "../src/commands.ts"
 import { EventBus } from "../src/event-bus.ts"
@@ -248,7 +247,6 @@ for (let seed = 1; seed <= 24; seed++) {
         maxTurns: 1,
       })
       await bounded(old.opened.promise)
-      old.accountingDone = accountingCleanup(child.id)
       spent[old.origin]! += 1
       expect(old.tree.usage.cost).toBe(1)
       await verify()
@@ -283,8 +281,8 @@ for (let seed = 1; seed <= 24; seed++) {
       const old = pending.splice(index, 1)[0]!
       old.release.resolve()
       await bounded(old.settled.promise)
-      // The dialect's finally precedes the outer request-fence finalizer. Wait for both
-      // before verifying the complete ledger or handing off the current writer's lease.
+      await Promise.resolve()
+      await Promise.resolve()
       await bounded(old.accountingDone)
       // The observer books terminal usage before the dialect finishes its physical cleanup.
       spent[old.origin]! += 3

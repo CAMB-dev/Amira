@@ -34,7 +34,7 @@ import {
   StandbyGoneError,
   warmUpCommands,
 } from "@amira/proc"
-import { subscribeHolds } from "./agent/held-input.ts"
+import { subscribeHolds } from "./agent/hold.ts"
 import type { Agent } from "./agent.ts"
 import { ExtensionBackgroundJobs, SessionBackgroundJobHost } from "./background-jobs.ts"
 import { ownCommandViews } from "./command-view-context.ts"

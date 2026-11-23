@@ -12,7 +12,7 @@ import type {
 } from "@amira/ai"
 import { hasFastMode } from "@amira/ai"
 import type { EventMap } from "@amira/api"
-import { markAccountingIncomplete, usageSnapshot } from "../accounting-receipts.ts"
+import { cloneUsage, usageSnapshot } from "../session-usage.ts"
 import { latchTransportFailure } from "./transport-failure.ts"
 import type { AgentOptions } from "./types.ts"
 
@@ -263,15 +263,25 @@ export async function modelCall(options: ModelCallOptions): Promise<ModelCallRes
       }
     }
   } catch (err) {
-    const usage = latestUsage ?? final?.usage ?? endedAttempt?.usage
-    if (usage) markAccountingIncomplete(usage)
+    if (latestUsage) {
+      latestUsage = cloneUsage(latestUsage)
+      latestUsage.pricingUnknown = true
+    } else {
+      latestUsage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        outputReported: false,
+        pricingUnknown: true,
+      }
+    }
     if (options.signal.aborted) aborted = true
     else error = err instanceof Error ? err.message : String(err)
   }
   if (!final) {
     if (options.signal.aborted) aborted = true
     if (!error && !aborted) error = "the model stream ended without a final message"
-    if (endedAttempt?.usage) markAccountingIncomplete(endedAttempt.usage)
   }
 
   // request.end may be the last receipt before an iterator throws, or a terminal

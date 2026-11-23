@@ -2,23 +2,6 @@
 import { type UserMessage, userMessage } from "@amira/ai"
 import type { PendingNotice } from "@amira/api"
 import { joinMessages } from "./messages.ts"
-
-function freezeSnapshot<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const item of Object.values(value)) freezeSnapshot(item)
-    Object.freeze(value)
-  }
-  return value
-}
-
-import {
-  addNoticeInput,
-  clearNoticeInput,
-  expectedNoticeInput,
-  type NoticeInput,
-  type NoticeInputSnapshot,
-} from "./notice-input.ts"
-import { changedNoticeRetry } from "./notice-retry.ts"
 import type { Emit, Turn, TurnResult } from "./types.ts"
 
 interface NoticeInboxDeps {
@@ -41,7 +24,7 @@ export class NoticeInbox {
    * Delivered notices waiting for a model call. Unlike steering they are never dropped:
    * after an interrupted or failed turn they wait for the next one.
    */
-  #notices: NoticeInput[] = []
+  #notices: UserMessage[] = []
   /** Notices announced and not yet delivered or cancelled. */
   #expected = 0
   #pendingNotices = new Set<{ target: NoticeInbox }>()
@@ -64,11 +47,9 @@ export class NoticeInbox {
     const pending = { target: this }
     this.#pendingNotices.add(pending)
     this.#expected++
-    expectedNoticeInput(this, this.#expected)
     const close = () => {
       if (!pending.target.#pendingNotices.delete(pending)) return false
       pending.target.#expected--
-      expectedNoticeInput(pending.target, pending.target.#expected)
       return true
     }
     return {
@@ -96,8 +77,6 @@ export class NoticeInbox {
       next.#pendingNotices.add(pending)
       next.#expected++
     }
-    expectedNoticeInput(this, this.#expected)
-    expectedNoticeInput(next, next.#expected)
   }
 
   get expected(): number {
@@ -108,22 +87,14 @@ export class NoticeInbox {
     return this.#notices.length
   }
 
-  /** Authoritative reset data comes from the execution inbox itself, not notification history. */
-  recoveryState(): NoticeInputSnapshot {
-    return freezeSnapshot({ queue: structuredClone(this.#notices), expected: this.#expected })
-  }
-
   take(): UserMessage[] {
-    const messages = this.#notices.splice(0).map((entry) => entry.message)
-    clearNoticeInput(this, this.#expected)
-    return messages
+    return this.#notices.splice(0)
   }
 
   receive(message: UserMessage, wake = true): void {
     if (this.#deps.disposed()) return
     message = structuredClone(message)
-    this.#notices.push({ id: `notice_${crypto.randomUUID()}`, message })
-    addNoticeInput(this, message, this.#expected)
+    this.#notices.push(message)
     const turn = this.#deps.turn()
     if (turn) this.#deps.emit(turn, "turn.steer", { message, state: "queued" })
     else if (this.#deps.holding()) {
@@ -168,7 +139,6 @@ export class NoticeInbox {
     if (!this.#retry) return
     clearTimeout(this.#retry.timer)
     this.#retry = undefined
-    changedNoticeRetry(this)
   }
 
   /**
@@ -187,7 +157,6 @@ export class NoticeInbox {
     // Never what keeps a process alive: print and rpc wait for it on their own terms.
     ;(timer as { unref?: () => void }).unref?.()
     this.#retry = { timer, attempt, at: Date.now() + delayMs }
-    changedNoticeRetry(this)
     this.#deps.emit(undefined, "notice.retry", {
       attempt,
       attempts: delays.length,
@@ -198,7 +167,6 @@ export class NoticeInbox {
 
   #redeliver() {
     this.#retry = undefined
-    changedNoticeRetry(this)
     if (this.#deps.disposed()) return
     this.#retries++
     const message = this.#notices.length
@@ -213,8 +181,7 @@ export class NoticeInbox {
     // A turn cancels the timer, so only a manual compaction can be running: the message then
     // waits for it like any notice arriving meanwhile.
     if (this.#deps.holding()) {
-      this.#notices.push({ id: `notice_${crypto.randomUUID()}`, message })
-      addNoticeInput(this, message, this.#expected)
+      this.#notices.push(message)
       this.#noticedDuringCompaction = true
       this.#deps.emit(undefined, "turn.steer", { message, state: "queued" })
       return
@@ -242,8 +209,5 @@ export class NoticeInbox {
     this.#notices.splice(0)
     this.#pendingNotices.clear()
     this.#expected = 0
-    clearNoticeInput(this, this.#expected)
-    // #jobNoticeTarget stays: a job that asks for its notice after this switch must still reach
-    // the replacement session.
   }
 }

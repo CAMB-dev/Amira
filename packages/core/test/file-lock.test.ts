@@ -14,7 +14,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }))
 test("a lock is exclusive, records its holder and is released", () => {
   const file = path.join(dir, "x.lock")
   const a = tryFileLock(file, 60_000)!
-  expect(readFileSync(file, "utf8").trim()).toBe(String(process.pid))
+  expect(readFileSync(file, "utf8").split("\n")[0]).toBe(String(process.pid))
   expect(tryFileLock(file, 60_000)).toBeUndefined()
   a.release()
   expect(existsSync(file)).toBe(false)

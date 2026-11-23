@@ -1,12 +1,9 @@
 import { type Ai, type AssistantMessage, type Usage, userMessage } from "@amira/ai"
 import type { ApprovalRequest, AskAnswer, AskOutcome, AskQuestion, AskRequest } from "@amira/api"
-import { copyAccountingUsage } from "../accounting-receipts.ts"
-import { accountingRecorded, withAccountingRequests } from "../accounting-requests.ts"
 import type { Agent, ApprovalDecision } from "../agent.ts"
 import { withCallableServerTools } from "../callable-server-tools.ts"
 import { renderPrompt } from "../prompt.ts"
-import { consultationAccounting } from "./consultation-accounting.ts"
-import type { ConsultationUsageRecorder } from "./consultation-usage.ts"
+import { incompleteUsage, negateUsage, usageDelta, usageSnapshot } from "../session-usage.ts"
 import { finalText, forkHistory } from "./fork.ts"
 
 /** Answers children's approvals and questions with their parent's model, one at a time. */
@@ -22,7 +19,7 @@ export class ParentConsultant {
     private deps: {
       ai: Ai
       callableTools: (requester: string) => ReadonlySet<string> | undefined
-      usageRecorder: (parent: Agent, requester: string) => ConsultationUsageRecorder
+      usageRecorder: (parent: Agent, requester: string) => (usage: Usage) => void
       acquire?: (requester: string, signal: AbortSignal) => Promise<() => void>
     },
   ) {}
@@ -119,25 +116,37 @@ export class ParentConsultant {
     // Capture the accounting owner while it is still live, only for this consultation.
     const model = parent.model
     const recordUsage = this.deps.usageRecorder(parent, requester)
-    const accounting = consultationAccounting(recordUsage)
     let release: (() => void) | undefined
-    let usage: Usage | undefined
+    let recorded: Usage | undefined
     let retrying = false
-    const record = () => {
-      const finalUsage = usage
-      usage = undefined
-      if (finalUsage) recordUsage(finalUsage)
+    const settle = (next: Usage) => {
+      const merged = usageSnapshot(next, recorded)
+      if (recorded) {
+        if (JSON.stringify(merged) === JSON.stringify(recorded)) return
+        if (incompleteUsage(recorded) && !incompleteUsage(merged)) {
+          const prev = recorded
+          recorded = merged
+          recordUsage(negateUsage(prev))
+          recordUsage(merged)
+        } else {
+          const delta = usageDelta(merged, recorded)
+          recorded = merged
+          recordUsage(delta)
+        }
+      } else {
+        recorded = merged
+        recordUsage(merged)
+      }
+    }
+    const resetAttempt = () => {
+      recorded = undefined
     }
     // Only an admitted requester may join the parent's physical-stream queue. Otherwise
     // an ancestor waiting for its descendant's slot can block that descendant's escalation.
     let streamOwnsPermit = false
     const stream = async () => {
-      // Open the durable intent only at admitted dispatch, using the already captured owner.
-      const accounted = accounting
-        ? withAccountingRequests(ai, accounting.agent, () => accounting.target)
-        : ai
       try {
-        for await (const ev of accounted.stream(
+        for await (const ev of ai.stream(
           {
             model,
             systemPrompt: renderPrompt([...parent.sections]),
@@ -149,46 +158,38 @@ export class ParentConsultant {
         )) {
           // A backoff abort repeats the failed attempt's usage, not a new request's.
           // Dialects without request.start begin the retry with their next non-abort event.
+          const backoffAbort = retrying && ev.type === "error" && ev.error.code === "aborted"
           if (
             ev.type === "request.attempt" ||
             ev.type === "request.start" ||
-            (retrying && ev.type !== "retry" && !(ev.type === "error" && ev.error.code === "aborted"))
+            (retrying && ev.type !== "retry" && ev.type !== "fast.fallback" && !backoffAbort)
           ) {
-            record()
+            resetAttempt()
             retrying = false
           }
-          if (ev.type === "retry" || ev.type === "fast.fallback") retrying = true
+          if (ev.type === "retry" || ev.type === "fast.fallback") {
+            resetAttempt()
+            retrying = true
+          }
           if (ev.type === "done") reply = ev.message
           if (ev.type === "error") failure = ev.error.message
-          if (ev.type === "done" || ev.type === "error" || ev.type === "request.end") {
-            // Book completed spending before backoff/admission can allow more work.
-            // Retain a copied final snapshot so abort/retry duplicates settle this attempt once.
-            if (ev.message.usage) {
-              usage = copyAccountingUsage(ev.message.usage)
-              const retained = recordUsage.observe?.(usage)
-              // An unchanged revision can reuse a committed contribution without a second charge.
-              if (accounting && retained) accountingRecorded(accounting.agent, retained)
-            }
+          if ((ev.type === "done" || ev.type === "error" || ev.type === "request.end") && !backoffAbort) {
+            if (ev.message.usage) settle(ev.message.usage)
           }
         }
       } catch (error) {
-        // Settle every observed charge before retaining the unknown tail of a broken stream.
-        record()
-        usage = {
+        // Retain unknown coverage for the broken tail of an interrupted consultation stream.
+        recordUsage({
           input: 0,
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
           outputReported: false,
           pricingUnknown: true,
-        }
+        })
         throw error
       } finally {
-        try {
-          record()
-        } finally {
-          release?.()
-        }
+        release?.()
       }
       return { text: reply ? finalText([reply]) : undefined, failure }
     }

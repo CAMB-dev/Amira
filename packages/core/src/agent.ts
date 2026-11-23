@@ -46,7 +46,6 @@ import { History } from "./agent/history.ts"
 import { SessionHold } from "./agent/hold.ts"
 import { modelRef } from "./agent/messages.ts"
 import { reportedSpeed, Thinking } from "./agent/model-call.ts"
-import { registerHeldInput } from "./agent/notice-input.ts"
 import { NoticeInbox } from "./agent/notices.ts"
 import { OwnedToolRunner } from "./agent/owned-tool.ts"
 import {
@@ -74,13 +73,13 @@ import type { ArtifactScope, ArtifactStore, ArtifactUsage } from "./artifacts.ts
 
 export * from "./agent/exports.ts"
 
-import { accountedAi, accountingAuxiliaryRecorded } from "./accounting-requests.ts"
+import { withCallableServerTools } from "./callable-server-tools.ts"
 import type { CompactionOptions } from "./compaction.ts"
 import type { ContextOptions, ContextView } from "./context.ts"
+import { recordConversationUsage } from "./conversation-usage.ts"
 import { type EmitMeta, EventBus } from "./event-bus.ts"
 import { FileRewind } from "./file-rewind.ts"
 import { InterceptorRegistry } from "./interceptors.ts"
-import { recordConversationUsage } from "./owned-conversations-usage.ts"
 import { assertOwnedSession } from "./owned-session.ts"
 import { Permissions } from "./permissions/policy.ts"
 import { intersectWriteRoots } from "./permissions/write-roots.ts"
@@ -222,7 +221,7 @@ export class Agent {
       this.#sections = opts.sections ?? [{ name: "identity", text: opts.systemPrompt ?? "" }]
       this.#compaction = opts.compaction ?? {}
       this.#context = opts.context ?? {}
-      const ai = accountedAi(opts.ai, this, this.callableTools)
+      const ai = withCallableServerTools(opts.ai, this.callableTools)
       const maxSteps = opts.maxSteps ?? DEFAULT_AGENT_MAX_STEPS
       if (!Number.isInteger(maxSteps) || maxSteps < 0)
         throw new Error("maxSteps must be a non-negative integer (0 means unlimited)")
@@ -288,12 +287,13 @@ export class Agent {
         emit: (turn, type, data) => this.#emit(turn, type, data),
       })
       this.#hold = new SessionHold({
+        bus: this.bus,
+        owner: this,
         state: this.#turnState,
         inbox: this.#inbox,
         prompt: (message, options) => this.prompt(message, options),
         emit: (turn, type, data) => this.#emit(turn, type, data),
       })
-      registerHeldInput(this, this.#hold, this.#inbox, () => this.#turnState.steering)
       this.#endTurn = opts.endTurn
 
       const { history, tokens, restoredTools } = restoreHistory(opts, this.#loadedTools)
@@ -882,7 +882,6 @@ export class Agent {
     if (this.tree) this.tree.recordUsage(this, usage)
     else recordConversationUsage(this, usage)
     if (!auxiliary) return
-    accountingAuxiliaryRecorded(this, usage)
     if (this.tree?.budgetExceeded) this.abort()
   }
 

@@ -15,6 +15,7 @@ import { drainOwnedTools, runOwnedTool } from "./agent/owned-tool.ts"
 import { Agent } from "./agent.ts"
 import { checkAskAnswers } from "./ask-answers.ts"
 import { completeForAgent } from "./completion.ts"
+import { conversationUsage } from "./conversation-usage.ts"
 import { EventBus } from "./event-bus.ts"
 import { amiraHome } from "./home.ts"
 import { ConversationEvents } from "./owned-conversations-events.ts"
@@ -33,7 +34,6 @@ import {
   validateSpec,
   writeOwnedLifecycle,
 } from "./owned-conversations-storage.ts"
-import { conversationUsage } from "./owned-conversations-usage.ts"
 import {
   registerConversationHold,
   registerConversationScope,
@@ -133,9 +133,7 @@ export class OwnedConversationManager {
         if (active && !active.isReleased()) return active.snapshot()
         const store = readOwnedStore(this.#home, saved)
         // No lease is acquired for inspection. A foreign writer is an unverified coverage fact.
-        const usage = conversationUsage(store, undefined, [
-          { kind: "integrity", verified: !existsSync(sessionLockFile(file)) },
-        ])
+        const usage = conversationUsage(store, undefined, !existsSync(sessionLockFile(store.file)))
         return freeze({
           id: saved.id,
           key: saved.spec.key,

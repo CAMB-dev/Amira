@@ -50,7 +50,7 @@ test("accounted snapshots explicitly serialize the known subtotal of unknown-pri
   const ledger = new BudgetLedger(undefined)
   ledger.add({ ...emptyUsage(), cost: 2 })
   ledger.add({ ...emptyUsage(), webSearchRequests: 1 })
-  const snapshot = accountUsage([{ usage: ledger.usage }])
+  const snapshot = accountUsage([ledger.usage])
   expect(snapshot.usage.cost).toBeUndefined()
   expect(JSON.parse(JSON.stringify(snapshot))).toMatchObject({ knownCostUsd: 2, complete: false })
 })

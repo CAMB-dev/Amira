@@ -3,7 +3,6 @@ import path from "node:path"
 import { emptyUsage, type Message, type ModelRef } from "@amira/ai"
 import { fallbackTitle, type SubagentInfo, type SubagentState } from "@amira/api"
 import type { Agent } from "./agent.ts"
-import { type ReceiptDestination, usageReceiptDestination } from "./owned-conversations-receipts.ts"
 import { SessionStore } from "./session-store.ts"
 import { storedSessionUsage } from "./session-usage.ts"
 import type { AgentTree } from "./subagents.ts"
@@ -15,8 +14,6 @@ export interface SubagentEntry {
   file?: string
   /** The inert/live evidence used by accounting readers. */
   session?: SessionStore
-  /** Original receipt destination, available even when a finished child's file is not. */
-  accountingDestination?: ReceiptDestination
   /** Its conversation so far; a copy, so it does not change under the caller. */
   messages(): Message[]
   /**
@@ -70,15 +67,12 @@ export function subagentsOf(
       seen.add(id)
       const known = tree?.subagent(id)
       if (known) {
-        const own =
-          known.session ??
-          (known.file ? openFinished(known.file, known.info, known.accountingDestination) : undefined)
+        const own = known.session ?? (known.file ? openFinished(known.file, known.info) : undefined)
         const kept = known.messages
         out.push({
           info: { ...known.info, depth },
           ...(own?.file || known.file ? { file: own?.file ?? known.file } : {}),
           ...(own ? { session: own } : {}),
-          ...(known.accountingDestination ? { accountingDestination: known.accountingDestination } : {}),
           messages: () => (kept ? [...kept] : own ? [...own.restore().messages] : []),
           history: () => (own ? storedHistory(own) : kept ? [...kept] : []),
         })
@@ -118,25 +112,16 @@ export function subagentMessages(
   if (known?.messages) return [...known.messages]
   if (known?.session) return [...known.session.restore().messages]
   const file = known?.file
-  if (file)
-    return [...(openFinished(file, known.info, known.accountingDestination)?.restore().messages ?? [])]
+  if (file) return [...(openFinished(file, known.info)?.restore().messages ?? [])]
   return listSubagents(agent, tree)
     .find((e) => e.info.id === id)
     ?.messages()
 }
 
 /** A different session at a finished child's pathname is unavailable, not its conversation. */
-function openFinished(
-  file: string,
-  info: SubagentInfo,
-  identity?: ReceiptDestination,
-): SessionStore | undefined {
+function openFinished(file: string, info: SubagentInfo): SessionStore | undefined {
   const store = openStored(file)
-  return store?.id === info.id &&
-    store.header.parent === info.parentSessionId &&
-    (!identity || usageReceiptDestination(store) === identity)
-    ? store
-    : undefined
+  return store?.id === info.id && store.header.parent === info.parentSessionId ? store : undefined
 }
 
 /** Stores read from disk, by file, kept while the file does not change; the most recent few. */

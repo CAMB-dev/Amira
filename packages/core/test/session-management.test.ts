@@ -16,7 +16,6 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { userMessage } from "@amira/ai"
 import { artifactDir } from "../src/artifacts.ts"
-import { leaseOwner } from "../src/file-lock-owner.ts"
 import { deleteSession, findSession, listSessions, sessionSnippet } from "../src/session-list.ts"
 import { SessionStore, sessionLockFile } from "../src/session-store.ts"
 
@@ -287,46 +286,6 @@ test("session paths match the store through a symlinked parent without allowing 
   }
 })
 
-test("deletion returns physical paths and names the physical guard through a parent alias", () => {
-  const root = tmp()
-  const actual = path.join(root, "actual")
-  const alias = path.join(root, "alias")
-  mkdirSync(path.join(actual, "sessions"), { recursive: true })
-  symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir")
-  const dir = path.join(alias, "sessions")
-  try {
-    const s = SessionStore.create({ cwd: "/project", dir })
-    s.appendMessage(userMessage("must stay while guarded"))
-    // Use an explicit alias: tmpdir() may already resolve TMPDIR on POSIX.
-    const requestedFile = path.join(dir, path.basename(s.file))
-    const physicalFile = realpathSync.native(requestedFile)
-    expect(requestedFile).not.toBe(physicalFile)
-    const gate = `${requestedFile}.lock.lease-gate`
-    mkdirSync(gate)
-    writeFileSync(path.join(gate, "owner.json"), "unverifiable")
-    const physicalGate = realpathSync.native(gate)
-    const before = readFileSync(requestedFile)
-    let error: unknown
-    try {
-      deleteSession("/project", s.id, undefined, dir)
-    } catch (caught) {
-      error = caught
-    }
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toBe(
-      `session stale-write guard is busy or unverifiable: ${physicalGate}; retry, or remove this directory manually only after confirming no Amira process is running on any host using these session files`,
-    )
-    expect(readFileSync(requestedFile)).toEqual(before)
-    expect(existsSync(gate)).toBe(true)
-    rmSync(gate, { recursive: true })
-    expect(deleteSession("/project", s.id, undefined, dir)).toEqual([physicalFile])
-    expect(existsSync(requestedFile)).toBe(false)
-    expect(existsSync(physicalFile)).toBe(false)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
 test("delete removes the saved artifacts of the session and of its sub-agents", () => {
   const dir = tmp()
   const s = SessionStore.create({ cwd: "/project", dir })
@@ -357,8 +316,7 @@ test("delete refuses a live session lease, then takes over a stale crash lease",
     return true
   })
   try {
-    const owner = { ...leaseOwner(), pid: holder }
-    writeFileSync(lock, `${holder}\n${owner.nonce}\n${JSON.stringify(owner)}\n`)
+    writeFileSync(lock, `${holder}\ntest-nonce\n`)
     expect(() => deleteSession("/project", s.id, undefined, dir)).toThrow("open in another Amira process")
     expect(existsSync(s.file)).toBe(true)
     expect(probe).toHaveBeenCalledWith(holder, 0)

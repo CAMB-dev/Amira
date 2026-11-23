@@ -1,6 +1,6 @@
 import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
-import { type FileLock, isProcessAlive, SessionWriteGuardError, tryFileLock } from "./file-lock.ts"
+import { type FileLock, isProcessAlive, tryFileLock } from "./file-lock.ts"
 import {
   sessionDeletionDirectory,
   stageSessionFiles,
@@ -117,114 +117,90 @@ export function sessionSnippet(
 export function deleteSession(cwd: string, id: string, currentId?: string, dir = sessionsDir(cwd)): string[] {
   if (id === currentId) throw new Error("the current session cannot be deleted")
   const directory = sessionDeletionDirectory(dir, true)
-  let removed: string[]
-  let blockedPath: string | undefined
-  try {
-    removed = withSessionDeletionDirectory(directory, (root, stage) => {
-      // Leases and any deferred cleanup refer only to this verified private namespace.
-      const deletionLocks: FileLock[] = []
-      const leases: { file: string; identity: BigIntStats; contents: string }[] = []
-      const take = (file: string, id: string) => {
-        sessionDeletionDirectory(path.dirname(file))
-        const recording = lstatSync(file)
-        if (!recording.isFile() || recording.isSymbolicLink())
-          throw new Error("unsafe session recording symlink or non-file")
-        const lease = sessionLockFile(file)
-        const relative = path.relative(root, lease)
-        if (relative.startsWith("..") || path.isAbsolute(relative))
-          throw new Error("unsafe session lease path")
-        deletionLocks.push(
-          takeDeletionLock(file, id, lease, (guard) => {
-            blockedPath = path.join(directory.directory, path.relative(root, guard))
-          }),
-        )
-        leases.push({
-          file: lease,
-          identity: lstatSync(lease, { bigint: true }),
-          contents: readFileSync(lease, "utf8"),
-        })
-      }
-      try {
-        // Keep the requested path for containment: lookup canonicalisation would hide links.
-        const file = path.join(root, `${id}.jsonl`)
-        if (!/^[\w-]+$/.test(id) || !lstatSync(file, { throwIfNoEntry: false }))
-          throw new Error(`no session ${id}`)
-        take(file, id)
-        const owned = (recording: string, tolerateDamage = false): Set<string> => {
-          const out = new Set<string>()
-          const visit = (name: string) => {
-            if (out.has(name)) return
-            let entries: SessionStore["entries"]
-            try {
-              // Every component stays inside the relocated root and must not be a symlink.
-              const rel = path.relative(root, path.resolve(name))
-              if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("unsafe session path")
-              let part = root
-              for (const component of rel.split(path.sep)) {
-                part = path.join(part, component)
-                if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session symlink")
-              }
-              out.add(name)
-              entries = SessionStore.open(name).entries
-            } catch (error) {
-              if (!tolerateDamage) throw error
-              return
+  const removed = withSessionDeletionDirectory(directory, (root, stage) => {
+    // Leases and any deferred cleanup refer only to this verified private namespace.
+    const deletionLocks: FileLock[] = []
+    const leases: { file: string; identity: BigIntStats; contents: string }[] = []
+    const take = (file: string, id: string) => {
+      sessionDeletionDirectory(path.dirname(file))
+      const recording = lstatSync(file)
+      if (!recording.isFile() || recording.isSymbolicLink())
+        throw new Error("unsafe session recording symlink or non-file")
+      const lease = sessionLockFile(file)
+      const relative = path.relative(root, lease)
+      if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("unsafe session lease path")
+      deletionLocks.push(takeDeletionLock(file, id, lease))
+      leases.push({
+        file: lease,
+        identity: lstatSync(lease, { bigint: true }),
+        contents: readFileSync(lease, "utf8"),
+      })
+    }
+    try {
+      // Keep the requested path for containment: lookup canonicalisation would hide links.
+      const file = path.join(root, `${id}.jsonl`)
+      if (!/^[\w-]+$/.test(id) || !lstatSync(file, { throwIfNoEntry: false }))
+        throw new Error(`no session ${id}`)
+      take(file, id)
+      const owned = (recording: string, tolerateDamage = false): Set<string> => {
+        const out = new Set<string>()
+        const visit = (name: string) => {
+          if (out.has(name)) return
+          let entries: SessionStore["entries"]
+          try {
+            // Every component stays inside the relocated root and must not be a symlink.
+            const rel = path.relative(root, path.resolve(name))
+            if (rel.startsWith("..") || path.isAbsolute(rel)) throw new Error("unsafe session path")
+            let part = root
+            for (const component of rel.split(path.sep)) {
+              part = path.join(part, component)
+              if (lstatSync(part).isSymbolicLink()) throw new Error("unsafe session symlink")
             }
-            for (const e of entries) {
-              if (e.type !== "subagent") continue
-              if (!/^[\w-]+$/.test(e.childSessionId)) {
-                if (!tolerateDamage) throw new Error("unsafe sub-agent id")
-                continue
-              }
-              const child = path.join(path.dirname(name), "subagents", `${e.childSessionId}.jsonl`)
-              if (lstatSync(child, { throwIfNoEntry: false })) visit(child)
-            }
+            out.add(name)
+            entries = SessionStore.open(name).entries
+          } catch (error) {
+            if (!tolerateDamage) throw error
+            return
           }
-          visit(recording)
-          return out
+          for (const e of entries) {
+            if (e.type !== "subagent") continue
+            if (!/^[\w-]+$/.test(e.childSessionId)) {
+              if (!tolerateDamage) throw new Error("unsafe sub-agent id")
+              continue
+            }
+            const child = path.join(path.dirname(name), "subagents", `${e.childSessionId}.jsonl`)
+            if (lstatSync(child, { throwIfNoEntry: false })) visit(child)
+          }
         }
-        const files = owned(file)
-        for (const name of readdirSync(root).filter(
-          (n) => n.endsWith(".jsonl") && !n.endsWith(".trace.jsonl"),
-        )) {
-          const other = path.join(root, name)
-          if (other === file) continue
-          // Damage must not discard valid sharing references discovered elsewhere in this graph.
-          for (const name of owned(other, true)) files.delete(name)
-        }
-        for (const name of files) {
-          if (name !== file) take(name, path.basename(name, ".jsonl"))
-        }
-        // Canonicalise results only after the requested-path containment walk, while the
-        // recordings still exist; never expose private tombstone paths to callers.
-        const removed = [...files].map((name) =>
-          path.join(directory.directory, path.relative(root, canonicalSessionFile(name))),
-        )
-        stageSessionFiles(files, stage)
-        return removed
-      } finally {
-        for (const lock of deletionLocks.reverse()) lock.release()
-        // Sharing failures may defer lease cleanup. Detach only our exact lease image before
-        // restoring the public root; retries retain private names, not public deletion authority.
-        for (const lease of leases) stage(lease.file, { ...lease, discardOnRollback: true })
+        visit(recording)
+        return out
       }
-    })
-  } catch (error) {
-    // Classify the public guard only after rollback restored that namespace for inspection.
-    if (error instanceof SessionWriteGuardError && blockedPath) throw new SessionWriteGuardError(blockedPath)
-    // Windows can refuse relocation while a transient writer still holds its recording fd.
-    // Preserve the ownership protocol's busy-gate error without acquiring a public lease.
-    const failure = error as NodeJS.ErrnoException
-    const gate = `${path.join(directory.directory, `${id}.jsonl`)}.lock.lease-gate`
-    if (
-      ["EPERM", "EBUSY", "EACCES"].includes(failure.code ?? "") &&
-      failure.path === directory.directory &&
-      /^[\w-]+$/.test(id) &&
-      existsSync(gate)
-    )
-      throw new SessionWriteGuardError(gate)
-    throw error
-  }
+      const files = owned(file)
+      for (const name of readdirSync(root).filter(
+        (n) => n.endsWith(".jsonl") && !n.endsWith(".trace.jsonl"),
+      )) {
+        const other = path.join(root, name)
+        if (other === file) continue
+        // Damage must not discard valid sharing references discovered elsewhere in this graph.
+        for (const name of owned(other, true)) files.delete(name)
+      }
+      for (const name of files) {
+        if (name !== file) take(name, path.basename(name, ".jsonl"))
+      }
+      // Canonicalise results only after the requested-path containment walk, while the
+      // recordings still exist; never expose private tombstone paths to callers.
+      const removed = [...files].map((name) =>
+        path.join(directory.directory, path.relative(root, canonicalSessionFile(name))),
+      )
+      stageSessionFiles(files, stage)
+      return removed
+    } finally {
+      for (const lock of deletionLocks.reverse()) lock.release()
+      // Sharing failures may defer lease cleanup. Detach only our exact lease image before
+      // restoring the public root; retries retain private names, not public deletion authority.
+      for (const lease of leases) stage(lease.file, { ...lease, discardOnRollback: true })
+    }
+  })
   const removedPaths = new Set(removed)
   for (const [requested, cached] of summaries)
     if (removedPaths.has(cached.summary.file)) summaries.delete(requested)
@@ -238,22 +214,8 @@ export function findSession(cwd: string, id: string, dir = sessionsDir(cwd)): st
   return existsSync(file) ? canonicalSessionFile(file) : undefined
 }
 
-function takeDeletionLock(
-  file: string,
-  id: string,
-  lease: string,
-  remember: (guard: string) => void,
-): FileLock {
-  const deletionLock = tryFileLock(
-    lease,
-    SESSION_LOCK_STALE_MS,
-    SESSION_LOCK_HEARTBEAT_MS,
-    true,
-    (ownerPath) => {
-      remember(ownerPath)
-      throw new SessionWriteGuardError(ownerPath)
-    },
-  )
+function takeDeletionLock(file: string, id: string, lease: string): FileLock {
+  const deletionLock = tryFileLock(lease, SESSION_LOCK_STALE_MS, SESSION_LOCK_HEARTBEAT_MS, true)
   if (!deletionLock) {
     const pid = sessionLockPid(file)
     if (pid !== undefined && pid !== process.pid && isProcessAlive(pid)) {

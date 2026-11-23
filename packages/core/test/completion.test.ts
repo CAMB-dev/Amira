@@ -12,14 +12,13 @@ import {
   type StreamEvent,
 } from "@amira/ai"
 import type { Budget, ExtensionAPI, SessionControl } from "@amira/api"
-import { unfinishedAccounting } from "../src/accounting-requests.ts"
 import { Agent } from "../src/agent.ts"
 import { completeForAgent } from "../src/completion.ts"
+import { conversationUsage } from "../src/conversation-usage.ts"
 import { EventBus } from "../src/event-bus.ts"
 import { ExtensionHost } from "../src/extensions.ts"
 import { InterceptorRegistry } from "../src/interceptors.ts"
 import { OwnedConversationManager } from "../src/owned-conversations.ts"
-import { conversationUsage } from "../src/owned-conversations-usage.ts"
 import { SessionStore } from "../src/session-store.ts"
 import { storedSessionUsage } from "../src/session-usage.ts"
 import { AgentTree } from "../src/subagents.ts"
@@ -369,42 +368,9 @@ for (const correction of ["search", "tokens", "reported"] as const) {
       knownCostUsd: expected,
       complete: false,
     })
-    expect(store.entries.filter((entry) => entry.type === "side_usage")).toHaveLength(3)
+    expect(store.entries.filter((entry) => entry.type === "side_usage")).toHaveLength(1)
   })
 }
-
-test("identical physical terminal revisions reuse their retained durable contribution", async () => {
-  const { ai, api, store } = await setup(createMockDialect())
-  ai.stream = async function* (request) {
-    const message = receipt(request, 0.2)
-    yield { type: "request.end", message }
-    yield { type: "done", message: { ...message, usage: { ...message.usage } } }
-  }
-  await api.complete(request)
-  expect(store.entries.filter((entry) => entry.type === "side_usage")).toHaveLength(1)
-  expect(unfinishedAccounting(store)).toHaveLength(0)
-  expect(storedSessionUsage(SessionStore.open(store.file))).toMatchObject({
-    knownCostUsd: 0.2,
-    complete: true,
-  })
-})
-
-test("an identical later observation cannot acknowledge a contribution whose append failed", async () => {
-  const { ai, api, store } = await setup(createMockDialect())
-  const append = store.append.bind(store)
-  store.append = (entry) => {
-    if (entry.type === "side_usage") throw new Error("simulated receipt write failure")
-    return append(entry)
-  }
-  ai.stream = async function* (request) {
-    const message = receipt(request, 0.2)
-    yield { type: "request.end", message }
-    yield { type: "done", message }
-  }
-  await api.complete(request)
-  expect(unfinishedAccounting(store)).toHaveLength(1)
-  expect(storedSessionUsage(SessionStore.open(store.file)).complete).toBe(false)
-})
 
 test("an abort during retry backoff does not charge the repeated attempt receipt twice", async () => {
   const { api, tree, ai, store } = await setup(createMockDialect())

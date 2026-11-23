@@ -13,17 +13,11 @@ import {
 } from "node:fs"
 import path from "node:path"
 import type { Message, ModelRef, ToolResultMessage, Usage } from "@amira/ai"
+import { knownUsageCost } from "@amira/ai/accounting"
 import type { CompactionInfo } from "@amira/api"
-import * as accounting from "./accounting-receipts.ts"
 import { contextTokens, summaryMessages } from "./compaction.ts"
 import type { ContextView, StoredView } from "./context.ts"
-import {
-  type FileLock,
-  pendingOwnedLockCleanup,
-  SessionWriteGuardError,
-  tryFileLock,
-  withTransientFileLock,
-} from "./file-lock.ts"
+import { type FileLock, tryFileLock, withTransientFileLock } from "./file-lock.ts"
 import { writeOwnedFile } from "./owned-conversations-lifecycle.ts"
 import type { OwnedSessionIdentity } from "./owned-session.ts"
 import { intersectWriteRoots } from "./permissions/write-roots.ts"
@@ -34,11 +28,11 @@ import {
 } from "./session-acquisition.ts"
 import { registerSessionBranchReader } from "./session-branch-reader.ts"
 import type { RestoredSession, SessionEntry, SessionEntryData } from "./session-entry.ts"
-import { checkpointIn, compactionInfo, ENTRY_TYPES, isEntry, parseLine } from "./session-entry-read.ts"
+import { checkpointIn, compactionInfo, isEntry, parseLine } from "./session-entry-read.ts"
 import { isSessionHeader, type SessionHeader } from "./session-header.ts"
 import { canonicalSessionFile } from "./session-path.ts"
 import { sessionsDir } from "./session-project.ts"
-import { entryUsage } from "./session-usage.ts"
+import { cloneUsage, entryUsage } from "./session-usage.ts"
 
 export { projectKey, sessionsDir } from "./session-project.ts"
 
@@ -115,7 +109,7 @@ export class SessionStore {
   #needsNewline = false
   #pending: string[] = []
   #accountingIntact = true
-  readonly #usageEvidence = new accounting.UsageWriteEvidence()
+  readonly #persistedUsage = new WeakSet<Usage>()
   /** Bytes in the file as far as this store knows; any other size means another writer. */
   #size = 0
   /** Generation last read/written under authority; never a substitute for claim-time refresh. */
@@ -346,16 +340,8 @@ export class SessionStore {
       SESSION_LOCK_STALE_MS,
       SESSION_LOCK_HEARTBEAT_MS,
       true,
-      (gate) => {
-        throw new SessionWriteGuardError(gate)
-      },
     )
-    if (!lock)
-      throw new SessionInUseError(
-        this.file,
-        sessionLockPid(this.file),
-        pendingOwnedLockCleanup(sessionLockFile(this.file)),
-      )
+    if (!lock) throw new SessionInUseError(this.file, sessionLockPid(this.file))
     return lock
   }
 
@@ -439,16 +425,9 @@ export class SessionStore {
 
   /** Only out-of-band metadata can follow another view; a model context cannot. */
   #withWriter(data: SessionEntryData, write: (writer: SessionStore) => string): string {
-    const accountingIntent = accounting.noteEntry(data)
     if (sessionFileKey(canonicalSessionFile(this.file)) !== sessionFileKey(this.file))
       throw new SessionConflictError(this.file)
-    if (
-      this.#written ||
-      data.type === "message" ||
-      data.type === "display" ||
-      data.type === "side_usage" ||
-      accountingIntent
-    ) {
+    if (this.#written || data.type === "message" || data.type === "display" || data.type === "side_usage") {
       for (const scope of this.#writeClaims) {
         if (scope.claimed) continue
         // Claim under authority without merging underneath the child's live model history.
@@ -456,8 +435,7 @@ export class SessionStore {
         scope.claimed = true
       }
     }
-    const metadata =
-      data.type === "display" || data.type === "side_usage" || data.type === "title" || accountingIntent
+    const metadata = data.type === "display" || data.type === "side_usage" || data.type === "title"
     // The canonical file was revalidated above; reuse its physical lock namespace.
     const lockFile = `${this.file}.lock`
     const key = sessionFileKey(this.file)
@@ -484,7 +462,6 @@ export class SessionStore {
       data.type !== "message" &&
       data.type !== "display" &&
       data.type !== "side_usage" &&
-      !accountingIntent &&
       !existsSync(this.file) &&
       !existsSync(lockFile)
     ) {
@@ -515,13 +492,9 @@ export class SessionStore {
         this.#validate()
         return write(this)
       },
-      (gate) => {
-        throw new SessionWriteGuardError(gate)
-      },
       SESSION_LOCK_STALE_MS,
     )
-    if (!result)
-      throw new SessionInUseError(this.file, sessionLockPid(this.file), pendingOwnedLockCleanup(lockFile))
+    if (!result) throw new SessionInUseError(this.file, sessionLockPid(this.file))
     return result.value
   }
 
@@ -536,7 +509,9 @@ export class SessionStore {
 
   /** Match a tree charge to its already-persisted attempt once, even if a provider reuses Usage. */
   takeUsageReceipt(usage: Usage): boolean {
-    return this.#usageEvidence.take(usage)
+    if (!this.#persistedUsage.has(usage)) return false
+    this.#persistedUsage.delete(usage)
+    return true
   }
 
   get title(): string | undefined {
@@ -636,10 +611,9 @@ export class SessionStore {
   /** Appends an entry as a child of the current tip and returns its id. */
   append(data: SessionEntryData): string {
     const usage = entryUsage(data)
-    if (usage) accounting.prepareAccountingWrite(usage)
     try {
       const id = this.#withWriter(data, (writer) => writer.#append(data))
-      if (usage) this.#usageEvidence.commit(usage, id)
+      if (usage) this.#persistedUsage.add(usage)
       return id
     } catch (error) {
       if (data.type === "side_usage" || data.type === "compaction" || data.type === "message")
@@ -661,25 +635,23 @@ export class SessionStore {
     }
     const usage = entryUsage(entry)
     if (usage) {
-      entry.accounting = accounting.entryAccounting(usage)
+      const known = knownUsageCost(usage)
+      if (known !== undefined && usage.cost === undefined)
+        entry.accounting = { ...entry.accounting, knownCostUsd: known }
       // Provider-owned usage objects can be reused or mutated after their terminal event.
+      const copy = cloneUsage(usage)
       if (entry.type === "message" && entry.message.role === "assistant")
-        entry.message = { ...entry.message, usage: { ...usage } }
-      else if (entry.type === "side_usage" || entry.type === "compaction") entry.usage = { ...usage }
+        entry.message = { ...entry.message, usage: copy }
+      else if (entry.type === "side_usage" || entry.type === "compaction") entry.usage = copy
     }
     if (!this.#accountingIntact) entry.accounting = { ...entry.accounting, incomplete: true }
-    accounting.sealJournalEntry(entry, this.id)
     // Written first, so a failed write leaves no entry behind for later ones to point at.
     // A paid side request must survive even when its owner has no conversational messages.
     this.#write(
       JSON.stringify(entry),
-      entry.type === "message" ||
-        entry.type === "display" ||
-        entry.type === "side_usage" ||
-        accounting.noteEntry(entry),
+      entry.type === "message" || entry.type === "display" || entry.type === "side_usage",
     )
     this.#add(entry)
-    accounting.appendReferenceProof(entry, this.id, (data) => this.#append(data))
     return entry.id
   }
 
@@ -811,7 +783,6 @@ export class SessionStore {
 
   #add(e: SessionEntry) {
     if (
-      !accounting.validJournalEntry(e, ENTRY_TYPES, this.id) ||
       this.#byId.has(e.id) ||
       (e.parentId !== null && !this.#byId.has(e.parentId)) ||
       e.accounting?.incomplete
@@ -822,7 +793,7 @@ export class SessionStore {
     this.#byId.set(e.id, e)
     // Session-wide notes stay off the branch: a rewind keeps the name, and an older Amira that
     // skips these entry types never sees a message or checkout pointing at one.
-    if (e.type === "title" || e.type === "side_usage" || accounting.noteEntry(e)) return
+    if (e.type === "title" || e.type === "side_usage") return
     if (e.type !== "checkout") this.#leaf = e.id
     else if (e.target === null) this.#leaf = null
     else if (this.#byId.has(e.target)) this.#leaf = e.target

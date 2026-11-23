@@ -1,4 +1,3 @@
-import { SessionWriteGuardError } from "./file-lock.ts"
 import { SessionInUseError, type SessionStore } from "./session-store.ts"
 
 /** Internal awaited acquisition budget; synchronous claim/Agent construction stay unchanged. */
@@ -9,8 +8,7 @@ export interface SessionAcquisitionOptions {
 }
 
 function transient(error: unknown): boolean {
-  if (error instanceof SessionWriteGuardError || error instanceof SessionInUseError)
-    return error.pendingOwnedCleanup
+  if (error instanceof SessionInUseError) return error.pendingOwnedCleanup
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   return code === "EPERM" || code === "EBUSY" || code === "EACCES"
 }

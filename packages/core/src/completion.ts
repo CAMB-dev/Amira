@@ -9,12 +9,11 @@ import {
   type Usage,
 } from "@amira/ai"
 import type { CompleteRequest, CompleteResult } from "@amira/api"
-import { accountingRecorded, requestAccountingTarget, withAccountingRequests } from "./accounting-requests.ts"
 import type { Agent } from "./agent.ts"
+import { recordConversationUsage } from "./conversation-usage.ts"
 import { offeredTools } from "./deferred-tools.ts"
-import { recordConversationUsage } from "./owned-conversations-usage.ts"
+import { usageDelta, usageSnapshot } from "./session-usage.ts"
 import { overBudget } from "./subagents/budget.ts"
-import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
 
 /** Internal text-only completion; its caller owns exclusivity and cancellation/drain lifetime. */
 export async function completeForAgent(options: {
@@ -33,10 +32,7 @@ export async function completeForAgent(options: {
     agent.callableTools && !agent.callableTools.has(NATIVE_WEB_SEARCH)
       ? { ...options.model, caps: { ...options.model.caps, webSearch: false } }
       : options.model
-  const ai = withAccountingRequests(options.ai, agent, () => {
-    const target = requestAccountingTarget(agent)
-    return target.store ? target : { store: agent.session }
-  })
+  const ai = options.ai
   const signals = [options.signal, request.signal].filter((signal) => signal !== undefined)
   const callerSignal = AbortSignal.any(signals)
   const label = sideLabel(request.label) ?? options.label
@@ -58,7 +54,6 @@ export async function completeForAgent(options: {
       const source = { provider: model.provider, model: model.id }
       if (agent.tree) agent.tree.recordUsage(agent, usage, source)
       else recordConversationUsage(agent, usage, source)
-      accountingRecorded(agent, usage)
     }
     const unknown = () =>
       book({
@@ -80,29 +75,43 @@ export async function completeForAgent(options: {
       : []
     let toolsKept = tools.length > 0 || (keepTools && hasNativeWebSearch(model))
     const sideModel = toolsKept ? model : { ...model, caps: { ...model.caps, webSearch: false } }
+    let attemptUsage: Usage | undefined
+    let bookedUsage: Usage | undefined
     let reported = false
     let settled = false
     let terminalFailure = false
     let failure: Error | undefined
     let backoff = false
     let dispatched = false
-    let record = consultationUsageRecorder(book)
     const observe = (message: AssistantMessage) => {
       if (!message.usage) return
       reported = true
-      const retained = record.observe?.(message.usage)
-      if (retained) accountingRecorded(agent, retained)
+      attemptUsage = usageSnapshot(message.usage, attemptUsage ?? bookedUsage)
+      if (settled && bookedUsage && attemptUsage) {
+        if (JSON.stringify(attemptUsage) !== JSON.stringify(bookedUsage)) {
+          const delta = usageDelta(attemptUsage, bookedUsage)
+          bookedUsage = attemptUsage
+          attemptUsage = undefined
+          book(delta)
+        }
+      }
     }
     const settle = () => {
       if (settled) return
       settled = true
-      if (!reported) {
+      if (attemptUsage) {
+        const u = attemptUsage
+        attemptUsage = undefined
+        bookedUsage = u
+        book(u)
+      } else if (!reported) {
         // Metadata-only coverage marker, not an invented token count or a zero-dollar charge.
         unknown()
       }
     }
     const nextAttempt = () => {
-      record = consultationUsageRecorder(book)
+      attemptUsage = undefined
+      bookedUsage = undefined
       reported = false
       settled = false
       backoff = false
@@ -183,9 +192,9 @@ export async function completeForAgent(options: {
       }
     } catch (error) {
       if (!terminalFailure) {
-        // An unexpected iterator/cleanup failure cannot certify an unreported attempt as free.
-        if (reported || settled) unknown()
-        else settle()
+        // Settle any observed receipt first, then record unknown coverage for the broken stream.
+        if (!settled) settle()
+        unknown()
         settled = true
       }
       throw error

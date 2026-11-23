@@ -12,14 +12,8 @@ import {
   type Usage,
 } from "@amira/ai"
 import { formatTokens } from "@amira/api"
-import {
-  addAccountingUsage,
-  incompleteUsage,
-  markAccountingIncomplete,
-  retainAccountingReceipts,
-} from "./accounting-receipts.ts"
 import { isTerminalProxyFailure } from "./agent/transport-failure.ts"
-import { consultationUsageRecorder } from "./subagents/consultation-usage.ts"
+import { addAccountingUsage, incompleteUsage } from "./session-usage.ts"
 
 export interface CompactionOptions {
   /** Compact once the context passes this fraction of the model's window. See DEFAULT_COMPACT_THRESHOLD. */
@@ -267,20 +261,20 @@ export async function summarize(
   let failure: string | undefined
   let modelError: ModelError | undefined
   let usage: Usage | undefined
+  let attemptUsage: Usage | undefined
   let usageIncomplete = false
-  const count = (u: Usage | undefined) => {
-    if (u) {
-      usage = usage ? addAccountingUsage(usage, u) : u
-      usageIncomplete ||= incompleteUsage(u)
-    } else usageIncomplete = true
+  const settleAttempt = () => {
+    if (!attemptUsage) return
+    const u = attemptUsage
+    attemptUsage = undefined
+    usage = usage ? addAccountingUsage(usage, u) : u
+    usageIncomplete ||= incompleteUsage(u)
   }
-  let record = consultationUsageRecorder(count)
   let backoff = false
   let dispatched = false
   const observe = (u: Usage | undefined) => {
     if (u) {
-      record.observe?.(u)
-      if (usage) retainAccountingReceipts(usage, u)
+      attemptUsage = { ...u }
       usageIncomplete ||= incompleteUsage(u)
     } else usageIncomplete = true
   }
@@ -297,24 +291,26 @@ export async function summarize(
       signal,
     )) {
       if (ev.type === "retry" || ev.type === "fast.fallback") {
+        settleAttempt()
         backoff = true
         dispatched = false
         continue
       }
       if (ev.type === "request.attempt") {
-        if (backoff || dispatched) record = consultationUsageRecorder(count)
+        if (backoff || dispatched) settleAttempt()
         backoff = false
         dispatched = true
         continue
       }
       // A synthetic backoff abort repeats the last receipt; only an opened attempt resets it.
-      if (backoff && !(ev.type === "error" && ev.error.code === "aborted")) {
-        record = consultationUsageRecorder(count)
+      const backoffAbort = backoff && ev.type === "error" && ev.error.code === "aborted"
+      if (backoff && !backoffAbort) {
+        settleAttempt()
         backoff = false
       }
       if (ev.type === "request.end") observe(ev.message.usage)
       if (ev.type === "error") {
-        observe(ev.message.usage)
+        if (!backoffAbort) observe(ev.message.usage)
         failure ??= ev.error.message
         modelError ??= ev.error
       }
@@ -323,7 +319,9 @@ export async function summarize(
         observe(ev.message.usage)
       }
     }
+    settleAttempt()
   } catch (err) {
+    settleAttempt()
     if (err instanceof SummaryError) throw err
     // The interrupted stream may hide more usage; retain the known subtotal without certifying it.
     throw new SummaryError(
@@ -339,7 +337,7 @@ export async function summarize(
   }
   if (failure !== undefined) throw new SummaryError(failure, usage, usageIncomplete, modelError)
   if (!text.trim()) throw new SummaryError("the model returned an empty summary", usage, usageIncomplete)
-  if (usage && usageIncomplete) markAccountingIncomplete(usage)
+  if (usage && usageIncomplete) usage.pricingUnknown = true
   return {
     summary: text.trim(),
     ...(usage ? { usage } : {}),
@@ -356,6 +354,6 @@ export class SummaryError extends Error {
     readonly failure?: ModelError,
   ) {
     super(message)
-    if (usage && usageIncomplete) markAccountingIncomplete(usage)
+    if (usage && usageIncomplete) usage.pricingUnknown = true
   }
 }

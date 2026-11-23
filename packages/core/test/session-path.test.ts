@@ -2,7 +2,6 @@ import { expect, spyOn, test } from "bun:test"
 import * as fs from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { takeFilesystemGate } from "../src/file-lock-gate.ts"
 import { canonicalSessionFile } from "../src/session-path.ts"
 import { sessionLockFile } from "../src/session-store.ts"
 
@@ -252,12 +251,10 @@ test("a hard link introduced after the initial path probe is still refused", () 
 })
 
 for (const kind of ["junction", "symlink", "mocked-symlink", "case", "relative"] as const) {
-  test(`${kind} directory aliases retain the previous release's session and gate namespace`, () => {
+  test(`${kind} directory aliases retain the canonical session lock namespace`, () => {
     const dir = fs.mkdtempSync(path.join(tmpdir(), "amira-session-namespace-"))
     const physical = path.join(dir, "MixedCase")
     fs.mkdirSync(physical)
-    let unlock: (() => void) | undefined
-    const staging = spyOn(fs, "mkdtempSync")
     try {
       let alias = physical
       if (kind === "junction") {
@@ -270,11 +267,6 @@ for (const kind of ["junction", "symlink", "mocked-symlink", "case", "relative"]
         const file = path.join(alias, "session.jsonl")
         const legacyLock = path.join(fs.realpathSync(path.resolve(alias)), "session.jsonl.lock")
         expect(sessionLockFile(file)).toBe(legacyLock)
-        unlock = takeFilesystemGate(legacyLock)
-        expect(unlock).toBeDefined()
-        expect(staging).toHaveBeenCalledWith(`${legacyLock}.lease-gate.pending-${process.pid}-`)
-        expect(fs.existsSync(`${legacyLock}.lease-gate`)).toBe(true)
-        expect(takeFilesystemGate(path.join(physical, "session.jsonl.lock"))).toBeUndefined()
       }
       if (kind === "symlink" || kind === "mocked-symlink")
         withAliases(
@@ -284,8 +276,6 @@ for (const kind of ["junction", "symlink", "mocked-symlink", "case", "relative"]
         )
       else check()
     } finally {
-      staging.mockRestore()
-      unlock?.()
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })

@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test"
-import { tmpdir } from "node:os"
 import {
   ArtifactStore,
   type ArtifactStoreOptions,
@@ -13,13 +12,10 @@ import {
   type SessionEntryData,
   type SessionHeader,
   SessionStore,
-  type SpawnedSubagent,
-  type SubagentEntry,
   streamProjectFiles,
   ToolRegistry,
   UiRequests,
 } from "../src/index.ts"
-import { usageReceiptDestination } from "../src/owned-conversations-receipts.ts"
 
 test("local suggestion attachment is a host-only composer seam", () => {
   const ui = new UiRequests(new EventBus())
@@ -39,25 +35,6 @@ test("local suggestion attachment is a host-only composer seam", () => {
   `)
   detach()
   expect(ui.api().acquireInputSuggestionSlot()).toBeUndefined()
-})
-
-test("finished subagent public types carry an opaque accounting destination, not a transcript", () => {
-  const store = SessionStore.create({ cwd: process.cwd(), dir: tmpdir() })
-  const identity: Pick<SpawnedSubagent, "accountingDestination"> &
-    Pick<SubagentEntry, "accountingDestination"> = {
-    accountingDestination: usageReceiptDestination(store),
-  }
-  expect({
-    fields: Object.keys(identity),
-    digest: /^[a-f0-9]{64}$/.test(identity.accountingDestination ?? ""),
-  }).toMatchInlineSnapshot(`
-    {
-      "digest": true,
-      "fields": [
-        "accountingDestination",
-      ],
-    }
-  `)
 })
 
 test("policy-bearing session header types remain exported with an explicit format discriminator", () => {

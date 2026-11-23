@@ -14,12 +14,11 @@ import {
   type SubagentInfo,
   type SubagentResult,
 } from "@amira/api"
-import { recordAccountingReceipts } from "../accounting-receipts.ts"
 import type { Agent } from "../agent.ts"
+import { recordConversationUsage } from "../conversation-usage.ts"
 import type { EmitMeta } from "../event-bus.ts"
-import { identifiedUsage, type ReceiptDestination } from "../owned-conversations-receipts.ts"
-import { recordConversationUsage } from "../owned-conversations-usage.ts"
 import type { SessionStore } from "../session-store.ts"
+import { cloneUsage } from "../session-usage.ts"
 import type { AgentTree } from "../subagents.ts"
 import { addUsage, overBudget, usageTokens } from "./budget.ts"
 import { metaOf } from "./events.ts"
@@ -36,8 +35,6 @@ export interface SpawnedSubagent {
   messages?: readonly Message[]
   session?: SessionStore
   file?: string
-  /** Retained receipt lookup only; never keeps the Agent, store or transcript alive. */
-  accountingDestination?: ReceiptDestination
 }
 
 export class Child implements ChildSession {
@@ -101,7 +98,6 @@ export class Child implements ChildSession {
   /** Private replies count in the owning persisted session without retaining their transcript. */
   chargeUsage(usage: Usage, model = this.model): void {
     if (!this.ephemeral) return
-    usage = identifiedUsage(usage)
     const attribution = {
       sessionId: this.id,
       parentSessionId: this.parentSessionId,
@@ -113,8 +109,13 @@ export class Child implements ChildSession {
       return
     }
     try {
-      this.usageStore.append({ type: "side_usage", model, usage, label: this.title, attribution })
-      recordAccountingReceipts(usage)
+      this.usageStore.append({
+        type: "side_usage",
+        model,
+        usage: cloneUsage(usage),
+        label: this.title,
+        attribution,
+      })
     } catch (error) {
       recordConversationUsage(this.agent, usage, model, attribution, this.usageStore)
       // Late receipts can outlive the owner's Agent. Report without disabling the resumed

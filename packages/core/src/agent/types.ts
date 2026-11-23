@@ -1,5 +1,5 @@
 // Owns Agent contracts, shared turn types, errors and notice-retry defaults.
-import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort } from "@amira/ai"
+import type { Ai, Message, ModelErrorInfo, ModelInfo, ReasoningEffort, UserMessage } from "@amira/ai"
 import type {
   ApprovalRequest,
   AskOutcome,
@@ -22,7 +22,14 @@ import type { PromptSection } from "../prompt.ts"
 import type { SessionStore } from "../session-store.ts"
 import type { AgentTree } from "../subagents.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
-import type { HeldInput } from "./held-input.ts"
+
+export interface HeldInput {
+  readonly id: string
+  readonly holdId: string
+  readonly kind: "prompt" | "steer"
+  readonly message: UserMessage
+  readonly turnId?: string
+}
 
 /** State that belongs to one turn, so late callbacks never leak into the next turn. */
 export interface Turn {

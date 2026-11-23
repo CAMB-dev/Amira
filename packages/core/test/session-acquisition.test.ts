@@ -5,9 +5,7 @@ import path from "node:path"
 import { createAi, createMockDialect, userMessage } from "@amira/ai"
 import { SPAWN_TEST_TIMEOUT_MS } from "../../../scripts/spawn-test.ts"
 import { Agent, type AgentOptions } from "../src/agent.ts"
-import { pendingOwnedLockCleanup, SessionWriteGuardError, tryFileLock } from "../src/file-lock.ts"
-import { takeFilesystemGate } from "../src/file-lock-gate.ts"
-import { leaseOwner } from "../src/file-lock-owner.ts"
+import { tryFileLock } from "../src/file-lock.ts"
 import { SessionInUseError, SessionStore, sessionLockFile } from "../src/session-store.ts"
 import { waitForFileLockCondition, waitForFileLockWorkerExit } from "./file-lock-test-waits.ts"
 import { finishWorker, startWorker } from "./session-ownership-worker.ts"
@@ -56,61 +54,6 @@ for (const code of ["EPERM", "EBUSY", "EACCES"]) {
   })
 }
 
-for (const kind of [
-  "foreign gate",
-  "corrupt gate",
-  "legacy lease",
-  "corrupt lease",
-  "foreign lease",
-  "live lease",
-]) {
-  test(`awaited claim fails ${kind} immediately, without scheduling a wait`, async () => {
-    const { dir, store, file } = fixture()
-    const foreign = { ...leaseOwner(), host: "different-host" }
-    const gate = `${file}.lease-gate`
-    fs.mkdirSync(dir, { recursive: true })
-    if (kind.endsWith("gate")) {
-      fs.mkdirSync(gate)
-      fs.writeFileSync(
-        path.join(gate, "owner.json"),
-        kind === "foreign gate" ? JSON.stringify(foreign) : "invalid",
-      )
-    } else {
-      const owner = kind === "foreign lease" ? foreign : leaseOwner()
-      fs.writeFileSync(
-        file,
-        kind === "legacy lease"
-          ? `${process.pid}\n`
-          : kind === "corrupt lease"
-            ? "invalid"
-            : `${owner.pid}\n${owner.nonce}\n${JSON.stringify(owner)}\n`,
-      )
-    }
-    const timers = spyOn(globalThis, "setTimeout")
-    const atomicWait = spyOn(Atomics, "wait")
-    const sleepSync = spyOn(Bun, "sleepSync")
-    let constructed = false
-    try {
-      const errorType = kind === "live lease" ? SessionInUseError : SessionWriteGuardError
-      expect(() =>
-        store.withClaim(() => {
-          constructed = true
-        }),
-      ).toThrow(errorType)
-      expect(constructed).toBe(false)
-      // Reject scheduled and synchronous sleeps without relying on wall-clock timing.
-      expect(timers).not.toHaveBeenCalled()
-      expect(atomicWait).not.toHaveBeenCalled()
-      expect(sleepSync).not.toHaveBeenCalled()
-    } finally {
-      timers.mockRestore()
-      atomicWait.mockRestore()
-      sleepSync.mockRestore()
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-  })
-}
-
 test(
   "awaited acquisition fails a verified live foreign-process lease without sleeping",
   async () => {
@@ -153,35 +96,6 @@ test(
   },
   SPAWN_TEST_TIMEOUT_MS,
 )
-
-test("an own pending lease does not make a foreign blocking gate retryable", () => {
-  const { dir, store, file } = fixture()
-  store.claim()
-  const remove = fs.rmSync
-  const hook = spyOn(fs, "rmSync").mockImplementation((target, options) => {
-    if (String(target) === file) throw Object.assign(new Error("lease reader"), { code: "EPERM" })
-    return remove(target, options)
-  })
-  store.release()
-  hook.mockRestore()
-  expect(pendingOwnedLockCleanup(file)).toBe(true)
-  const gate = `${file}.lease-gate`
-  fs.mkdirSync(gate)
-  const contents = JSON.stringify({ ...leaseOwner(), host: "foreign", pid: process.pid })
-  fs.writeFileSync(path.join(gate, "owner.json"), contents)
-  const timers = spyOn(globalThis, "setTimeout")
-  try {
-    expect(() => store.withClaim(() => "must not construct")).toThrow(SessionWriteGuardError)
-    expect(timers).not.toHaveBeenCalled()
-    expect(fs.readFileSync(path.join(gate, "owner.json"), "utf8")).toBe(contents)
-  } finally {
-    timers.mockRestore()
-    fs.rmSync(gate, { recursive: true, force: true })
-    store.claim()
-    store.release()
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
 
 for (const overshoot of [0, 249]) {
   test(`two-second acquisition deadline is monotonic and retains the original path diagnostic (${overshoot}ms scheduler overshoot)`, async () => {
@@ -329,36 +243,6 @@ for (const view of ["same", "different", "unclaimed"] as const) {
     }
   })
 }
-
-test("a replacement gate with the same PID is not the exact release-requested gate", () => {
-  const { dir, store, file } = fixture()
-  const gate = `${file}.lease-gate`
-  const unlock = takeFilesystemGate(file)!
-  expect(unlock).toBeDefined()
-  const rename = fs.renameSync
-  const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
-    if (String(from) === gate && String(to).includes(".retired-"))
-      throw Object.assign(new Error("reader"), { code: "EPERM" })
-    return rename(from, to)
-  })
-  unlock()
-  expect(pendingOwnedLockCleanup(gate)).toBe(true)
-  hook.mockRestore()
-  rename(gate, `${gate}.displaced`)
-  fs.mkdirSync(gate)
-  const replacement = JSON.stringify(leaseOwner())
-  fs.writeFileSync(path.join(gate, "owner.json"), replacement)
-  const timers = spyOn(globalThis, "setTimeout")
-  try {
-    expect(pendingOwnedLockCleanup(gate)).toBe(false)
-    expect(() => store.withClaim(() => "not constructed")).toThrow(SessionWriteGuardError)
-    expect(timers).not.toHaveBeenCalled()
-    expect(fs.readFileSync(path.join(gate, "owner.json"), "utf8")).toBe(replacement)
-  } finally {
-    timers.mockRestore()
-    fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
 
 for (const existingOwner of [false, true]) {
   test(`cancellation after temporary claim releases exactly that ref (existing owner ${existingOwner})`, async () => {

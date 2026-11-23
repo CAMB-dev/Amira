@@ -1,15 +1,6 @@
 // Owns between-turn work and the prompts/steers queued behind it.
 import type { UserMessage } from "@amira/ai"
-import { addHeldInput, clearHeldInput, type HeldInput, publishHoldState } from "./held-input.ts"
-
-function freezeSnapshot<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const item of Object.values(value)) freezeSnapshot(item)
-    Object.freeze(value)
-  }
-  return value
-}
-
+import type { EventBus } from "../event-bus.ts"
 import type { NoticeInbox } from "./notices.ts"
 import { transportFailure } from "./transport-failure.ts"
 import type { TurnState } from "./turn-runner.ts"
@@ -23,7 +14,33 @@ import {
   type TurnResult,
 } from "./types.ts"
 
+type HoldListener = (owner: unknown, holding: boolean) => void
+const holdListeners = new WeakMap<EventBus, Set<HoldListener>>()
+
+/** Subscribes to between-turn work holds on a bus (used to clear composer suggestions). */
+export function subscribeHolds(bus: EventBus, listener: HoldListener): () => void {
+  let set = holdListeners.get(bus)
+  if (!set) {
+    set = new Set()
+    holdListeners.set(bus, set)
+  }
+  set.add(listener)
+  return () => {
+    set.delete(listener)
+  }
+}
+
+function notifyHold(bus: EventBus, owner: unknown, holding: boolean): void {
+  for (const listener of [...(holdListeners.get(bus) ?? [])]) {
+    try {
+      listener(owner, holding)
+    } catch {}
+  }
+}
+
 interface SessionHoldDeps {
+  bus: EventBus
+  owner: unknown
   state: Pick<TurnState, "abort">
   inbox: NoticeInbox
   prompt: (message: UserMessage, options: PromptOptions) => Promise<TurnResult>
@@ -53,25 +70,20 @@ export class SessionHold {
     return this.#next?.prompted ?? false
   }
 
-  /** Reset state is sampled from the actual execution queue, preserving admission identities. */
-  recoveryState(): readonly HeldInput[] {
-    return freezeSnapshot(structuredClone(this.#next?.messages ?? []))
-  }
-
   async run<T>(what: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.#deps.state.abort) throw new AgentBusyError("a turn or compaction is already running")
     const abort = new AbortController()
     this.#deps.state.abort = abort
     this.#what = what
     this.#id = `hold_${crypto.randomUUID()}`
-    publishHoldState(this)
+    notifyHold(this.#deps.bus, this.#deps.owner, true)
     try {
       return await work(abort.signal)
     } finally {
       this.#deps.state.abort = undefined
       this.#what = undefined
       this.#id = undefined
-      publishHoldState(this)
+      notifyHold(this.#deps.bus, this.#deps.owner, false)
       const noticed = this.#deps.inbox.takeNoticedDuringHold()
       if (transportFailure(abort.signal)) this.#deps.inbox.suspend()
       // Held input starts one turn; notices join it, or wake their own turn unless aborted.
@@ -83,7 +95,6 @@ export class SessionHold {
   steer(message: UserMessage): void {
     const next = this.#enqueue(message, true)
     const owned = next.messages[next.messages.length - 1]!.message
-    addHeldInput(this, { message: owned, kind: "steer", holdId: this.#id! })
     this.#deps.emit(undefined, "turn.steer", { message: owned, state: "queued" })
   }
 
@@ -92,7 +103,6 @@ export class SessionHold {
     next.prompted = true
     return new Promise((resolve, reject) => {
       next.waiters.push({ resolve, reject })
-      addHeldInput(this, { message, kind: "prompt", holdId: this.#id!, turnId })
     })
   }
 
@@ -120,7 +130,6 @@ export class SessionHold {
     const next = this.#next
     this.#next = undefined
     if (!next) return
-    clearHeldInput(this)
     if (aborted) {
       for (const { message } of next.messages)
         this.#deps.emit(undefined, "turn.steer", { message, state: "dropped" })

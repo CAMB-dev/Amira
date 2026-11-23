@@ -15,8 +15,8 @@ import {
 } from "@amira/ai"
 import type { AnyEvent, EventMap } from "@amira/api"
 import { Agent, type AgentOptions } from "../src/agent.ts"
+import { conversationUsage } from "../src/conversation-usage.ts"
 import { EventBus } from "../src/event-bus.ts"
-import { conversationUsage } from "../src/owned-conversations-usage.ts"
 import { SessionStore } from "../src/session-store.ts"
 import { AgentTree } from "../src/subagents.ts"
 

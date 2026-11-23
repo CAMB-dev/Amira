@@ -1,10 +1,8 @@
 import type { Message, ModelRef, Signature, Usage } from "@amira/ai"
 import type { CompactionInfo, NoticeLevel, PrintOptions } from "@amira/api"
-import type { UsageCoverage } from "./accounting-coverage.ts"
 import type { ContextView, StoredView } from "./context.ts"
 import type { FileJournalEntry } from "./file-rewind.ts"
 import type { UsageAttribution } from "./session-usage.ts"
-import type { AccountingStatement } from "./usage-statements.ts"
 
 export type SessionEntryData =
   | FileJournalEntry
@@ -60,19 +58,8 @@ export type SessionEntry = SessionEntryData & {
   id: string
   parentId: string | null
   ts: number
-  /** Serializable subtotal: an aggregate Usage may otherwise retain this only in a WeakMap. */
-  accounting?: {
-    knownCostUsd?: number
-    incomplete?: true
-    coverageIncomplete?: true
-    receiptId?: string
-    coverage?: UsageCoverage
-    source?: "request" | "reported" | "unknown"
-    attempts?: { id: string; revision: number }[]
-    statements?: AccountingStatement[]
-    seal?: string
-    journal?: { v: 1; sessionId: string; fingerprint: string }
-  }
+  /** Legacy optional accounting metadata preserved for backwards-compatible JSONL reads. */
+  accounting?: Record<string, unknown> & { incomplete?: boolean }
 }
 
 /** Messages rebuilt from a branch, with the entry id each one came from. */

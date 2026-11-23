@@ -153,21 +153,18 @@ test("persisted sub-agent appends use the same bounded work as held-lease append
   }
 })
 
-test("200 new sessions use one transient gate and one append each, without persistent leases", () => {
+test("200 new sessions use one transient lock and one append each, without persistent leases", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "amira-create-perf-"))
   const canonicalDir = fs.realpathSync(dir)
-  const rename = spyOn(fs, "renameSync")
+  const link = spyOn(fs, "linkSync")
   const write = spyOn(fs, "writeSync")
   const append = spyOn(fs, "appendFileSync")
   try {
     // Work counts catch extra locking/persistence without comparing noisy disk timings.
     for (let i = 0; i < 200; i++) SessionStore.create({ cwd: dir, dir }).appendMessage(message)
-    // A persistent lease publishes and releases through extra gates and writes a lease
-    // descriptor. Count those operations instead of relying on the speed of CI's disk.
     expect(
-      rename.mock.calls.filter(
-        ([, target]) =>
-          path.dirname(String(target)) === canonicalDir && String(target).endsWith(".lease-gate"),
+      link.mock.calls.filter(
+        ([, target]) => path.dirname(String(target)) === canonicalDir && String(target).endsWith(".lock"),
       ),
     ).toHaveLength(200)
     expect(write).not.toHaveBeenCalled()
@@ -177,7 +174,7 @@ test("200 new sessions use one transient gate and one append each, without persi
     expect(readdirSync(dir)).toHaveLength(200)
     expect(readdirSync(dir).every((file) => file.endsWith(".jsonl"))).toBe(true)
   } finally {
-    rename.mockRestore()
+    link.mockRestore()
     write.mockRestore()
     append.mockRestore()
     rmSync(dir, { recursive: true, force: true })
