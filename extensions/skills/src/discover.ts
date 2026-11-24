@@ -31,10 +31,18 @@ export interface DiscoverOptions {
   dirs?: string[]
 }
 
+export interface ShadowedSkill {
+  name: string
+  path: string
+  winner: string
+}
+
 export interface Discovery {
   skills: Skill[]
   /** Skills that could not be loaded, as "path: reason". */
   problems: string[]
+  /** Lower-precedence skills with the same name as an active skill. */
+  shadowed?: ShadowedSkill[]
 }
 
 /** Skill directories, highest precedence first: Amira's own directories win name clashes. */
@@ -57,6 +65,7 @@ export function skillRoots(opts: DiscoverOptions): string[] {
 export function discoverSkills(opts: DiscoverOptions): Discovery {
   const byName = new Map<string, Skill>()
   const problems: string[] = []
+  const shadowed: ShadowedSkill[] = []
   const seenRoots = new Set<string>()
   for (const root of skillRoots(opts)) {
     const resolved = path.resolve(root)
@@ -77,11 +86,13 @@ export function discoverSkills(opts: DiscoverOptions): Discovery {
         problems.push(`${file}: ${skill}`)
         continue
       }
-      if (!byName.has(skill.name)) byName.set(skill.name, skill)
+      const existing = byName.get(skill.name)
+      if (!existing) byName.set(skill.name, skill)
+      else shadowed.push({ name: skill.name, path: skill.path, winner: existing.path })
     }
   }
   const skills = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
-  return { skills, problems }
+  return { skills, problems, ...(shadowed.length ? { shadowed } : {}) }
 }
 
 /** The instructions of a skill, without its frontmatter. */

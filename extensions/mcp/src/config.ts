@@ -19,6 +19,8 @@ export interface McpConfig {
   servers: ServerConfig[]
   /** Unreadable files and invalid entries, as messages. */
   problems: string[]
+  /** Non-fatal warnings (e.g. environment variables withheld for untrusted project HTTP servers). */
+  warnings?: string[]
   /** Names marked `"disabled": true`; they also switch off entries from earlier files. */
   disabled?: string[]
 }
@@ -100,6 +102,22 @@ export function readMcpConfig(
   return parseLayeredServers(layers, cwd, trusted, userFile, env, problems)
 }
 
+const ENV_PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/
+
+function rawHttpHasEnvPlaceholder(raw: unknown, name: string): boolean {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false
+  const entry = (raw as Record<string, unknown>)[name]
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false
+  const o = entry as Record<string, unknown>
+  if (typeof o.url === "string" && ENV_PLACEHOLDER.test(o.url)) return true
+  if (o.headers && typeof o.headers === "object" && !Array.isArray(o.headers)) {
+    for (const v of Object.values(o.headers as Record<string, unknown>)) {
+      if (typeof v === "string" && ENV_PLACEHOLDER.test(v)) return true
+    }
+  }
+  return false
+}
+
 function parseLayeredServers(
   layers: readonly McpSettingLayer[],
   cwd: string,
@@ -109,6 +127,7 @@ function parseLayeredServers(
   problems: string[],
 ): McpConfig {
   const byName = new Map<string, { server: ServerConfig; scope: SettingsLayerScope }>()
+  const warnings: string[] = []
   const trusted = isTrusted(cwd, trustedProjects ?? DEFAULT_MCP_TRUSTED_PROJECTS)
   for (const layer of layers) {
     const fromProject = layer.scope === "project" || layer.scope === "project-local"
@@ -126,11 +145,20 @@ function parseLayeredServers(
       // An untrusted project cannot redirect a server the user configured.
       const previous = byName.get(server.name)
       if (!open && (previous?.scope === "user" || previous?.scope === "flags")) continue
+      if (!open && server.type === "http" && rawHttpHasEnvPlaceholder(layer.value, server.name)) {
+        warnings.push(
+          `${layer.file}: MCP HTTP server "${server.name}" has \${VAR} placeholders withheld because this project is not trusted; add ${JSON.stringify(path.resolve(cwd))} to "${TRUST_KEY}" in ${trustFile} to allow them.`,
+        )
+      }
       byName.delete(server.name)
       byName.set(server.name, { server, scope: layer.scope })
     }
   }
-  return { servers: [...byName.values()].map(({ server }) => server), problems }
+  return {
+    servers: [...byName.values()].map(({ server }) => server),
+    problems,
+    ...(warnings.length ? { warnings } : {}),
+  }
 }
 
 function scopeForFile(file: string, cwd: string, home: string): SettingsLayerScope {

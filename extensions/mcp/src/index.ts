@@ -1,5 +1,6 @@
-import { defineExtension, type Extension, withSection } from "@amira/api"
+import { AGENT_STATUS_BADGES, defineExtension, type Extension, withSection } from "@amira/api"
 import { type McpConfig, readMcpSettings, type ServerConfig } from "./config.ts"
+import { mcpCommand } from "./mcp-command.ts"
 import { ServerConnection, type ServerOptions, type ServerState } from "./server.ts"
 
 export { McpClient, type McpTool, PROTOCOL_VERSION } from "./client.ts"
@@ -69,6 +70,7 @@ export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension
         api.home,
       )
     for (const p of config.problems) api.reportError(p)
+    for (const w of config.warnings ?? []) api.notify(w, "warning")
     const serverOpts: ServerOptions = {
       connectTimeoutMs: opts.connectTimeoutMs ?? 60_000,
       toolTimeoutMs: opts.toolTimeoutMs ?? 600_000,
@@ -91,6 +93,30 @@ export function createMcpExtension(opts: McpExtensionOptions = {}): McpExtension
     }
     for (const [name, previous] of connections) if (!next.has(name)) await previous.close()
     connections = next
+    api.registerCommand(mcpCommand(() => connections))
+    api.registerStatusItem({
+      id: "mcp",
+      align: "right",
+      order: -4,
+      priority: 4,
+      tone: () => {
+        const list = [...connections.values()]
+        if (list.some((c) => c.state === "connecting" || c.state === "idle")) return "accent"
+        if (list.some((c) => c.state === "failed")) return "warning"
+        return "muted"
+      },
+      text: () => {
+        const list = [...connections.values()]
+        if (!list.length) return ""
+        const connecting = list.filter((c) => c.state === "connecting" || c.state === "idle").length
+        if (connecting > 0) {
+          const ready = list.filter((c) => c.state === "ready").length
+          return `${AGENT_STATUS_BADGES.working.symbol} MCP ${ready}/${list.length}`
+        }
+        const failed = list.filter((c) => c.state === "failed").length
+        return failed > 0 ? `MCP ${failed} failed` : ""
+      },
+    })
     started = new Promise((resolve) => {
       setTimeout(() => resolve(Promise.all([...connections.values()].map((c) => c.start()))), 0)
     })

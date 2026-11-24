@@ -4,7 +4,7 @@ import { McpClient, type McpTool } from "./client.ts"
 import type { ServerConfig } from "./config.ts"
 import { HttpTransport } from "./http.ts"
 import { StdioTransport } from "./stdio.ts"
-import { mcpToolName, toolDescription, toolSchema, toToolResult } from "./tools.ts"
+import { mcpToolName, mcpToolPresenter, toolDescription, toolSchema, toToolResult } from "./tools.ts"
 
 export type ServerState = "idle" | "connecting" | "ready" | "failed" | "closed"
 
@@ -48,6 +48,7 @@ export class ServerConnection {
   async start(): Promise<void> {
     if (this.state !== "idle") return
     this.state = "connecting"
+    this.#api.requestRender()
     const transport = this.#transport()
     const client = new McpClient(transport)
     this.#client = client
@@ -71,6 +72,7 @@ export class ServerConnection {
       if (!this.#is("connecting")) return
       this.#register(tools)
       this.state = "ready"
+      this.#api.requestRender()
       if (this.#stale) this.#queueRefresh()
     } catch (err) {
       if (!this.#is("connecting")) return void client.close()
@@ -78,6 +80,19 @@ export class ServerConnection {
       this.#failed(`${err instanceof Error ? err.message : String(err)}${tail ? `\n${tail}` : ""}`)
       void client.close()
     }
+  }
+
+  /** Closes any existing transport and reconnects cleanly. */
+  async reconnect(): Promise<void> {
+    this.#unregisterAll()
+    this.#tools = []
+    this.error = undefined
+    this.state = "closed"
+    const previous = this.#client
+    this.#client = undefined
+    await previous?.close()
+    this.state = "idle"
+    await this.start()
   }
 
   /** Reads the state without the narrowing TypeScript keeps across awaits. */
@@ -134,6 +149,7 @@ export class ServerConnection {
             execute: (args, ctx) => this.#call(tool.name, args, ctx.signal),
           }),
         )
+        this.#unregister.push(this.#api.registerToolRenderer(name, mcpToolPresenter(server, tool)))
       } catch (err) {
         this.#api.reportError(`MCP server "${server}": ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -188,7 +204,17 @@ export class ServerConnection {
     this.error = error
     this.#unregisterAll()
     this.#tools = []
-    this.#api.reportError(`MCP server "${this.config.name}" (${this.config.source}) failed: ${error}`)
+    this.#api.requestRender()
+    const lines = error
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+    const headline = lines.length > 1 ? `${lines[0]} — ${lines.at(-1)}` : (lines[0] ?? error)
+    const summary = `MCP server "${this.config.name}" (${this.config.source}) failed: ${headline}`
+    this.#api.reportError(summary)
+    if (lines.length > 1) {
+      this.#api.notify(summary, "error", { details: error })
+    }
   }
 
   #unregisterAll() {

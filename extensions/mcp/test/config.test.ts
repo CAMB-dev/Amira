@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { expand, isTrusted, parseServers, readMcpConfig, readMcpSettings } from "../src/config.ts"
-import { mcpToolName, toToolResult } from "../src/tools.ts"
+import { mcpToolName, mcpToolPresenter, toToolResult } from "../src/tools.ts"
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), "amira-mcp-config-"))
 afterAll(() => rmSync(tmp, { recursive: true, force: true }))
@@ -135,6 +135,8 @@ test("an untrusted project's stdio servers do not start and its entries get no v
   expect(r.problems).toHaveLength(1)
   expect(r.problems[0]).toContain('not starting MCP server "evil" (powershell -c whoami)')
   expect(r.problems[0]).toContain("mcpTrustedProjects")
+  expect(r.warnings).toHaveLength(1)
+  expect(r.warnings?.[0]).toContain('MCP HTTP server "web"')
 
   writeFileSync(
     path.join(home, "settings.json"),
@@ -227,4 +229,17 @@ test("results map text, images, resources and errors", () => {
       { type: "text", text: "[resource v (binary), not shown]" },
     ],
   })
+
+  const presenter = mcpToolPresenter("github", { name: "get_issue" })
+  expect(presenter.verbs).toEqual({ past: "github/get_issue", running: "github/get_issue" })
+  expect(presenter.summary!({ id: 42, repo: "amira" })).toBe("42 · repo=amira")
+  expect(
+    presenter.body!(
+      { args: {}, result: { content: [] }, text: "line 1\nline 2" },
+      { detail: "full", width: 80 },
+    ),
+  ).toEqual([
+    { kind: "text", text: "line 1", wrap: true },
+    { kind: "text", text: "line 2", wrap: true },
+  ])
 })

@@ -350,7 +350,7 @@ test("every skill runs as $<name> and sends its instructions, user-only ones too
     agent,
   })
   // Skills are not slash commands, so one may share a command's name.
-  expect(commands.list().map((c) => c.name)).toEqual(["help"])
+  expect(commands.list().map((c) => c.name)).toEqual(["help", "skills"])
   expect(commands.skills().map((s) => [s.name, s.description, s.source])).toEqual([
     ["deploy", "Ship it", "builtin:skills"],
     ["help", "Named like a command", "builtin:skills"],
@@ -364,7 +364,7 @@ test("every skill runs as $<name> and sends its instructions, user-only ones too
   expect(shown[0]).toEqual({ display: { text: "$deploy to prod", note: "Loaded skill deploy (2 lines)" } })
   await commands.runSkill("$deploy again", { frontend: "tui" })
   expect(sent[1]).toBe('Skill "deploy" is already loaded in the current context.\n\nArguments: again')
-  expect(shown[1]).toEqual({ display: { text: "$deploy again", note: "Loaded skill deploy (2 lines)" } })
+  expect(shown[1]).toEqual({ display: { text: "$deploy again", note: "Skill deploy (already in context)" } })
   await commands.runSkill("$secret", { frontend: "tui" })
   expect(sent[2]).toContain('Skill "secret"')
   expect(shown[2]).toEqual({ display: { text: "$secret", note: "Loaded skill secret (1 line)" } })
@@ -373,6 +373,19 @@ test("every skill runs as $<name> and sends its instructions, user-only ones too
   expect(slash.ok).toBe(false)
   expect(slash.error).toBe("Unknown command /deploy — skills now start with $: $deploy")
   expect(sent).toHaveLength(3)
+  // /skills lists discovered skills and dynamically updates when skills are edited or deleted.
+  const listed = await commands.run("/skills", { frontend: "print" })
+  expect(listed.ok).toBe(true)
+  expect(listed.output.join("\n")).toContain("$deploy")
+  expect(listed.output.join("\n")).toContain("[user-only]")
+  skill(root, "deploy", "name: deploy\ndescription: Ship faster", "# Deploy\nRun ./ship.sh")
+  rmSync(path.join(root, "secret"), { recursive: true, force: true })
+  const reloaded = await commands.run("/skills reload", { frontend: "print" })
+  expect(reloaded.ok).toBe(true)
+  expect(commands.skills().map((s) => [s.name, s.description])).toEqual([
+    ["deploy", "Ship faster"],
+    ["help", "Named like a command"],
+  ])
   await bus.flush()
   expect(events.filter((e) => e.type === "extension.error")).toEqual([])
 })
