@@ -2,13 +2,14 @@ import {
   type Component,
   type Editor,
   type EditorPart,
-  graphemes,
   type InputEvent,
+  LineInput,
   matchesKey,
   type RenderContext,
   truncateToWidth,
+  visibleWidth,
 } from "@amira/tui-kit"
-import { glyphs } from "./glyphs.ts"
+import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import type { PromptHistory } from "./prompt-history.ts"
 
@@ -31,7 +32,7 @@ export type SearchAction =
  */
 export class HistorySearch implements Component {
   #active = false
-  #query = ""
+  #input = new LineInput()
   /** Index into the history of the match shown; -1 when there is none. */
   #match = -1
   #draft: EditorPart[] = []
@@ -47,12 +48,12 @@ export class HistorySearch implements Component {
   }
 
   get query(): string {
-    return this.#query
+    return this.#input.value
   }
 
   start(): void {
     this.#active = true
-    this.#query = ""
+    this.#input = new LineInput()
     this.#draft = this.editor.getParts()
     this.#match = -1
   }
@@ -66,7 +67,9 @@ export class HistorySearch implements Component {
 
   handleKey(e: InputEvent): SearchAction {
     if (e.type === "paste") {
-      this.#setQuery(this.#query + e.text.split("\n")[0])
+      const before = this.#input.value
+      this.#input.handleInput({ type: "paste", text: e.text.split("\n")[0] ?? "" })
+      if (this.#input.value !== before) this.#syncQuery()
       return "handled"
     }
     const keys = this.keys
@@ -82,13 +85,16 @@ export class HistorySearch implements Component {
       if (this.#match !== -1) this.#find(this.#match + 1, 1)
       return "handled"
     }
-    if (matchesKey(e, "backspace")) {
-      const gs = graphemes(this.#query)
-      this.#setQuery(gs.slice(0, -1).join(""))
-      return "handled"
-    }
-    if (e.type === "key" && e.text !== undefined && !e.ctrl && !e.alt) {
-      this.#setQuery(this.#query + e.text)
+    if (
+      matchesKey(e, "backspace") ||
+      matchesKey(e, "delete") ||
+      matchesKey(e, "w", { ctrl: true }) ||
+      matchesKey(e, "u", { ctrl: true }) ||
+      (e.type === "key" && e.text !== undefined && !e.ctrl && !e.alt)
+    ) {
+      const before = this.#input.value
+      this.#input.handleInput(e)
+      if (this.#input.value !== before) this.#syncQuery()
       return "handled"
     }
     this.#active = false
@@ -98,18 +104,24 @@ export class HistorySearch implements Component {
   render(width: number, { theme }: RenderContext): string[] {
     if (!this.#active) return []
     const total = this.#matches()
-    const status =
+    const noMatch = this.#match === -1 && !!this.query
+    const statusText =
       this.#match !== -1
         ? `${total.indexOf(this.#match) + 1} of ${total.length}`
-        : this.#query
+        : this.query
           ? "no match"
           : "type to search"
-    const line = `${theme.accent(glyphs.search)} ${theme.muted("search history")} ${theme.accent(glyphs.searchPrompt)} ${this.#query}  ${theme.muted(status)}`
-    return [truncateToWidth(line, width, "…")]
+    const status = (noMatch ? theme.warning : theme.muted)(statusText)
+    const lead = `${theme.accent(glyphs.search)} ${theme.muted("search history")} ${theme.accent(glyphs.searchPrompt)} `
+    const reserve = visibleWidth(lead) + visibleWidth(status) + 2
+    const queryRoom = Math.max(4, width - reserve)
+    const renderedQuery = this.#input.render(queryRoom, theme, { focused: true, more: viewEllipsis() })
+    const line = `${lead}${renderedQuery}  ${status}`
+    return [truncateToWidth(line, width, viewEllipsis())]
   }
 
   #matches(): number[] {
-    const q = this.#query.toLowerCase()
+    const q = this.query.toLowerCase()
     const out: number[] = []
     const entries = this.history.entries
     for (let i = entries.length - 1; i >= 0; i--)
@@ -117,8 +129,7 @@ export class HistorySearch implements Component {
     return out
   }
 
-  #setQuery(q: string): void {
-    this.#query = q
+  #syncQuery(): void {
     // Each query searches from the newest entry again.
     this.#find(this.history.entries.length - 1, -1, true)
   }
@@ -126,7 +137,7 @@ export class HistorySearch implements Component {
   /** Shows the first match from `from` going `dir`; with none, keeps the one shown unless `reset`. */
   #find(from: number, dir: -1 | 1, reset = false): void {
     const entries = this.history.entries
-    const q = this.#query.toLowerCase()
+    const q = this.query.toLowerCase()
     for (let i = from; i >= 0 && i < entries.length; i += dir) {
       if (entries[i]!.display.toLowerCase().includes(q)) {
         this.#match = i

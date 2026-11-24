@@ -405,9 +405,9 @@ test("every dialog is a block with a bar down its left, the question, the option
     "│   Yes                                                    │",
     "│   Yes, and don't ask again this session                  │",
     "│   No                                                     │",
-    "│   Other…                                                 │",
+    "│   Other…  reject and tell the model what to do           │",
     "│                                                          │",
-    "│ ↑↓ select · n no · esc deny                              │",
+    "│ ↑↓ select · n no · esc stop turn                         │",
     "╰──────────────────────────────────────────────────────────╯",
   ])
   expect(ask().dialog.render(60, plain)).toEqual([
@@ -440,7 +440,7 @@ test("a confirm starts with nothing selected: Enter and y do nothing until a cho
   expect(early.answers).toEqual([])
   early.press("down")
   expect(early.rows()[5]).toBe("› Yes")
-  expect(early.rows().at(-1)).toBe("↑↓ move · n no · enter choose · esc deny")
+  expect(early.rows().at(-1)).toBe("↑↓ move · n no · enter choose · esc stop turn")
   early.press("enter")
   expect(early.answers).toEqual([true])
   const no = approval()
@@ -474,7 +474,7 @@ test("Other opens a text field in its row; Esc closes the field, then cancels th
   d.press("escape")
   expect(d.answers).toEqual([])
   // Closed, the text stays with the choice, and choosing it again edits it.
-  expect(d.rows()[8]).toBe('› Other… "no, use trash"')
+  expect(d.rows()[8]).toContain('› Other… "no, use trash"')
   d.press("enter")
   d.type("!")
   d.press("enter")
@@ -546,14 +546,23 @@ test("a diff review fits the rows it has: title, options and keys stay, the diff
     "  3  discard",
     "↑↓ move · enter choose · esc cancel",
   ])
-  // Six diff rows leave a distinct footer and bottom edge: first 3, marker, final 2.
+  // Six diff rows show a scrollable slice + scroll indicator, and PgDn scrolls further into the diff.
   expect(lines.slice(1, 7)).toEqual([
     "  + line 1",
     "  + line 2",
     "  + line 3",
-    "  … 49 more lines …",
-    "  + line 53",
-    "  + line 54",
+    "  + line 4",
+    "  + line 5",
+    "  ↑↓ lines 1–5 of 54 · pgup/pgdn scroll",
+  ])
+  dialog.handleInput(key("pagedown"))
+  expect(rows().slice(1, 7)).toEqual([
+    "  + line 5",
+    "  + line 6",
+    "  + line 7",
+    "  + line 8",
+    "  + line 9",
+    "  ↑↓ lines 5–9 of 54 · pgup/pgdn scroll",
   ])
   // Every row still has the bar.
   expect(
@@ -612,8 +621,8 @@ test("a tight approval gives up its blank rows and message before its options", 
     "  Yes",
     "  Yes, and don't ask again this session",
     "  No",
-    "  Other…",
-    "↑↓ select · n no · esc deny",
+    "  Other…  reject and tell the model what to do",
+    "↑↓ select · n no · esc stop turn",
   ])
 })
 

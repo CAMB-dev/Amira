@@ -220,6 +220,9 @@ test("mouse footer validates, selects save scope, saves only on Enter action, an
   expect(invalid.plain()).toContain("must match the declared pattern")
   expect(invalid.plain()).not.toContain("save settings to")
   click(invalid.view, cell(invalid.rows(), "esc discard"))
+  // Dirty edits ask before discarding; confirming with y discards.
+  expect(invalid.plain()).toContain("Discard unsaved settings?")
+  invalid.view.handleInput(textKey("y"))
   expect(invalid.cancelled()).toBe(1)
   expect(invalid.closed()).toBe(1)
   expect(invalid.saved).toEqual([])
@@ -303,8 +306,8 @@ test("number steppers have visible ANSI focus, clamp typed numbers, and reset on
   const row = p.rows().find((line) => stripAnsi(line).includes("Font size"))!
   expect(stripAnsi(row)).toContain(`${glyphs.pointer} Font size  - 16 +`)
   expect(row).toContain("\x1b[7m")
-  expect(row).toContain(defaultTheme.borderFocused("-"))
-  expect(row).toContain(defaultTheme.borderFocused("+"))
+  expect(row).toContain(defaultTheme.accent("-"))
+  expect(row).toContain(defaultTheme.accent("+"))
   p.view.handleInput(key("right"))
   expect(p.view.values.size).toBe(18)
   expect(p.plain()).toContain("Font size *")
@@ -408,7 +411,14 @@ test("Enter chooses user/project inline using provenance; a second Enter saves, 
   const discarded = page()
   discarded.view.handleInput(key("right"))
   discarded.view.handleInput(key("enter"))
+  // Esc from scope selection returns to the fields instead of losing edits.
   discarded.view.handleInput(key("escape"))
+  expect(discarded.plain()).not.toContain("save settings to")
+  expect(discarded.closed()).toBe(0)
+  // Esc from dirty fields asks before discarding; y confirms discard.
+  discarded.view.handleInput(key("escape"))
+  expect(discarded.plain()).toContain("Discard unsaved settings?")
+  discarded.view.handleInput(textKey("y"))
   expect(discarded.saved).toEqual([])
   expect(discarded.cancelled()).toBe(1)
   expect(discarded.closed()).toBe(1)

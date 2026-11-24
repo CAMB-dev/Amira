@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { Editor, key, textKey } from "@amira/tui-kit"
+import { CURSOR_MARKER, Editor, key, textKey } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { HistorySearch } from "../src/history-search.ts"
 import { PromptHistory } from "../src/prompt-history.ts"
@@ -14,12 +14,19 @@ function setup(entries: string[], draft = "") {
   const type = (s: string) => {
     for (const ch of s) search.handleKey(textKey(ch))
   }
-  const line = () => search.render(80, plain)[0]
-  return { editor, search, type, line }
+  const rawLine = () => search.render(80, plain)[0]
+  const line = () => rawLine()?.replace(CURSOR_MARKER, "")
+  return { editor, search, type, line, rawLine }
 }
 
 test("typing finds the newest entry containing the query; Ctrl+R steps to older ones", () => {
-  const { editor, search, type, line } = setup(["fix the tests", "run bun test", "deploy", "Test again"])
+  const { editor, search, type, line, rawLine } = setup([
+    "fix the tests",
+    "run bun test",
+    "deploy",
+    "Test again",
+  ])
+  expect(rawLine()).toContain(CURSOR_MARKER)
   expect(line()).toBe("⌕ search history ›   type to search")
   type("test")
   expect(editor.getText()).toBe("Test again")

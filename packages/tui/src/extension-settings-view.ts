@@ -113,6 +113,8 @@ export class ExtensionSettingsView implements Component {
   #cancelling = 0
   #error: string | undefined
   #closed = false
+  #confirmDiscard = false
+  #initialValues: string
   #previewKey = ""
   #revision = 0
   #preview: MarkdownRenderResult | undefined
@@ -129,8 +131,13 @@ export class ExtensionSettingsView implements Component {
     this.#backend = backend
     this.#opts = opts
     this.#values = structuredClone(backend.request.values)
+    this.#initialValues = JSON.stringify(this.#values)
     this.#scope = backend.request.scope
     this.#syncInputs()
+  }
+
+  #isDirty(): boolean {
+    return JSON.stringify(this.#values) !== this.#initialValues
   }
 
   get closed(): boolean {
@@ -185,7 +192,25 @@ export class ExtensionSettingsView implements Component {
     if (this.#closed) return false
     if (this.#saving) return true
     if (event.type === "mouse") return this.#handleMouse(event)
-    if (matchesKey(event, "escape")) {
+    if (this.#confirmDiscard) {
+      if (matchesKey(event, "y") || matchesKey(event, "c", { ctrl: true })) void this.#cancel()
+      else if (matchesKey(event, "n") || matchesKey(event, "escape") || matchesKey(event, "enter")) {
+        this.#confirmDiscard = false
+        this.#opts.requestRender()
+      }
+      return true
+    }
+    if (matchesKey(event, "escape") || matchesKey(event, "c", { ctrl: true })) {
+      if (this.#choosingScope && matchesKey(event, "escape")) {
+        this.#choosingScope = false
+        this.#opts.requestRender()
+        return true
+      }
+      if (this.#isDirty()) {
+        this.#confirmDiscard = true
+        this.#opts.requestRender()
+        return true
+      }
       void this.#cancel()
       return true
     }
@@ -254,8 +279,13 @@ export class ExtensionSettingsView implements Component {
           this.#numberInput = new LineInput({ accept: (g) => /^[\d.+-]$/.test(g) })
         if (this.#numberInput?.handleInput(event)) {
           const raw = this.#numberInput.value
-          if (raw.trim() && Number.isFinite(Number(raw)))
-            this.#changed(field.key, clampNumber(field, Number(raw)))
+          if (raw.trim() && Number.isFinite(Number(raw))) {
+            const clamped = clampNumber(field, Number(raw))
+            if (field.max !== undefined && Number(raw) > field.max) this.#numberInput.value = String(clamped)
+            this.#changed(field.key, clamped)
+          } else {
+            this.#opts.requestRender()
+          }
         }
       }
     } else if (field.type === "text" || field.type === "colour") {
@@ -477,31 +507,55 @@ export class ExtensionSettingsView implements Component {
             .map(style),
         )
       }
-      // Show the focused row and its description before spending space on adjacent fields.
-      let start = this.#focus
-      let end = start + 1
-      let used = focusedRows.length
-      while (start > 0 && used + fieldRows[start - 1]!.lines.length <= budget)
-        used += fieldRows[--start]!.lines.length
-      while (end < fieldRows.length && used + fieldRows[end]!.lines.length <= budget)
-        used += fieldRows[end++]!.lines.length
-      const shown = fieldRows.slice(start, end)
-      body = shown.flatMap((row) => row.lines).slice(0, budget)
-      let offset = 0
-      for (const row of shown) {
-        for (const target of row.targets) addBodyTarget(target, offset)
-        offset += row.lines.length
-      }
-      if (body.length) this.#fieldArea = { x: 0, y: bodyTop, width: room, height: body.length }
-      const waiting = this.#opts.waiting?.() ?? []
-      if (waiting.length && budget > body.length)
-        body.push(
+      if (this.#confirmDiscard) {
+        body = [
           truncateToWidth(
-            theme.muted(`${waiting.length} dialogs wait: ${waiting.join(", ")}`),
+            `${theme.warning(glyphs.warning)} ${bold(theme.text("Discard unsaved settings?"))}`,
             room,
             viewEllipsis(),
           ),
-        )
+          theme.muted(truncateToWidth("y discard  ·  n / esc keep editing", room, viewEllipsis())),
+        ]
+      } else {
+        const waiting = this.#opts.waiting?.() ?? []
+        const reserveWaiting = waiting.length ? 1 : 0
+        const scrollBudget = Math.max(1, budget - reserveWaiting)
+        // Show the focused row and its description before spending space on adjacent fields.
+        let start = this.#focus
+        let end = start + 1
+        let used = focusedRows.length
+        while (start > 0 && used + fieldRows[start - 1]!.lines.length <= scrollBudget)
+          used += fieldRows[--start]!.lines.length
+        while (end < fieldRows.length && used + fieldRows[end]!.lines.length <= scrollBudget)
+          used += fieldRows[end++]!.lines.length
+        const shown = fieldRows.slice(start, end)
+        body = shown.flatMap((row) => row.lines).slice(0, scrollBudget)
+        let offset = 0
+        for (const row of shown) {
+          for (const target of row.targets) addBodyTarget(target, offset)
+          offset += row.lines.length
+        }
+        if (body.length) this.#fieldArea = { x: 0, y: bodyTop, width: room, height: body.length }
+        if ((start > 0 || end < fieldRows.length) && body.length < scrollBudget) {
+          body.push(
+            theme.muted(
+              truncateToWidth(
+                `${glyphs.arrowUp}${glyphs.arrowDown} ${start + 1}${glyphs.rangeSeparator}${end} of ${fieldRows.length}`,
+                room,
+                viewEllipsis(),
+              ),
+            ),
+          )
+        }
+        if (waiting.length && budget > body.length)
+          body.push(
+            truncateToWidth(
+              theme.warning(`${glyphs.warning} ${waiting.length} dialogs wait: ${waiting.join(", ")}`),
+              room,
+              viewEllipsis(),
+            ),
+          )
+      }
     }
     if (!this.#saving) {
       for (const target of footerTargets)
@@ -525,14 +579,19 @@ export class ExtensionSettingsView implements Component {
     const changed = value !== field.default ? " *" : ""
     const label = `${focused ? glyphs.pointer : " "} ${field.label}${changed}`
     const labelStyle = focused ? theme.accent : theme.text
-    const controlStyle = focused ? (text: string) => inverse(theme.borderFocused(text)) : theme.fg2
+    const controlStyle = focused ? (text: string) => inverse(theme.accent(text)) : theme.fg2
     const stepper = (button: string, disabled = false) =>
-      focused && !disabled ? theme.borderFocused(button) : theme.muted(button)
+      focused && !disabled ? theme.accent(button) : theme.muted(button)
     let control: string
     switch (field.type) {
-      case "number":
-        control = `${stepper("-", field.min !== undefined && Number(value) <= field.min)} ${controlStyle(String(value))} ${stepper("+", field.max !== undefined && Number(value) >= field.max)}`
+      case "number": {
+        const display =
+          focused && this.#numberInput
+            ? this.#numberInput.render(Math.max(4, Math.min(16, width - 8)), theme, { focused: true })
+            : String(value)
+        control = `${stepper("-", field.min !== undefined && Number(value) <= field.min)} ${controlStyle(display)} ${stepper("+", field.max !== undefined && Number(value) >= field.max)}`
         break
+      }
       case "choice": {
         const option = field.options.find((o) => (typeof o === "string" ? o : o.value) === value)
         const shown = typeof option === "string" ? option : (option?.label ?? String(value))

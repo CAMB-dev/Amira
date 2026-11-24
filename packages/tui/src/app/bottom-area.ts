@@ -262,14 +262,21 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let dockRoom = 0
   const dock = new View((width, ctx) => deps.renderDock?.(width, ctx, dockRoom) ?? [])
   const inputRegion = new View((width, ctx) => {
-    const dialog = deps.dialogs()[0]
+    const allDialogs = deps.dialogs()
+    const dialog = allDialogs[0]
     if (!dialog) {
       inputBox.accentFocus = deps.focusHint?.(ctx.theme, width) !== undefined
       const indicator = deps.conversationIndicator?.(width)
-      const rows = [...(indicator ? [ctx.theme.accent(indicator)] : []), ...inputBox.render(width, ctx)]
+      // While Ctrl+R search is active, keep the terminal cursor in HistorySearch instead of the preview box.
+      const prevFocused = editor.focused
+      if (search.active && prevFocused) editor.focused = false
+      const boxRows = inputBox.render(width, ctx)
+      if (search.active && prevFocused) editor.focused = true
+      const rows = [...(indicator ? [ctx.theme.accent(indicator)] : []), ...boxRows]
       composerRows = rows.length
       return rows
     }
+    dialog.queueRemaining = Math.max(0, allDialogs.length - 1)
     const lines = dialog.render(width, ctx)
     dialogInset = deps.conversationIndicator?.(width) ? 1 : 0
     dialogRows = lines.length
@@ -532,10 +539,12 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   function searchHint(): HintItems {
     const accept = keys.label("search.accept")
     const older = keys.label("search.older")
+    const newer = keys.label("search.newer")
     const cancel = keys.label("search.cancel")
     return [
       accept && { text: `${accept} accept`, priority: 5 },
       older && { text: `${older} older`, priority: 3 },
+      newer && { text: `${newer} newer`, priority: 2 },
       cancel && { text: `${cancel} cancel`, priority: 4 },
     ]
   }
@@ -581,7 +590,28 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         dialog.handleInput(translateMouse(event, 0, top))
         return true
       }
-      if (!inputList() || search.active) return false
+      if (!inputList() || search.active) {
+        if (
+          event.action === "press" &&
+          event.button === "left" &&
+          !search.active &&
+          event.y >= pointerTop &&
+          event.y < pointerTop + composerRows
+        ) {
+          const framed = inputBox.framed(pointerWidth)
+          const indicatorRows = deps.conversationIndicator?.(pointerWidth) ? 1 : 0
+          const textTop = pointerTop + indicatorRows + (framed ? 1 : 0)
+          const textLeft = framed ? 2 : 0
+          const row = event.y - textTop
+          const col = event.x - textLeft
+          if (row >= 0 && col >= 0) {
+            editor.focused = true
+            editor.placeCursor(col, row)
+            return true
+          }
+        }
+        return false
+      }
       const top = pointerTop + composerRows
       const inside =
         event.x >= listInset && event.x < pointerWidth && event.y >= top && event.y < top + listRows

@@ -248,3 +248,114 @@ export function cutMiddle(lines: string[], rows: number, theme: Theme, width: nu
   const marker = theme.muted(`${viewEllipsis()} ${lines.length - keep} more lines ${viewEllipsis()}`)
   return [...lines.slice(0, head), marker, ...lines.slice(lines.length - tail)]
 }
+
+/** One choice of a dialog list: what it reads and what choosing it answers. */
+export interface DialogChoice {
+  label: string
+  description?: string
+  value?: unknown
+  other?: boolean
+  index?: number
+}
+
+/** One page of a dialog: a confirm, a list, or one of an ask's questions. */
+export interface DialogPage<A = unknown> {
+  question: string
+  header?: string
+  choices: (DialogChoice & { value?: A })[]
+  multi: boolean
+  selected: number
+  checked: Set<number>
+  other?: string
+  answer?: unknown
+}
+
+export const otherChoiceLabel = () => `Other${viewEllipsis("…")}`
+
+/** Turns a dialog request into one or more navigable pages. */
+export function buildDialogPages<R extends { kind: string; title: string; source?: string }, A>(
+  r: R & Record<string, any>,
+  confirmLabels: { yes: string; no: string },
+  alwaysOf: (always: boolean | string) => string,
+): DialogPage<A>[] {
+  const page = (
+    question: string,
+    choices: DialogPage<A>["choices"],
+    extra: Partial<DialogPage<A>> = {},
+  ): DialogPage<A> => ({
+    question,
+    choices,
+    multi: false,
+    selected: 0,
+    checked: new Set(),
+    ...extra,
+  })
+  switch (r.kind) {
+    case "confirm":
+      return [
+        page(
+          r.title,
+          [
+            { label: confirmLabels.yes, value: true as A },
+            ...(r.always ? [{ label: alwaysOf(r.always), value: "always" as A }] : []),
+            { label: confirmLabels.no, value: false as A },
+            ...(r.other
+              ? [
+                  {
+                    label: otherChoiceLabel(),
+                    other: true,
+                    ...(r.source === "approval"
+                      ? { description: "reject and tell the model what to do" }
+                      : {}),
+                  },
+                ]
+              : []),
+          ],
+          // Nothing preselected: an Enter typed before the dialog showed up does not answer it.
+          { selected: -1 },
+        ),
+      ]
+    case "select":
+      return [
+        page(
+          r.title,
+          (r.options as string[]).map((o, i) => {
+            const description = (r.descriptions as (string | undefined)[] | undefined)?.[i]
+            return { label: o, value: o as A, index: i, ...(description ? { description } : {}) }
+          }),
+          { selected: r.initial === undefined ? 0 : Math.max(0, (r.options as string[]).indexOf(r.initial)) },
+        ),
+      ]
+    case "diff-review":
+      return [
+        page(
+          r.title,
+          (r.options as string[]).map((o) => ({ label: o, value: o as A })),
+        ),
+      ]
+    case "ask":
+      return (r.questions as any[]).map((q) => {
+        const recommended = q.options.flatMap((o: any, i: number) =>
+          o.label.endsWith("(Recommended)") ? [i] : [],
+        )
+        return page(
+          q.question,
+          [
+            ...q.options.map((o: any) => ({
+              label: o.label,
+              ...(o.description ? { description: o.description } : {}),
+            })),
+            { label: otherChoiceLabel(), other: true },
+          ],
+          {
+            multi: q.multiSelect === true,
+            selected: q.multiSelect ? 0 : (recommended[0] ?? 0),
+            checked: new Set(q.multiSelect ? recommended : []),
+            ...(q.header ? { header: q.header } : {}),
+          },
+        )
+      })
+    default:
+      return [page(r.title, [])]
+  }
+}

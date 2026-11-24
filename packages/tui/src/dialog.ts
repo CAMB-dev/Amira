@@ -8,6 +8,7 @@ import {
   key,
   LineInput,
   type MouseInput,
+  matchesKey,
   type RenderContext,
   Spinner,
   type Theme,
@@ -17,9 +18,12 @@ import {
 } from "@amira/tui-kit"
 import { alwaysLabel, CONFIRM_LABELS } from "./dialog-echo.ts"
 import {
+  buildDialogPages,
   cutEnd,
   cutMiddle,
+  type DialogChoice,
   type DialogHints,
+  type DialogPage,
   DialogTargets,
   fitTitle,
   renderDialogInput,
@@ -40,8 +44,6 @@ export type DialogAnswer = string | ConfirmAnswer | AskAnswer[] | SelectChoice |
 
 /** Options of a list shown at once; longer lists scroll with the selection. */
 const MAX_OPTIONS = 10
-
-const otherLabel = () => `Other${viewEllipsis("…")}`
 
 /** One choice of a list: what it reads and what choosing it answers. */
 interface Choice {
@@ -120,6 +122,12 @@ export class Dialog implements Component {
   #spinnerFrame: number | undefined
   #refreshIntervalMs: number | undefined
   #animatedRows = new Set<string>()
+  #previewTop = 0
+  #previewTotal = 0
+  #previewShown = 0
+  #previewRange: [number, number] | undefined
+  /** Other dialogs queued behind this one, set by the host bottom area. */
+  queueRemaining = 0
 
   constructor(
     request: DialogRequest,
@@ -140,7 +148,11 @@ export class Dialog implements Component {
     } = {},
   ) {
     this.#request = request
-    this.#pages = pagesOf(request)
+    this.#pages = buildDialogPages<DialogRequest, DialogAnswer>(
+      request,
+      CONFIRM_LABELS,
+      alwaysLabel,
+    ) as Page[]
     if (request.kind === "select") this.#searchTexts = request.searchTexts?.map((s) => s.toLowerCase()) ?? []
     if (request.kind === "input" && request.secret) {
       this.#secret = new LineInput({ mask: "*", accept: (g) => !/\s/.test(g) })
@@ -240,6 +252,21 @@ export class Dialog implements Component {
       if (this.#page < this.#frontier()) this.#goTo(this.#page + 1)
       return true
     }
+    if (this.#previewTotal > this.#previewShown) {
+      const step =
+        matchesKey(e, "pageup") || matchesKey(e, "up", { shift: true })
+          ? -Math.max(1, this.#previewShown - 1)
+          : matchesKey(e, "pagedown") || matchesKey(e, "down", { shift: true })
+            ? Math.max(1, this.#previewShown - 1)
+            : 0
+      if (step) {
+        this.#previewTop = Math.max(
+          0,
+          Math.min(this.#previewTotal - this.#previewShown, this.#previewTop + step),
+        )
+        return true
+      }
+    }
     if (keys.is(e, "dialog.up")) page.selected = n ? (Math.max(0, page.selected) - 1 + n) % n : 0
     else if (keys.is(e, "dialog.down")) page.selected = n ? (page.selected + 1) % n : 0
     else if (r.kind === "confirm" && keys.is(e, "dialog.yes")) return this.#finish(true)
@@ -286,6 +313,19 @@ export class Dialog implements Component {
     if (e.action === "wheel") {
       if (e.button !== "up" && e.button !== "down") return false
       if (!this.#mouse.contains(e)) return false
+      if (
+        this.#previewRange &&
+        this.#previewTotal > this.#previewShown &&
+        e.y >= this.#previewRange[0] &&
+        e.y < this.#previewRange[1]
+      ) {
+        const delta = e.button === "up" ? -3 : 3
+        this.#previewTop = Math.max(
+          0,
+          Math.min(this.#previewTotal - this.#previewShown, this.#previewTop + delta),
+        )
+        return true
+      }
       const choices = this.#choices()
       const page = this.#current
       page.selected = Math.max(0, Math.min(choices.length - 1, page.selected + (e.button === "up" ? -3 : 3)))
@@ -350,7 +390,11 @@ export class Dialog implements Component {
     const border = warn ? theme.warning : theme.accent
     // Every kind shares the padded frame: one cell inside each border, title set off by rules.
     const inner = Math.max(1, width - 4)
-    const title = this.#titleRows(Math.max(1, inner - 2), theme)[0] ?? ""
+    const baseTitle = this.#titleRows(Math.max(1, inner - 2), theme)[0] ?? ""
+    const title =
+      this.queueRemaining > 0
+        ? `${baseTitle} ${theme.warning(`${glyphs.separator} +${this.queueRemaining} waiting`)}`
+        : baseTitle
     const body =
       this.request.kind === "input"
         ? renderDialogInput(inner, ctx, {
@@ -424,7 +468,22 @@ export class Dialog implements Component {
       if (fit.indicator && indicator) out.push(indicator)
       out.push(...fitTitle(title, fit.title))
       out.push(...cutEnd(message, fit.message, theme))
-      if (diffRows > 0) out.push(...cutMiddle(diff, diffRows, theme, width))
+      this.#previewTotal = diff.length
+      this.#previewShown = diffRows > 0 && diff.length > diffRows && diffRows >= 3 ? diffRows - 1 : diffRows
+      this.#previewRange = undefined
+      if (diffRows > 0) {
+        const startRow = out.length + (width >= 6 && this.maxRows >= 4 ? 1 : 0)
+        if (diff.length > diffRows && diffRows >= 3) {
+          const shown = diffRows - 1
+          this.#previewTop = Math.max(0, Math.min(diff.length - shown, this.#previewTop))
+          out.push(...diff.slice(this.#previewTop, this.#previewTop + shown))
+          const scrollNote = `${glyphs.arrowUp}${glyphs.arrowDown} lines ${this.#previewTop + 1}${glyphs.rangeSeparator}${this.#previewTop + shown} of ${diff.length} ${glyphs.separator} pgup/pgdn scroll`
+          out.push(theme.muted(truncateToWidth(scrollNote, width, viewEllipsis())))
+        } else {
+          out.push(...cutMiddle(diff, diffRows, theme, width))
+        }
+        this.#previewRange = [startRow, startRow + Math.min(diff.length, diffRows)]
+      }
       if (fit.blanks > 1 && head) out.push("")
       out.push(...filter)
       const offset = out.length
@@ -604,14 +663,14 @@ export class Dialog implements Component {
         : (section?.choose ?? this.selection.choose?.() ?? "choose")
     // An approval's Esc denies the call (and stops the turn); a later question's goes back one.
     const cancel =
-      this.#page > 0 ? "back" : r.source === "approval" ? "deny" : (this.selection.cancel ?? "cancel")
+      this.#page > 0 ? "back" : r.source === "approval" ? "stop turn" : (this.selection.cancel ?? "cancel")
     return [
       this.#pages.length > 1 && questions && { text: `${questions} question`, priority: 4 },
       move && { text: `${move} ${picking ? "select" : "move"}`, priority: picking ? 5 : 2 },
       page.multi && this.#hint("dialog.toggle", "toggle", 4),
       // Only a select filters; the other lists are few and fixed.
       r.kind === "select" && { text: "type to filter", priority: 1 },
-      answerKeys && { text: answerKeys, priority: 1 },
+      answerKeys && { text: answerKeys, priority: 3 },
       !picking && this.#hint("dialog.choose", choose, 5),
       // Typed into a filter, the keys are part of it.
       ...(this.#filter && !(r.kind === "select" && r.searchTexts) ? [] : (section?.keys ?? [])).map((k) => ({
@@ -802,73 +861,5 @@ export class Dialog implements Component {
       this.onDone(answer)
     }
     return true
-  }
-}
-
-/** The questions of a request, each with its choices. */
-function pagesOf(r: DialogRequest): Page[] {
-  const page = (question: string, choices: Choice[], extra: Partial<Page> = {}): Page => ({
-    question,
-    choices,
-    multi: false,
-    selected: 0,
-    checked: new Set(),
-    ...extra,
-  })
-  switch (r.kind) {
-    case "confirm":
-      return [
-        page(
-          r.title,
-          [
-            { label: CONFIRM_LABELS.yes, value: true },
-            ...(r.always ? [{ label: alwaysLabel(r.always), value: "always" as const }] : []),
-            { label: CONFIRM_LABELS.no, value: false },
-            ...(r.other ? [{ label: otherLabel(), other: true }] : []),
-          ],
-          // Nothing preselected: an Enter typed before the dialog showed up does not answer it.
-          { selected: -1 },
-        ),
-      ]
-    case "select":
-      return [
-        page(
-          r.title,
-          r.options.map((o, i) => {
-            const description = r.descriptions?.[i]
-            return { label: o, value: o, index: i, ...(description ? { description } : {}) }
-          }),
-          { selected: r.initial === undefined ? 0 : Math.max(0, r.options.indexOf(r.initial)) },
-        ),
-      ]
-    case "diff-review":
-      return [
-        page(
-          r.title,
-          r.options.map((o) => ({ label: o, value: o })),
-        ),
-      ]
-    case "ask":
-      return r.questions.map((q) => {
-        const recommended = q.options.flatMap((o, i) => (o.label.endsWith("(Recommended)") ? [i] : []))
-        return page(
-          q.question,
-          [
-            ...q.options.map((o) => ({
-              label: o.label,
-              ...(o.description ? { description: o.description } : {}),
-            })),
-            { label: otherLabel(), other: true },
-          ],
-          {
-            multi: q.multiSelect === true,
-            selected: q.multiSelect ? 0 : (recommended[0] ?? 0),
-            checked: new Set(q.multiSelect ? recommended : []),
-            ...(q.header ? { header: q.header } : {}),
-          },
-        )
-      })
-    default:
-      return [page(r.title, [])]
   }
 }

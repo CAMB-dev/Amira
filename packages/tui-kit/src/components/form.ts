@@ -708,13 +708,7 @@ export class Form implements Component {
         return f.input!.handleInput(e)
       case "textarea":
         // Enter moves on like in the other fields; the newline key breaks the line.
-        if (
-          isSubmitKey(e) ||
-          matchesKey(e, "tab") ||
-          matchesKey(e, "escape") ||
-          (this.cardLayout && (matchesKey(e, "up") || matchesKey(e, "down")))
-        )
-          return false
+        if (isSubmitKey(e) || matchesKey(e, "tab") || matchesKey(e, "escape")) return false
         return f.editor!.handleInput(e)
       case "select":
         return this.selectInput(f, e)
@@ -763,7 +757,6 @@ export class Form implements Component {
       f.filter = ""
       return true
     }
-    if (this.cardLayout && (matchesKey(e, "up") || matchesKey(e, "down"))) return false
     if (matchesKey(e, "up") || (this.cardLayout && matchesKey(e, "left")))
       f.highlight = Math.max(0, f.highlight - 1)
     else if (matchesKey(e, "down") || (this.cardLayout && matchesKey(e, "right")))
@@ -787,7 +780,6 @@ export class Form implements Component {
     const toggle = (v: string) => {
       f.value = checked.includes(v) ? checked.filter((x) => x !== v) : [...checked, v]
     }
-    if (this.cardLayout && (matchesKey(e, "up") || matchesKey(e, "down"))) return false
     if (this.cardLayout && (matchesKey(e, "left") || matchesKey(e, "right"))) {
       f.highlight = Math.max(0, Math.min(rows.length - 1, f.highlight + (matchesKey(e, "left") ? -1 : 1)))
       return true
