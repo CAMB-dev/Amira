@@ -14,14 +14,14 @@
     "number": "#e5b783"
   },
   "light": {
-    "accent": "#b86e0a",
+    "accent": "#945400",
     "heading1": "#285f9e",
     "heading": "#285f9e",
     "path": "#285f9e",
     "command": "#285f9e",
     "shimmer": "#704307",
     "shimmerEnd": "#593705",
-    "keyword": "#a8610a",
+    "keyword": "#8f4f05",
     "string": "#576c24",
     "number": "#9a5128"
   }

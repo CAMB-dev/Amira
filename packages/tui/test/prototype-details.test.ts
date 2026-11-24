@@ -68,7 +68,7 @@ test("prototype details: diff context surface and independently colored signs", 
     theme,
     94,
   )
-  expect(rows[0]).toContain("\x1b[48;2;25;25;25m")
+  expect(rows[0]).toContain("\x1b[48;2;27;28;32m")
   expect(rows[1]).toContain("\x1b[48;2;71;20;26m")
   expect(rows[2]).toContain("\x1b[48;2;15;58;18m")
   expect(rows[1]).toContain("\x1b[38;2;229;115;122m- ")
@@ -97,7 +97,7 @@ test("prototype details: spaced status stats, fg2 stop key and focused input pal
   const input = new InputBox(new Editor({ prompt: "› ", placeholder: "Message Amira" }), () => [
     { id: "model", text: "claude-opus-5-5 (high) · ask", align: "right", tone: "accent", priority: 40 },
   ]).render(100, ctx)
-  expect(input[0]).toContain("\x1b[38;2;86;86;86m")
+  expect(input[0]).toContain("\x1b[38;2;110;110;110m")
   expect(input[1]).toContain(bold(theme.accent("› ")))
   expect(stripAnsi(input[2]!)).toBe(`╰${"─".repeat(98)}╯`)
   expect(stripAnsi(input[1]!)).toMatch(/^│ › Message Amira +│$/)
@@ -125,5 +125,5 @@ test("prototype details: sky heading and quiet list markers retain semantic Mark
   expect(rows[0]).toContain("\x1b[38;2;122;162;247mStatus bar layout")
   const list = rows.filter((row) => row.includes("•"))
   expect(list).toHaveLength(2)
-  for (const row of list) expect(row).toContain("\x1b[38;2;114;114;114m•")
+  for (const row of list) expect(row).toContain("\x1b[38;2;148;148;148m•")
 })

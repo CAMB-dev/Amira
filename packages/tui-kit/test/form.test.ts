@@ -517,7 +517,7 @@ describe("Form", () => {
         "space toggle · type to filter · ctrl+a all/none filtered options · ctrl+x invert filtered options",
       ],
       ["checkbox", "space toggle"],
-      ["textarea", "shift+enter newline · enter next"],
+      ["textarea", "shift+enter/ctrl+enter newline · enter next"],
       ["action", "enter run"],
     ] as const) {
       const form = new Form({

@@ -556,7 +556,8 @@ export class ExtensionViewer implements Component {
       : []
     head.push(...this.#renderLines(extra, width, theme))
     for (const t of this.#opts.waiting?.() ?? []) head.push(waitingLine(theme, t, width))
-    head.push(theme.dim(glyphs.rule.repeat(width)))
+    const ruleStyle = this.#opts.placement === "dock" && this.focused ? theme.accent : theme.dim
+    head.push(ruleStyle(glyphs.rule.repeat(width)))
     // A bounded dock keeps a body row and its host controls even with a tall header.
     if (this.#opts.placement === "dock") head.splice(Math.max(0, ctx.rows - 2))
     const state = this.#scrollState()

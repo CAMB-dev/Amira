@@ -34,11 +34,18 @@ function fixture() {
 
 test("ghost text replaces only an empty focused prompt's placeholder, without moving its caret", () => {
   const s = fixture()
-  const ctx = { ...plain, theme: { ...plain.theme, dim: (text: string) => `[dim]${text}[/dim]` } }
+  const ctx = {
+    ...plain,
+    theme: {
+      ...plain.theme,
+      muted: (text: string) => `[muted]${text}[/muted]`,
+      dim: (text: string) => `[dim]${text}[/dim]`,
+    },
+  }
   const box = new InputBox(s.input.editor, undefined, s.input.visible)
   s.api.setInputSuggestion("Try the tests")
   const row = box.render(60, ctx)[1]!
-  expect(row).toContain(`${CURSOR_MARKER}[dim]Try the tests[/dim]`)
+  expect(row).toContain(`${CURSOR_MARKER}[muted]Try the tests[/muted][dim]  tab[/dim]`)
   expect(visibleWidth(row.split(CURSOR_MARKER)[0]!)).toBe(4)
   expect(s.input.editor.isEmpty).toBe(true)
   for (const text of ["x", " ", "\n"]) {

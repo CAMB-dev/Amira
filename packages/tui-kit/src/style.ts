@@ -1,4 +1,5 @@
 import { sgrAttributes, sgrGroup } from "@amira/api/internal/text-width"
+import { RESET } from "./ansi.ts"
 import {
   type Background,
   backgroundFromEnv,
@@ -11,6 +12,7 @@ import {
   type ColorDepth,
   type ColorDepthSetting,
   type ColorHint,
+  channels,
   detectColorDepth,
   type Hex,
   nearest256,
@@ -40,8 +42,17 @@ export function isColorEnabled(): boolean {
 function sgr(open: number | string, close: number): StyleFn {
   const o = `\x1b[${open}m`
   const c = `\x1b[${close}m`
-  // Re-open after nested closes so an inner style does not end the outer one.
+  // Re-open after nested closes (and full resets for backgrounds) so inner spans never punch holes.
+  if (close === 49) return (text) => o + text.replaceAll(c, c + o).replaceAll(RESET, RESET + o) + c
   return (text) => o + text.replaceAll(c, c + o) + c
+}
+
+function relativeLuminance(hex: Hex): number {
+  const linear = channels(hex).map((v) => {
+    const c = v / 255
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return linear[0]! * 0.2126 + linear[1]! * 0.7152 + linear[2]! * 0.0722
 }
 
 export const bold = sgr(1, 22)
@@ -169,9 +180,11 @@ export const terminalTheme: Theme = {
   chipSuccess: chip(231, 22),
   chipWarning: chip(16, 178),
   chipDanger: chip(231, 124),
-  chipAccent: chip(231, 54),
+  chipAccent: chip(231, 30),
   /** Text selected with the mouse, as in a full-screen transcript. */
   selection: inverse,
+  findMatch: inverse,
+  findCurrent: compose(inverse, underline),
   ...ansiMarkdownTheme,
 }
 
@@ -200,6 +213,10 @@ export const monoTheme: Theme = {
   shimmer: bold,
   shimmerEnd: bold,
   selection: inverse,
+  findMatch: inverse,
+  findCurrent: compose(inverse, underline),
+  diffAddedWordBg: underline,
+  diffRemovedWordBg: underline,
   heading: bold,
   heading1: compose(bold, underline),
   subheading: compose(bold, italic),
@@ -384,9 +401,11 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     keyword: fg(p.keyword, blue),
     string: fg(p.string, green),
     number: fg(p.number, yellow),
-    comment: fg(p.fg2),
+    comment: compose(italic, fg(p.muted)),
     shimmer: fg(shimmer, cyan),
     shimmerEnd: fg(shimmerEnd, blue),
+    findMatch: inverse,
+    findCurrent: compose(inverse, underline),
   }
   if (depth === "16") return theme
   const fades = depth === "truecolor" ? 32 : 8
@@ -400,7 +419,9 @@ export function createTheme(options: ThemeOptions = {}): Theme {
   }
   const chipStyle = (background: Hex, fallback: number) => {
     const edge = sgr(quantize(background, depth, fallback - 10), 39)
-    const body = compose(sgr(quantize(background, depth, fallback, true), 49), fg(p.bg, black))
+    const ink: Hex = relativeLuminance(background) > 0.32 ? "#121212" : "#f6f5f2"
+    const inkFallback = relativeLuminance(background) > 0.32 ? black : white
+    const body = compose(sgr(quantize(background, depth, fallback, true), 49), fg(ink, inkFallback))
     return (text: string) => edge("▐") + body(text) + edge("▌")
   }
   theme.chipNeutral = chipStyle(p.fg2, 47)

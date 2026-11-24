@@ -69,7 +69,7 @@ for (const name of names) {
             row.includes(comment),
           )!
           expect(contrast(row, comment)).toBeGreaterThanOrEqual(4.5)
-          expect(row).toContain(theme.fg2(comment))
+          expect(row).toContain(theme.comment!(comment))
           for (const token of ["rule", "tableBorder", "quoteBar"])
             expect(theme[token]!("line")).toBe(theme.dim("line"))
           const label = renderMarkdown("```ts\nx\n```", 60, theme)[0]!
@@ -121,7 +121,8 @@ for (const name of names) {
               if (definition.kind === "widgets") check(rows, "widget hint")
               if (definition.kind === "code") {
                 check(rows, "ts")
-                check(rows, "// dock comment")
+                const commentRow = rows.find((row) => row.includes("// dock comment"))!
+                expect(contrast(commentRow, "// dock comment")).toBeGreaterThanOrEqual(4.5)
               }
               for (const text of ["scroll dock", "follow", "close dock"]) check(rows, text)
               dock.handleInput(key("pageup"))

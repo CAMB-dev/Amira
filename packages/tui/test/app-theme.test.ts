@@ -12,7 +12,7 @@ const selectedAppearance = (variant: ThemeVariant) =>
 test("interactive startup applies palette and depth settings, with mono taking precedence", async () => {
   const cases = [
     { settings: { theme: "dark", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;120;219;226m›" },
-    { settings: { theme: "light", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;21;124;132m›" },
+    { settings: { theme: "light", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[38;2;15;107;114m›" },
     { settings: { theme: "terminal", colorDepth: "truecolor" }, env: {}, prompt: "\x1b[36m›" },
     { settings: { theme: "light", colorDepth: "truecolor" }, env: { NO_COLOR: "1" }, prompt: "\x1b[1m›" },
   ] as const
@@ -78,7 +78,7 @@ test("/theme arrows preview immediately, Esc restores without saving, and Enter 
     },
   })
   const dark = "\x1b[38;2;120;219;226m"
-  const light = "\x1b[38;2;21;124;132m"
+  const light = "\x1b[38;2;15;107;114m"
   try {
     s.terminal.send("/theme\r")
     await s.shows("Choose a theme")
@@ -243,7 +243,7 @@ test("named themes respect forced appearance and fall back to that variant's def
     settings: { theme: "night-only", themeVariant: "light", colorDepth: "truecolor" },
   })
   try {
-    expect(s.terminal.output).toContain("\x1b[38;2;21;124;132m›")
+    expect(s.terminal.output).toContain("\x1b[38;2;15;107;114m›")
     expect(s.terminal.output).not.toContain("\x1b[38;2;1;2;3m")
   } finally {
     s.terminal.send("\x03\x03")
@@ -334,7 +334,7 @@ test("explicit dark selection wins over a forced named-theme light variant", asy
     settings: { theme: "auto", themeVariant: "light", colorDepth: "truecolor" },
   })
   try {
-    expect(s.terminal.output).toContain("\x1b[38;2;21;124;132m›")
+    expect(s.terminal.output).toContain("\x1b[38;2;15;107;114m›")
     s.terminal.clearWrites()
     s.terminal.send("/theme dark\r")
     await waitFor(() => s.terminal.output.includes("\x1b[38;2;120;219;226m›"), "explicit dark palette")

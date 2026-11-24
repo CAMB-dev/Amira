@@ -114,7 +114,7 @@ export function createCommandRunner(options: CommandRunnerOptions): CommandRunne
     ...(Object.keys(ACTIONS) as Action[]).flatMap((action) => {
       const info: { scope: string; help?: string } = ACTIONS[action]
       if (!info.help) return []
-      const label = options.keys.label(action, (spec) => action !== "newline" || options.reaches(spec))
+      const label = options.keys.label(action, (spec) => options.reaches(spec))
       return label ? [{ keys: label, description: info.help }] : []
     }),
     ...dockKeyHelp(options.keys),

@@ -518,7 +518,7 @@ export class OverlayManager {
     const { keys, reaches } = this.deps
     const next = new KeyReference(keys, {
       onClose: () => this.viewer === next && this.closeView(),
-      usable: (action, s) => action !== "newline" || reaches(s),
+      usable: (_action, s) => reaches(s),
     })
     this.showOverlay(next)
     this.deps.view().renderOverlay()

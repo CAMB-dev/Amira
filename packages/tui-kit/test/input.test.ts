@@ -340,6 +340,14 @@ describe("kitty keyboard protocol", () => {
     expect(parse("\x1b[13;3u")).toEqual([key("enter", { alt: true })])
     expect(parse("\x1b[27u")).toEqual([key("escape")])
   })
+
+  test("xterm modifyOtherKeys: Shift+Enter, Ctrl+Enter, Alt+Enter, Ctrl+Shift+Z", () => {
+    expect(parse("\x1b[27;2;13~")).toEqual([key("enter", { shift: true })])
+    expect(parse("\x1b[27;5;13~")).toEqual([key("enter", { ctrl: true })])
+    expect(parse("\x1b[27;3;13~")).toEqual([key("enter", { alt: true })])
+    expect(parse("\x1b[27;6;90~")).toEqual([key("z", { ctrl: true, shift: true })])
+    expect(parse("\x1b[27;5;9~")).toEqual([key("tab", { ctrl: true })])
+  })
 })
 
 describe("win32-input-mode", () => {

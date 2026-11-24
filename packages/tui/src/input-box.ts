@@ -62,7 +62,11 @@ export class InputBox implements Component {
           const at = row.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length
           const prefix = row.slice(0, at)
           const room = Math.max(0, width - visibleWidth(prefix))
-          rows[0] = prefix + ctx.theme.dim(truncateToWidth(suggestion, room, chromeGlyphs(ctx.glyphs).more))
+          const tabHint = "  tab"
+          const textRoom = room > tabHint.length + 8 ? room - tabHint.length : room
+          const clipped = truncateToWidth(suggestion, textRoom, chromeGlyphs(ctx.glyphs).more)
+          const suffix = room > tabHint.length + 8 ? ctx.theme.dim(tabHint) : ""
+          rows[0] = prefix + ctx.theme.muted(clipped) + suffix
         }
         return rows
       },
@@ -94,7 +98,7 @@ export class InputBox implements Component {
         theme = focusedThemes.get(ctx.theme) ?? { ...ctx.theme, border }
         focusedThemes.set(ctx.theme, theme)
       }
-    } else theme = { ...ctx.theme, border: ctx.theme.muted }
+    } else theme = ctx.theme
     const rows = (framed ? this.box : this.input).render(width, { ...ctx, theme })
     if (width < 8 || this.maxRows < 2) return rows
     const { below } = this.editor.hidden

@@ -16,7 +16,9 @@ export interface TerminalEnv {
  */
 export function detectEnv(env: Env = process.env): TerminalEnv {
   const vscode = env.TERM_PROGRAM === "vscode"
-  const nested = vscode || !!env.TMUX || !!env.WSL_DISTRO_NAME
+  // Windows Terminal never sets TERM_PROGRAM; any TERM_PROGRAM (VS Code, Cursor, Antigravity,
+  // WezTerm, ...) means a nested terminal that merely inherited WT_SESSION.
+  const nested = !!env.TERM_PROGRAM || !!env.TMUX || !!env.STY || !!env.WSL_DISTRO_NAME
   return { vscode, windowsTerminal: !!env.WT_SESSION && !nested }
 }
 

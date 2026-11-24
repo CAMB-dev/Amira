@@ -243,23 +243,25 @@ function endsWide(text: string): boolean {
 }
 
 const MARK_ON = "\x1b[7m"
+const MARK_OFF = "\x1b[27m"
 const CURRENT_ON = "\x1b[7;4m"
-const MARK_OFF = "\x1b[27;24m"
+const CURRENT_OFF = "\x1b[27;24m"
 
 /**
  * `line` with the given ranges of its plain text in inverse video (the current match also
  * underlined). Escape sequences are kept; one inside a range (a color change, a reset) is
- * followed by the mark again, so the range stays marked to its end.
+ * followed by the mark again, so the range stays marked to its end. Non-current matches close
+ * only inverse (`27m`), preserving any surrounding link/heading underline.
  */
 export function highlight(line: string, ranges: { col: number; len: number; current: boolean }[]): string {
   let out = ""
   let plain = 0
-  let open: { end: number; on: string } | undefined
+  let open: { end: number; on: string; off: string } | undefined
   const sorted = [...ranges].sort((a, b) => a.col - b.col)
   let next = 0
   for (let i = 0; i < line.length; ) {
     if (open && plain >= open.end) {
-      out += MARK_OFF
+      out += open.off
       open = undefined
     }
     ESCAPE.lastIndex = i
@@ -273,7 +275,9 @@ export function highlight(line: string, ranges: { col: number; len: number; curr
     while (!open && next < sorted.length && sorted[next]!.col + sorted[next]!.len <= plain) next++
     const r = sorted[next]
     if (!open && r && r.col <= plain) {
-      open = { end: r.col + r.len, on: r.current ? CURRENT_ON : MARK_ON }
+      open = r.current
+        ? { end: r.col + r.len, on: CURRENT_ON, off: CURRENT_OFF }
+        : { end: r.col + r.len, on: MARK_ON, off: MARK_OFF }
       out += open.on
       next++
     }
@@ -281,6 +285,6 @@ export function highlight(line: string, ranges: { col: number; len: number; curr
     plain++
     i++
   }
-  if (open) out += MARK_OFF
+  if (open) out += open.off
   return out
 }

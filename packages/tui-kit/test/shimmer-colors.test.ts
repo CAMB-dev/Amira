@@ -21,7 +21,7 @@ test("custom shimmer stops and all fade steps are precomputed without changing o
       const fades = depth === "truecolor" ? 32 : 8
       for (let fade = 1; fade <= fades; fade++) {
         expect(themeToken(theme, `shimmer${stop}Fade${fade}`)?.("x")).toBe(
-          foreground(blend("#727272", highlight, fade / fades)),
+          foreground(blend("#949494", highlight, fade / fades)),
         )
       }
     }

@@ -248,6 +248,18 @@ function decodeCsi(params: string, final: string): Decoded {
   if (final === "~") {
     const code = Number.parseInt(parts[0] ?? "", 10)
     if (code === 200) return { pasteStart: true }
+    // xterm modifyOtherKeys: CSI 27 ; <mod> ; <codepoint> ~
+    if (code === 27 && parts.length >= 3) {
+      const keyCode = Number.parseInt(parts[2] ?? "", 10)
+      if (Number.isNaN(keyCode)) return { events: [] }
+      const mods = xtermMods(parts[1])
+      const named = KITTY_CODES[keyCode] ?? (keyCode === 8 ? "backspace" : undefined)
+      if (named) return { events: [key(named, mods)] }
+      if (keyCode >= 32 && keyCode <= 0x10ffff && !(keyCode >= 0xd800 && keyCode <= 0xdfff)) {
+        return { events: [charKey(String.fromCodePoint(keyCode), mods)] }
+      }
+      return { events: [] }
+    }
     const name = TILDE_CODES[code]
     return { events: name ? [key(name, xtermMods(parts[1]))] : [] }
   }

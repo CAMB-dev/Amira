@@ -57,7 +57,7 @@ test("auto chooses the detected background, unknown is dark, settings override d
   const dark = createTheme(options)
   const light = createTheme({ ...options, capabilities: { background: "light" } })
   expect(dark.accent("x")).toBe("\x1b[38;2;120;219;226mx\x1b[39m")
-  expect(light.accent("x")).toBe("\x1b[38;2;21;124;132mx\x1b[39m")
+  expect(light.accent("x")).toBe("\x1b[38;2;15;107;114mx\x1b[39m")
   expect(createTheme({ ...options, theme: "dark", capabilities: { background: "light" } }).accent("x")).toBe(
     dark.accent("x"),
   )
@@ -149,7 +149,7 @@ test("code backgrounds colour existing fenced rows without changing layout", () 
   const theme = createTheme(options)
   const painted = renderMarkdown(source, 40, theme)
   expect(painted.map(stripAnsi)).toEqual(renderMarkdown(source, 40, defaultTheme).map(stripAnsi))
-  expect(painted.every((row) => row.startsWith("\x1b[48;2;25;25;25m") && row.endsWith("\x1b[49m"))).toBe(true)
+  expect(painted.every((row) => row.startsWith("\x1b[48;2;27;28;32m") && row.endsWith("\x1b[49m"))).toBe(true)
 })
 
 test("NO_COLOR and dumb terminals always select mono, even with explicit colour settings", () => {

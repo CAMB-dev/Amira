@@ -172,7 +172,13 @@ async function runFullscreen(
     },
   })
   // Shift+Enter is no use where the terminal sends it as plain Enter.
-  const reaches = (s: KeySpec) => capabilities.shiftEnter || !(s.shift && s.name === "enter")
+  const reaches = (s: KeySpec) => {
+    if (capabilities.shiftEnter) return true
+    if (s.shift && s.name === "enter") return false
+    if (s.ctrl && s.shift) return false
+    if (s.ctrl && s.name === "tab") return false
+    return true
+  }
   let workspace: EventMap["workspace.changed"] | undefined
   const header: NonNullable<ViewHost["header"]> = (width, ctx) => [
     headerLine(

@@ -11,10 +11,10 @@ import {
   ToolBlock,
 } from "./blocks.ts"
 import { userBandPaddingIn } from "./format.ts"
-import { glyphs } from "./glyphs.ts"
+import { asciiGlyphs, glyphs, viewEllipsis } from "./glyphs.ts"
 import { PaneFind } from "./pane/find.ts"
 import { PaneTextSelection } from "./pane/text-selection.ts"
-import { cellsOf, markCells, sliceCells } from "./text-selection.ts"
+import { cellsOf, markCells, selectionMarks, sliceCells } from "./text-selection.ts"
 import { runningOutputLimit } from "./tool-view.ts"
 import { gapBetween } from "./transcript.ts"
 
@@ -866,15 +866,14 @@ export class TranscriptPane {
 export function markGutter(line: string, theme: Theme): string {
   const cells = cellsOf(line)
   const first = cells.findIndex((c) => !c.escape)
-  if (first === -1) return `${line}${theme.accent(SELECTED)}`
-  if (cells[first]!.text !== " ") return markCells(line, 0, 1, { on: MARK_ON, off: "\x1b[27m" })
+  const marker = asciiGlyphs() ? "|" : SELECTED
+  if (first === -1) return `${line}${theme.accent(marker)}`
+  if (cells[first]!.text !== " ") return markCells(line, 0, 1, selectionMarks(theme))
   const text = (cs: typeof cells) => cs.map((c) => c.text).join("")
-  return `${text(cells.slice(0, first))}${theme.accent(SELECTED)}${text(cells.slice(first + 1))}`
+  return `${text(cells.slice(0, first))}${theme.accent(marker)}${text(cells.slice(first + 1))}`
 }
-
-const MARK_ON = "\x1b[7m"
 
 /** A one-line bar under the transcript, fitted to `width`. */
 export function barLine(text: string, width: number): string {
-  return truncateToWidth(text, width, "…")
+  return truncateToWidth(text, width, viewEllipsis())
 }

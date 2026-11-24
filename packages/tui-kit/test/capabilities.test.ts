@@ -15,11 +15,15 @@ import {
 import { InputReader } from "../src/reader.ts"
 import { FakeTerminal, ProcessTerminal } from "../src/terminal.ts"
 
-test("detectEnv: Windows Terminal unless running inside VS Code", () => {
+test("detectEnv: Windows Terminal unless running inside VS Code or another nested terminal", () => {
   expect(detectEnv({ WT_SESSION: "x" })).toEqual({ windowsTerminal: true, vscode: false })
   expect(detectEnv({ WT_SESSION: "x", TERM_PROGRAM: "vscode" })).toEqual({
     windowsTerminal: false,
     vscode: true,
+  })
+  expect(detectEnv({ WT_SESSION: "x", TERM_PROGRAM: "cursor" })).toEqual({
+    windowsTerminal: false,
+    vscode: false,
   })
   expect(detectEnv({})).toEqual({ windowsTerminal: false, vscode: false })
 })

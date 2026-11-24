@@ -467,12 +467,12 @@ export class Editor implements Component {
     const prompt = this.prompt
     const indent = " ".repeat(this.promptWidth)
     const caret = this.focused ? CURSOR_MARKER : ""
+    const lead = this.focused ? theme.accent(prompt) : theme.muted(prompt)
     if (this.isEmpty && this.opts.placeholder) {
       this.top = 0
       this.hidden = { above: 0, below: 0 }
-      // Cut to the row: a placeholder longer than the box must not wrap or push past its edge.
       const room = Math.max(0, width - this.promptWidth)
-      return [theme.accent(prompt) + caret + theme.muted(truncateToWidth(this.opts.placeholder, room, more))]
+      return [lead + caret + theme.muted(truncateToWidth(this.opts.placeholder, room, more))]
     }
     const total = this.totalRows()
     const caretRow = this.caretRow()
@@ -495,7 +495,7 @@ export class Editor implements Component {
       if (this.pastes.size) {
         body = this.pastes.expand(body, (p) => theme.accent(truncateToWidth(p.label, max, more)))
       }
-      out.push((i === 0 ? theme.accent(prompt) : indent) + body)
+      out.push((i === 0 ? lead : indent) + body)
     }
     return out
   }

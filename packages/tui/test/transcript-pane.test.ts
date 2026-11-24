@@ -392,7 +392,7 @@ test("highlight keeps escape sequences and marks ranges of the plain text", () =
   const line = "ab\x1b[31mcd\x1b[0mef"
   const out = highlight(line, [{ col: 1, len: 3, current: false }])
   expect(stripAnsi(out)).toBe("abcdef")
-  expect(out).toBe("a\x1b[7mb\x1b[31m\x1b[7mcd\x1b[27;24m\x1b[0mef")
+  expect(out).toBe("a\x1b[7mb\x1b[31m\x1b[7mcd\x1b[27m\x1b[0mef")
 })
 
 test("folding a reply cuts long code blocks and hides details bodies", () => {

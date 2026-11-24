@@ -170,7 +170,7 @@ function formHint(ctx: RenderContext, focus: string, f: FormFieldState | undefin
     case "checkbox":
       return `${space} toggle ${sep} ${common}`
     case "textarea":
-      return `${keyLabel({ name: "enter", shift: true })} newline ${sep} ${enter} next ${sep} ${common}`
+      return `${keyLabel({ name: "enter", shift: true })}/${keyLabel({ name: "enter", ctrl: true })} newline ${sep} ${enter} next ${sep} ${common}`
     case "action":
       return f.action?.running
         ? `${esc} stop ${sep} ${tab}/${vertical} move ${sep} ${save} save`

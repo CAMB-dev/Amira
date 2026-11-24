@@ -14,8 +14,8 @@ import { wordDiff } from "../src/word-diff.ts"
 const dark = { ...defaultTheme, ...surfaceTheme("dark") }
 const RED = "\x1b[48;2;71;20;26m"
 const GREEN = "\x1b[48;2;15;58;18m"
-const RED_WORD = "\x1b[48;2;102;33;42m"
-const GREEN_WORD = "\x1b[48;2;23;85;28m"
+const RED_WORD = "\x1b[48;2;125;40;52m"
+const GREEN_WORD = "\x1b[48;2;31;110;38m"
 const OFF = "\x1b[49m"
 
 const edit: ToolLine[] = diffToolLines([
@@ -51,7 +51,7 @@ test("an edit: numbers in a gutter, changed lines on their color to the edge, ch
     "  41   return lines",
   ])
   // Context lines use the code surface; changed lines use their addition/removal surface.
-  expect(rows[0]!.startsWith("  \x1b[48;2;25;25;25m")).toBe(true)
+  expect(rows[0]!.startsWith("  \x1b[48;2;27;28;32m")).toBe(true)
   expect(visibleWidth(rows[0]!)).toBe(44)
   expect(rows[1]).toContain(dark.error("- "))
   expect(rows[2]).toContain(dark.success("+ "))

@@ -89,7 +89,7 @@ test("surface colors suit the background, and are not in the default theme", () 
   // A word's background inside a line's: the line's comes back after it.
   const s = surfaceTheme("dark")
   expect(s.diffAddedBg(`a${s.diffAddedWordBg("b")}c`)).toBe(
-    "\x1b[48;2;15;58;18ma\x1b[48;2;23;85;28mb\x1b[49m\x1b[48;2;15;58;18mc\x1b[49m",
+    "\x1b[48;2;15;58;18ma\x1b[48;2;31;110;38mb\x1b[49m\x1b[48;2;15;58;18mc\x1b[49m",
   )
   expect(stripColors(s.userBg("hi"))).toBe("hi")
   expect(themeToken(defaultTheme, "userBg")).toBeUndefined()
