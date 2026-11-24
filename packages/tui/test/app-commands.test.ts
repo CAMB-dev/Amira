@@ -18,7 +18,7 @@ test("typing a slash opens the command list below the editor; Tab and Enter comp
   expect(editorRow).toBeGreaterThan(-1)
   expect(popupRow).toBeGreaterThan(editorRow)
   // The list follows the separate status row, replaces the hint, and ends with its own hint.
-  expect(rows.filter((l) => l.trim()).at(-1)).toContain("tab complete · enter run · esc close")
+  expect(rows.filter((l) => l.trim()).at(-1)).toContain("↑↓ select · tab complete · esc close")
   expect(rows.slice(editorRow).join("\n")).not.toContain("mock/m1")
   expect(live()).not.toContain("shift+tab mode")
   // Prefix first: "/he" puts help on top; Tab completes it, Enter runs it.
@@ -53,7 +53,7 @@ test("typing a command: fullscreen reserves room for its list and each key draws
     expect(lines[bottom]).toBe(`╰${"─".repeat(58)}╯`)
     expect(lines[bottom + 1]).toBe(`${" ".repeat(51)}m1 · auto`)
     const start = bottom + 2
-    const end = lines.findIndex((l) => l.startsWith("  tab complete"))
+    const end = lines.findIndex((l) => l.startsWith("  ↑↓ select") || l.startsWith("  tab complete"))
     return end === -1 ? [] : lines.slice(start, end).map((l) => l.trimEnd())
   }
   const steps: [string, string[]][] = [
@@ -406,7 +406,7 @@ test("typing $ opens the skill list; Enter runs the skill, shown as typed with i
   expect(live()).toContain("Review a pull request")
   // Skills are not commands: the "/" list leaves them out.
   expect(live().split("╰")[1]).not.toContain("/help")
-  expect(live()).toContain("tab complete · enter run · esc close")
+  expect(live()).toContain("↑↓ select · tab complete · esc close")
   terminal.send("rev")
   await waitFor(() => live().includes("› $review-pr"), "review-pr selected")
   terminal.send("\t")
@@ -512,10 +512,11 @@ test("the $ list takes its keys from the keybindings like the / list", async () 
   })
   terminal.send("$")
   await waitFor(() => live().includes("  $deploy"), "skill popup")
-  expect(live()).toContain("ctrl+y run · ctrl+g close")
+  expect(live()).toContain("↑/ctrl+n select · tab complete · ctrl+g close")
   // A bare "$" marks nothing: the first ↓ marks the first skill.
   terminal.send("\x0e")
   await waitFor(() => live().includes("› $deploy"), "first marked")
+  expect(live()).toContain("ctrl+y run · ctrl+g close")
   terminal.send("\x0e")
   await waitFor(() => live().includes("› $review-pr"), "moved down")
   terminal.send("\x0e")

@@ -36,7 +36,7 @@ test("configured margins follow the prototype formula at every narrow-width boun
 })
 
 test("overlay pointer coordinates subtract both edges; margin presses cannot activate widgets", () => {
-  const geometry = contentGeometry(100, 30, {})
+  const geometry = contentGeometry(100, 30, { margin: 3, marginRows: 1 })
   expect(contentMouse(press, geometry)).toMatchObject({ x: 0, y: 0 })
   for (const position of [{ x: 2 }, { x: 97 }, { y: 0 }, { y: 29 }])
     expect(contentMouse({ ...press, ...position }, geometry)).toBeUndefined()
@@ -46,7 +46,7 @@ test("overlay pointer coordinates subtract both edges; margin presses cannot act
 
 test("outer frame clipping keeps an over-wide extension surface out of the right margin", () => {
   const component = { render: () => [`\x1b[48;2;32;32;32m${"x".repeat(100)}\x1b[49m`] }
-  const lines = marginView(component, {}).render(70, {
+  const lines = marginView(component, { margin: 3, marginRows: 1 }).render(70, {
     ...plain,
     color: true,
     rows: 30,
@@ -61,7 +61,7 @@ test("clicking a sticky band inside the margin reveals its real user message", (
     true,
     70,
     30,
-    {},
+    { margin: 3, marginRows: 1 },
     {
       afterRender(view, screen) {
         // Grow this turn until its real user band is above the viewport.

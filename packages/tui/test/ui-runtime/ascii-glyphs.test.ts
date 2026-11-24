@@ -294,13 +294,13 @@ test("ASCII view hints cut with three periods and keep their exact width", () =>
       expect(visibleWidth(hint)).toBe(8)
     }
 
-    // The same cuts in Unicode mode keep the arrow and the true ellipsis; the key is bold.
+    // The same cuts in Unicode mode keep the arrow and the true ellipsis; styled themes bold the key.
     setGlyphs()
     for (const focused of [false, true]) {
       viewer.focused = focused
       const hint = viewer.focusHint(plain.theme, 8)
       expect(stripAnsi(hint)).toBe(focused ? "tab → i…" : "tab → v…")
-      expect(hint).toStartWith("\x1b[1mtab")
+      expect(viewer.focusHint(defaultTheme, 8)).toStartWith("\x1b[1mtab")
     }
   } finally {
     viewer.dispose()

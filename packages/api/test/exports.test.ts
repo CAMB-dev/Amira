@@ -641,7 +641,7 @@ test("the public TUI settings include optional margins without changing API_VERS
   const edgeToEdge: TuiSettings = { margin: 0, marginRows: 0 }
   const omitted: TuiSettings = {}
   expect(API_VERSION).toBe("0.1.72")
-  expect(defaults).toEqual({ margin: 3, marginRows: 1 })
+  expect(defaults).toEqual({ margin: 1, marginRows: 0 })
   expect(edgeToEdge).toEqual({ margin: 0, marginRows: 0 })
   expect(omitted).toEqual({})
 })

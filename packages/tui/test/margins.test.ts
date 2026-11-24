@@ -7,12 +7,12 @@ import { cellsOf } from "../src/text-selection.ts"
 import { marginFrame, zeroMargins } from "./margins-fixture.ts"
 
 for (const columns of [100, 70]) {
-  test(`default geometry at ${columns}x30 reserves three cells and one fullscreen row per edge`, () => {
+  test(`default geometry at ${columns}x30 reserves one cell per side and uses the full height`, () => {
     expect(contentGeometry(columns, 30, {})).toEqual({
-      left: 3,
-      width: columns - 6,
-      rows: 1,
-      height: 28,
+      left: 1,
+      width: columns - 2,
+      rows: 0,
+      height: 30,
     })
     expect(contentGeometry(columns, 30, zeroMargins)).toEqual({
       left: 0,
@@ -27,13 +27,9 @@ for (const columns of [100, 70]) {
       const frame = marginFrame(fullscreen, columns, 30, {})
       for (const state of [frame.live, frame.committed]) {
         for (const row of [...state.scrollback, ...state.grid]) {
-          if (row) expect(row.slice(0, 3)).toBe("   ")
-          expect(visibleWidth(row.trimEnd())).toBeLessThanOrEqual(columns - 3)
+          if (row) expect(row.slice(0, 1)).toBe(" ")
+          expect(visibleWidth(row.trimEnd())).toBeLessThanOrEqual(columns - 1)
         }
-      }
-      if (fullscreen) {
-        expect(frame.live.grid[0]!.trim()).toBe("")
-        expect(frame.live.grid.at(-1)!.trim()).toBe("")
       }
       const output = [...frame.live.scrollback, ...frame.live.grid].join("\n")
       for (const text of [
@@ -45,7 +41,7 @@ for (const columns of [100, 70]) {
         "Check the changes",
       ])
         expect(output).toContain(text)
-      expect(output).toContain(`${" ".repeat(columns - 5)}ts`)
+      expect(output).toContain(`${" ".repeat(columns - 3)}ts`)
       expect(frame.committed.ansi).toContain("48;2;71;20;26m")
       expect(frame.committed.ansi).toContain("48;2;15;58;18m")
     })
@@ -65,8 +61,8 @@ for (const columns of [100, 70]) {
           if (cell.text === "\x1b[49m" || cell.text === "\x1b[0m") background = false
         } else if (background && cell.width > 0) {
           painted++
-          expect(cell.col).toBeGreaterThanOrEqual(3)
-          expect(cell.col + cell.width).toBeLessThanOrEqual(columns - 3)
+          expect(cell.col).toBeGreaterThanOrEqual(1)
+          expect(cell.col + cell.width).toBeLessThanOrEqual(columns - 1)
         }
       }
     }
@@ -81,9 +77,8 @@ test("narrow margins shrink just enough to preserve sixty content columns", () =
     [61, 0, 61],
     [62, 1, 60],
     [63, 1, 61],
-    [64, 2, 60],
-    [65, 2, 61],
-    [66, 3, 60],
+    [64, 1, 62],
+    [66, 1, 64],
   ]) {
     expect(contentGeometry(columns!, 30, {})).toMatchObject({ left, width })
   }
@@ -156,11 +151,9 @@ for (const fullscreen of [true]) {
     )
     expect(frame.live.grid.join("\n")).toContain("Choose model")
     for (const row of frame.live.grid) {
-      expect(row.slice(0, 3)).toBe("   ")
-      expect(row.slice(-3)).toBe("   ")
+      expect(row.slice(0, 1)).toBe(" ")
+      expect(row.slice(-1)).toBe(" ")
     }
-    expect(frame.live.grid[0]!.trim()).toBe("")
-    expect(frame.live.grid.at(-1)!.trim()).toBe("")
   })
 }
 
@@ -208,19 +201,19 @@ test("a margin-wrapped component gets reduced columns and row context, not merel
       return ["x".repeat(width)]
     },
   }
-  const lines = marginView(component, {}).render(70, { ...plain, rows: 30 })
+  const lines = marginView(component, { margin: 3, marginRows: 1 }).render(70, { ...plain, rows: 30 })
   expect(calls).toEqual([{ width: 64, rows: 28 }])
   expect(lines[0]).toBe("")
   expect(lines[1]).toBe(`   ${"x".repeat(64)}`)
   expect(lines.at(-1)).toBe("")
 })
 
-test("ultrawide terminals cap default reading width while honoring explicit margin settings", () => {
+test("wide terminals fill available width while keeping subtle side margin", () => {
   expect(contentGeometry(200, 40, {})).toEqual({
-    left: 32,
-    width: 136,
-    rows: 1,
-    height: 38,
+    left: 1,
+    width: 198,
+    rows: 0,
+    height: 40,
   })
   expect(contentGeometry(200, 40, zeroMargins)).toEqual({
     left: 0,

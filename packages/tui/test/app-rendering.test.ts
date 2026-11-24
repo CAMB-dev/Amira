@@ -449,7 +449,7 @@ test("the status stays below the intact frame when a dialog takes the input box'
 test("a command list below the input box leaves the separate status below its plain bottom edge", async () => {
   const { terminal, live, exited } = await setup([], { commands: testCommands([]) })
   terminal.send("/")
-  await waitFor(() => live().includes("tab complete · enter run · esc close"), "the list")
+  await waitFor(() => live().includes("↑↓ select · tab complete · esc close"), "the list")
   expect(live()).toMatch(/^╰─{58}╯\n {51}m1 · auto$/m)
   terminal.send("\x03\x03")
   await exited

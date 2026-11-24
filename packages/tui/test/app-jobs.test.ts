@@ -93,22 +93,23 @@ for (const mode of ["fullscreen"] as const) {
     })
     terminal.send("/jobs\r")
     await shows("Background jobs")
-    await waitFor(() => live().includes("1  job1 · running 0s · npm run dev"), "the list")
-    expect(live()).toContain("2  job2 · running 0s · tsc --watch")
+    await waitFor(() => live().includes("job1 · running 0s · npm run dev"), "the list")
+    expect(live()).toContain("job2 · running 0s · tsc --watch")
     expect(live()).toContain("VITE ready in 300 ms")
     expect(live()).toMatch(/x stop/)
-    // x on the highlighted (first) job stops it.
+    // x on the highlighted (first) job asks for confirmation (nothing preselected); Down + Enter chooses Yes.
     terminal.send("x")
+    await waitFor(() => live().includes("Stop job1?"), "stop confirmation")
+    terminal.send("\x1b[B\r")
     await shows("Stopped job1.")
     expect(jobs.procs[0]!.stops).toEqual([2000])
     await waitFor(() => jobs.registry.get("job1")!.status === "stopped", "job1 stopped")
     // Stopped on request: no notice that it ended.
     expect(all()).not.toContain("Background job job1")
 
-    // Enter on the second job opens the view with its output, which follows as it grows.
+    // Enter on the remaining running job (now first under Running) opens the view with its output.
     terminal.send("/jobs\r")
-    await waitFor(() => live().includes("2  job2 · running"), "the list again")
-    terminal.send("\x1b[B")
+    await waitFor(() => live().includes("job2 · running"), "the list again")
     terminal.send("\r")
     await waitFor(() => live().includes("job2 · tsc --watch"), "the view")
     expect(live()).toContain("Found 0 errors. Watching for file changes.")
