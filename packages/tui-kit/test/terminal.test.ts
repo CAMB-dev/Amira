@@ -44,6 +44,73 @@ test("exitAltScreen only writes when the alt screen is active", () => {
   expect(term.writes).toEqual([modes.altScreen.on, modes.altScreen.off])
 })
 
+test("kitty keyboard mode is re-pushed on the alternate screen and popped on both screens", () => {
+  const term = new FakeTerminal()
+  term.enableMode(modes.bracketedPaste)
+  term.enableMode(modes.kittyKeyboard)
+  term.enterAltScreen()
+  // Idempotent enterAltScreen must not push a second copy onto the alt screen stack.
+  term.enterAltScreen()
+  expect(term.writes).toEqual([
+    modes.bracketedPaste.on,
+    modes.kittyKeyboard.on,
+    modes.altScreen.on,
+    modes.kittyKeyboard.on,
+  ])
+
+  // Exiting the alt screen pops the alt stack before leaving, keeping main-screen kitty active.
+  term.clearWrites()
+  term.exitAltScreen()
+  expect(term.writes).toEqual([modes.kittyKeyboard.off, modes.altScreen.off])
+
+  // Re-entering pushes onto the alt stack again, and restore unwinds both stacks in LIFO order.
+  term.clearWrites()
+  term.enterAltScreen()
+  expect(term.writes).toEqual([modes.altScreen.on, modes.kittyKeyboard.on])
+  term.clearWrites()
+  term.restore()
+  expect(term.output).toBe(
+    `${modes.kittyKeyboard.off}${modes.altScreen.off}${modes.kittyKeyboard.off}${modes.bracketedPaste.off}\x1b[0m\x1b[?25h`,
+  )
+})
+
+test("suspend and resume preserve kitty keyboard pushes across main and alternate screens", () => {
+  const term = new FakeTerminal()
+  term.setRawMode(true)
+  term.enableMode(modes.kittyKeyboard)
+  term.enterAltScreen()
+  term.clearWrites()
+
+  const resume = term.suspend()
+  expect(term.output).toBe(
+    `${modes.kittyKeyboard.off}${modes.altScreen.off}${modes.kittyKeyboard.off}\x1b[0m\x1b[?25h`,
+  )
+
+  term.clearWrites()
+  resume()
+  expect(term.writes).toEqual([modes.kittyKeyboard.on, modes.altScreen.on, modes.kittyKeyboard.on])
+
+  term.clearWrites()
+  term.restore()
+  expect(term.output).toBe(
+    `${modes.kittyKeyboard.off}${modes.altScreen.off}${modes.kittyKeyboard.off}\x1b[0m\x1b[?25h`,
+  )
+})
+
+test("kitty keyboard enabled after enterAltScreen is popped before leaving alt screen and kept on main", () => {
+  const term = new FakeTerminal()
+  term.enterAltScreen()
+  term.enableMode(modes.kittyKeyboard)
+  term.clearWrites()
+
+  term.exitAltScreen()
+  expect(term.writes).toEqual([modes.kittyKeyboard.off, modes.altScreen.off, modes.kittyKeyboard.on])
+
+  term.clearWrites()
+  term.restore()
+  expect(term.output).toBe(`${modes.kittyKeyboard.off}\x1b[0m\x1b[?25h`)
+})
+
 test("a failed alternate-screen exit retains its mode for restore", () => {
   const f = processTerminalFixture()
   try {

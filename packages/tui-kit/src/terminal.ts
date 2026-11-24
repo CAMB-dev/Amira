@@ -14,6 +14,14 @@ type Listener<T extends unknown[]> = (...args: T) => void
 // Shared with synchronous emergency cleanup without changing the subclass restore-sequence hook.
 const restoreWrites = new WeakMap<BaseTerminal, (write: (sequence: string) => void) => void>()
 
+/**
+ * Kitty's keyboard protocol keeps separate enhancement stacks for the main and alternate screens,
+ * so switching to the alternate screen resets flags to 0 until pushed there too. Tracking the
+ * alt-screen push as its own active entry keeps LIFO teardown balanced across `exitAltScreen()`,
+ * `restore()`, emergency exit, and `suspend()`/`resume()`.
+ */
+const altScreenKittyKeyboard: TerminalMode = { ...modes.kittyKeyboard }
+
 class Emitter<T extends unknown[]> {
   private listeners = new Set<Listener<T>>()
   on(fn: Listener<T>): () => void {
@@ -105,10 +113,23 @@ export abstract class BaseTerminal implements Terminal {
   }
 
   enterAltScreen(): void {
+    const hadAlt = this.active.includes(modes.altScreen)
     this.enableMode(modes.altScreen)
+    if (!hadAlt && this.active.includes(modes.kittyKeyboard)) {
+      this.enableMode(altScreenKittyKeyboard)
+    }
   }
 
   exitAltScreen(): void {
+    this.disableMode(altScreenKittyKeyboard)
+    const altIndex = this.active.indexOf(modes.altScreen)
+    const kittyIndex = this.active.indexOf(modes.kittyKeyboard)
+    if (altIndex !== -1 && kittyIndex > altIndex) {
+      this.disableMode(modes.kittyKeyboard)
+      this.disableMode(modes.altScreen)
+      this.enableMode(modes.kittyKeyboard)
+      return
+    }
     this.disableMode(modes.altScreen)
   }
 
