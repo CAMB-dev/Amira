@@ -195,7 +195,8 @@ function transcriptLines(
     const next = blocks[index + 1]
     const last = !next || next.type === "text" || next.type === "thinking"
     if (block.type === "thinking") {
-      out.push({ kind: "muted", text: `${symbols.thought} Thought` })
+      const hint = opts.toolDetail === "full" ? "" : "  Ctrl+O to expand"
+      out.push({ kind: "muted", text: `${symbols.thought} Thought${hint}` })
       if (opts.toolDetail === "full") {
         const pipe = opts.glyphs?.treePipe ?? symbols.treePipe
         for (const row of block.text.trim().split("\n"))
@@ -369,7 +370,10 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
     const list = api.session()?.subagents() ?? []
     if (!list.length) return
     const index = list.findIndex((s) => s.id === data.sessionId)
-    data.sessionId = list[(index + step + list.length) % list.length]!.id
+    data.sessionId =
+      index === -1
+        ? (step < 0 ? list.at(-1)! : list[0]!).id
+        : list[(index + step + list.length) % list.length]!.id
   }
   const navigation: ViewKey<SubagentData>[] = [
     { key: "left", label: "switch", run: (data) => switchTo(data, -1) },
@@ -421,7 +425,7 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
       const session = api.session()
       const list = session?.subagents() ?? []
       const info = list.find((s) => s.id === data.sessionId)
-      if (!info) return []
+      if (!info) return [{ kind: "muted", text: "Sub-agent is no longer available. Press Esc to close." }]
       const out = transcriptLines(
         info,
         session?.subagentMessages(info.id) ?? [],
@@ -431,6 +435,12 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
       )
       const stream = streams.get(info.id)
       if (stream?.text.trim()) out.push(...replyLines(stream.text, opts), { kind: "text", text: "" })
+      else if (stream?.thinking) {
+        out.push(
+          { kind: "segments", parts: [{ kind: "spinner" }, { kind: "shimmer", text: " Thinking" }] },
+          { kind: "text", text: "" },
+        )
+      }
       // The view's title already owns live state; do not duplicate it in the transcript.
       if (!live(info)) {
         const state = agentStatusState(info)
@@ -453,9 +463,10 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
       return out
     },
     get keys() {
-      const info = shown && infoFor(shown)
+      const list = api.session()?.subagents() ?? []
+      const info = shown && list.find((s) => s.id === shown!.sessionId)
       return [
-        ...navigation,
+        ...(list.length > 1 ? navigation : []),
         ...(info && live(info)
           ? [
               {
@@ -477,19 +488,23 @@ export function subagentView(api: ExtensionAPI): ViewDefinition<SubagentData> {
               } satisfies ViewKey<SubagentData>,
             ]
           : []),
-        {
-          key: "p",
-          label: "print",
-          run: (data: SubagentData, view) => {
-            const session = api.session()
-            const list = session?.subagents() ?? []
-            const info = list.find((s) => s.id === data.sessionId)
-            if (!info) return
-            const text = subagentTranscriptText(info, session?.subagentMessages(info.id) ?? [], list)
-            view.close()
-            view.print(text)
-          },
-        } satisfies ViewKey<SubagentData>,
+        ...(info
+          ? [
+              {
+                key: "p",
+                label: "print",
+                run: (data: SubagentData, view) => {
+                  const session = api.session()
+                  const all = session?.subagents() ?? []
+                  const target = all.find((s) => s.id === data.sessionId)
+                  if (!target) return
+                  const text = subagentTranscriptText(target, session?.subagentMessages(target.id) ?? [], all)
+                  view.close()
+                  view.print(text)
+                },
+              } satisfies ViewKey<SubagentData>,
+            ]
+          : []),
       ]
     },
   }

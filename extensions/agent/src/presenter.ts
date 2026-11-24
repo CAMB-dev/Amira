@@ -1,4 +1,10 @@
-import { AGENT_STATUS_BADGES, agentStatusState, type SubagentStatus, type ToolPresenter } from "@amira/api"
+import {
+  AGENT_STATUS_BADGES,
+  agentStatusState,
+  plural,
+  type SubagentStatus,
+  type ToolPresenter,
+} from "@amira/api"
 import { type AgentParams, taskList } from "./tools.ts"
 
 /** Each report's heading ends in how its sub-agent ended: "## title · role · id · done (…)". */
@@ -40,7 +46,10 @@ export const agentPresenter: ToolPresenter<AgentParams> = {
   /** One of several sub-agents failing or stopping is not a success of the whole call. */
   outcome(call) {
     if (call.result.isError) return undefined
-    return reportStates(call.text).some((s) => s !== "done") ? "failed" : undefined
+    const states = reportStates(call.text)
+    if (states.some((s) => s === "error")) return "failed"
+    if (states.some((s) => s !== "done")) return "interrupted"
+    return undefined
   },
   /** All of the reports, at the full level: each one's heading as a heading, not as "## ". */
   body(call, { detail }) {
@@ -48,7 +57,49 @@ export const agentPresenter: ToolPresenter<AgentParams> = {
     return call.text
       .split("\n")
       .map((text) =>
-        text.startsWith("## ") ? { kind: "accent", text: text.slice(3) } : { kind: "text", text },
+        text.startsWith("## ")
+          ? { kind: "accent", text: text.slice(3), wrap: true }
+          : { kind: "text", text, wrap: true },
+      )
+  },
+}
+
+export const agentResultPresenter: ToolPresenter<{ ids?: unknown }> = {
+  verbs: { past: "Collected", running: "Collecting" },
+  summary(args) {
+    const ids = Array.isArray(args.ids)
+      ? args.ids.filter((id: unknown): id is string => typeof id === "string")
+      : []
+    return ids.length ? ids.join(", ") : ""
+  },
+  result(call) {
+    if (call.result.isError) return undefined
+    const reports = call.text.split("\n").filter((l) => l.startsWith("## ")).length
+    const states = reportStates(call.text)
+    if (reports > 1 && states.length === reports) {
+      const labels = states.map((s) => AGENT_STATUS_BADGES[agentStatusState({ status: s })].label)
+      return [...new Set(labels)]
+        .map((label) => `${labels.filter((l) => l === label).length} ${label}`)
+        .join(" · ")
+    }
+    if (reports > 1) return plural(reports, "report")
+    return call.text.split("\n")[0]?.replace(/^#+\s*/, "") || undefined
+  },
+  outcome(call) {
+    if (call.result.isError) return undefined
+    const states = reportStates(call.text)
+    if (states.some((s) => s === "error")) return "failed"
+    if (states.some((s) => s !== "done")) return "interrupted"
+    return undefined
+  },
+  body(call, { detail }) {
+    if (detail !== "full" || call.result.isError) return []
+    return call.text
+      .split("\n")
+      .map((text) =>
+        text.startsWith("## ")
+          ? { kind: "accent", text: text.slice(3), wrap: true }
+          : { kind: "text", text, wrap: true },
       )
   },
 }

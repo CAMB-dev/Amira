@@ -2,6 +2,7 @@ import {
   type AskAnswer,
   type AskOutcome,
   type AskQuestion,
+  clip,
   defineTool,
   type ToolCallView,
   type ToolLine,
@@ -135,10 +136,9 @@ const questionsOf = (args: Partial<AskUserParams>): AskQuestion[] =>
 /** Longest a question's label (its header, else the question) may be above its answer. */
 const LABEL_CHARS = 40
 
-/** `s` cut to `max` characters, whole code points, with an ellipsis when cut. */
+/** `s` cut to `max` terminal cells, with an ellipsis when cut. */
 function clipLabel(s: string, max: number): string {
-  const chars = [...s.replace(/\s+/g, " ").trim()]
-  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : chars.join("")
+  return clip(s.replace(/\s+/g, " ").trim(), max)
 }
 
 /** Summary keeps the answers compact; full detail retains every question and offered option. */
@@ -207,8 +207,8 @@ export const askUserPresenter: ToolPresenter<AskUserParams, AskUserDetails> = {
     return d.questions.flatMap((q, i): ToolLine[] => {
       const answer = answers[i] ? answerText(answers[i]) : "(no answer)"
       return [
-        { kind: "muted", text: clipLabel(q.header || q.question, LABEL_CHARS) },
-        ...answer.split("\n").map((l): ToolLine => ({ kind: "text", text: `  ${l}` })),
+        { kind: "muted", text: clipLabel(q.header || q.question, LABEL_CHARS), wrap: true },
+        ...answer.split("\n").map((l): ToolLine => ({ kind: "text", text: `  ${l}`, wrap: true })),
       ]
     })
   },

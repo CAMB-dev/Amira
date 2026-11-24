@@ -4,7 +4,9 @@ import type { SpeedObserver } from "./status-speed.ts"
 
 /** The live bar shares /status's ordered collector, but estimates only visible reply deltas. */
 export function liveSpeed(
-  api: Pick<ExtensionAPI, "settings" | "registerStatusItem" | "requestRender" | "onExit">,
+  api: Pick<ExtensionAPI, "settings" | "registerStatusItem" | "requestRender" | "onExit"> & {
+    onUnload?: ExtensionAPI["onUnload"]
+  },
 ): SpeedObserver | undefined {
   if (!(api.settings.tui?.tokenSpeed ?? DEFAULT_TUI_TOKEN_SPEED)) return
   let active:
@@ -45,6 +47,7 @@ export function liveSpeed(
   }
   api.registerStatusItem({ id: "token-speed", align: "right", priority: 0, tone: "muted", text: () => text })
   api.onExit(stop)
+  api.onUnload?.(stop)
   return (e, timing, speed) => {
     if (e.parentSessionId !== undefined) return
     if (e.type === "session.start" || e.type === "events.lost") {

@@ -165,7 +165,9 @@ export const writePresenter: ToolPresenter<WriteParams, WriteDetails> = {
         ...(d.truncated ? [{ kind: "muted" as const, text: "… diff truncated" }] : []),
       ]
     // After a resume: what was written, as additions.
-    return str(call.args.content)
+    const content = str(call.args.content)
+    if (!content) return []
+    return content
       .replace(/\n$/, "")
       .split("\n")
       .map((text, i) => ({ kind: "diff-add", text, lineNo: i + 1 }))
@@ -279,7 +281,7 @@ export const shellPresenter: ToolPresenter<BashParams, BashDetails | BackgroundJ
     const live = job && liveJobInfo(job.jobId)
     if (!live) return undefined
     if (live.status === "running" || live.status === "starting") return "working"
-    if (live.status === "stopped") return "done"
+    if (live.status === "stopped") return "interrupted"
     return live.status === "failed" || live.exitCode !== 0 ? "failed" : "done"
   },
   body(call, { detail, outputLines: tail = SHELL_TAIL_LINES }) {
@@ -323,7 +325,8 @@ export const globPresenter: ToolPresenter<GlobParams, GlobDetails> = {
     if (call.result.isError) return undefined
     const d = detailsOf<GlobDetails>(call, "count")
     if (d) return plural(d.count, "file")
-    return call.text.startsWith("No files") ? "no files" : plural(call.text.split("\n").length, "file")
+    if (call.text.startsWith("No files") || !call.text.trim()) return "no files"
+    return plural(call.text.trim().split("\n").length, "file")
   },
   body: (call, { detail }) => (detail === "full" ? outputLines(call.text) : []),
   explore: (args) => ({
@@ -350,8 +353,21 @@ export const outputReadPresenter: ToolPresenter<OutputReadParams, unknown> = {
   explore: (args) => ({ verb: "Read", target: str(args.id) }),
 }
 
-export const toolSearchPresenter: ToolPresenter = {
+export const toolSearchPresenter: ToolPresenter<{ query?: string; names?: string[] }> = {
   verbs: { past: "Loaded", running: "Loading" },
+  summary(args) {
+    if (Array.isArray(args.names) && args.names.length) {
+      return args.names.filter((n): n is string => typeof n === "string").join(", ")
+    }
+    return str(args.query)
+  },
+  result(call) {
+    if (call.result.isError) return undefined
+    const loaded = /^Loaded (\d+) tools?/.exec(call.text)
+    if (loaded) return plural(Number(loaded[1]), "tool")
+    if (call.text.startsWith("No ")) return "none"
+    return firstLine(call.text)
+  },
 }
 
 /** The presenters of the built-in tools, by tool name. */

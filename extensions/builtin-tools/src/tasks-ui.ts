@@ -16,6 +16,7 @@ import {
   type SessionControl,
   type SubagentInfo,
   subagentTranscriptText,
+  textCells,
   type ViewSegment,
 } from "@amira/api"
 import { STOP_GRACE_MS } from "./jobs.ts"
@@ -134,14 +135,15 @@ function taskSegments(
 ): ViewSegment[] {
   const separator = ` ${opts.glyphs?.separator ?? "·"} `
   const badge = AGENT_STATUS_BADGES[task.state]
+  const rawTime = taskTime(task, opts.now)
+  const timeCell = columns.time > 0 ? (rawTime || "-").padStart(columns.time) : ""
   const head = [
     ...(opts.statusBadge?.(task.state, { pad: true }) ?? [{ kind: badge.role, text: badge.label.padEnd(7) }]),
     { kind: "muted" as const, text: ` ${taskName(task).padEnd(columns.name)}${separator}` },
-    { kind: "muted" as const, text: `${taskTime(task, opts.now).padStart(columns.time)}${separator}` },
+    ...(timeCell ? [{ kind: "muted" as const, text: `${timeCell}${separator}` }] : []),
   ]
-  // Badge, name and time are one cell per character.
-  const room = Math.max(0, opts.width - head.reduce((n, part) => n + part.text.length, 0))
-  const last = oneLine(task.last)
+  const room = Math.max(0, opts.width - head.reduce((n, part) => n + textCells(part.text), 0))
+  const last = room >= 10 ? oneLine(task.last) : ""
   const label = clip(task.label, last ? Math.max(8, Math.floor(room / 2)) : room, opts.glyphs?.more ?? "…")
   return [
     ...head,
@@ -177,8 +179,8 @@ export function tasksPanel(
       ]
       if (opts.collapsed) return lines
       const columns = {
-        name: Math.max(...live.map((task) => taskName(task).length)),
-        time: Math.max(...live.map((task) => taskTime(task, opts.now).length)),
+        name: Math.max(...live.map((task) => textCells(taskName(task)))),
+        time: Math.max(...live.map((task) => textCells(taskTime(task, opts.now)))),
       }
       return [
         ...lines,
@@ -317,6 +319,7 @@ export function tasksCommand(registry: BackgroundJobRegistry): CommandDefinition
 
 export function registerTasks(api: ExtensionAPI, registry: BackgroundJobRegistry): void {
   const streams = new Map<string, string>()
+  let lastDeltaRender = 0
   api.registerPanel(tasksPanel(registry, () => api.session?.(), streams))
   api.registerCommand(tasksCommand(registry))
   api.on("message.start", (e) => {
@@ -326,7 +329,11 @@ export function registerTasks(api: ExtensionAPI, registry: BackgroundJobRegistry
     if (e.parentSessionId === undefined || e.data.kind !== "text") return
     const text = `${streams.get(e.sessionId) ?? ""}${e.data.text}`
     streams.set(e.sessionId, text.slice(-2000))
-    api.requestRender()
+    const now = Date.now()
+    if (now - lastDeltaRender >= 250) {
+      lastDeltaRender = now
+      api.requestRender()
+    }
   })
   api.on("message.end", (e) => {
     if (e.parentSessionId === undefined) return

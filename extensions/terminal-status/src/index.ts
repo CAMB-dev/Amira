@@ -13,7 +13,7 @@ export default defineExtension((api) => {
 
   const sync = () => {
     const name = clean(sessionTitle || folder, 64)
-    const base = `Amira · ${name}`
+    const base = name ? `Amira · ${name}` : "Amira"
     api.terminal.setTitle(clip(working ? `● ${base}` : base, 128))
     api.terminal.setProgress(waiting ? "paused" : working ? "indeterminate" : "none")
   }
@@ -32,6 +32,13 @@ export default defineExtension((api) => {
         .pop() || e.data.cwd
     sessionTitle = e.data.title?.trim() || undefined
     working = false
+    waiting = false
+    sync()
+  })
+  api.on("session.end", (e) => {
+    if (e.sessionId !== sessionId) return
+    working = false
+    waiting = false
     sync()
   })
   api.on("session.title", (e) => {

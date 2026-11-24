@@ -403,7 +403,7 @@ export function agentsCommand(opts: AgentsCommandOptions = {}): CommandDefinitio
             optionStatuses: [...agents.map((s) => agentStatusState(s)), ...kept.map(() => undefined)],
             descriptions: [
               ...agentRows.map(() => ""),
-              ...kept.map((w) => `${keptWhen(w, now)} · ${shortPath(w.dir, home)}`),
+              ...kept.map((w) => `${keptWhen(w, Date.now())} · ${shortPath(w.dir, home)}`),
             ],
           }
         },

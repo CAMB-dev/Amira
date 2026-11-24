@@ -1215,7 +1215,7 @@ test("x in the viewer stops the running sub-agent after y confirms; another key 
   s.terminal.send("/agents view\r")
   await waitFor(() => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] wait +\d+s$/m.test(s.view()), "the viewer")
   // The generic footer lists a view's keys before the scroll keys (dropped first when narrow).
-  expect(s.screen.lines.at(-1)).toContain("following · ←→ switch · x stop · p print · ")
+  expect(s.screen.lines.at(-1)).toContain("following · x stop · p print · ")
   expect(s.screen.lines.at(-1)).toMatch(/ · esc close · f6 → input$/)
   const child = s.control.subagents()[0]!
   const question = `  Stop Check explorer (explorer ${child.id})? y stops it · any other key keeps it running`

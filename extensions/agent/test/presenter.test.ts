@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { textResult, toolResultText } from "@amira/api"
 import { agentPresenter } from "../src/index.ts"
+import { agentResultPresenter } from "../src/presenter.ts"
 
 const view = (text: string) => {
   const result = textResult(text)
@@ -13,6 +14,10 @@ test("several reports sum up by how each ended; a failure among them is no succe
   )
   expect(agentPresenter.result!(mixed)).toBe("2 done · 1 failed · 1 stopped")
   expect(agentPresenter.outcome!(mixed)).toBe("failed")
+  // Stopped-only outcomes count as interrupted, not failed.
+  expect(agentPresenter.outcome!(view("## C · coder · s_3 · aborted (1s, 2k tokens)\n\nc"))).toBe(
+    "interrupted",
+  )
   // Headings without a state keep the plain count.
   expect(agentPresenter.result!(view("## One\n\na\n\n## Two\n\nb"))).toBe("2 reports")
 })
@@ -22,11 +27,25 @@ test("at the full level an agent call shows every report, its headings as headin
   expect(agentPresenter.result!(call)).toBe("2 done")
   expect(agentPresenter.outcome!(call)).toBeUndefined()
   const body = agentPresenter.body!(call, { detail: "full", width: 80 })
-  expect(body[0]).toEqual({ kind: "accent", text: "One · explorer · s_1 · done" })
+  expect(body[0]).toEqual({ kind: "accent", text: "One · explorer · s_1 · done", wrap: true })
   expect(body.filter((l) => l.kind === "accent").map((l) => l.text)).toEqual([
     "One · explorer · s_1 · done",
     "Two · coder · s_2 · done",
   ])
   expect(body.some((l) => l.text.startsWith("##"))).toBe(false)
   expect(agentPresenter.body!(call, { detail: "summary", width: 80 })).toEqual([])
+
+  // agent_result presenter summarizes ids and wraps full reports.
+  const collected = {
+    args: { ids: ["s_1", "s_2"] },
+    result: textResult("## One · explorer · s_1 · done\n\nfirst\n\n## Two · coder · s_2 · done\n\nsecond"),
+    text: "## One · explorer · s_1 · done\n\nfirst\n\n## Two · coder · s_2 · done\n\nsecond",
+  }
+  expect(agentResultPresenter.summary!(collected.args)).toBe("s_1, s_2")
+  expect(agentResultPresenter.result!(collected)).toBe("2 done")
+  expect(agentResultPresenter.body!(collected, { detail: "full", width: 80 })[0]).toEqual({
+    kind: "accent",
+    text: "One · explorer · s_1 · done",
+    wrap: true,
+  })
 })

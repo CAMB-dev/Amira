@@ -1,6 +1,10 @@
 import { homedir } from "node:os"
 import { sep } from "node:path"
-import type { BackgroundJobInfo as JobInfo, BackgroundJobRegistry as JobRegistry } from "@amira/api"
+import type {
+  AgentStatusState,
+  BackgroundJobInfo as JobInfo,
+  BackgroundJobRegistry as JobRegistry,
+} from "@amira/api"
 import {
   type BackgroundJobDetails,
   type CommandCandidate,
@@ -17,7 +21,9 @@ import {
   type SelectSection,
   type ToolLine,
   type ToolPresenter,
+  type ViewControl,
   type ViewDefinition,
+  type ViewKey,
 } from "@amira/api"
 import {
   configureJobs,
@@ -63,9 +69,20 @@ export function lastLine(registry: JobRegistry, id: string): string {
   return ""
 }
 
+const jobStatusState = (job: JobInfo): AgentStatusState =>
+  isLive(job)
+    ? "working"
+    : job.status === "exited"
+      ? job.exitCode === 0
+        ? "done"
+        : "failed"
+      : job.status === "failed"
+        ? "failed"
+        : "stopped"
+
 /** "job1 · running 3m 12s · npm run dev", as lists show a job. */
-export function jobRow(job: JobInfo, now: number, commandCells = 60): string {
-  return `${job.id} · ${jobState(job, now)} · ${clip(job.command.replace(/\s+/g, " ").trim(), commandCells)}`
+export function jobRow(job: JobInfo, now: number, commandCells = 60, separator = "·", more = "…"): string {
+  return `${job.id} ${separator} ${jobState(job, now)} ${separator} ${clip(job.command.replace(/\s+/g, " ").trim(), commandCells, more)}`
 }
 
 /** The jobs-only entry point for the unified tasks panel; folded, only its summary shows. */
@@ -74,7 +91,7 @@ export function jobsPanel(registry: JobRegistry): PanelDefinition {
 }
 
 /** The output of one job as lines: its end, with how much came before. */
-function outputLines(registry: JobRegistry, id: string, max: number): ToolLine[] {
+function outputLines(registry: JobRegistry, id: string, max: number, more = "…"): ToolLine[] {
   const out = registry.output(id)
   const lines = out.text.replace(/\r?\n$/, "").split(/\r?\n/)
   if (!out.text) return [{ kind: "muted", text: "(no output yet)" }]
@@ -85,7 +102,7 @@ function outputLines(registry: JobRegistry, id: string, max: number): ToolLine[]
       ? [
           {
             kind: "muted" as const,
-            text: `… earlier output${earlier ? `: ${plural(earlier, "line")}` : ""} not shown`,
+            text: `${more} earlier output${earlier ? `: ${plural(earlier, "line")}` : ""} not shown`,
           },
         ]
       : []),
@@ -102,8 +119,14 @@ function shortPath(path: string, cells: number, more: string): string {
 }
 
 /** The job's facts under the view's title: its state, process, working directory and log. */
-function headerLines(job: JobInfo, now: number, width = Number.POSITIVE_INFINITY, more = "…"): ToolLine[] {
-  const pid = job.pid !== undefined ? ` · pid ${job.pid}` : ""
+function headerLines(
+  job: JobInfo,
+  now: number,
+  width = Number.POSITIVE_INFINITY,
+  more = "…",
+  separator = "·",
+): ToolLine[] {
+  const pid = job.pid !== undefined ? ` ${separator} pid ${job.pid}` : ""
   return [
     {
       kind: isLive(job) ? "accent" : job.status === "exited" && job.exitCode === 0 ? "success" : "warning",
@@ -111,39 +134,82 @@ function headerLines(job: JobInfo, now: number, width = Number.POSITIVE_INFINITY
     },
     // One row: "in" stays with its directory instead of wrapping onto a row of its own.
     { kind: "muted", text: `in ${shortPath(job.cwd, width - 3, more)}` },
-    ...(job.logPath ? [{ kind: "muted" as const, text: `log: ${job.logPath}` }] : []),
+    ...(job.logPath
+      ? [{ kind: "muted" as const, text: `log: ${shortPath(job.logPath, width - 5, more)}` }]
+      : []),
   ]
 }
 
-/** The live view on one job: its output as it grows, x to stop it. */
+/** The live view on one job: its output as it grows, x to stop it, p to print it. */
 export function jobView(registry: JobRegistry): ViewDefinition<{ id: string }> {
+  let shownId: string | undefined
   return {
     kind: JOB_VIEW,
-    title: ({ id }) => {
+    title: ({ id }, opts) => {
+      shownId = id
       const job = registry.get(id)
-      return job ? `${job.id} · ${job.command.replace(/\s+/g, " ").trim()}` : id
+      const separator = opts.glyphs?.separator ?? "·"
+      return job ? `${job.id} ${separator} ${job.command.replace(/\s+/g, " ").trim()}` : id
     },
     header: ({ id }, opts) => {
+      shownId = id
       const job = registry.get(id)
       if (job && isLive(job)) opts.requestRefresh?.(1000)
       return job
-        ? headerLines(job, opts.now, opts.width, opts.glyphs?.more)
+        ? headerLines(job, opts.now, opts.width, opts.glyphs?.more, opts.glyphs?.separator)
         : [{ kind: "muted", text: "This job is no longer kept." }]
     },
-    render: ({ id }) => (registry.get(id) ? outputLines(registry, id, VIEW_LINES) : []),
-    keys: [
-      {
-        key: "x",
-        label: "stop",
-        async run({ id }, view) {
-          const job = registry.get(id)
-          if (!job || !isLive(job)) return
-          if (!(await view.confirm(`Stop ${job.id}?`, { yes: "stops it", no: "keeps it running" }))) return
-          await registry.stop(id, STOP_GRACE_MS)
-          view.requestRender()
-        },
-      },
-    ],
+    render: ({ id }, opts) =>
+      registry.get(id) ? outputLines(registry, id, VIEW_LINES, opts.glyphs?.more) : [],
+    get keys() {
+      const job = shownId ? registry.get(shownId) : undefined
+      return [
+        ...(job && isLive(job)
+          ? [
+              {
+                key: "x",
+                label: "stop",
+                async run({ id }: { id: string }, view: ViewControl) {
+                  const target = registry.get(id)
+                  if (!target || !isLive(target)) return
+                  if (
+                    !(await view.confirm(
+                      `Stop ${target.id}? (${clip(target.command.replace(/\s+/g, " ").trim(), 60)})`,
+                      { yes: "stops it", no: "keeps it running" },
+                    ))
+                  )
+                    return
+                  await registry.stop(id, STOP_GRACE_MS)
+                  view.requestRender()
+                },
+              } satisfies ViewKey<{ id: string }>,
+            ]
+          : []),
+        ...(job
+          ? [
+              {
+                key: "p",
+                label: "print",
+                run({ id }: { id: string }, view: ViewControl) {
+                  const target = registry.get(id)
+                  if (!target) return
+                  const now = Date.now()
+                  const lines = [
+                    jobRow(target, now, 200),
+                    ...headerLines(target, now)
+                      .slice(1)
+                      .map((l) => l.text),
+                    "",
+                    ...outputLines(registry, target.id, PRINT_LINES).map((l) => l.text),
+                  ]
+                  view.close()
+                  view.print(lines.join("\n"))
+                },
+              } satisfies ViewKey<{ id: string }>,
+            ]
+          : []),
+      ]
+    },
   }
 }
 
@@ -233,7 +299,9 @@ export function jobsCommand(registry: JobRegistry): CommandDefinition {
       const running = list.filter(isLive)
       const finished = list.filter((j) => !isLive(j))
       const ordered = [...running, ...finished]
-      const rows = ordered.map((j) => jobRow(j, now))
+      const sepGlyph = () => ctx.glyphs?.().separator ?? "·"
+      const moreGlyph = () => ctx.glyphs?.().more ?? "…"
+      const rows = ordered.map((j) => jobRow(j, now, 60, sepGlyph(), moreGlyph()))
       const sections: SelectSection[] = []
       if (running.length) {
         sections.push({
@@ -253,7 +321,17 @@ export function jobsCommand(registry: JobRegistry): CommandDefinition {
       }
       const pick = await ctx.ui.choose("Background jobs", rows, {
         sections,
+        optionStatuses: ordered.map(jobStatusState),
         descriptions: ordered.map((j) => lastLine(registry, j.id)),
+        live: () => {
+          const current = ordered.map((j) => registry.get(j.id) ?? j)
+          const t = Date.now()
+          return {
+            optionLabels: current.map((j) => jobRow(j, t, 60, sepGlyph(), moreGlyph())),
+            optionStatuses: current.map(jobStatusState),
+            descriptions: current.map((j) => lastLine(registry, j.id)),
+          }
+        },
         signal: ctx.signal,
       })
       if (!pick) return

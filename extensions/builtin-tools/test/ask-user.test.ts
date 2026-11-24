@@ -85,10 +85,10 @@ test("summary retains per-question answers; full retains all choices, multiple m
     text: text(r)!,
   }
   expect(askUserPresenter.body!(view, { detail: "summary", width: 90 })).toEqual([
-    { kind: "muted", text: "Approach" },
-    { kind: "text", text: "  Safe" },
-    { kind: "muted", text: "Extras" },
-    { kind: "text", text: '  Tests, Docs, (own words) "Keep it small"' },
+    { kind: "muted", text: "Approach", wrap: true },
+    { kind: "text", text: "  Safe", wrap: true },
+    { kind: "muted", text: "Extras", wrap: true },
+    { kind: "text", text: '  Tests, Docs, (own words) "Keep it small"', wrap: true },
   ])
   const full = askUserPresenter.body!(view, { detail: "full", width: 90 })
   expect(full.filter((line) => line.marker === "success").map((line) => line.text)).toEqual([

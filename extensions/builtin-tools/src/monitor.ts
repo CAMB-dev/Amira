@@ -1,7 +1,8 @@
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { defineTool, type ShellMode, type ToolPresenter, textResult } from "@amira/api"
-import { jobsConfig } from "./jobs.ts"
+import { endText, jobsConfig } from "./jobs.ts"
+import { liveJobInfo } from "./jobs-ui.ts"
 import { MonitorEvents, type MonitorTiming } from "./monitor-events.ts"
 import { resolvePowerShell } from "./powershell.ts"
 import { resolveShell, type Shell } from "./shell.ts"
@@ -139,10 +140,25 @@ export const monitorTool = createMonitorTool()
 
 export const monitorPresenter: ToolPresenter<MonitorParams> = {
   verbs: { past: "Monitored", running: "Starting monitor" },
-  summary: (args) => args.description ?? args.command,
+  summary: (args) => {
+    const base = args.description ?? args.command
+    return args.filter ? `${base} · /${args.filter}/` : base
+  },
   result: (call) => {
     const details = call.result.details as { jobId?: string } | undefined
-    return details?.jobId
+    const jobId = details?.jobId
+    if (!jobId) return undefined
+    const live = liveJobInfo(jobId)
+    if (live && live.status !== "running" && live.status !== "starting") return `${jobId} ${endText(live)}`
+    return jobId
+  },
+  outcome: (call) => {
+    const details = call.result.details as { jobId?: string } | undefined
+    const live = details?.jobId ? liveJobInfo(details.jobId) : undefined
+    if (!live) return undefined
+    if (live.status === "running" || live.status === "starting") return "working"
+    if (live.status === "stopped") return "interrupted"
+    return live.status === "failed" || live.exitCode !== 0 ? "failed" : "done"
   },
   body: () => [],
 }

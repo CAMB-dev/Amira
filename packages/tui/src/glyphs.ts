@@ -153,7 +153,12 @@ export function viewSeparator(): string {
 export function chromeText(text: string): string {
   const separated = glyphs.separator === "·" ? text : text.replaceAll(" · ", ` ${glyphs.separator} `)
   return asciiGlyphs()
-    ? separated.replaceAll("…", "...").replaceAll(" — ", " - ").replaceAll("—", "-")
+    ? separated
+        .replaceAll("…", "...")
+        .replaceAll(" — ", " - ")
+        .replaceAll("—", "-")
+        .replaceAll("–", glyphs.rangeSeparator)
+        .replaceAll("→", glyphs.goesTo)
     : separated
 }
 

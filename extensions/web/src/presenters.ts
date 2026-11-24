@@ -1,4 +1,11 @@
-import type { ToolCallView, ToolLine, ToolPresenter, WebFetchDetails, WebSearchDetails } from "@amira/api"
+import {
+  plural,
+  type ToolCallView,
+  type ToolLine,
+  type ToolPresenter,
+  type WebFetchDetails,
+  type WebSearchDetails,
+} from "@amira/api"
 
 /** How web_search and web_fetch calls are shown (D1). */
 
@@ -9,7 +16,8 @@ function detailsOf<D>(call: ToolCallView<any, unknown>, key: keyof D): D | undef
   return d && typeof d === "object" && key in d ? (d as D) : undefined
 }
 
-const textLines = (text: string): ToolLine[] => text.split("\n").map((t) => ({ kind: "code", text: t }))
+const textLines = (text: string): ToolLine[] =>
+  text.split("\n").map((t) => ({ kind: "text", text: t, wrap: true }))
 
 /** "812 chars", "12.3k chars" */
 function size(chars: number): string {
@@ -26,7 +34,7 @@ export const webSearchPresenter: ToolPresenter<
 > = {
   verbs: { past: "Searched", running: "Searching" },
   summary(args) {
-    if (args.query !== undefined) return `"${str(args.query)}"`
+    if (str(args.query)) return `"${str(args.query)}"`
     if (str(args.url)) return str(args.pattern) ? `"${str(args.pattern)}" in ${str(args.url)}` : str(args.url)
     // A hosted search may not say what it looked for.
     return ""
@@ -36,15 +44,24 @@ export const webSearchPresenter: ToolPresenter<
     const d = detailsOf<WebSearchDetails & { native?: boolean }>(call, "results")
     if (!d) return undefined
     const n = d.results.length
-    if (d.native) return n ? `${n} source${n === 1 ? "" : "s"} · ${d.backend}` : d.backend
-    return `${n} result${n === 1 ? "" : "s"} · ${d.backend}`
+    if (d.native) return n ? `${plural(n, "source")} · ${d.backend}` : d.backend
+    return `${plural(n, "result")} · ${d.backend}`
   },
   body: (call, { detail }) => (detail === "full" && !call.result.isError ? textLines(call.text) : []),
 }
 
-export const webFetchPresenter: ToolPresenter<{ url: string }, WebFetchDetails> = {
+export const webFetchPresenter: ToolPresenter<
+  { url: string; offset?: number; prompt?: string },
+  WebFetchDetails
+> = {
   verbs: { past: "Fetched", running: "Fetching" },
-  summary: (args) => str(args.url),
+  summary(args) {
+    const base = str(args.url)
+    const parts = [base]
+    if (typeof args.offset === "number" && args.offset > 0) parts.push(`from ${args.offset}`)
+    if (str(args.prompt)) parts.push(`"${str(args.prompt)}"`)
+    return parts.filter(Boolean).join(" · ")
+  },
   result(call) {
     if (call.result.isError) return undefined
     const d = detailsOf<WebFetchDetails>(call, "finalUrl")

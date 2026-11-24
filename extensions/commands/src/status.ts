@@ -8,21 +8,15 @@ import {
   plural,
   type StatusTone,
 } from "@amira/api"
+import { formatCost } from "./format.ts"
 
-export { formatTokens }
+export { formatCost, formatTokens }
 
 /** "12.3k/128k (10%)", or just "12.3k" when the window is unknown. */
 export function formatContext(used: number, window: number | undefined): string {
   if (!window) return formatTokens(used)
   const pct = Math.min(999, Math.round((used / window) * 100))
   return `${formatTokens(used)}/${formatTokens(window)} (${pct}%)`
-}
-
-/** "$1.25", "$0.012", "$0.0004"; tinier amounts show as "<$0.0001". */
-export function formatCost(usd: number): string {
-  if (usd >= 1) return `$${usd.toFixed(2)}`
-  if (usd >= 0.01 || usd === 0) return `$${usd.toFixed(3)}`
-  return usd < 0.00005 ? "<$0.0001" : `$${usd.toFixed(4)}`
 }
 
 /** How the context use reads: a warning above 70% of the window, an error above 90%. */
@@ -108,6 +102,13 @@ export default defineExtension((api) => {
   api.on("model.changed", (e) => {
     if (!own(e)) return
     model = modelName(e.data.to)
+    const win = api.session()?.info().contextWindow
+    if (win) contextWindow = win
+    api.requestRender()
+  })
+  api.on("compact.end", (e) => {
+    if (!own(e)) return
+    context = e.data.tokensAfter ?? 0
     api.requestRender()
   })
   api.on("thinking.changed", (e) => {
@@ -168,7 +169,12 @@ export default defineExtension((api) => {
     align: "right",
     order: -5,
     priority: 5,
-    tone: "accent",
+    tone: () => {
+      const agents = api.session()?.subagents?.() ?? []
+      if (jobs.running().length > 0 || agents.some((a) => a.status === "running")) return "accent"
+      if (agents.some((a) => a.status === "paused")) return "warning"
+      return "muted"
+    },
     text: () => {
       const live = jobs.running()
       const monitors = live.filter((job) => job.kind === "monitor").length
