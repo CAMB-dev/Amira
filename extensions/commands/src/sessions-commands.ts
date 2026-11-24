@@ -1,4 +1,4 @@
-import type { CommandDefinition, StoredSessionInfo } from "@amira/api"
+import { type CommandDefinition, plural, type StoredSessionInfo } from "@amira/api"
 import { oneLine } from "./command-utils.ts"
 
 /** "3m ago", "5h ago", "2d ago"; the date after a month. */
@@ -13,7 +13,7 @@ export function ago(ms: number, now = Date.now()): string {
 
 /** How a stored session reads in a picker: "<id> · 3m ago · 12 msgs · first words". */
 export function sessionLabel(s: StoredSessionInfo, now = Date.now()): string {
-  return `${s.id} · ${ago(s.updatedAt, now)} · ${s.messageCount} msgs · ${oneLine(s.title || s.firstUserText || "(empty)", 50)}`
+  return `${s.id} · ${ago(s.updatedAt, now)} · ${plural(s.messageCount, "msg")} · ${oneLine(s.title || s.firstUserText || "(empty)", 50)}`
 }
 
 /** The first message under a session's label, only when the label shows a title instead. */
@@ -41,11 +41,22 @@ export function renameCommand(): CommandDefinition {
     name: "rename",
     description: "Name the current session",
     args: { hint: "[title]" },
-    run(args, ctx) {
+    async run(args, ctx) {
       if (!ctx.session.rename) throw new Error("this host cannot rename sessions")
-      ctx.session.rename(args)
+      let next = args
+      if (!next.trim() && ctx.frontend === "tui") {
+        const currentTitle = ctx.session.info().title
+        const entered = await ctx.ui.input("Rename session", {
+          ...(currentTitle ? { initial: currentTitle } : {}),
+          placeholder: "Session title (leave empty to clear)",
+          signal: ctx.signal,
+        })
+        if (entered === undefined) return
+        next = entered
+      }
+      ctx.session.rename(next)
       const title = ctx.session.info().title
-      ctx.print(args.trim() ? `Renamed session to ${title}.` : "Cleared the manual session name.")
+      ctx.print(next.trim() ? `Renamed session to ${title}.` : "Cleared the manual session name.")
     },
   }
 }
@@ -69,11 +80,16 @@ export function resumeCommand(): CommandDefinition {
     description: "Switch to another session of this directory",
     args: {
       hint: "[session id]",
-      complete: (_prefix, ctx) =>
-        ctx.session.sessions().map((s) => ({
-          value: s.id,
-          description: `${ago(s.updatedAt)} · ${oneLine(s.title || s.firstUserText || "(empty)", 40)}`,
-        })),
+      complete: (_prefix, ctx) => {
+        const current = ctx.session.info().id
+        return ctx.session
+          .sessions()
+          .filter((s) => s.id !== current)
+          .map((s) => ({
+            value: s.id,
+            description: `${ago(s.updatedAt)} · ${oneLine(s.title || s.firstUserText || "(empty)", 40)}`,
+          }))
+      },
     },
     async run(args, ctx) {
       let id = args
@@ -114,10 +130,15 @@ export function resumeCommand(): CommandDefinition {
         }
         const chosen = idOf(picked.option)
         if (picked.key === "d") {
-          const sure = await ctx.ui.confirm("Delete this session?", picked.option, {
-            signal: ctx.signal,
-            tone: "warning",
-          })
+          const sure = await ctx.ui.confirm(
+            "Delete this session?",
+            `${picked.option}\nThis permanently deletes the session file.`,
+            {
+              signal: ctx.signal,
+              tone: "warning",
+            },
+          )
+          ctx.signal.throwIfAborted()
           if (sure) {
             await ctx.session.deleteSession!(chosen)
             ctx.print(`Deleted session ${chosen}.`)

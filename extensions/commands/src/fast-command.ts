@@ -45,7 +45,7 @@ export function fastCommand(): CommandDefinition {
         if (enabled !== current) {
           ctx.session.setFastMode(enabled)
           report(ctx)
-          ctx.print("Changing fast mode may invalidate the prompt cache.")
+          ctx.print("Changing fast mode may invalidate the prompt cache.", "warning")
           return
         }
       }

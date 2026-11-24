@@ -10,6 +10,7 @@ import {
   type ExtensionStatusMetadata,
   extensionStatusBadge,
   extensionStatusNotice,
+  formatElapsed,
   type ManagedExtension,
   type SelectSection,
   type ToolLine,
@@ -72,8 +73,10 @@ function hasUpdate(p: ManagedExtension, available: AvailableExtension[]): boolea
 /** What `d` (and "Show details") prints about an installed package. */
 function details(item: ManagedExtension): string {
   return [
-    `${packageName(item)} ${item.version} · ${item.scope}${item.enabled ? "" : " · disabled"}`,
+    `${packageName(item)} ${item.version} · ${item.scope}${item.enabled ? "" : " · disabled"}${item.shadowed ? " · shadowed" : ""}`,
     item.description,
+    item.statusMessage,
+    item.replacedBy ? `Replaced by: ${item.replacedBy}` : "",
     `Source: ${item.source}`,
     item.trusted ? "Trusted" : "Not trusted: loads once you trust the project (amira ext trust)",
     item.error,
@@ -151,17 +154,21 @@ export function extensionProgressLines(
   width: number,
   spinner = "",
   now = Date.now(),
+  glyphs?: { separator?: string; more?: string },
 ): ToolLine[] {
+  const sep = glyphs?.separator ?? "·"
+  const more = glyphs?.more ?? "…"
+  const doneCount = rows.filter((p) => ["done", "failed", "cancelled"].includes(p.phase)).length
+  const headSummary =
+    rows.length > 1 ? `Extensions ${sep} ${doneCount}/${rows.length} done` : `Extensions ${sep} working`
   return [
-    { kind: "muted", text: clip(`${spinner ? `${spinner} ` : ""}Extensions · working`, width) },
+    { kind: "muted", text: clip(`${spinner ? `${spinner} ` : ""}${headSummary}`, width, more) },
     ...rows.map((p): ToolLine => {
       const active = !["done", "failed", "cancelled"].includes(p.phase)
       const phase = p.phase === "dependencies" ? "installing dependencies" : p.phase
       const percent = p.percent !== undefined ? ` ${Math.max(0, Math.min(100, Math.round(p.percent)))}%` : ""
       const elapsed =
-        active && p.startedAt !== undefined
-          ? ` · ${Math.max(0, Math.floor((now - p.startedAt) / 1000))}s`
-          : ""
+        active && p.startedAt !== undefined ? ` ${sep} ${formatElapsed(Math.max(0, now - p.startedAt))}` : ""
       return {
         kind:
           p.phase === "failed"
@@ -172,8 +179,9 @@ export function extensionProgressLines(
                 ? "warning"
                 : "accent",
         text: clip(
-          `${active && spinner ? `${spinner} ` : ""}${oneLine(p.name)} · ${phase}${percent}${elapsed}${p.detail ? ` · ${oneLine(p.detail)}` : ""}`,
+          `${active && spinner ? `${spinner} ` : ""}${oneLine(p.name)} ${sep} ${phase}${percent}${elapsed}${p.detail ? ` ${sep} ${oneLine(p.detail)}` : ""}`,
           width,
+          more,
         ),
       }
     }),
@@ -190,7 +198,7 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
     id: "extensions",
     render: (opts) =>
       running && progress.size && opts.sessionId === sessionId
-        ? extensionProgressLines([...progress.values()], opts.width, opts.spinner, opts.now)
+        ? extensionProgressLines([...progress.values()], opts.width, opts.spinner, opts.now, opts.glyphs)
         : [],
   })
   const update = (p: ExtensionProgress) => {
@@ -365,7 +373,8 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
               result.extensions.length
                 ? result.extensions
                     .map(
-                      (p) => `${p.name} ${p.version}${p.description ? `\n  ${oneLine(p.description)}` : ""}`,
+                      (p) =>
+                        `${packageName(p)} ${p.version}${p.description ? `\n  ${oneLine(p.description)}` : ""}`,
                     )
                     .join("\n")
                 : "No extensions match in the index.",

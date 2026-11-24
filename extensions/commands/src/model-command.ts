@@ -58,13 +58,17 @@ export function modelCommand(): CommandDefinition {
     async run(args, ctx) {
       const ref = args
       if (!ref) {
+        if (ctx.session.info().busy) throw new Error("Wait for the turn to end before switching models")
         const current = modelLabel(ctx.session.info().model)
         const models = ctx.session.models()
         if (!models.length) {
+          const providers = ctx.session.providers()
           throw new Error(
-            ctx.session.providers().length
-              ? "No models to pick from: list some with /provider edit <id>, store a key with /provider key <id>, or pass one: /model provider/model"
-              : "No providers configured — add one with /provider add",
+            !providers.length
+              ? "No providers configured — add one with /provider add"
+              : !providers.some((p) => p.hasKey)
+                ? "No provider has an API key available — store one with /provider key <id>, or pass a model: /model provider/model"
+                : "No models to pick from: list some with /provider edit <id>, store a key with /provider key <id>, or pass one: /model provider/model",
           )
         }
         const picked = await pickModel(ctx, "Choose a model", models)

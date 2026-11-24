@@ -47,8 +47,8 @@ export function windowLabel(tokens: number, source: ContextWindowSource | undefi
   return size
 }
 
-/** Rows of cells as aligned columns, two spaces apart; the last column is not padded. */
-export function table(rows: string[][]): string {
+/** Rows of cells as aligned columns, two spaces apart; the last column is not right-padded. */
+export function table(rows: string[][], align?: ("left" | "right")[]): string {
   const widths: number[] = []
   for (const row of rows) {
     for (const [i, cell] of row.entries()) widths[i] = Math.max(widths[i] ?? 0, textCells(cell))
@@ -57,7 +57,13 @@ export function table(rows: string[][]): string {
   return rows
     .map((row) =>
       row
-        .map((cell, i) => (i === row.length - 1 ? cell : padCells(cell, widths[i]!)))
+        .map((cell, i) => {
+          if (align?.[i] === "right") {
+            const pad = Math.max(0, widths[i]! - textCells(cell))
+            return `${" ".repeat(pad)}${cell}`
+          }
+          return i === row.length - 1 ? cell : padCells(cell, widths[i]!)
+        })
         .join("  ")
         .trimEnd(),
     )
@@ -232,7 +238,12 @@ export function estimateTokens(value: string | Message): number {
 }
 
 /** The /context report: estimated tokens by part, against the model's window. */
-export function contextReport(preview: ContextPreview, window: number, reported: number | undefined): string {
+export function contextReport(
+  preview: ContextPreview,
+  window: number,
+  reported: number | undefined,
+  source?: ContextWindowSource,
+): string {
   const parts: [string, number][] = [
     ["System prompt", estimateTokens(preview.systemPrompt)],
     [
@@ -257,9 +268,10 @@ export function contextReport(preview: ContextPreview, window: number, reported:
   const rows = parts.map(([name, t]) => [name, `~${formatTokens(t)}`, percent(t, window)])
   rows.push(["Total (estimated)", `~${formatTokens(total)}`, percent(total, window)])
   const free = Math.max(0, window - (reported ?? total))
+  const guessed = source === "default" ? " (default guess)" : ""
   const head =
     reported !== undefined
-      ? `Context: ${formatTokens(reported)} of ${formatTokens(window)} tokens at the last reply (${percent(reported, window)}); ${formatTokens(free)} free.`
-      : `Context window: ${formatTokens(window)} tokens; ~${formatTokens(free)} free.`
-  return `${head}\n${table(rows)}\nEstimates count about four characters per token.`
+      ? `Context: ${formatTokens(reported)} of ${formatTokens(window)} tokens${guessed} at the last reply (${percent(reported, window)}); ${formatTokens(free)} free.`
+      : `Context window: ${formatTokens(window)} tokens${guessed}; ~${formatTokens(free)} free.`
+  return `${head}\n${table(rows, ["left", "right", "right"])}\nEstimates count about four characters per token.`
 }

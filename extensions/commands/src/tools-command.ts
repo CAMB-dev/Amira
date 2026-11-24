@@ -1,5 +1,5 @@
 import type { CommandContext, CommandDefinition } from "@amira/api"
-import { subcommandCandidates } from "./command-utils.ts"
+import { oneLine, subcommandCandidates } from "./command-utils.ts"
 import { table } from "./format.ts"
 
 export function toolsCommand(): CommandDefinition {
@@ -26,15 +26,27 @@ export function toolsCommand(): CommandDefinition {
         if ((sub !== "enable" && sub !== "disable") || !name || rest.length) {
           throw new Error("usage: /tools [enable|disable <name>]")
         }
-        ctx.session.setToolEnabled(name, sub === "enable")
-        ctx.print(`${sub === "enable" ? "Enabled" : "Disabled"} ${name} for this session.`)
+        const enable = sub === "enable"
+        const existing = ctx.session.tools().find((t) => t.name === name)
+        if (existing && existing.enabled === enable) {
+          ctx.print(`${name} is already ${enable ? "enabled" : "disabled"}.`)
+          return
+        }
+        ctx.session.setToolEnabled(name, enable)
+        ctx.print(`${enable ? "Enabled" : "Disabled"} ${name} for this session.`)
         return
       }
       const tools = ctx.session.tools()
+      if (!tools.length) {
+        ctx.print("No tools registered.")
+        return
+      }
+      const hasDesc = tools.some((t) => t.description?.trim())
       const rows = tools.map((t) => [
-        t.enabled ? "on " : "off",
+        t.enabled ? "on" : "off",
         t.name,
         t.exposure === "active" ? t.source : `${t.source}, ${t.exposure}`,
+        ...(hasDesc ? [t.description ? oneLine(t.description, 56) : ""] : []),
       ])
       const off = tools.filter((t) => !t.enabled).length
       ctx.print(`Tools (${tools.length - off} on, ${off} off):\n${table(rows)}`)

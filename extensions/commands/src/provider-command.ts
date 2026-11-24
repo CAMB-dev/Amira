@@ -13,6 +13,7 @@ import {
 import { table } from "./format.ts"
 import { pickModel } from "./model-command.ts"
 import { ProviderConnectionTests } from "./provider-tests.ts"
+import { pickThinking } from "./thinking-command.ts"
 
 const USAGE = "usage: /provider [add [<vendor|protocol>] | edit <id> | remove <id> | key <id>]"
 const ADD = "+ Add provider"
@@ -132,8 +133,9 @@ async function manage(
     const count = draft?.models.length ?? 0
     const source = draft?.keySource ?? (p.apiKeyEnv ? "env" : "none")
     const variable = draft?.apiKeyEnv ?? p.apiKeyEnv
-    const key =
+    const keyBase =
       source === "env" ? (variable ? `env (${variable})` : "env") : source === "auth" ? "auth.json" : "none"
+    const key = !p.hasKey && source !== "none" ? `${keyBase}, missing` : keyBase
     const status = tests.status(sessionId, a, p.id)
     return `${p.id === current ? "current · " : ""}${p.dialect} · ${shortUrl} · ${count} ${count === 1 ? "model" : "models"} · key: ${key}${status ? ` · ${status}` : ""}`
   })
@@ -176,6 +178,7 @@ async function manage(
     if (!model) return
     ctx.session.setModel(model)
     ctx.print(`Model: ${modelLabel(ctx.session.info().model)}`)
+    if (ctx.session.info().supportsThinking) await pickThinking(ctx)
     return
   }
   if (action === "Edit") {

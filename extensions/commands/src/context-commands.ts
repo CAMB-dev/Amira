@@ -8,8 +8,10 @@ const PRUNE_SCOPES = {
   all: "every artifact of this session",
 }
 
-/** "1.2 MB": artifact sizes. */
-function formatMb(bytes: number): string {
+/** "512 B", "24 KB", "1.2 MB": human-readable artifact sizes. */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
   const mb = bytes / (1024 * 1024)
   return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`
 }
@@ -63,7 +65,7 @@ export function pruneCommand(): CommandDefinition {
         const r = await artifacts.prune(scope as keyof typeof PRUNE_SCOPES)
         ctx.print(
           r.removed
-            ? `Deleted ${r.removed} ${r.removed === 1 ? "artifact" : "artifacts"} (${formatMb(r.bytes)}). Reading one now says it was pruned.`
+            ? `Deleted ${r.removed} ${r.removed === 1 ? "artifact" : "artifacts"} (${formatSize(r.bytes)}). Reading one now says it was pruned.`
             : "Nothing to delete.",
         )
         return
@@ -74,21 +76,21 @@ export function pruneCommand(): CommandDefinition {
           ? [
               "Groups:",
               table([
-                ["Group", "Active", "Inactive", "Unused", "Pruned", "Bytes"],
+                ["Group", "Active", "Inactive", "Unused", "Pruned", "Size"],
                 ...u.groups.map((g) => [
                   `${g.label}${g.protected ? " (protected)" : ""}`,
                   String(g.active),
                   String(g.inactive),
                   String(g.unused),
                   String(g.pruned),
-                  formatMb(g.bytes),
+                  formatSize(g.bytes),
                 ]),
               ]),
             ]
           : []
       ctx.print(
         [
-          `Artifacts: ${formatMb(u.bytes)} of the ${formatMb(u.quotaBytes)} quota in ${u.dir}`,
+          `Artifacts: ${formatSize(u.bytes)} of the ${formatSize(u.quotaBytes)} quota in ${u.dir}`,
           table([
             ["Active", `${u.active} (mentioned in the context the model sees)`],
             ["Inactive", `${u.inactive} (only in compacted or rewound history, or a sub-agent's)`],
@@ -109,7 +111,14 @@ export function contextCommand(): CommandDefinition {
     description: "Show what fills the context window",
     async run(_args, ctx) {
       const info = ctx.session.info()
-      ctx.print(contextReport(await ctx.session.preview(), info.contextWindow, info.contextTokens))
+      ctx.print(
+        contextReport(
+          await ctx.session.preview(),
+          info.contextWindow,
+          info.contextTokens,
+          info.contextWindowSource,
+        ),
+      )
     },
   }
 }

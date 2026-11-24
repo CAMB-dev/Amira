@@ -20,15 +20,32 @@ function report(ctx: CommandContext): void {
 
 /** Shared by /thinking and the second step of the interactive model picker. */
 export async function pickThinking(ctx: CommandContext): Promise<void> {
-  const current = ctx.session.info().thinkingLevel
-  const levels = [...LEVELS, undefined]
-  const options = levels.map((level) => `${label(level)}${level === current ? " (current)" : ""}`)
-  const picked = await ctx.ui.select("Thinking effort", options, {
-    signal: ctx.signal,
-    initial: options[levels.indexOf(current)]!,
+  const info = ctx.session.info()
+  if (info.busy) throw new Error("Wait for the turn to end before changing thinking effort")
+  const current = info.thinkingLevel
+  const currentChoice = current ?? "default"
+  const sep = ctx.glyphs?.().separator ?? "·"
+  const descriptions = CHOICES.map((choice) => {
+    const isCurrent = choice === currentChoice
+    if (choice === "default") return isCurrent ? `current ${sep} not sent` : "not sent"
+    return isCurrent ? "current" : ""
   })
-  if (picked === undefined) return
-  ctx.session.setThinking(levels[options.indexOf(picked)])
+  const title =
+    info.supportsThinking === false
+      ? `Thinking effort (${modelLabel(info.model)} doesn't think; saved for thinking models)`
+      : "Thinking effort"
+  const picked = await ctx.ui.choose(title, CHOICES, {
+    sections: [{ at: 0, choose: "set" }],
+    descriptions,
+    signal: ctx.signal,
+    initial: currentChoice,
+  })
+  if (!picked) {
+    if (ctx.frontend !== "tui") report(ctx)
+    return
+  }
+  const level = picked.option === "default" ? undefined : (picked.option as ReasoningEffort)
+  ctx.session.setThinking(level)
   // The TUI echoes the choice, but still needs to explain a non-thinking model.
   if (ctx.frontend !== "tui" || ctx.session.info().supportsThinking === false) report(ctx)
 }

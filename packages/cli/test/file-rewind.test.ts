@@ -333,8 +333,11 @@ test("active sub-agents block rewind; explicit prune is available as a command",
   const child = session.tree.spawn(host.agent, { prompt: "wait", systemPrompt: "child" })
   await expect(host.control.rewind!(0)).rejects.toThrow("active sub-agents")
   await child.result()
-  const result = await host.run("/rewind-prune", { frontend: "print" })
-  expect(result.output.join("\n")).toContain("Pruned 0 file images")
+  const refused = await host.run("/rewind-prune", { frontend: "print" })
+  expect(refused.ok).toBe(false)
+  expect(refused.error).toContain("--yes")
+  const result = await host.run("/rewind-prune --yes", { frontend: "print" })
+  expect(result.output.join("\n")).toContain("No captured file history to prune.")
 })
 
 test("a sub-agent in a subdirectory writes the parent's files, so it shares the parent's journal", async () => {

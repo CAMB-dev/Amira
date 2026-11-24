@@ -4,6 +4,7 @@ import {
   type ExtensionAPI,
   hasUnpricedSearch,
   modelLabel,
+  plural,
 } from "@amira/api"
 import { cacheHitRate, costByModel, formatCost, formatTokens, table, windowLabel } from "./format.ts"
 import { liveSpeed } from "./live-speed.ts"
@@ -30,10 +31,12 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
         const wake = () => {
           waiting.delete(wake)
           clearTimeout(timer)
+          signal.removeEventListener("abort", wake)
           resolve()
         }
-        const timer = setTimeout(wake, deadline - Date.now())
+        const timer = setTimeout(wake, Math.max(0, deadline - Date.now()))
         waiting.add(wake)
+        signal.addEventListener("abort", wake, { once: true })
       })
     }
     return workspace.get(sessionId)
@@ -89,13 +92,15 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
           : ""
       const unpricedSearch =
         messages.some(hasUnpricedSearch) ||
-        [...compactions, ...subagents].some((c) => hasUnpricedSearch({ content: [], usage: c.usage }))
+        [...compactions, ...sideRequests, ...subagents].some((c) =>
+          hasUnpricedSearch({ content: [], usage: c.usage }),
+        )
       const cost = unpricedSearch
         ? "unknown (search cost unavailable)"
         : withSubs !== undefined
           ? `${costLabel(withSubs, treePricingUnknown)} with sub-agents${own !== undefined && formatCost(own) !== formatCost(withSubs) ? `; this session alone ${costLabel(own, ownPricingUnknown)}` : ""}${ofWhich}`
           : own !== undefined
-            ? `${costLabel(own, ownPricingUnknown)} (this session; no sub-agents)${ofWhich}`
+            ? `${costLabel(own, ownPricingUnknown)} (${subagents.length ? "this session; sub-agent prices unknown" : "this session; no sub-agents"})${ofWhich}`
             : "unknown"
       const usage = rows.reduce(
         (t, r) => ({
@@ -109,12 +114,27 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
       const cacheRate = cacheHitRate(usage.input, usage.cacheRead, usage.cacheWrite)
       const context =
         info.contextTokens !== undefined
-          ? `${formatTokens(info.contextTokens)} of ${formatTokens(info.contextWindow)} tokens (${Math.round((info.contextTokens / info.contextWindow) * 100)}%)`
-          : "nothing sent yet"
+          ? info.contextWindow > 0
+            ? `${formatTokens(info.contextTokens)} of ${formatTokens(info.contextWindow)} tokens (${Math.round((info.contextTokens / info.contextWindow) * 100)}%)`
+            : `${formatTokens(info.contextTokens)} tokens`
+          : messages.length > 0
+            ? "reset after compaction"
+            : "nothing sent yet"
+      const fastModeRow = info.fastMode?.requested
+        ? [
+            [
+              "Fast mode",
+              info.fastMode.applied
+                ? `on${info.fastMode.used ? ` (last: ${info.fastMode.used})` : ""}`
+                : `on (unsupported by model${info.fastMode.unavailableReason ? `: ${info.fastMode.unavailableReason}` : ""})`,
+            ],
+          ]
+        : []
       ctx.print(
         table([
           ["Model", modelLabel(info.model)],
           ...(info.thinking ? [["Thinking", info.thinking]] : []),
+          ...fastModeRow,
           [
             "Provider",
             provider
@@ -142,7 +162,7 @@ export function statusCommand(api: ExtensionAPI): CommandDefinition {
             ? [
                 [
                   "Permissions",
-                  `${info.permissions.mode} mode; ${info.permissions.rules} command ${info.permissions.rules === 1 ? "rule" : "rules"} (/permissions lists them)`,
+                  `${info.permissions.mode} mode; ${plural(info.permissions.rules, "command rule")} (/permissions lists them)`,
                 ],
               ]
             : []),

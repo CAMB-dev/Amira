@@ -665,8 +665,9 @@ test("/thinking picker marks and preselects the effective choice even for a non-
   const result = await run("/thinking")
   expect(requests[0]).toMatchObject({
     kind: "select",
-    options: ["low", "medium", "high", "xhigh (current)", "max", "default (not sent)"],
-    initial: "xhigh (current)",
+    options: ["low", "medium", "high", "xhigh", "max", "default"],
+    descriptions: ["", "", "", "current", "", "not sent"],
+    initial: "xhigh",
   })
   expect(result.text).toContain("Thinking: medium")
   expect(result.text).toContain("doesn't think; choice kept for a thinking model")
@@ -679,7 +680,10 @@ test("/thinking picker preselects default, and cancellation keeps the choice", a
   const session = thinkingControl()
   const { run, requests, host } = await setup(session.control, [undefined])
   expect((await run("/thinking")).ok).toBe(true)
-  expect(requests[0]).toMatchObject({ initial: "default (not sent) (current)" })
+  expect(requests[0]).toMatchObject({
+    initial: "default",
+    descriptions: ["", "", "", "", "", "current · not sent"],
+  })
   expect(session.changes).toEqual([])
   expect((await host.complete("/thinking ")).candidates.find((c) => c.value === "default")?.description).toBe(
     "current; not sent",
@@ -688,7 +692,7 @@ test("/thinking picker preselects default, and cancellation keeps the choice", a
 
 test("/thinking picker can select default and reports the result outside the TUI", async () => {
   const session = thinkingControl("max")
-  const { run } = await setup(session.control, ["default (not sent)"])
+  const { run } = await setup(session.control, ["default"])
   expect(await run("/thinking", "rpc")).toMatchObject({ ok: true, text: "Thinking: default (not sent)" })
   expect(session.changes).toEqual([undefined])
 })
@@ -698,7 +702,12 @@ test("/model interactive selection asks for effort using the newly selected mode
   const { run, requests } = await setup(session.control, ["openai/gpt-5", "max"])
   expect(await run("/model")).toMatchObject({ ok: true, text: "Model: openai/gpt-5" })
   expect(requests).toHaveLength(2)
-  expect(requests[1]).toMatchObject({ kind: "select", title: "Thinking effort", initial: "high (current)" })
+  expect(requests[1]).toMatchObject({
+    kind: "select",
+    title: "Thinking effort",
+    initial: "high",
+    descriptions: ["", "", "current", "", "", "not sent"],
+  })
   expect(session.info().model).toEqual({ provider: "openai", model: "gpt-5" })
   expect(session.changes).toEqual(["max"])
 })
@@ -746,7 +755,10 @@ test("/model effort step preselects default and can return a chosen effort in RP
     ok: true,
     text: "Model: openai/gpt-5\nThinking: low",
   })
-  expect(requests[1]).toMatchObject({ initial: "default (not sent) (current)" })
+  expect(requests[1]).toMatchObject({
+    initial: "default",
+    descriptions: ["", "", "", "", "", "current · not sent"],
+  })
   expect(session.changes).toEqual(["low"])
 })
 

@@ -44,8 +44,10 @@ export function permissionsCommand(): CommandDefinition {
         "Protected (writes and edits always ask, in every mode): .amira directories and Amira's user directory, .git (hooks, config), .gitmodules, core.hooksPath and your Git config.",
         "Shell commands can still change these files: they do not run in a sandbox yet.",
       )
-      if (report.warnings.length) lines.push("", "Left out:", ...report.warnings.map((w) => `  ${w}`))
       ctx.print(lines.join("\n"))
+      if (report.warnings.length) {
+        ctx.print(["Left out:", ...report.warnings.map((w) => `  ${w}`)].join("\n"), "warning")
+      }
     },
   }
 }
