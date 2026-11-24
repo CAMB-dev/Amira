@@ -46,6 +46,7 @@ export class InputBox implements Component {
     private editor: Editor,
     private status: () => readonly StatusEntry[] = () => [],
     private suggestion: () => string | undefined = () => undefined,
+    private placeholder: () => string | undefined = () => undefined,
   ) {
     this.input = {
       render: (width, ctx) => {
@@ -56,17 +57,24 @@ export class InputBox implements Component {
         }
         const rows = editor.render(width, { ...ctx, theme })
         const suggestion = editor.focused && editor.isEmpty ? this.suggestion() : undefined
-        if (suggestion) {
+        const dynamicPlaceholder = !suggestion && editor.isEmpty ? this.placeholder() : undefined
+        if (suggestion || dynamicPlaceholder) {
           // Preserve the editor's prompt and cursor, replacing only its empty-input placeholder.
           const row = rows[0]!
-          const at = row.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length
-          const prefix = row.slice(0, at)
+          const marker = row.indexOf(CURSOR_MARKER)
+          const prefix =
+            marker >= 0 ? row.slice(0, marker + CURSOR_MARKER.length) : truncateToWidth(row, 2, "")
           const room = Math.max(0, width - visibleWidth(prefix))
-          const tabHint = "  tab"
-          const textRoom = room > tabHint.length + 8 ? room - tabHint.length : room
-          const clipped = truncateToWidth(suggestion, textRoom, chromeGlyphs(ctx.glyphs).more)
-          const suffix = room > tabHint.length + 8 ? ctx.theme.dim(tabHint) : ""
-          rows[0] = prefix + ctx.theme.muted(clipped) + suffix
+          if (suggestion) {
+            const tabHint = "  tab"
+            const textRoom = room > tabHint.length + 8 ? room - tabHint.length : room
+            const clipped = truncateToWidth(suggestion, textRoom, chromeGlyphs(ctx.glyphs).more)
+            const suffix = room > tabHint.length + 8 ? ctx.theme.dim(tabHint) : ""
+            rows[0] = prefix + ctx.theme.muted(clipped) + suffix
+          } else if (dynamicPlaceholder) {
+            const clipped = truncateToWidth(dynamicPlaceholder, room, chromeGlyphs(ctx.glyphs).more)
+            rows[0] = prefix + ctx.theme.muted(clipped)
+          }
         }
         return rows
       },

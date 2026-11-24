@@ -23,7 +23,7 @@ import type { HistorySearch } from "../history-search.ts"
 import { InputBox } from "../input-box.ts"
 import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { badgeSymbol, spinnerFrameAt, statusBadge } from "../status-badge.ts"
-import { type StatusEntry, statusLine } from "../status-bar.ts"
+import { permissionModeTone, type StatusEntry, statusLine } from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
 import { visibleAnimation } from "../view-animation.ts"
 import { renderViewLines } from "../view-lines.ts"
@@ -160,8 +160,19 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         align: "right",
         tone: model?.tone ?? "accent",
         priority: model?.priority ?? 40,
-        text: `${model?.text ?? fallback}${mode ? ` ${glyphs.separator} ${mode}` : ""}`,
+        text: model?.text ?? fallback,
       },
+      ...(mode
+        ? [
+            {
+              id: "mode",
+              align: "right",
+              tone: permissionModeTone(mode),
+              priority: 41,
+              text: mode,
+            } as const,
+          ]
+        : []),
       // Requested but not supported by the current model: say so, instead of hiding the choice.
       ...(fastApplied
         ? [{ id: "fast", align: "right", tone: "accent", priority: 40, text: "fast" } as const]
@@ -170,7 +181,11 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
           : []),
     ]
   }
-  const inputBox = new InputBox(editor, statusItems, deps.suggestion)
+  const workingPlaceholder = () => {
+    if (!deps.activity().working || deps.conversationFocused?.() || search.active) return undefined
+    return enterDoes === "steer" ? `Steer turn${viewEllipsis()}` : `Queue next message${viewEllipsis()}`
+  }
+  const inputBox = new InputBox(editor, statusItems, deps.suggestion, workingPlaceholder)
   /** Lists supply their own two-cell gutter; the frame adds two more before the text. */
   const listLines = (
     list: NonNullable<ReturnType<typeof inputList>>,
@@ -481,12 +496,14 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       if (deps.dock?.()?.finishLayout()) rest = draw()
     }
     // Only optional rows above the interactive region may be clipped. Never choose
-    // editor/options/hints by tail slicing the whole bottom area.
+    // editor/options/hints by tail slicing the whole bottom area; strictly obey budget.
     const essential = rest.slice(interactiveStart)
     const prefixRoom = Math.max(0, budget - essential.length)
     const visible =
       budget > 0
-        ? [...rest.slice(Math.max(0, interactiveStart - prefixRoom), interactiveStart), ...essential]
+        ? essential.length > budget
+          ? essential.slice(0, budget)
+          : [...rest.slice(Math.max(0, interactiveStart - prefixRoom), interactiveStart), ...essential]
         : []
     pointerTop = ctx.rows - (rest.length - interactiveStart)
     pointerWidth = width

@@ -78,13 +78,23 @@ function headerItems(info: HeaderInfo, width: number, ctx: RenderContext): strin
   if (visibleWidth(right) > width - 2) right = context
   if (visibleWidth(right) >= width) return truncateToWidth(right, width, viewEllipsis())
   const room = Math.max(0, width - visibleWidth(right) - 3)
-  const branch = info.branch
-    ? `${theme.muted(`${glyphs.branch} ${info.branch}`)}${info.dirty ? theme.warning("*") : ""}  `
-    : ""
+  const formatBranch = (max?: number) => {
+    if (!info.branch) return ""
+    const name = max ? truncateToWidth(info.branch, max, viewEllipsis()) : info.branch
+    return `${theme.muted(`${glyphs.branch} ${name}`)}${info.dirty ? theme.warning("*") : ""}  `
+  }
+  let branch = formatBranch()
   const path = themeToken(theme, "path") ?? theme.fg2
   const cwd = path(info.cwd)
-  const title = info.title ? theme.muted(`  ${glyphs.separator}  ${displayTitle(info.title)}`) : ""
+  const title = info.title
+    ? theme.dim(`  ${glyphs.separator}  `) +
+      (themeToken(theme, "fg2") ?? theme.text)(displayTitle(info.title))
+    : ""
   let left = branch + cwd + title
+  if (visibleWidth(left) > room && info.branch && visibleWidth(info.branch) > 24) {
+    branch = formatBranch(24)
+    left = branch + cwd + title
+  }
   if (visibleWidth(left) > room) left = branch + cwd
   if (visibleWidth(left) > room) {
     const cwdRoom = room - visibleWidth(branch)

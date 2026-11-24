@@ -1,4 +1,5 @@
 import {
+  bold,
   type InputEvent,
   LineInput,
   type Terminal,
@@ -8,7 +9,9 @@ import {
 } from "@amira/tui-kit"
 import type { Block, BlockEnv } from "../blocks/base.ts"
 import { copyToClipboard } from "../clipboard.ts"
+import { CLOCK_INSET } from "../format.ts"
 import { glyphs, viewEllipsis } from "../glyphs.ts"
+import { CONTENT_INSET } from "../grid.ts"
 import { fitHint } from "../hint.ts"
 import type { Keybindings } from "../keybindings.ts"
 import { isActive } from "../subagents.ts"
@@ -43,31 +46,36 @@ export function createFindSelect(deps: FindSelectDeps) {
 
   function findBar(width: number): string {
     const theme = deps.theme
+    const rightInset = width >= 24 ? CLOCK_INSET : 0
+    const inner = Math.max(1, width - CONTENT_INSET.length - rightInset)
+    const keyHint = (k: string | undefined, label: string, priority: number) =>
+      k && { text: `${bold(theme.fg2(k))}${theme.muted(` ${label}`)}`, priority }
     const count = pane.matchCount
-      ? `${pane.matchPosition}/${pane.matchCount}`
+      ? theme.muted(`${pane.matchPosition}/${pane.matchCount}`)
       : findInput.value
-        ? "no matches"
+        ? theme.warning("no matches")
         : ""
     const next = keys.label("find.next")
     const prev = keys.label("find.prev")
     const close = keys.label("find.close")
-    const head = `${theme.accent(glyphs.search)} find ${theme.muted(glyphs.searchPrompt)} `
+    const head = `${CONTENT_INSET}${theme.accent(glyphs.search)} find ${theme.muted(glyphs.searchPrompt)} `
     // The query keeps room for what is typed (and the caret); the keys get the rest, the
     // least needed going first.
     const query = Math.max(FIND_QUERY_ROOM, visibleWidth(findInput.value) + 1)
     const hint = fitHint(
       [
         count && { text: count, priority: 5 },
-        next && { text: `${next} older`, priority: 3 },
-        prev && { text: `${prev} newer`, priority: 2 },
-        close && { text: `${close} close`, priority: 4 },
+        keyHint(next, "older", 3),
+        keyHint(prev, "newer", 2),
+        keyHint(close, "close", 4),
       ],
-      Math.max(0, width - visibleWidth(head) - query - 2),
+      Math.max(0, inner - (visibleWidth(head) - CONTENT_INSET.length) - query - 2),
+      theme.muted(` ${glyphs.separator} `),
     )
-    const room = Math.max(4, width - visibleWidth(head) - visibleWidth(hint) - 2)
+    const room = Math.max(4, inner - (visibleWidth(head) - CONTENT_INSET.length) - visibleWidth(hint) - 2)
     const input = findInput.render(room, theme, { focused: true, placeholder: "text in the transcript" })
     const pad = " ".repeat(Math.max(1, room - visibleWidth(input) + 2))
-    return truncateToWidth(`${head}${input}${pad}${theme.muted(hint)}`, width, viewEllipsis())
+    return truncateToWidth(`${head}${input}${pad}${hint}`, width - rightInset, viewEllipsis())
   }
 
   /** The blocks a selection moves over (those with rows), and where `b` is among them. */
@@ -90,6 +98,7 @@ export function createFindSelect(deps: FindSelectDeps) {
   }
 
   function selectBar(width: number): string {
+    const theme = deps.theme
     const b = pane.selected!
     const e = env(width)
     const fold = keys.label("select.toggle")
@@ -97,24 +106,29 @@ export function createFindSelect(deps: FindSelectDeps) {
     const back = keys.label("select.exit")
     const open = keys.label("select.open")
     const code = pane.selectedCode
+    const keyHint = (k: string | undefined, label: string, priority: number) =>
+      k && { text: `${bold(theme.fg2(k))}${theme.muted(` ${label}`)}`, priority }
     // Moving between blocks is in the key reference (the help key).
     const items = code
       ? [
           {
-            text: `${glyphs.pointer} code block ${code.index + 1} of ${code.count} in the reply`,
+            text: `${theme.accent(glyphs.pointer)} ${theme.fg2(`code block ${code.index + 1} of ${code.count} in the reply`)}`,
             priority: 6,
           },
-          copy && { text: `${copy} copy`, priority: 5 },
-          back && { text: `${back} reply`, priority: 5 },
+          keyHint(copy, "copy", 5),
+          keyHint(back, "reply", 5),
         ]
       : [
-          { text: `${glyphs.pointer} ${b.label} ${position(b, e)}`, priority: 6 },
-          b.foldable(e) && fold && { text: `${fold} ${b.isFolded(e) ? "unfold" : "fold"}`, priority: 3 },
-          open && opens(b, e) && { text: `${open} ${opens(b, e)}`, priority: 3 },
-          copy && { text: `${copy} copy`, priority: 4 },
-          back && { text: `${back} back`, priority: 5 },
+          {
+            text: `${theme.accent(glyphs.pointer)} ${theme.fg2(`${b.label} ${position(b, e)}`)}`,
+            priority: 6,
+          },
+          b.foldable(e) && keyHint(fold, b.isFolded(e) ? "unfold" : "fold", 3),
+          opens(b, e) && keyHint(open, opens(b, e)!, 3),
+          keyHint(copy, "copy", 4),
+          keyHint(back, "back", 5),
         ]
-    return deps.theme.muted(fitHint(items, width))
+    return `${CONTENT_INSET}${fitHint(items, Math.max(1, width - CONTENT_INSET.length), theme.muted(` ${glyphs.separator} `))}`
   }
 
   /** Scrolling keys, in any state of the view. */

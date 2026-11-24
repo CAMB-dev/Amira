@@ -73,6 +73,22 @@ function fitItems(
   return { left: kept.filter((i) => i.align === "left"), right: kept.filter((i) => i.align === "right") }
 }
 
+/** Safety tone for permission modes: calm for ask, accent for plan, loud for auto/bypass. */
+export function permissionModeTone(mode: string): StatusTone {
+  switch (mode) {
+    case "plan":
+      return "accent"
+    case "auto-edit":
+    case "auto":
+      return "warning"
+    case "full-auto":
+    case "bypass":
+      return "error"
+    default:
+      return "muted"
+  }
+}
+
 function join(xs: readonly StatusEntry[], theme: Theme): string {
   const dim = themeToken(theme, "dim") ?? theme.muted
   return xs
@@ -81,13 +97,14 @@ function join(xs: readonly StatusEntry[], theme: Theme): string {
       const split = x.id === "model" ? x.text.lastIndexOf(separator()) : -1
       if (split < 0) return style(x.text)
       const model = x.text.slice(0, split)
+      const mode = x.text.slice(split + separator().length)
       const thinking = / (\([^()]+\))$/.exec(model)
       const name = thinking ? model.slice(0, thinking.index) : model
       return (
         style(name) +
         (thinking ? theme.muted(` ${thinking[1]}`) : "") +
         dim(separator()) +
-        theme.muted(x.text.slice(split + separator().length))
+        toneStyle(permissionModeTone(mode), theme)(mode)
       )
     })
     .join(dim(separator()))

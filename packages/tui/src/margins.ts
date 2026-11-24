@@ -1,10 +1,16 @@
 import { DEFAULT_TUI_MARGIN, DEFAULT_TUI_MARGIN_ROWS, type TuiSettings } from "@amira/api"
 import { type Component, type MouseInput, translateMouse, truncateToWidth } from "@amira/tui-kit"
 
+/** Default cap on ultrawide terminals so prose stays comfortable to scan. */
+export const MAX_READING_WIDTH = 136
+
 /** One content column shared by transcript, chrome and full-screen overlays. */
 export function contentGeometry(columns: number, rows: number, settings: TuiSettings) {
   const configured = settings.margin ?? DEFAULT_TUI_MARGIN
-  const left = columns - 2 * configured >= 60 ? configured : Math.max(0, Math.floor((columns - 60) / 2))
+  let left = columns - 2 * configured >= 60 ? configured : Math.max(0, Math.floor((columns - 60) / 2))
+  if (settings.margin === undefined && columns - 2 * left > MAX_READING_WIDTH) {
+    left = Math.floor((columns - MAX_READING_WIDTH) / 2)
+  }
   const edgeRows = rows >= 24 ? (settings.marginRows ?? DEFAULT_TUI_MARGIN_ROWS) : 0
   return {
     left,

@@ -214,3 +214,18 @@ test("a margin-wrapped component gets reduced columns and row context, not merel
   expect(lines[1]).toBe(`   ${"x".repeat(64)}`)
   expect(lines.at(-1)).toBe("")
 })
+
+test("ultrawide terminals cap default reading width while honoring explicit margin settings", () => {
+  expect(contentGeometry(200, 40, {})).toEqual({
+    left: 32,
+    width: 136,
+    rows: 1,
+    height: 38,
+  })
+  expect(contentGeometry(200, 40, zeroMargins)).toEqual({
+    left: 0,
+    width: 200,
+    rows: 0,
+    height: 40,
+  })
+})
