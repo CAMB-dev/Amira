@@ -1,15 +1,17 @@
 import type { ToolDetailLevel, UserMessage } from "@amira/api"
 import {
+  chromeGlyphs,
   type Glyphs,
   type ImageStore,
   type ScreenImage,
   stripAnsi,
   type Theme,
   truncateToWidth,
+  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { messageTimestamp, timestampIn, userBandPaddingIn, userLines, userText } from "../format.ts"
-import { viewEllipsis } from "../glyphs.ts"
+import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { MARKER_WIDTH } from "../grid.ts"
 import type { ReplyRenderers } from "../markdown-nodes.ts"
 import type { SpawnGroups, SubagentNode } from "../subagents.ts"
@@ -287,9 +289,12 @@ export class DetailNoticeBlock extends Block {
 
   lines(env: BlockEnv): string[] {
     const head = noticeLines(env.theme, this.level, this.text, env.width)
-    return this.#shown(env)
-      ? [...head, ...noticeDetailLines(env.theme, this.level, this.detail, env.width)]
-      : head
+    const shown = this.#shown(env)
+    const chrome = chromeGlyphs(env.glyphs ?? { pointer: glyphs.pointer })
+    const cue = `  ${env.theme.muted(shown ? chrome.disclosureOpen : chrome.disclosureClosed)}`
+    const last = head.length - 1
+    if (last >= 0 && visibleWidth(head[last]!) + visibleWidth(cue) <= env.width) head[last] += cue
+    return shown ? [...head, ...noticeDetailLines(env.theme, this.level, this.detail, env.width)] : head
   }
 
   copyText(): string {
@@ -298,6 +303,10 @@ export class DetailNoticeBlock extends Block {
 
   override foldable(): boolean {
     return true
+  }
+
+  override isFolded(env: BlockEnv): boolean {
+    return !this.#shown(env)
   }
 
   override toggleFold(env: BlockEnv): void {

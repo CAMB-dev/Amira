@@ -155,7 +155,6 @@ function transcriptLines(
         kind: "muted",
         text: `${opts.glyphs?.separator ?? symbols.separator} ${kid.role} ${opts.glyphs?.separator ?? symbols.separator} ${kid.id}`,
       },
-      { kind: "text", text: " " },
       ...stats(kid, opts),
       { kind: "text", text: " " },
       {
@@ -170,6 +169,7 @@ function transcriptLines(
           (block) =>
             block.type === "toolCall" ||
             block.type === "serverTool" ||
+            (block.type === "thinking" && block.text.trim()) ||
             (block.type === "text" && block.text.trim()),
         )
       : [],
@@ -186,15 +186,22 @@ function transcriptLines(
   const finished = (name: string, call: ToolCallView, last: boolean) => {
     pending.push({ name, call, last })
   }
-  let previous: "tool" | "reply" | "user" = "user"
+  let previous: "tool" | "reply" | "thinking" | "user" = "user"
   for (const [index, block] of blocks.entries()) {
-    const kind = block.type === "text" ? "reply" : "tool"
-    if (kind === "reply") flush()
+    const kind = block.type === "text" ? "reply" : block.type === "thinking" ? "thinking" : "tool"
+    if (kind !== "tool") flush()
     if (kind !== "tool" || previous !== "tool") out.push({ kind: "text", text: "" })
     previous = kind
     const next = blocks[index + 1]
-    const last = !next || next.type === "text"
-    if (block.type === "text") {
+    const last = !next || next.type === "text" || next.type === "thinking"
+    if (block.type === "thinking") {
+      out.push({ kind: "muted", text: `${symbols.thought} Thought` })
+      if (opts.toolDetail === "full") {
+        const pipe = opts.glyphs?.treePipe ?? symbols.treePipe
+        for (const row of block.text.trim().split("\n"))
+          out.push({ kind: "muted", text: row.trim() ? `  ${pipe} ${row}` : `  ${pipe}` })
+      }
+    } else if (block.type === "text") {
       out.push(...replyLines(block.text, opts))
     } else if (block.type === "serverTool") {
       if (block.status === "running" && live(info)) {

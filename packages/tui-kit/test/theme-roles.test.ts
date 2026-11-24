@@ -6,7 +6,7 @@ import { palettes } from "../src/palette.ts"
 import { createTheme, monoTheme, type StyleFn, stripColors, type ThemeDefinition } from "../src/style.ts"
 
 const names = ["amira", "amber", "burnt", "lavender", "mono", "ascii"]
-const references = ["path", "command", "code", "heading1", "heading", "subheading", "link", "linkUrl"]
+const references = ["path", "command", "code", "heading1", "heading", "subheading", "link"]
 const options = { env: {}, platform: "other" } as const
 
 function definition(name: string): ThemeDefinition {
@@ -76,6 +76,7 @@ for (const name of names) {
           }
         }
         expect(theme.thinking("Thought")).toBe(theme.muted("Thought"))
+        expect(theme.linkUrl!("https://example.com")).toBe(theme.muted("https://example.com"))
         const base = createTheme({ ...options, theme: appearance, colorDepth })
         for (const token of ["success", "warning", "error"])
           expect(theme[token]!("status")).toBe(base[token]!("status"))

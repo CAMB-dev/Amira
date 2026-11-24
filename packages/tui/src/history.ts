@@ -8,6 +8,7 @@ import type {
 } from "@amira/api"
 import { isSummaryMessage } from "@amira/core"
 import {
+  chromeGlyphs,
   type Glyphs as MarkdownGlyphs,
   renderMarkdown,
   type Theme,
@@ -290,14 +291,16 @@ export function summaryLines(
   const n = summary ? summary.split("\n").length : 0
   // A server's checkpoint may have no readable text (OpenAI's is encrypted).
   const unreadable = !summary.trim()
+  const sep = glyphs.separator
   const what = info
-    ? `${compactionReason(info)} · ${unreadable ? "no readable summary" : "summary of earlier messages"}`
+    ? `${compactionReason(info)} ${sep} ${unreadable ? "no readable summary" : "summary of earlier messages"}`
     : unreadable
-      ? "Compacted · no readable summary"
+      ? `Compacted ${sep} no readable summary`
       : "Compacted summary of earlier messages"
-  const title = `${what}${folded && !unreadable ? ` · ${n} line${n === 1 ? "" : "s"}` : ""}`
+  const title = `${what}${folded && !unreadable ? ` ${sep} ${n} line${n === 1 ? "" : "s"}` : ""}`
+  const chrome = chromeGlyphs(markdownGlyphs ?? { pointer: glyphs.pointer })
   const head = truncateToWidth(
-    `${theme.accent(folded ? "▸" : "▾")} ${theme.muted(title)}`,
+    `${theme.accent(folded ? chrome.disclosureClosed : chrome.disclosureOpen)} ${theme.muted(title)}`,
     width,
     viewEllipsis(),
   )

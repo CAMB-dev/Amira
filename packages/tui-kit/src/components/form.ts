@@ -780,6 +780,7 @@ export class Form implements Component {
     const toggle = (v: string) => {
       f.value = checked.includes(v) ? checked.filter((x) => x !== v) : [...checked, v]
     }
+    if (this.cardLayout && (matchesKey(e, "up") || matchesKey(e, "down"))) return false
     if (this.cardLayout && (matchesKey(e, "left") || matchesKey(e, "right"))) {
       f.highlight = Math.max(0, Math.min(rows.length - 1, f.highlight + (matchesKey(e, "left") ? -1 : 1)))
       return true

@@ -363,7 +363,7 @@ test("ASCII views draw their own hunk gap inside the number column", () => {
       renderNode(hunks, 24, 8)
         .map((row) => stripAnsi(row).trimEnd())
         .slice(0, 5),
-    ).toEqual([" 1 - old", " 1 + new", "...", "20 - past", "20 + next"])
+    ).toEqual([" 1 - old", " 1 + new", "...   18 unchanged lines", "20 - past", "20 + next"])
   } finally {
     setGlyphs(before)
   }
@@ -373,7 +373,7 @@ test("Unicode view hunk gaps keep the glyph diffToolLines writes", () => {
   const before = { ...glyphs }
   try {
     setGlyphs()
-    expect(renderNode(hunks, 24, 8).map((row) => stripAnsi(row).trimEnd())[2]).toBe(" ⋯")
+    expect(renderNode(hunks, 24, 8).map((row) => stripAnsi(row).trimEnd())[2]).toBe(" ⋯   18 unchanged lines")
   } finally {
     setGlyphs(before)
   }

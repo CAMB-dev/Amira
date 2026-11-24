@@ -1,4 +1,5 @@
 import type { ToolRejection } from "./events.ts"
+import { plural } from "./format.ts"
 import type { DiffHunk } from "./tool-details.ts"
 import type { ToolResult } from "./tools.ts"
 
@@ -122,8 +123,15 @@ export interface ToolPresenter<A = Record<string, unknown>, D = unknown> {
  */
 export function diffToolLines(hunks: readonly DiffHunk[]): ToolLine[] {
   const out: ToolLine[] = []
+  let prevNewEnd: number | undefined
   for (const [i, h] of hunks.entries()) {
-    if (i > 0) out.push({ kind: "diff-hunk", text: "⋯" })
+    if (i > 0) {
+      const skipped = prevNewEnd !== undefined ? h.newStart - prevNewEnd : 0
+      out.push({
+        kind: "diff-hunk",
+        text: skipped > 0 ? `⋯ ${plural(skipped, "unchanged line")}` : "⋯",
+      })
+    }
     let oldNo = h.oldStart
     let newNo = h.newStart
     for (const line of h.lines) {
@@ -135,6 +143,7 @@ export function diffToolLines(hunks: readonly DiffHunk[]): ToolLine[] {
         oldNo++
       }
     }
+    prevNewEnd = newNo
   }
   return out
 }

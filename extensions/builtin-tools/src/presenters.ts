@@ -121,7 +121,13 @@ export const readPresenter: ToolPresenter<ReadParams, ReadDetails> = {
 /** The diff of an edit: from its details, or worked out from its arguments after a resume. */
 function editDiff(call: ToolCallView<EditParams, EditDetails>) {
   const d = detailsOf<EditDetails>(call, "hunks")
-  if (d) return { diff: d, lines: diffToolLines(d.hunks), replacements: d.replacements }
+  if (d) {
+    const lines = [
+      ...diffToolLines(d.hunks),
+      ...(d.truncated ? [{ kind: "muted" as const, text: "… diff truncated" }] : []),
+    ]
+    return { diff: d, lines, replacements: d.replacements }
+  }
   // Without the file its line numbers are unknown; show the change alone.
   const diff = fileDiff(str(call.args.old_string), str(call.args.new_string), Number.POSITIVE_INFINITY)
   const lines = diffToolLines(diff.hunks).map(({ kind, text }) => ({ kind, text }))
@@ -153,7 +159,11 @@ export const writePresenter: ToolPresenter<WriteParams, WriteDetails> = {
   body(call) {
     if (call.result.isError) return []
     const d = detailsOf<WriteDetails>(call, "hunks")
-    if (d) return diffToolLines(d.hunks)
+    if (d)
+      return [
+        ...diffToolLines(d.hunks),
+        ...(d.truncated ? [{ kind: "muted" as const, text: "… diff truncated" }] : []),
+      ]
     // After a resume: what was written, as additions.
     return str(call.args.content)
       .replace(/\n$/, "")
@@ -192,7 +202,13 @@ export const applyPatchPresenter: ToolPresenter<ApplyPatchParams, ApplyPatchDeta
       .split(/\r?\n/)
       .map(
         (line): ToolLine => ({
-          kind: line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-remove" : "muted",
+          kind: line.startsWith("+")
+            ? "diff-add"
+            : line.startsWith("-")
+              ? "diff-remove"
+              : line.startsWith(" ")
+                ? "diff-context"
+                : "muted",
           text: /^[+\- ]/.test(line) ? line.slice(1) : line,
         }),
       )

@@ -193,8 +193,9 @@ export class ExtensionSettingsView implements Component {
     if (this.#saving) return true
     if (event.type === "mouse") return this.#handleMouse(event)
     if (this.#confirmDiscard) {
-      if (matchesKey(event, "y") || matchesKey(event, "c", { ctrl: true })) void this.#cancel()
-      else if (matchesKey(event, "n") || matchesKey(event, "escape") || matchesKey(event, "enter")) {
+      if (matchesKey(event, "y") || matchesKey(event, "escape") || matchesKey(event, "c", { ctrl: true }))
+        void this.#cancel()
+      else if (matchesKey(event, "n") || matchesKey(event, "enter")) {
         this.#confirmDiscard = false
         this.#opts.requestRender()
       }

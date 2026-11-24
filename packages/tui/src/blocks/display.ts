@@ -1,5 +1,6 @@
 import type { PrintOptions, ToolDetailLevel } from "@amira/api"
-import { renderMarkdown, type Theme, wrapText } from "@amira/tui-kit"
+import { chromeGlyphs, renderMarkdown, type Theme, visibleWidth, wrapText } from "@amira/tui-kit"
+import { glyphs } from "../glyphs.ts"
 import { type NoticeLevel, noticeLines } from "../transcript.ts"
 import { Block, type BlockEnv } from "./base.ts"
 
@@ -18,7 +19,13 @@ export class DisplayBlock extends Block {
 
   lines(env: BlockEnv): string[] {
     const head = noticeLines(env.theme, this.level, this.text, env.width)
-    if (!this.options.details || this.isFolded(env)) return head
+    if (!this.options.details) return head
+    const folded = this.isFolded(env)
+    const chrome = chromeGlyphs(env.glyphs ?? { pointer: glyphs.pointer })
+    const cue = `  ${env.theme.muted(folded ? chrome.disclosureClosed : chrome.disclosureOpen)}`
+    const last = head.length - 1
+    if (last >= 0 && visibleWidth(head[last]!) + visibleWidth(cue) <= env.width) head[last] += cue
+    if (folded) return head
     const width = Math.max(1, env.width - 4)
     const rows = this.options.markdown
       ? renderMarkdown(this.options.details, width, env.theme, { hyperlinks: env.hyperlinks })

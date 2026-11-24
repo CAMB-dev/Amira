@@ -13,7 +13,7 @@ import {
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
-import { glyphs, viewEllipsis } from "./glyphs.ts"
+import { glyphs, viewEllipsis, viewGap } from "./glyphs.ts"
 import { type Range, wordDiff } from "./word-diff.ts"
 
 const SIGNS: Partial<Record<ToolLine["kind"], string>> = {
@@ -55,7 +55,7 @@ function styleOf(kind: ToolLine["kind"], theme: Theme): StyleFn {
   }
 }
 
-const FILE_HEADER = /^(?:--- |\+\+\+ |diff )/
+const FILE_HEADER = /^(?:--- |\+\+\+ |diff |(?:add|delete|update|rename): )/i
 
 /** Tabs as spaces to the next multiple of TAB_WIDTH, as the terminal and Markdown code draw them. */
 export function expandTabs(line: string): string {
@@ -132,7 +132,7 @@ export function renderToolLines(
   // that pass nothing get the host cut marker (three periods in ASCII mode).
   const marker = view?.ellipsis ?? viewEllipsis()
   const reserve = textWidth(marker)
-  const gap = view?.gap ?? HUNK_GAP
+  const gap = view?.gap ?? viewGap()
   const isView = view !== undefined
   const numbered = lines.filter((l) => l.lineNo !== undefined)
   const gutter = numbered.length ? Math.max(...numbered.map((l) => String(l.lineNo).length)) : 0
@@ -164,7 +164,15 @@ export function renderToolLines(
       )
       return
     }
-    if (l.wrap || l.marker || l.description !== undefined || l.hangingIndent || l.continuationMarker) {
+    if (
+      l.wrap ||
+      l.marker ||
+      l.description !== undefined ||
+      l.hangingIndent ||
+      l.continuationMarker ||
+      l.kind === "error" ||
+      l.kind === "warning"
+    ) {
       const offset = out.length
       const record = onWrap && ((row: number, join: "" | " ") => onWrap(offset + row, join))
       const content = onRow && ((row: number, from: number) => onRow(offset + row, from))
@@ -183,6 +191,11 @@ export function renderToolLines(
     // A file's header starts at the edge, above the numbers of its lines; other lines (a note
     // such as "… 12 more lines") line up with the text of the diff lines around them.
     const header = l.kind === "muted" && FILE_HEADER.test(text)
+    if (header && out.length > 0) {
+      const prev = lines[i - 1]
+      const prevHeader = prev && prev.kind === "muted" && FILE_HEADER.test(texts[i - 1] ?? "")
+      if (!prevHeader) append([""])
+    }
     // File content keeps its line numbers in the gutter, as diff lines do.
     const number = l.lineNo === undefined ? " ".repeat(gutter) : String(l.lineNo).padStart(gutter)
     const no = header ? "" : `${gutter ? `${number} ` : ""}${signed ? "  " : ""}`

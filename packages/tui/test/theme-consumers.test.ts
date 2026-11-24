@@ -80,7 +80,7 @@ test("file headers and program output use path and secondary foreground tokens",
 
 test("reasoning labels use thinking while expanded text retains muted italics", () => {
   const rows = reasoningLines(theme, "a thought", { thinking: true, expanded: true }, 80)
-  expect(rows[0]).toBe(`${theme.muted("∴")} ${theme.muted("Thinking")}`)
+  expect(rows[0]).toBe(`${theme.thinking("∴")} ${theme.thinking("Thinking")}`)
   expect(rows[1]).toContain(theme.muted(italic("a thought")))
   expect(rows.map(stripAnsi)).toEqual(["∴ Thinking", "  a thought"])
 })

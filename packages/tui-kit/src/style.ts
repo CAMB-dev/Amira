@@ -130,7 +130,7 @@ const ansiMarkdownTheme = {
   code: blue,
   link: compose(underline, blue),
   /** The URL shown after a link's text when the terminal cannot make it clickable. */
-  linkUrl: blue,
+  linkUrl: gray,
   /** An image shown as its alt text, when it is not a clickable link. */
   image: italic,
   quote: italic,
@@ -392,7 +392,7 @@ export function createTheme(options: ThemeOptions = {}): Theme {
     subheading: depth === "16" ? ansiMarkdownTheme.subheading : compose(bold, italic, fg(p.heading)),
     code: fg(p.command, blue),
     link: compose(underline, fg(p.path, blue)),
-    linkUrl: fg(p.path, blue),
+    linkUrl: fg(p.muted),
     quoteBar: fg(p.dim),
     listMarker: fg(p.muted),
     rule: fg(p.dim),

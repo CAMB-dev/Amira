@@ -594,6 +594,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         if (
           event.action === "press" &&
           event.button === "left" &&
+          editor.focused &&
           !search.active &&
           event.y >= pointerTop &&
           event.y < pointerTop + composerRows

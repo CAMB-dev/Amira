@@ -277,7 +277,7 @@ export function reasoningLines(
     opts.durationMs === undefined
       ? ""
       : ` for ${opts.durationMs < 10_000 ? Math.max(0.1, Math.round(opts.durationMs / 100) / 10) : Math.round(opts.durationMs / 1000)}s`
-  const thinking = theme.muted
+  const thinking = themeToken(theme, "thinking") ?? theme.muted
   const body = text.trim()
   const hint =
     body && !opts.expanded && opts.expandKey ? `  ${theme.muted(`${opts.expandKey} to expand`)}` : ""
@@ -382,7 +382,7 @@ export function compactionReason(info: CompactionInfo | undefined): string {
 export function compactionSizes(info: CompactionInfo | undefined): string | undefined {
   if (info?.tokensBefore === undefined || info.tokensAfter === undefined) return undefined
   if (info.reason === "overflow") return undefined
-  return `${compactTokens(info.tokensBefore)} → ~${compactTokens(info.tokensAfter)} tokens`
+  return `${compactTokens(info.tokensBefore)} ${glyphs.goesTo} ~${compactTokens(info.tokensAfter)} tokens`
 }
 
 /**
@@ -462,6 +462,7 @@ export function subagentRows(
   last = true,
   indent = treeIndent(sub.depth),
   spinner = defaultSpinner,
+  pad = true,
 ): string[] {
   const s = glyphs.separator
   const state = agentStatusState(sub)
@@ -471,7 +472,7 @@ export function subagentRows(
       : state === "idle"
         ? ` ${s} ${compactTokens(sub.tokens)} tok`
         : ` ${s} ${formatElapsed(now - (sub.startedAt ?? now))} ${s} ${compactTokens(sub.tokens)} tok`
-  const mark = styledStatusBadge(state, theme, spinner, { pad: true })
+  const mark = styledStatusBadge(state, theme, spinner, { pad })
   const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark} `
   const rest = ` ${s} ${sub.role}${stats}`
   const title = fitTitle(oneLine(sub.title), rest, width - visibleWidth(lead))
@@ -480,7 +481,7 @@ export function subagentRows(
   if (state === "working" && sub.activity) {
     const summary = clip(oneLine(sub.activity.summary), ACTIVITY_CHARS)
     const tree = `${indent}${treeRail(!last)}${treeArm(true)}`
-    const tool = `${theme.muted(tree)}${treeGap(true)}${theme.accent(spinner)} ${theme.fg2(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
+    const tool = `${theme.muted(tree)}${treeGap(true)}${theme.accent(asciiGlyphs() ? Spinner.ascii(spinner) : spinner)} ${theme.fg2(sub.activity.name)}${summary ? ` ${theme.muted(summary)}` : ""}`
     rows.push(truncateToWidth(tool, width, viewEllipsis()))
   }
   return rows
@@ -504,8 +505,9 @@ export function subagentEndLine(
   theme: Theme,
   last = true,
   indent = treeIndent(sub.depth),
+  pad = true,
 ): string {
-  const mark = styledStatusBadge(agentStatusState(end), theme, undefined, { pad: true })
+  const mark = styledStatusBadge(agentStatusState(end), theme, undefined, { pad })
   const s = glyphs.separator
   const stats = `${sub.role} ${s} ${formatDuration(end.durationMs)} ${s} ${compactTokens(end.tokens)} tok`
   const lead = `${indent}${treeArm(last)}${treeGap(last)}${mark} `

@@ -115,10 +115,10 @@ export function runningOutputLimit(index: number, count: number): number {
 export const OUTPUT_LINES = DEFAULT_SHELL_OUTPUT_LINES
 
 /** The tree rail continues beside results, wrapped diffs and live output until the last tool. */
-function treeHead(theme: Theme, last = false): string {
+function treeHead(theme: Theme, last = false, style: StyleFn = theme.muted): string {
   const arm = last ? glyphs.treeLast : glyphs.treeBranch
   const cells = Math.max(visibleWidth(glyphs.treeBranch), visibleWidth(glyphs.treeLast))
-  return theme.muted(arm + " ".repeat(cells - visibleWidth(arm)))
+  return style(arm + " ".repeat(cells - visibleWidth(arm)))
 }
 
 /** Internal rail prefix for a tool's sub-agent rows as well as its own output. */
@@ -491,8 +491,9 @@ export function finishedToolLines(
   const cutShort = outcome === "interrupted" && call.rejected !== "aborted" && view.text !== ""
   const continuation = treeContinuation(theme, opts.last)
   const headWidth = timestampRoom(width, opts.timestamp, opts.turnDurationMs)
+  const armStyle = shown === "failed" ? theme.error : theme.muted
   const out = [
-    headLine(theme, treeHead(theme, opts.last), call.name, summary, headWidth, {
+    headLine(theme, treeHead(theme, opts.last, armStyle), call.name, summary, headWidth, {
       muted: !ran,
       verb: ran || cutShort ? presenter?.verbs?.past : undefined,
       summaryStyle: summaryStyle(theme, call.args),
@@ -687,11 +688,19 @@ export function runningToolLines(
   live.forEach((_, i) => {
     opts.onRow?.(i + 1, visibleWidth(prefix))
   })
+  const liveStyle = (kind: ToolLine["kind"]) =>
+    kind === "error"
+      ? theme.error
+      : kind === "warning"
+        ? theme.warning
+        : kind === "accent"
+          ? theme.accent
+          : theme.muted
   return stampRows(
     [
       head,
       ...live.map((l) =>
-        truncateToWidth(`${prefix}${theme.muted(terminalText(l.text))}`, width, cutMarker(opts)),
+        truncateToWidth(`${prefix}${liveStyle(l.kind)(terminalText(l.text))}`, width, cutMarker(opts)),
       ),
     ],
     theme,

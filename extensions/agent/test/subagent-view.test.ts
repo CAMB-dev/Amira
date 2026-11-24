@@ -696,7 +696,7 @@ for (const { status, state, symbol, text, kind } of statuses) {
     const title = `${styledBadge} Child a${styledStats}${theme.muted(" · explorer · a")}`
     expect(rows[0]).toBe(title + " ".repeat(120 - stripAnsi(title).length - 7) + theme.muted(" 1 of 2"))
     expect(rows).toContain(
-      `${theme[kind](`${symbol} ${text.padEnd(7)}`)} Child b ${theme.muted("· explorer · b")} ${styledStats} ${theme.muted("· Task b")}`,
+      `${theme[kind](`${symbol} ${text.padEnd(7)}`)} Child b ${theme.muted("· explorer · b")}${styledStats} ${theme.muted("· Task b")}`,
     )
     const task = userLines(theme, userMessage("Task a"), 120)
     expect(rows.slice(3, 3 + task.length)).toEqual(task)
@@ -707,7 +707,6 @@ for (const { status, state, symbol, text, kind } of statuses) {
         childBadge,
         { kind: "text", text: " Child b " },
         { kind: "muted", text: "· explorer · b" },
-        { kind: "text", text: " " },
         ...stats,
         { kind: "text", text: " " },
         { kind: "muted", text: "· Task b" },
@@ -751,7 +750,6 @@ for (const { status, state, symbol, text, kind } of statuses) {
         ...badge,
         { kind: "text", text: " Child b " },
         { kind: "muted", text: "· explorer · b" },
-        { kind: "text", text: " " },
         { kind: "muted", text: `${timing} · 1.6k tok · $0.0123` },
         { kind: "text", text: " " },
         { kind: "muted", text: "· Task b" },

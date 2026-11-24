@@ -411,9 +411,9 @@ for (const mode of MODES) {
         "  Yes",
         "  Yes, and don't ask again this session",
         "  No",
-        "  Other…",
+        "  Other…  reject and tell the model what to do",
         "",
-        "  ↑↓ select · n no · esc deny",
+        "  ↑↓ select · n no · esc stop turn",
       ])
       // Nothing is preselected: an Enter typed now does not answer it.
       s.terminal.send("\r")

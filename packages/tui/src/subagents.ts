@@ -17,6 +17,7 @@ import {
   subagentRows,
   treeLayout,
 } from "./format.ts"
+import { glyphs } from "./glyphs.ts"
 import { serverToolCall } from "./server-tools.ts"
 import { callSummary, type PresenterSource } from "./tool-view.ts"
 
@@ -142,10 +143,11 @@ export function nodeRows(
   last = true,
   indent?: string,
   spinner?: string,
+  pad = true,
 ): string[] {
   return n.end
-    ? [subagentEndLine(n, n.end, width, t, last, indent)]
-    : subagentRows(n, now, width, t, last, indent, spinner)
+    ? [subagentEndLine(n, n.end, width, t, last, indent, pad)]
+    : subagentRows(n, now, width, t, last, indent, spinner, pad)
 }
 
 /**
@@ -157,7 +159,10 @@ export function backgroundLabel(groups: SpawnGroups | undefined, roots: Subagent
   // A compact group's own row names it already.
   if (of.length && of.every((g) => g?.compact)) return "in the background"
   const names = [...new Set(of.flatMap((g) => (g && !g.compact ? [g.name] : [])))]
-  return names.length ? `${names.join(", ")} · in the background` : "started by a command · in the background"
+  const sep = glyphs.separator
+  return names.length
+    ? `${names.join(", ")} ${sep} in the background`
+    : `started by a command ${sep} in the background`
 }
 
 /** Spawn groups of a session's tree, by id, as their latest event had them. */

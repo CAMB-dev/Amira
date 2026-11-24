@@ -17,9 +17,10 @@ function reportStates(text: string): SubagentStatus[] {
  * call (title, role, time, tokens, what it does), so the result line only sums them up.
  */
 export const agentPresenter: ToolPresenter<AgentParams> = {
+  verbs: { past: "Spawned", running: "Spawning" },
   summary(args) {
     const n = taskList(args).length
-    return `· ${n} sub-agent${n === 1 ? "" : "s"}${args.background ? ` · background` : ""}`
+    return `${n} sub-agent${n === 1 ? "" : "s"}${args.background ? ` · background` : ""}`
   },
   result(call) {
     if (call.result.isError) return undefined

@@ -1,4 +1,5 @@
 import {
+  chromeGlyphs,
   defaultGlyphs,
   type Glyphs,
   type ImageInput,
@@ -93,7 +94,8 @@ export function foldMarkdown(source: string, folded: boolean): { text: string; f
     }
     if (details && DETAILS_CLOSE.test(line)) {
       if (--details.depth === 0) {
-        const title = `**${folded ? "▸" : "▾"} ${details.summary ?? "Details"}**`
+        const chrome = chromeGlyphs({ pointer: glyphs.pointer })
+        const title = `**${folded ? chrome.disclosureClosed : chrome.disclosureOpen} ${details.summary ?? "Details"}**`
         out.splice(details.start, 0, title, "")
         details = undefined
       }
@@ -107,7 +109,15 @@ export function foldMarkdown(source: string, folded: boolean): { text: string; f
     }
     if (!details || !folded) out.push(line)
   }
-  if (details) out.splice(details.start, 0, `**${folded ? "▸" : "▾"} ${details.summary ?? "Details"}**`, "")
+  if (details) {
+    const chrome = chromeGlyphs({ pointer: glyphs.pointer })
+    out.splice(
+      details.start,
+      0,
+      `**${folded ? chrome.disclosureClosed : chrome.disclosureOpen} ${details.summary ?? "Details"}**`,
+      "",
+    )
+  }
   return { text: out.join("\n"), foldable }
 }
 
