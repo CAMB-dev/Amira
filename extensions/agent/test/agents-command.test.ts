@@ -642,7 +642,12 @@ test(
       await waitForSpawnCondition("kept-worktree picker", () => host.ui.pending.length > 0)
       return host.ui.pending[0]!
     }
-    const answer = async (line: string, pick: (r: UiRequest) => unknown, review?: string) => {
+    const answer = async (
+      line: string,
+      pick: (r: UiRequest) => unknown,
+      review?: string,
+      confirm?: boolean,
+    ) => {
       const running = run(line)
       const list = await next()
       host.ui.respond(list.requestId, pick(list))
@@ -650,6 +655,11 @@ test(
         const diff = await next()
         expect(diff.kind).toBe("diff-review")
         host.ui.respond(diff.requestId, review)
+        if (confirm !== undefined) {
+          const ask = await next()
+          expect(ask.kind).toBe("confirm")
+          host.ui.respond(ask.requestId, confirm)
+        }
         return { list, diff, ...(await running) }
       }
       return { list, diff: undefined, ...(await running) }
@@ -701,7 +711,20 @@ test(
     expect((await run("/agents worktrees")).text).toContain(
       "Tidy the docs · coder · 1 file, +1 -0 · changed today",
     )
-    const discarded = await answer("/agents", (r) => (r.kind === "select" ? r.options[0] : ""), DISCARD_KEPT)
+    const cancelled = await answer(
+      "/agents",
+      (r) => (r.kind === "select" ? r.options[0] : ""),
+      DISCARD_KEPT,
+      false,
+    )
+    expect(cancelled.text).toBe('Kept the worktree of "Tidy the docs" (coder).')
+    expect(existsSync(old.dir)).toBe(true)
+    const discarded = await answer(
+      "/agents",
+      (r) => (r.kind === "select" ? r.options[0] : ""),
+      DISCARD_KEPT,
+      true,
+    )
     expect(discarded.text).toBe('Discarded the worktree of "Tidy the docs" (coder).')
     expect(existsSync(old.dir)).toBe(false)
     expect(existsSync(path.join(repo, "new.txt"))).toBe(false)

@@ -37,10 +37,29 @@ export function pruneCommand(): CommandDefinition {
     async run(args, ctx) {
       const artifacts = ctx.session.artifacts
       if (!artifacts) throw new Error("this session keeps no artifacts")
-      const scope = args.trim()
-      if (scope) {
-        if (!(scope in PRUNE_SCOPES))
-          throw new Error(`usage: /prune [${Object.keys(PRUNE_SCOPES).join("|")}]`)
+      const parts = args.trim().split(/\s+/).filter(Boolean)
+      const yes = parts.at(-1) === "--yes"
+      const scope = yes ? parts.slice(0, -1).join(" ") : args.trim()
+      if (scope || yes) {
+        if (!(scope in PRUNE_SCOPES) || parts.length > (yes ? 2 : 1))
+          throw new Error(`Usage: /prune [${Object.keys(PRUNE_SCOPES).join("|")}] [--yes]`)
+        if (scope === "all" && !yes && ctx.frontend !== "print") {
+          const u = artifacts.usage()
+          if (u.active + u.inactive + u.unused > 0) {
+            const detail =
+              u.active > 0
+                ? `${u.active} active ${u.active === 1 ? "artifact is" : "artifacts are"} still referenced in the current context. Reading one afterward says it was pruned.`
+                : "Every saved artifact of this session will be deleted."
+            const confirmed = await ctx.ui.confirm("Delete all artifacts?", detail, {
+              signal: ctx.signal,
+              tone: "warning",
+            })
+            if (!confirmed) {
+              ctx.print("Prune cancelled.")
+              return
+            }
+          }
+        }
         const r = await artifacts.prune(scope as keyof typeof PRUNE_SCOPES)
         ctx.print(
           r.removed

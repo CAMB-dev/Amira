@@ -8,6 +8,8 @@ import {
   hasUnpricedSearch,
   type Message,
   padCells,
+  plural,
+  type SubagentInfo,
   serverToolText,
   textCells,
   type Usage,
@@ -115,6 +117,7 @@ export function costReport(
   replies: readonly AssistantMessage[],
   compactions: readonly CompactionUsage[] = [],
   sideRequests: readonly CompactionUsage[] = [],
+  subagents: readonly SubagentInfo[] = [],
 ): string {
   const asReplies = compactions.map(
     (c): AssistantMessage => ({ role: "assistant", content: [], model: c.model, usage: c.usage }),
@@ -130,16 +133,43 @@ export function costReport(
       (r) => ({ ...r, side: label }),
     ),
   )
-  const rows: (ModelCost & { compaction?: boolean; side?: string })[] = [
+  const subagentsWithUsage = subagents.filter(
+    (s) =>
+      s.usage.input + s.usage.output + s.usage.cacheRead + s.usage.cacheWrite > 0 ||
+      s.usage.cost !== undefined,
+  )
+  const subagentRows: (ModelCost & { subagents?: number })[] = []
+  if (subagentsWithUsage.length) {
+    let usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    let subUnpricedSearch = false
+    for (const s of subagentsWithUsage) {
+      const pricingUnknown = usage.pricingUnknown || s.usage.pricingUnknown
+      usage = addUsage(usage, s.usage)
+      if (pricingUnknown) usage.pricingUnknown = true
+      if (hasUnpricedSearch({ content: [], usage: s.usage })) subUnpricedSearch = true
+    }
+    if (subUnpricedSearch) delete usage.cost
+    subagentRows.push({
+      model: "sub-agents",
+      speed: "standard",
+      replies: subagentsWithUsage.length,
+      usage,
+      ...(usage.cost !== undefined ? { cost: usage.cost } : {}),
+      subagents: subagentsWithUsage.length,
+    })
+  }
+  const rows: (ModelCost & { compaction?: boolean; side?: string; subagents?: number })[] = [
     ...costByModel(replies),
     ...compactionRows,
     ...sideRows,
+    ...subagentRows,
   ]
   const unpricedSearch =
     rows.some((r) => r.cost === undefined && (r.usage.webSearchRequests ?? 0) > 0) ||
     [...replies, ...asReplies, ...sideReplies].some(
       (r) => hasUnpricedSearch(r) && (r.usage?.webSearchRequests ?? 0) === 0,
-    )
+    ) ||
+    subagentsWithUsage.some((s) => hasUnpricedSearch({ content: [], usage: s.usage }))
   if (!rows.length) return "No model replies with usage in this session yet."
   const line = (r: Pick<ModelCost, "usage" | "cost">, label: string, count: string) => {
     const u = r.usage
@@ -159,11 +189,13 @@ export function costReport(
   const fastModels = new Set(rows.filter((r) => r.speed === "fast").map((r) => r.model))
   const body = rows.map((r) => {
     const model = fastModels.has(r.model) ? `${r.model} (${r.speed})` : r.model
-    return r.compaction
-      ? line(r, `${model} (compaction)`, `${r.replies} ${r.replies === 1 ? "compaction" : "compactions"}`)
-      : r.side
-        ? line(r, `${model} (${r.side})`, `${r.replies} requests`)
-        : line(r, model, `${r.replies} ${r.replies === 1 ? "reply" : "replies"}`)
+    return r.subagents !== undefined
+      ? line(r, "sub-agents", plural(r.subagents, "sub-agent"))
+      : r.compaction
+        ? line(r, `${model} (compaction)`, plural(r.replies, "compaction"))
+        : r.side
+          ? line(r, `${model} (${r.side})`, plural(r.replies, "request"))
+          : line(r, model, plural(r.replies, "reply", "replies"))
   })
   if (rows.length > 1) {
     const usage = rows.reduce<Usage>((u, r) => addUsage(u, r.usage), {

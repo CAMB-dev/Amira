@@ -88,13 +88,20 @@ export function extensionRows(
   settings: ExtensionSettingsTarget[] = [],
 ) {
   const names = new Set(installed.map((p) => p.name))
-  const standalone = settings
-    .filter((target) => target.standalone)
-    .map((target) => ({
-      label: `${target.name} · standalone`,
+  const standaloneTargets = settings.filter((target) => target.standalone)
+  const standaloneCounts = new Map<string, number>()
+  for (const target of standaloneTargets) {
+    standaloneCounts.set(target.name, (standaloneCounts.get(target.name) ?? 0) + 1)
+  }
+  const standalone = standaloneTargets.map((target) => {
+    const dup = (standaloneCounts.get(target.name) ?? 0) > 1
+    const base = `${target.name} · standalone`
+    return {
+      label: dup ? `${base} (${target.identity})` : base,
       description: oneLine(target.source),
       target,
-    }))
+    }
+  })
   const rows = installed.map((p) => ({
     label: `${packageName(p)} ${p.version} · ${p.scope} · ${p.enabled ? "enabled" : "disabled"}${!p.trusted ? " · not trusted" : ""}${p.shadowed ? " · shadowed" : ""}${hasUpdate(p, available) ? " · update available" : ""}`,
     description: oneLine(p.error ?? p.description),
@@ -369,6 +376,18 @@ export function extensionCommand(api: ExtensionAPI): { command: CommandDefinitio
       }
       try {
         if (parsed.sub) {
+          if (
+            parsed.sub === "remove" &&
+            ctx.frontend !== "print" &&
+            admin.list().some((p) => p.name === parsed.names[0] && p.scope === parsed.scope)
+          ) {
+            const confirmed = await ctx.ui.confirm(
+              `Remove ${parsed.names[0]} from ${parsed.scope} scope?`,
+              undefined,
+              { signal: ctx.signal, tone: "warning" },
+            )
+            if (!confirmed) return
+          }
           await perform(parsed.sub, parsed.names, parsed.scope)
           return
         }

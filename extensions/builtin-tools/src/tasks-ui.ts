@@ -296,12 +296,20 @@ export function tasksCommand(registry: BackgroundJobRegistry): CommandDefinition
       if (!pick) return
       const task = live[rows.indexOf(pick.option)]
       if (!task) return
-      if (pick.key === "x")
+      if (pick.key === "x") {
+        const current = tasks(registry, ctx.session).find((t) => t.id === task.id)
+        if (!current) return ctx.print(`${task.id} has already ended.`)
+        const ok = await ctx.ui.confirm(`Stop ${task.id}?`, clip(task.label, 120), {
+          signal: ctx.signal,
+          tone: "warning",
+        })
+        if (!ok) return
         return ctx.print(
           (await stop(task, registry, ctx))
             ? `Stopped ${task.id}.`
             : `${task.id} has ended or is still stopping.`,
         )
+      }
       await show(task, registry, ctx)
     },
   }

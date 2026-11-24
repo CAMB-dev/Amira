@@ -581,6 +581,19 @@ test("presenters: a background start, a read, a stop and the list", () => {
   expect(jobOutputPresenter.summary!(read.args)).toBe("job2 · wait for /ready/")
   expect(jobOutputPresenter.result!(read)).toBe("matched · 3 new lines · running")
   expect(jobOutputPresenter.body!(read, opts).map((l) => l.text)).toEqual(["a", "b", "ready"])
+  const multi = call(
+    { job_id: "job2" },
+    "[50 earlier characters are left out]\n\npara 1\n\npara 2\nlast line\n\nJob job2 is running (pid 7, started 3s ago).",
+    job("running", { outputLines: 4 }),
+  )
+  expect(jobOutputPresenter.body!(multi, opts).map((l) => l.text)).toEqual(["para 1", "para 2", "last line"])
+  expect(jobOutputPresenter.body!(multi, { ...opts, detail: "full" })).toEqual([
+    { kind: "muted", text: "[50 earlier characters are left out]" },
+    { kind: "code", text: "para 1" },
+    { kind: "code", text: "" },
+    { kind: "code", text: "para 2" },
+    { kind: "code", text: "last line" },
+  ])
   const stopped = call({ job_id: "job2" }, "Stopped job job2 (npm run dev).", job("stopped"))
   expect(jobStopPresenter.result!(stopped)).toBe("stopped")
   const list = call({}, "job2 · …", {

@@ -539,14 +539,14 @@ test("Escape in the action menu, edit form, or key input changes nothing", async
 })
 
 test("management Remove preserves confirmation, optional key removal, and the in-use guard", async () => {
-  for (const removeKey of [true, false, undefined]) {
+  for (const removeKey of [true, false]) {
     const session = await setup((r) => {
       if (r.kind === "select") return r.title === "Providers" ? "deepseek" : "Remove"
       if (r.kind === "confirm") return r.title.startsWith("Also") ? removeKey : true
       return undefined
     })
     expect((await session.run("/provider")).text).toBe('Removed provider "deepseek".')
-    expect(session.calls).toEqual([`remove deepseek key=${removeKey === true}`])
+    expect(session.calls).toEqual([`remove deepseek key=${removeKey}`])
     expect(session.asked.slice(2).map((r) => r.title)).toEqual([
       "Remove provider deepseek?",
       "Also delete its key (…wxyz) from ~/.amira/auth.json?",
@@ -557,6 +557,14 @@ test("management Remove preserves confirmation, optional key removal, and the in
       "warning",
     ])
   }
+  // Pressing Escape on the second confirmation aborts the removal instead of deleting the provider.
+  const cancelledSecond = await setup((r) => {
+    if (r.kind === "select") return r.title === "Providers" ? "deepseek" : "Remove"
+    if (r.kind === "confirm") return r.title.startsWith("Also") ? undefined : true
+    return undefined
+  })
+  expect((await cancelledSecond.run("/provider")).text).toBe("Kept it.")
+  expect(cancelledSecond.calls).toEqual([])
   for (const answer of [false, undefined]) {
     const session = await setup((r) =>
       r.kind === "select" ? (r.title === "Providers" ? "deepseek" : "Remove") : answer,

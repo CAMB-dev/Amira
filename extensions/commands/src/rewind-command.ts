@@ -1,4 +1,10 @@
-import type { ExtensionAPI, FileRewindPlan, SessionControl, UserMessage } from "@amira/api"
+import {
+  type ExtensionAPI,
+  type FileRewindPlan,
+  plural,
+  type SessionControl,
+  type UserMessage,
+} from "@amira/api"
 import { oneLine } from "./command-utils.ts"
 
 type RewindPick = { message: UserMessage; index: number }
@@ -44,13 +50,17 @@ function directRewindPreview(
   return lines.join("\n")
 }
 
-function parseDirectRewind(args: string): { nth: number; yes: boolean } {
+function parseDirectRewind(args: string): { nth: number; yes: boolean; conversationOnly: boolean } {
   const parts = args.trim().split(/\s+/)
-  const yes = parts.at(-1) === "--yes"
   const number = Number(parts[0])
-  if (!Number.isSafeInteger(number) || number < 1 || parts.length !== (yes ? 2 : 1))
+  const flags = parts.slice(1)
+  const yes = flags.includes("--yes")
+  const conversationOnly = flags.includes("--conversation-only")
+  const validFlags = flags.every((f) => f === "--yes" || f === "--conversation-only")
+  const uniqueFlags = new Set(flags).size === flags.length
+  if (!Number.isSafeInteger(number) || number < 1 || !validFlags || !uniqueFlags)
     throw new Error("Usage: /rewind <n> [--yes]")
-  return { nth: number, yes }
+  return { nth: number, yes, conversationOnly }
 }
 
 function ordinal(number: number): string {
@@ -91,24 +101,33 @@ export function registerRewindCommands(api: ExtensionAPI): void {
         return
       }
 
-      const { nth, yes } = parseDirectRewind(args)
+      const { nth, yes, conversationOnly } = parseDirectRewind(args)
       const pick = picks[nth - 1]
       if (!pick) throw new Error(`There are only ${picks.length} user messages to rewind to`)
       const plan = ctx.session.planRewind?.(pick.index)
+      const restoreFiles = !conversationOnly && !!plan && restoresFiles(plan)
       if (!yes) {
         if (ctx.frontend === "print")
           throw new Error("Print mode cannot confirm rewind; repeat this command with --yes to proceed")
+        const preview = directRewindPreview(
+          pick,
+          ctx.session.messages().length - pick.index,
+          conversationOnly ? undefined : plan,
+        )
+        const conflictHint =
+          restoreFiles && plan && plan.conflicts.length > 0
+            ? `\nOr run /rewind ${nth} --conversation-only to rewind without restoring files.`
+            : ""
         const confirmed = await ctx.ui.confirm(
           `Rewind to before the ${ordinal(nth)} most recent user message?`,
-          directRewindPreview(pick, ctx.session.messages().length - pick.index, plan),
-          { signal: ctx.signal },
+          `${preview}${conflictHint}`,
+          { signal: ctx.signal, tone: "warning" },
         )
         if (!confirmed) {
           ctx.print("Rewind cancelled.")
           return
         }
       }
-      const restoreFiles = !!plan && restoresFiles(plan)
       await rewind(pick.index, { restoreFiles, signal: ctx.signal })
       const files =
         !plan || !restoreFiles
@@ -122,11 +141,31 @@ export function registerRewindCommands(api: ExtensionAPI): void {
   api.registerCommand({
     name: "rewind-prune",
     description: "Discard this session's captured file history and free its storage",
-    run: (_args, ctx) => {
+    args: { hint: "[--yes]" },
+    run: async (args, ctx) => {
       if (!ctx.session.pruneFileHistory) throw new Error("File rewind storage is not available")
+      const trimmed = args.trim()
+      if (trimmed && trimmed !== "--yes") throw new Error("Usage: /rewind-prune [--yes]")
+      if (trimmed !== "--yes") {
+        if (ctx.frontend === "print")
+          throw new Error("Print mode cannot confirm pruning file history; repeat with --yes to proceed")
+        const confirmed = await ctx.ui.confirm(
+          "Discard captured file history?",
+          "Earlier captured file changes can no longer be restored.",
+          { signal: ctx.signal, tone: "warning" },
+        )
+        if (!confirmed) {
+          ctx.print("Prune cancelled.")
+          return
+        }
+      }
       const result = ctx.session.pruneFileHistory()
+      if (result.files === 0) {
+        ctx.print("No captured file history to prune.")
+        return
+      }
       ctx.print(
-        `Pruned ${result.files} file images (${result.bytes} bytes). Earlier captured changes can no longer be restored.`,
+        `Pruned ${plural(result.files, "file image")} (${result.bytes} bytes). Earlier captured changes can no longer be restored.`,
       )
     },
   })

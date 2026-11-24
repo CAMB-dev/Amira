@@ -12,6 +12,7 @@ export function costCommand(): CommandDefinition {
           ctx.session.replies(),
           ctx.session.compactions?.() ?? [],
           ctx.session.sideRequests?.() ?? [],
+          ctx.session.subagents?.() ?? [],
         ),
       )
     },

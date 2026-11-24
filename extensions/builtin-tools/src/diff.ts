@@ -148,6 +148,17 @@ function toHunks(ops: Op[], context: number): FileDiff {
     const end = Math.min(ops.length, to + context)
     const slice = ops.slice(from, end)
     if (kept + slice.length > MAX_HUNK_LINES) {
+      const remaining = MAX_HUNK_LINES - kept
+      if (remaining > 0) {
+        const part = slice.slice(0, remaining)
+        hunks.push({
+          oldStart: oldNo[from]!,
+          oldLines: part.filter((o) => o.op !== "+").length,
+          newStart: newNo[from]!,
+          newLines: part.filter((o) => o.op !== "-").length,
+          lines: part.map((o) => o.op + o.text),
+        })
+      }
       truncated = true
       break
     }

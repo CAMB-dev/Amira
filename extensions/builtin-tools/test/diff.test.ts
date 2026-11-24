@@ -76,4 +76,6 @@ test("huge changes keep their counts but only the first hunk lines", () => {
   const after = lines(2000, 5000).join("\n")
   const d = fileDiff(before, after)
   expect(d).toMatchObject({ added: 2000, removed: 2000, truncated: true })
+  expect(d.hunks.length).toBeGreaterThan(0)
+  expect(d.hunks[0]!.lines).toHaveLength(400)
 })

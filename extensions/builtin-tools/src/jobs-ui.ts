@@ -28,6 +28,7 @@ import {
   STOP_GRACE_MS,
   watchJobEnds,
 } from "./jobs.ts"
+import { NOT_CONTAINED_WARNING } from "./shell-notes.ts"
 import { registerTasks, tasksPanel } from "./tasks-ui.ts"
 
 /**
@@ -227,24 +228,49 @@ export function jobsCommand(registry: JobRegistry): CommandDefinition {
       }
       const now = Date.now()
       // The list numbers them itself; a digit picks that one.
-      const rows = list.map((j) => jobRow(j, now))
-      if (ctx.frontend === "print") return ctx.print(rows.map((r, i) => `${i + 1}. ${r}`).join("\n"))
-      const sections: SelectSection[] = [
-        {
+      if (ctx.frontend === "print")
+        return ctx.print(list.map((j, i) => `${i + 1}. ${jobRow(j, now)}`).join("\n"))
+      const running = list.filter(isLive)
+      const finished = list.filter((j) => !isLive(j))
+      const ordered = [...running, ...finished]
+      const rows = ordered.map((j) => jobRow(j, now))
+      const sections: SelectSection[] = []
+      if (running.length) {
+        sections.push({
           at: 0,
+          ...(finished.length ? { title: "Running" } : {}),
           choose: ctx.openView ? "open" : "print",
           keys: [{ key: "x", label: "stop" }, ...(ctx.openView ? [{ key: "p", label: "print" }] : [])],
-        },
-      ]
+        })
+      }
+      if (finished.length) {
+        sections.push({
+          at: running.length,
+          ...(running.length ? { title: "Finished" } : {}),
+          choose: ctx.openView ? "open" : "print",
+          ...(ctx.openView ? { keys: [{ key: "p", label: "print" }] } : {}),
+        })
+      }
       const pick = await ctx.ui.choose("Background jobs", rows, {
         sections,
-        descriptions: list.map((j) => lastLine(registry, j.id)),
+        descriptions: ordered.map((j) => lastLine(registry, j.id)),
         signal: ctx.signal,
       })
       if (!pick) return
-      const chosen = list[rows.indexOf(pick.option)]
+      const chosen = ordered[rows.indexOf(pick.option)]
       if (!chosen) return
-      if (pick.key === "x") return stopJobs(ctx, registry, list, chosen.id)
+      if (pick.key === "x") {
+        const current = registry.get(chosen.id)
+        if (!current || !isLive(current))
+          return ctx.print(`${chosen.id} is not running${current ? `: it ${endText(current)}.` : "."}`)
+        const ok = await ctx.ui.confirm(
+          `Stop ${chosen.id}?`,
+          clip(chosen.command.replace(/\s+/g, " ").trim(), 120),
+          { signal: ctx.signal, tone: "warning" },
+        )
+        if (!ok) return
+        return stopJobs(ctx, registry, list, chosen.id)
+      }
       const job = registry.get(chosen.id)
       if (!job) return ctx.print(`${chosen.id} is no longer kept.`)
       if (pick.key !== "p" && ctx.openView?.({ kind: JOB_VIEW, data: { id: job.id } })) return
@@ -267,10 +293,30 @@ function shortState(d: BackgroundJobDetails): string {
   return d.status
 }
 
+const DROPPED_NOTE = /^\[\d+ earlier characters are left out.*\]$/
+const POLL_NOTE =
+  "Nothing new again. Do not poll: pass wait_for (and a timeout) to wait for the line you expect, or continue with other work."
+const JOB_STATUS_SENTENCE =
+  /^Job \S+ (?:is running \(.*\)|exited with code -?\d+|was stopped|was killed.*|failed to start: .*|was lost: .*)\.$/
+const JOB_WAIT_SENTENCE =
+  /^(?:Matched: .*|No line matched \/.*\/ within \d+ ms\.|The job ended before a line matched\.|The wait was aborted\.)$/
+
 const outputBody = (text: string, detail: string, max = 3): ToolLine[] => {
-  // The tool's own sentences come after the output; the presenter shows the output's end only.
-  const lines = text.split("\n\n")[0]?.split("\n") ?? []
-  if (detail === "full") return lines.map((t) => ({ kind: "code", text: t }))
+  const parts = text.split("\n\n")
+  // Strip only the exact trailing paragraphs job_output adds after the output, preserving blank lines inside output.
+  if (parts.at(-1) === NOT_CONTAINED_WARNING) parts.pop()
+  if (parts.at(-1) === POLL_NOTE) parts.pop()
+  if (parts.length > 1 && JOB_STATUS_SENTENCE.test(parts.at(-1)!)) parts.pop()
+  if (parts.length > 1 && JOB_WAIT_SENTENCE.test(parts.at(-1)!)) parts.pop()
+  const dropped = parts.length > 1 && DROPPED_NOTE.test(parts[0]!) ? parts.shift() : undefined
+  const bodyText = parts.join("\n\n")
+  const lines = bodyText ? bodyText.split("\n") : []
+  if (detail === "full") {
+    return [
+      ...(dropped ? [{ kind: "muted" as const, text: dropped }] : []),
+      ...lines.map((t) => ({ kind: "code" as const, text: t })),
+    ]
+  }
   if (detail !== "summary") return []
   const tail = lines.filter((l) => l.trim() && l !== "(no new output)").slice(-max)
   return tail.map((t) => ({ kind: "code", text: t }))

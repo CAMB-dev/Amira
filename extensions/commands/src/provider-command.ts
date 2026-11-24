@@ -163,7 +163,13 @@ async function manage(
   if (action === "Use a model from it") {
     const models = ctx.session.models().filter((model) => model.startsWith(`${id}/`))
     if (!models.length) {
-      ctx.print(`No models configured; add one with /provider edit ${id}.`)
+      const provider = ctx.session.providers().find((p) => p.id === id)
+      const draft = a.draft(id)
+      if (draft?.models.length && provider && !provider.hasKey) {
+        ctx.print(`No API key available for ${id}; set one with /provider key ${id}.`, "warning")
+      } else {
+        ctx.print(`No models configured; add one with /provider edit ${id}.`)
+      }
       return
     }
     const model = await pickModel(ctx, `Model from ${id}`, models)
@@ -267,12 +273,19 @@ async function remove(ctx: CommandContext, id: string, a: ProviderAdmin) {
     return
   }
   const stored = a.storedKeyHint(id)
-  const removeKey = stored
-    ? (await ctx.ui.confirm(`Also delete its key (${stored}) from ~/.amira/auth.json?`, undefined, {
-        signal: ctx.signal,
-        tone: "warning",
-      })) === true
-    : false
+  let removeKey = false
+  if (stored) {
+    const ans = await ctx.ui.confirm(`Also delete its key (${stored}) from ~/.amira/auth.json?`, undefined, {
+      signal: ctx.signal,
+      tone: "warning",
+    })
+    ctx.signal.throwIfAborted()
+    if (ans === undefined) {
+      ctx.print("Kept it.")
+      return
+    }
+    removeKey = ans
+  }
   ctx.print(await a.remove(id, { removeKey }))
 }
 

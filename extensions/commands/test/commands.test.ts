@@ -1201,7 +1201,7 @@ test("/prune reports artifacts by reference and deletes only the scope asked for
     "Deleted 1 artifact (1.0 MB). Reading one now says it was pruned.",
   )
   expect((await run("/prune inactive")).text).toBe("Nothing to delete.")
-  expect((await run("/prune everything")).error).toBe("usage: /prune [unused|inactive|all]")
+  expect((await run("/prune everything")).error).toBe("Usage: /prune [unused|inactive|all] [--yes]")
   expect(pruned).toEqual(["unused", "inactive"])
   expect((await host.complete("/prune ")).candidates.map((c) => c.value)).toEqual([
     "unused",
@@ -1421,6 +1421,51 @@ test("/reload reloads extensions and /quit asks the frontend to leave", async ()
   expect(quit).toBe(true)
   expect(r.output).toEqual(["Reloaded extensions."])
   expect(calls).toEqual(["reload"])
+
+  // When busy in TUI, /quit asks for confirmation first.
+  const busy = await setup({ info: () => ({ ...fakeControl().control.info(), busy: true }) }, [false, true])
+  let busyQuit = false
+  await busy.host.run("/quit", { frontend: "tui", quit: () => (busyQuit = true) })
+  expect(busyQuit).toBe(false)
+  await busy.host.run("/quit", { frontend: "tui", quit: () => (busyQuit = true) })
+  expect(busyQuit).toBe(true)
+})
+
+test("/cost includes sub-agent usage and /rewind-prune requires confirmation", async () => {
+  const { run } = await setup({
+    replies: () => [reply("openai/gpt-5", 1000, 100, 0.01)],
+    subagents: () => [
+      {
+        id: "sa_1",
+        parentSessionId: "s1",
+        role: "explorer",
+        title: "Search",
+        task: "find files",
+        status: "done",
+        depth: 1,
+        usage: { input: 2000, output: 200, cacheRead: 0, cacheWrite: 0, cost: 0.02 },
+      },
+    ],
+  })
+  const cost = (await run("/cost")).text
+  expect(cost).toContain("sub-agents")
+  expect(cost).toContain("1 sub-agent")
+  expect(cost).toContain("$0.030")
+
+  let pruned = 0
+  const pruneEnv = await setup(
+    {
+      pruneFileHistory: () => {
+        pruned++
+        return { files: 2, bytes: 1024 }
+      },
+    },
+    [false, true],
+  )
+  expect((await pruneEnv.run("/rewind-prune")).text).toBe("Prune cancelled.")
+  expect(pruned).toBe(0)
+  expect((await pruneEnv.run("/rewind-prune")).text).toContain("Pruned 2 file images")
+  expect(pruned).toBe(1)
 })
 
 test("formatting helpers", () => {

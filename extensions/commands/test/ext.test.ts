@@ -234,7 +234,7 @@ test(
   "/ext local file git install, reinstall, update, disable, enable and remove use the core",
   async () => {
     const { admin, repo, manifest, index } = await fixture()
-    const { run, reloads } = await setup(admin)
+    const { run, reloads } = await setup(admin, (r) => (r.kind === "confirm" ? true : undefined))
     expect((await run("/ext install fixture")).output.join("\n")).toContain(
       "Installed fixture 1.0.0 into user scope. Reload now? (/reload)",
     )

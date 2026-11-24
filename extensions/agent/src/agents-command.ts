@@ -258,6 +258,15 @@ async function reviewKept(ctx: CommandContext, worktrees: KeptWorktrees, w: Kept
         : `Merged the changes of ${who} into the working tree: ${formatStat(r.stat)}.`
     ctx.print(r.cleanup ? `${done} The worktree could not be removed: ${r.cleanup}` : done)
   } else if (choice === DISCARD_KEPT) {
+    const ok = await ctx.ui.confirm(
+      `Discard worktree and changes of ${who}?`,
+      `This permanently removes ${w.dir}.`,
+      { signal: ctx.signal, tone: "warning" },
+    )
+    if (!ok) {
+      ctx.print(`Kept the worktree of ${who}.`)
+      return
+    }
     const problem = await worktrees.discard(w)
     ctx.print(
       problem
