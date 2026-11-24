@@ -111,10 +111,10 @@ test("named presets fit the picker header; longer inherited labels use normal na
   const inherited = control(undefined, { name: "custom", shimmerEffect: "reveal" }).shimmer
   inherited.handleInput(key("tab"))
   const inheritedHeader = inherited.header("light", plain.theme)
-  expect(stripAnsi(inheritedHeader)).toBe("› Appearance: auto · dark · light · Shimmer: theme (reveal)")
+  expect(stripAnsi(inheritedHeader)).toBe("› Appearance: auto · dark · light │ Shimmer: theme (reveal)")
   const narrow = truncateToWidth(inheritedHeader, 58, "…")
   expect(visibleWidth(narrow)).toBe(58)
-  expect(stripAnsi(narrow)).toBe("› Appearance: auto · dark · light · Shimmer: theme (revea…")
+  expect(stripAnsi(narrow)).toBe("› Appearance: auto · dark · light │ Shimmer: theme (revea…")
 })
 
 test("knob edits stay sparse and inherit the theme; panel Enter returns to Shimmer then applies", () => {

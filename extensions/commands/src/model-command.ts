@@ -11,10 +11,31 @@ export async function pickModel(
   models: string[],
 ): Promise<string | undefined> {
   const current = modelLabel(ctx.session.info().model)
-  const pick = await ctx.ui.choose(title, models, {
-    sections: [{ at: 0 }],
-    ...(models.includes(current) ? { initial: current } : {}),
-    descriptions: models.map((model) => (model === current ? "current" : "")),
+  // Group by provider when multiple providers are present so long model lists stay scannable.
+  const groups = new Map<string, string[]>()
+  for (const model of models) {
+    const slash = model.indexOf("/")
+    const provider = slash > 0 ? model.slice(0, slash) : ""
+    const list = groups.get(provider) ?? []
+    list.push(model)
+    groups.set(provider, list)
+  }
+  const multiProvider = groups.size > 1 && [...groups.keys()].every(Boolean)
+  const ordered = multiProvider ? [...groups.values()].flat() : models
+  const sections: { at: number; title?: string }[] = []
+  if (multiProvider) {
+    let at = 0
+    for (const [provider, list] of groups) {
+      sections.push({ at, title: provider })
+      at += list.length
+    }
+  } else {
+    sections.push({ at: 0 })
+  }
+  const pick = await ctx.ui.choose(title, ordered, {
+    sections,
+    ...(ordered.includes(current) ? { initial: current } : {}),
+    descriptions: ordered.map((model) => (model === current ? "current" : "")),
     signal: ctx.signal,
   })
   return pick?.option

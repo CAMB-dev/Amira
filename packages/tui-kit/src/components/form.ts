@@ -512,10 +512,11 @@ export class Form implements Component {
       else visible.push("")
       while (visible.length + keyLines.length < bodyRows) visible.push("")
       visible.push(...keyLines)
+      const sideRule = ctx.glyphs?.codeSide ?? "│"
       for (let row = 0; row < body.length; row++) {
         const left = truncateToWidth(body[row] ?? "", formWidth)
         body[row] =
-          `${left}${" ".repeat(Math.max(0, formWidth - visibleWidth(left)))} ${theme.border("|")} ${theme.muted(visible[row] ?? "")}`
+          `${left}${" ".repeat(Math.max(0, formWidth - visibleWidth(left)))} ${theme.border(sideRule)} ${theme.muted(visible[row] ?? "")}`
       }
     }
     const output = [...header, ...body, ...footer].slice(0, Math.max(1, ctx.rows))

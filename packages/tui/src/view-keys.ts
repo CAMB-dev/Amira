@@ -1,5 +1,5 @@
 import type { ViewKey } from "@amira/api"
-import { type Theme, truncateToWidth } from "@amira/tui-kit"
+import { type LineInput, type Theme, truncateToWidth, visibleWidth } from "@amira/tui-kit"
 import { terminalText } from "./diff-view.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { type HintItem, styleHint } from "./hint.ts"
@@ -48,4 +48,27 @@ export function viewInputHint(
 
 function keyLabel(key: string): string {
   return bindingLabel({ name: key === "shift-tab" ? "tab" : terminalText(key), shift: key === "shift-tab" })
+}
+
+/** Inline view prompt keeping `enter send · esc cancel` visible even after typing begins. */
+export function renderViewPrompt(
+  title: string,
+  input: LineInput,
+  width: number,
+  theme: Theme,
+  focused: boolean,
+  back: string | undefined,
+): string {
+  const label = truncateToWidth(`${title} `, Math.max(1, Math.floor(width / 2)), viewEllipsis())
+  const room = Math.max(1, width - visibleWidth(label))
+  const hintText = `${bindingLabel({ name: "enter" })} send${back ? ` ${glyphs.separator} ${back} cancel` : ""}`
+  const showTail = input.value.length > 0 && room > visibleWidth(hintText) + 12
+  const rendered = input.render(showTail ? room - visibleWidth(hintText) - 2 : room, theme, {
+    focused,
+    placeholder: hintText,
+    more: viewEllipsis("…"),
+  })
+  if (!showTail) return `${theme.accent(label)}${rendered}`
+  const gap = " ".repeat(Math.max(2, room - visibleWidth(rendered) - visibleWidth(hintText)))
+  return `${theme.accent(label)}${rendered}${gap}${styleHint(hintText, theme)}`
 }

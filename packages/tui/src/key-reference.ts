@@ -2,6 +2,7 @@ import {
   bold,
   type Component,
   type InputEvent,
+  LineInput,
   matchesKey,
   type RenderContext,
   ScrollView,
@@ -13,7 +14,7 @@ import {
 } from "@amira/tui-kit"
 import { dockKeyHelp } from "./app/dock.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
-import { fitHint } from "./hint.ts"
+import { fitHint, styleHint } from "./hint.ts"
 import {
   ACTIONS,
   type Action,
@@ -58,6 +59,8 @@ export class KeyReference implements Component {
   #scroll: ScrollView
   /** The first render puts it at the top, once its length is known. */
   #placed = false
+  #filtering = false
+  #filter = new LineInput()
 
   constructor(
     private keys: Keybindings,
@@ -72,6 +75,32 @@ export class KeyReference implements Component {
   }
 
   handleInput(e: InputEvent): boolean {
+    if (this.#filtering) {
+      if (matchesKey(e, "c", { ctrl: true })) {
+        this.opts.onClose()
+        return true
+      }
+      if (matchesKey(e, "escape")) {
+        this.#filtering = false
+        this.#filter.value = ""
+        this.#scroll.scrollToTop()
+        return true
+      }
+      if (matchesKey(e, "enter")) {
+        this.#filtering = false
+        return true
+      }
+      const before = this.#filter.value
+      if (this.#filter.handleInput(e)) {
+        if (this.#filter.value !== before) this.#scroll.scrollToTop()
+        return true
+      }
+      return this.#scroll.handleInput(e)
+    }
+    if (matchesKey(e, "/") && e.type === "key" && !e.ctrl && !e.alt) {
+      this.#filtering = true
+      return true
+    }
     if (
       matchesKey(e, "escape") ||
       matchesKey(e, "q") ||
@@ -81,17 +110,36 @@ export class KeyReference implements Component {
       this.opts.onClose()
       return true
     }
+    if (matchesKey(e, "j")) {
+      this.#scroll.scrollBy(1)
+      return true
+    }
+    if (matchesKey(e, "k")) {
+      this.#scroll.scrollBy(-1)
+      return true
+    }
     return this.#scroll.handleInput(e)
   }
 
   render(width: number, ctx: RenderContext): string[] {
     const { theme } = ctx
+    const filterRow =
+      this.#filtering || this.#filter.value
+        ? [
+            `  ${theme.accent(glyphs.search)} ${theme.muted("filter:")} ${this.#filter.render(
+              Math.max(4, width - 12),
+              theme,
+              { focused: this.#filtering, placeholder: "action, key, or description" },
+            )}`,
+          ]
+        : []
     const head = [
       truncateToWidth(`  ${bold(theme.text("Keys"))}`, width, viewEllipsis()),
       ...wrapText(
         "To change a key, map the action name after its description to keys in keybindings.json, in Amira's home folder (~/.amira unless AMIRA_HOME says otherwise).",
         Math.max(1, width - 2),
       ).map((l) => `  ${theme.muted(l)}`),
+      ...filterRow,
       theme.muted(glyphs.rule.repeat(width)),
     ]
     this.#scroll.height = Math.max(1, ctx.rows - head.length - 1)
@@ -112,20 +160,42 @@ export class KeyReference implements Component {
   }
 
   #body(width: number, theme: Theme): string[] {
-    const groups = SCOPES.map((s) => ({
+    const query = this.#filter.value.trim().toLowerCase()
+    const rawGroups = SCOPES.map((s) => ({
       ...s,
       rows: (Object.keys(ACTIONS) as Action[])
         .filter((a) => ACTIONS[a].scope === s.scope)
         .map((a) => ({
           keys: this.#labels(a),
-          description: `${ACTIONS[a].description} ${glyphs.separator} ${a}`,
+          description: ACTIONS[a].description,
+          action: a as string,
         })),
     }))
-    groups.push({ scope: "view", title: "Docked views", rows: dockKeyHelp(this.keys) })
+    rawGroups.push({
+      scope: "view",
+      title: "Docked views",
+      rows: dockKeyHelp(this.keys).map((r) => ({ ...r, action: "" })),
+    })
+    const groups = query
+      ? rawGroups
+          .map((g) => ({
+            ...g,
+            rows: g.rows.filter(
+              (r) =>
+                g.title.toLowerCase().includes(query) ||
+                (r.keys ?? "not bound").toLowerCase().includes(query) ||
+                r.description.toLowerCase().includes(query) ||
+                r.action.toLowerCase().includes(query),
+            ),
+          }))
+          .filter((g) => g.rows.length > 0)
+      : rawGroups
+    if (!groups.length) return [`  ${theme.warning(`no keys match "${this.#filter.value.trim()}"`)}`]
     const widest = Math.max(...groups.flatMap((g) => g.rows.map((r) => visibleWidth(r.keys ?? "not bound"))))
     // Two spaces of indent, the keys column, two spaces, then the description.
     const keysWidth = Math.max(4, Math.min(MAX_KEYS_WIDTH, widest, Math.floor((width - 4) / 3)))
     const textWidth = Math.max(8, width - keysWidth - 4)
+    const dim = themeToken(theme, "dim") ?? theme.muted
     const out: string[] = []
     for (const g of groups) {
       if (out.length) out.push("")
@@ -135,11 +205,18 @@ export class KeyReference implements Component {
       for (const r of g.rows) {
         const keyLines = r.keys ? wrapText(r.keys, keysWidth) : ["not bound"]
         const style = r.keys ? theme.text : theme.muted
-        const textLines = wrapText(r.description, textWidth)
+        const full = r.action ? `${r.description} ${glyphs.separator} ${r.action}` : r.description
+        const textLines = wrapText(full, textWidth)
+        const actionTail = r.action ? ` ${glyphs.separator} ${r.action}` : ""
         for (let i = 0; i < Math.max(keyLines.length, textLines.length); i++) {
           const k = keyLines[i] ?? ""
           const pad = " ".repeat(Math.max(0, keysWidth - visibleWidth(k)))
-          const line = `  ${style(k)}${pad}  ${theme.muted(textLines[i] ?? "")}`
+          const t = textLines[i] ?? ""
+          const styledText =
+            actionTail && t.endsWith(actionTail)
+              ? `${theme.muted(t.slice(0, -actionTail.length))}${dim(actionTail)}`
+              : theme.muted(t)
+          const line = `  ${style(k)}${pad}  ${styledText}`
           out.push(truncateToWidth(line, width, viewEllipsis()))
         }
       }
@@ -166,10 +243,13 @@ export class KeyReference implements Component {
       [
         ...where.map((text) => ({ text, priority: 2 })),
         { text: `${move} ${scroll} scroll`, priority: 1 },
-        { text: `${keyLabel({ name: "escape" })} close`, priority: 4 },
+        {
+          text: `${keyLabel({ name: "escape" })} ${this.#filtering ? "clear filter" : "close"}`,
+          priority: 4,
+        },
       ],
       Math.max(1, width - 2),
     )
-    return `  ${theme.muted(hint)}`
+    return `  ${styleHint(hint, theme)}`
   }
 }

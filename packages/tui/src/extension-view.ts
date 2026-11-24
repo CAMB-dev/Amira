@@ -51,6 +51,7 @@ import { scrollPosition, waitingLine } from "./view-helpers.ts"
 import {
   viewKeyHints as keyHints,
   namedViewKeys as NAMED,
+  renderViewPrompt,
   usableViewKey as usable,
   viewInputHint,
 } from "./view-keys.ts"
@@ -831,43 +832,41 @@ export class ExtensionViewer implements Component {
       )
     }
     if (this.#confirm) return theme.warning(truncateToWidth(this.#confirm.text, width, viewEllipsis()))
-    const asking = this.#prompt
-    if (asking) {
-      const label = truncateToWidth(`${asking.title} `, Math.max(1, Math.floor(width / 2)), viewEllipsis())
-      const room = Math.max(1, width - visibleWidth(label))
-      const back = this.#navigationLabel("view.back", true)
-      const placeholder = `${bindingLabel({ name: "enter" })} send${back ? ` ${glyphs.separator} ${back} cancel` : ""}`
-      return `${theme.accent(label)}${asking.input.render(room, theme, { focused: this.focused, placeholder, more: viewEllipsis("…") })}`
+    if (this.#prompt) {
+      const p = this.#prompt
+      return renderViewPrompt(
+        p.title,
+        p.input,
+        width,
+        theme,
+        this.focused,
+        this.#navigationLabel("view.back", true),
+      )
     }
     if (this.#view.hostKeys === "minimal")
       return theme.muted(truncateToWidth(this.#backHint(), width, viewEllipsis()))
-    if (this.#ui)
-      return styleHint(
-        fitViewHint(
-          [
-            ...keyHints(this.#view.keys ?? []),
-            ...(this.#opts.hostFocus
-              ? [
-                  this.needsTab && { text: "tab focus", priority: 2 },
-                  {
-                    text: `${[glyphs.arrowUp, glyphs.arrowDown].join(glyphs.arrowUp.length === 1 && glyphs.arrowDown.length === 1 ? "" : "/")} navigate`,
-                    priority: 2,
-                  },
-                  { text: "enter open/send", priority: 2 },
-                ]
-              : [
-                  {
-                    text: `tab focus ${glyphs.separator} arrows navigate ${glyphs.separator} enter open/send`,
-                    priority: 2,
-                  },
-                ]),
-            { text: this.#scrollHint(), priority: 1 },
-            { text: this.#backHint(), priority: 5 },
-          ],
-          width,
-        ),
-        theme,
-      )
+    if (this.#ui) {
+      const arrows = `${glyphs.arrowUp}${glyphs.arrowUp.length === 1 && glyphs.arrowDown.length === 1 ? "" : "/"}${glyphs.arrowDown}`
+      const nav = this.#opts.hostFocus
+        ? [
+            this.needsTab && { text: "tab focus", priority: 2 },
+            { text: `${arrows} navigate`, priority: 2 },
+            { text: "enter open/send", priority: 2 },
+          ]
+        : [
+            {
+              text: `tab focus ${glyphs.separator} arrows navigate ${glyphs.separator} enter open/send`,
+              priority: 2,
+            },
+          ]
+      const items = [
+        ...keyHints(this.#view.keys ?? []),
+        ...nav,
+        { text: this.#scrollHint(), priority: 1 },
+        { text: this.#backHint(), priority: 5 },
+      ]
+      return styleHint(fitViewHint(items, width), theme)
+    }
     const scroll = this.scroll
     const p = scroll.position
     // The way back stays longest, then the view's own keys; the scroll keys go first.

@@ -1243,8 +1243,8 @@ test("live preview sits beside wide forms and below narrow forms", () => {
     onCancel: () => {},
   })
   const wide = form.render(120, { ...plain, rows: 36 })
-  expect(stripAnsi(wide.find((line) => line.includes("Name"))!)).toContain("| Preview")
-  expect(wide.some((line) => line.includes("| settings.json"))).toBe(true)
+  expect(stripAnsi(wide.find((line) => line.includes("Name"))!)).toContain("│ Preview")
+  expect(wide.some((line) => line.includes("│ settings.json"))).toBe(true)
   expect(wide.some((line) => line.includes("key -> auth.json: ****"))).toBe(true)
   previewValue = "changed"
   expect(form.render(120, { ...plain, rows: 36 }).join("\n")).toContain("entry: changed")

@@ -102,7 +102,7 @@ for (const mode of ["fullscreen"] as const) {
         const app = await setup([], { cols, rows: 12, commands, settings: { mode, margin, marginRows: 0 } })
         try {
           app.terminal.send("/")
-          await waitFor(() => app.live().includes("enter run"), "command popup")
+          await waitFor(() => app.live().includes("↑↓ select"), "command popup")
           app.terminal.send("\x1b[B")
           await Bun.sleep(30)
           for (let i = 0; i < 12; i++) {

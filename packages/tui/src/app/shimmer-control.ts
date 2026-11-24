@@ -12,6 +12,7 @@ import { bold, type InputEvent, type RenderContext, type Theme, underline } from
 import { Dialog } from "../dialog.ts"
 import { dialogFrame } from "../dialog-frame.ts"
 import { glyphs } from "../glyphs.ts"
+import { styleHint } from "../hint.ts"
 import { type Keybindings, keyLabel } from "../keybindings.ts"
 
 const PRESETS = Object.keys(SHIMMER_PRESETS) as ShimmerPreset[]
@@ -107,7 +108,8 @@ export class ShimmerControl {
     const shimmer = `Shimmer: ${label}`
     // The controls share the list's cursor column, so focusing them never shifts their text.
     const marker = this.focus === "list" ? "  " : `${accent(glyphs.choice)} `
-    return `${marker}${appearanceLabel}${variants.join(separator)}${separator}${
+    const groupDivider = theme.dim(` ${glyphs.treePipe} `)
+    return `${marker}${appearanceLabel}${variants.join(separator)}${groupDivider}${
       this.focus === "shimmer" ? accent(shimmer) : theme.muted(shimmer)
     }`
   }
@@ -218,7 +220,7 @@ export class ShimmerControl {
       `${resolved.period} ms`,
       resolved.edge,
       resolved.direction,
-      `${this.colorName(normalized?.colors)}${pair ? ` (${pair.join(" → ")})` : ""}`,
+      `${this.colorName(normalized?.colors)}${pair ? ` (${pair.join(` ${glyphs.goesTo} `)})` : ""}`,
     ]
     const rows = KNOBS.map((key, index) => {
       const text = `${key}: ${values[index]}`
@@ -245,7 +247,7 @@ export class ShimmerControl {
         ...(spaced ? [""] : []),
         ...rows.slice(start, start + room),
         ...(spaced ? [""] : []),
-        theme.muted(hint),
+        styleHint(hint, theme),
       ],
       width,
       ctx,

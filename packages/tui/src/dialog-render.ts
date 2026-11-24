@@ -12,7 +12,7 @@ import {
 } from "@amira/tui-kit"
 import { dialogFrame } from "./dialog-frame.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
-import { fitHint, type HintItem } from "./hint.ts"
+import { fitHint, type HintItem, styleHint } from "./hint.ts"
 
 export type DialogHints = ((HintItem & { key?: KeyEvent }) | false | "" | null | undefined)[]
 
@@ -86,7 +86,7 @@ export class DialogTargets {
           width: visibleWidth(item.text),
         })
     }
-    return theme.muted(text)
+    return styleHint(text, theme)
   }
 
   beginOptions(): void {

@@ -18,7 +18,7 @@ import type { Dialog } from "../dialog.ts"
 import type { FilePicker } from "../file-picker.ts"
 import { chromeText, glyphs, viewEllipsis } from "../glyphs.ts"
 import { CONTENT_INSET } from "../grid.ts"
-import { fitHint } from "../hint.ts"
+import { fitHint, styleHint } from "../hint.ts"
 import type { HistorySearch } from "../history-search.ts"
 import { InputBox } from "../input-box.ts"
 import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
@@ -397,7 +397,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         ...rows,
         ...(showHint
           ? [
-              `  ${pointerHint ?? deps.focusHint?.(ctx.theme, Math.max(1, width - 2)) ?? ctx.theme.muted(fitHint(list.hint(), Math.max(1, width - 2)))}`,
+              `  ${pointerHint ?? deps.focusHint?.(ctx.theme, Math.max(1, width - 2)) ?? styleHint(fitHint(list.hint(), Math.max(1, width - 2)), ctx.theme)}`,
             ]
           : []),
       ]
@@ -582,12 +582,14 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const complete = keys.label("popup.complete")
     const accept = keys.label("popup.accept")
     const close = keys.label("popup.close")
+    const move = keys.pairLabel("popup.up", "popup.down")
+    const popup = popups.find((p) => p.visible)
     // A usage line or "no command matches": nothing to pick or complete.
-    if (!popups.find((p) => p.visible)?.hasCandidates)
-      return [close && { text: `${close} close`, priority: 4 }]
+    if (!popup?.hasCandidates) return [close && { text: `${close} close`, priority: 4 }]
     return [
+      !popup.canAccept && move && { text: `${move} select`, priority: 5 },
       complete && { text: `${complete} complete`, priority: 2 },
-      accept && { text: `${accept} run`, priority: 5 },
+      popup.canAccept && accept && { text: `${accept} run`, priority: 5 },
       close && { text: `${close} close`, priority: 4 },
     ]
   }

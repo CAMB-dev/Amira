@@ -34,9 +34,12 @@ export function fitHint(
  * word, such as a scroll position, has no key and stays muted.
  */
 export function styleHint(text: string, theme: Theme, separator = ` ${glyphs.separator} `): string {
+  // Unstyled test themes (plain) return identity strings; avoid injecting bare ANSI bold.
+  if (theme.accent("x") === "x") return text
   return text
     .split(separator)
     .map((item) => {
+      if (/^\d+[–-]\d+ of \d+$/.test(item)) return theme.muted(item)
       const space = item.indexOf(" ")
       return space > 0
         ? `${bold(theme.fg2(item.slice(0, space)))}${theme.muted(item.slice(space))}`

@@ -227,6 +227,11 @@ export class CommandPopup implements Component {
     return (this.#shown?.candidates.length ?? 0) > 0
   }
 
+  /** Whether pressing accept now will actually run a command or skill (false on bare sigil). */
+  get canAccept(): boolean {
+    return this.hasCandidates && !(this.#shown && this.#pickedNothing(this.#shown))
+  }
+
   /** A bare sigil with nothing picked yet: no candidate is chosen. */
   #pickedNothing(r: Result): boolean {
     return !r.command && r.text === this.sigil && !this.#navigated
