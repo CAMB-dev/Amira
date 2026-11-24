@@ -1,111 +1,29 @@
 import type { Dialect, DialectContext, ProviderCompat } from "../dialect.ts"
 import { fastBody } from "../fast-mode.ts"
-import { requestHeaders } from "../request-headers.ts"
 import { DEFAULT_MAX_TOKENS_FIELD, DEFAULT_STREAM_USAGE } from "../settings-defaults.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
-import { httpError } from "./http-stream.ts"
+import { parseJSON, postStream } from "./http-stream.ts"
 import { ChatAccumulator } from "./openai-chat-accumulate.ts"
 import { bodyError, isRetryableBodyError } from "./openai-chat-errors.ts"
 import { toChatMessages } from "./openai-chat-messages.ts"
-import { withRetryAfter } from "./retry-after.ts"
 
 export { toChatMessages }
 
 export const openaiChat: Dialect = {
   id: "openai-chat",
-  async *stream(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
-    const acc = new ChatAccumulator({ provider: req.model.provider, model: req.model.id })
-    const aborted = () => acc.fail({ message: "aborted", code: "aborted" }, false)
-
-    if (ctx.signal.aborted) {
-      yield aborted()
-      return
-    }
-    let res: Response
-    try {
-      const init = {
-        method: "POST",
-        headers: requestHeaders(
-          {
-            "content-type": "application/json",
-            ...(ctx.endpoint.apiKey ? { authorization: `Bearer ${ctx.endpoint.apiKey}` } : {}),
-          },
-          ctx.endpoint.headers,
-          ctx.userAgent,
-        ),
-        body: JSON.stringify(requestBody(req, ctx.compat)),
-        signal: ctx.signal,
-      }
-      if (ctx.signal.aborted) {
-        yield aborted()
-        return
-      }
-      yield { type: "request.start", thinkingDisplay: "raw" }
-      res = await ctx.fetch(`${ctx.endpoint.baseUrl.replace(/\/$/, "")}/chat/completions`, init)
-    } catch (e) {
-      if (ctx.signal.aborted) yield aborted()
-      else yield acc.fail({ message: `request failed: ${(e as Error).message}` }, true)
-      return
-    }
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "")
-      const failed = acc.fail(...httpError(res.status, detail))
-      yield withRetryAfter(failed, res.headers)
-      return
-    }
-    if (!res.body) {
-      yield acc.fail({ message: `HTTP ${res.status} with an empty body`, status: res.status }, true)
-      return
-    }
-
-    const body = res.body
-    try {
-      if (!(res.headers.get("content-type") ?? "").includes("text/event-stream")) {
-        yield* readPlain(res, acc)
-        return
-      }
-      yield { type: "start" }
-      let parsed = 0
-      let sawDone = false
-      for await (const sse of parseSSE(body, ctx.signal)) {
-        if (sse.data === "[DONE]") {
-          sawDone = true
-          break
-        }
-        let chunk: any
-        try {
-          chunk = JSON.parse(sse.data)
-        } catch {
-          continue
-        }
-        parsed++
-        if (chunk.error) {
-          const { error, retryable } = bodyError(chunk.error)
-          yield acc.fail(error, retryable)
-          return
-        }
-        yield* acc.apply(chunk)
-      }
-      if (parsed === 0 && !sawDone) {
-        yield acc.fail({ message: "the event stream ended without any events" }, true)
-        return
-      }
-      // Some servers never send [DONE] but do send a finish_reason; with neither, the
-      // connection dropped mid-reply.
-      if (!sawDone && !acc.finished) {
-        yield acc.fail({ message: "the event stream ended before the reply was complete" }, true)
-        return
-      }
-      yield* acc.finishThinking()
-      yield acc.end()
-    } catch (e) {
-      if (ctx.signal.aborted) yield aborted()
-      else yield acc.fail({ message: `stream failed: ${(e as Error).message}` }, true)
-    } finally {
-      // Covers consumers that stop before the body is read to the end.
-      await body.cancel().catch(() => {})
-    }
+  stream(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
+    const { apiKey, baseUrl } = ctx.endpoint
+    return postStream({
+      ctx,
+      acc: new ChatAccumulator({ provider: req.model.provider, model: req.model.id }),
+      url: `${baseUrl.replace(/\/$/, "")}/chat/completions`,
+      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+      body: requestBody(req, ctx.compat),
+      thinkingDisplay: "raw",
+      readSSE,
+      readPlain,
+    })
   },
 }
 
@@ -129,13 +47,46 @@ function requestBody(req: ModelRequest, compat: ProviderCompat = {}): Record<str
   return body
 }
 
+async function* readSSE(
+  body: ReadableStream<Uint8Array>,
+  acc: ChatAccumulator,
+  signal: AbortSignal,
+): AsyncGenerator<StreamEvent> {
+  yield { type: "start" }
+  let parsed = 0
+  let sawDone = false
+  for await (const sse of parseSSE(body, signal)) {
+    if (sse.data === "[DONE]") {
+      sawDone = true
+      break
+    }
+    const chunk = parseJSON(sse.data)
+    if (!chunk) continue
+    parsed++
+    if (chunk.error) {
+      const { error, retryable } = bodyError(chunk.error)
+      yield acc.fail(error, retryable)
+      return
+    }
+    yield* acc.apply(chunk)
+  }
+  if (parsed === 0 && !sawDone) {
+    yield acc.fail({ message: "the event stream ended without any events" }, true)
+    return
+  }
+  // Some servers never send [DONE] but do send a finish_reason; with neither, the
+  // connection dropped mid-reply.
+  if (!sawDone && !acc.finished) {
+    yield acc.fail({ message: "the event stream ended before the reply was complete" }, true)
+    return
+  }
+  yield* acc.finishThinking()
+  yield acc.end()
+}
+
 /** A 200 response that is not an event stream: an error body, a whole completion, or junk. */
-async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<StreamEvent> {
-  const text = await res.text()
-  let json: any
-  try {
-    json = JSON.parse(text)
-  } catch {}
+async function* readPlain(text: string, type: string, acc: ChatAccumulator): AsyncGenerator<StreamEvent> {
+  const json = parseJSON(text)
   if (json?.error) {
     const { error, retryable } = bodyError(json.error)
     yield acc.fail(error, retryable)
@@ -143,7 +94,6 @@ async function* readPlain(res: Response, acc: ChatAccumulator): AsyncGenerator<S
   }
   const choice = json?.choices?.[0]
   if (!choice?.message) {
-    const type = res.headers.get("content-type") || "no content-type"
     const message = `expected an event stream, got ${type}: ${text.slice(0, 500)}`
     yield acc.fail({ message }, isRetryableBodyError({ message }))
     return

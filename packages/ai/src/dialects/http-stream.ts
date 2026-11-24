@@ -25,8 +25,12 @@ export interface StreamRequest<A extends Failable> {
   readPlain(text: string, contentType: string, acc: A): AsyncGenerator<StreamEvent>
   /** Reads response metadata before either the success or HTTP-error path. */
   responseHeaders?(headers: Headers, acc: A): void
+  /** Transforms merged request headers before dispatch (e.g. appending feature beta flags). */
+  transformHeaders?(headers: Record<string, string>): Record<string, string>
   /** Maps an HTTP error body's `error` field; defaults to the OpenAI shape. */
-  errorOf?(raw: unknown): { error: ModelError; retryable: boolean }
+  errorOf?(raw: unknown, status?: number): { error: ModelError; retryable: boolean }
+  /** Overrides HTTP status retryability; defaults to OpenAI status rules (429 / 5xx). */
+  retryableStatus?(status: number): boolean
 }
 
 /**
@@ -43,13 +47,14 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
   }
   let res: Response
   try {
+    const baseHeaders = requestHeaders(
+      { "content-type": "application/json", ...r.headers },
+      ctx.endpoint.headers,
+      ctx.userAgent,
+    )
     const init = {
       method: "POST",
-      headers: requestHeaders(
-        { "content-type": "application/json", ...r.headers },
-        ctx.endpoint.headers,
-        ctx.userAgent,
-      ),
+      headers: r.transformHeaders ? r.transformHeaders(baseHeaders) : baseHeaders,
       body: JSON.stringify(r.body),
       signal: ctx.signal,
     }
@@ -70,7 +75,10 @@ export async function* postStream<A extends Failable>(r: StreamRequest<A>): Asyn
   r.responseHeaders?.(res.headers, acc)
   if (!res.ok) {
     const detail = await res.text().catch(() => "")
-    yield withRetryAfter(acc.fail(...httpError(res.status, detail, r.errorOf ?? bodyError)), res.headers)
+    yield withRetryAfter(
+      acc.fail(...httpError(res.status, detail, r.errorOf ?? bodyError, r.retryableStatus)),
+      res.headers,
+    )
     return
   }
   if (!res.body) {
@@ -104,6 +112,7 @@ export function httpError(
   status: number,
   detail: string,
   errorOf: NonNullable<StreamRequest<Failable>["errorOf"]> = bodyError,
+  retryableStatus: (status: number) => boolean = isRetryableStatus,
 ): [ModelError, boolean] {
   const error: ModelError = { message: `HTTP ${status}: ${detail.slice(0, 500)}`, status }
   let bodyRetryable = isRetryableBodyError(error)
@@ -111,14 +120,14 @@ export function httpError(
     const parsed = JSON.parse(detail)
     const raw = Array.isArray(parsed) ? parsed[0]?.error : parsed?.error
     if (raw !== undefined) {
-      const mapped = errorOf(raw)
+      const mapped = errorOf(raw, status)
       error.message = `HTTP ${status}: ${mapped.error.message.slice(0, 500)}`
       bodyRetryable = isRetryableBodyError({ ...mapped.error, status })
       const code = mapped.error.code
       if (code) error.code = code
     }
   } catch {}
-  return [error, isRetryableStatus(status) || bodyRetryable]
+  return [error, retryableStatus(status) || bodyRetryable]
 }
 
 /** Parses an SSE data field as JSON, or returns undefined for junk. */

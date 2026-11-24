@@ -494,12 +494,14 @@ test("an HTTP request is abortable", async () => {
   // The cancellation is a POST of its own, sent without waiting: the next request may overtake
   // it. Ask until the server has it.
   const deadline = performance.now() + 5000
-  let listed = ""
-  while (!listed.includes("[2]") && performance.now() < deadline) {
-    if (listed) await Bun.sleep(20)
-    listed = JSON.stringify(await client.callTool("cancelled", {}, { timeoutMs: 5000 }))
+  let cancelled: unknown[] = []
+  while (cancelled.length === 0 && performance.now() < deadline) {
+    if (cancelled.length === 0) await Bun.sleep(20)
+    const res = await client.callTool("cancelled", {}, { timeoutMs: 5000 })
+    const text = res.content?.find((b) => b.type === "text")?.text ?? "[]"
+    cancelled = JSON.parse(text) as unknown[]
   }
-  expect(listed).toContain("[2]")
+  expect(cancelled.length).toBe(1)
   await client.close()
 })
 

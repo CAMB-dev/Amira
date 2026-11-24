@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@amira/api": "workspace:*"
+    "@amira/api": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.2"
   }
 }

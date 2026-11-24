@@ -1,5 +1,6 @@
 import { type OpenPipeOptions, openPipe, type PipeEvent, type PipeProcess } from "@amira/api"
-import type { JsonRpcMessage, Transport } from "./transport.ts"
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
+import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js"
 
 export interface StdioSpec {
   argv: string[]
@@ -21,11 +22,13 @@ export interface StdioOptions {
  * kills the server's tree when Amira exits if it still runs then.
  */
 export class StdioTransport implements Transport {
-  onmessage?: (message: JsonRpcMessage) => void
-  onclose?: (reason: string) => void
-  protocolVersion?: string
+  onmessage?: <T extends JSONRPCMessage>(message: T) => void
+  onerror?: (error: Error) => void
+  onclose?: () => void
   /** Process id of the server (or its launcher) once spawned. */
   pid: number | undefined
+  /** Reason the server process ended unexpectedly, if it did. */
+  closeReason: string | undefined
 
   #spec: StdioSpec
   #opts: StdioOptions
@@ -60,7 +63,8 @@ export class StdioTransport implements Transport {
           if (!started) reject(new Error(`could not start ${this.#spec.argv[0]}: ${reason}`))
           else if (!this.#closed) {
             this.#closed = true
-            this.onclose?.(`server process ${reason}`)
+            this.closeReason = `server process ${reason}`
+            this.onclose?.()
           }
         }
       }
@@ -73,7 +77,7 @@ export class StdioTransport implements Transport {
     })
   }
 
-  async send(message: JsonRpcMessage): Promise<void> {
+  async send(message: JSONRPCMessage): Promise<void> {
     if (this.#closed || !this.#pipe) throw new Error("the server connection is closed")
     this.#pipe.write(`${JSON.stringify(message)}\n`)
   }
@@ -82,6 +86,7 @@ export class StdioTransport implements Transport {
     if (this.#closed) return
     this.#closed = true
     this.#pipe?.close(this.#opts.closeGraceMs ?? 2000)
+    this.onclose?.()
   }
 
   #onStdout(data: string) {
@@ -98,7 +103,7 @@ export class StdioTransport implements Transport {
           // Not protocol traffic (a server logging to stdout); treat it like stderr.
           this.#onStderr(`${line}\n`)
         }
-        if (msg && typeof msg === "object") this.onmessage?.(msg as JsonRpcMessage)
+        if (msg && typeof msg === "object") this.onmessage?.(msg as JSONRPCMessage)
       }
       nl = this.#buffer.indexOf("\n")
     }

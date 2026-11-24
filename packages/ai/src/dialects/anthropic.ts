@@ -1,6 +1,5 @@
 import type { Dialect, DialectContext } from "../dialect.ts"
 import { FAST_MODE_BETA, fastBody } from "../fast-mode.ts"
-import { requestHeaders } from "../request-headers.ts"
 import { parseSSE } from "../sse.ts"
 import type { ModelRequest, StreamEvent } from "../types.ts"
 import { MessagesAccumulator } from "./anthropic-accumulate.ts"
@@ -8,8 +7,8 @@ import { anthropicCompaction, COMPACT_BETA, carriesCompaction, withBeta } from "
 import { anthropicError, isRetryableStatus } from "./anthropic-errors.ts"
 import { ANTHROPIC_DIALECT, toAnthropicMessages } from "./anthropic-messages.ts"
 import { requestBody } from "./anthropic-request.ts"
+import { parseJSON, postStream } from "./http-stream.ts"
 import { isRetryableBodyError } from "./openai-chat-errors.ts"
-import { withRetryAfter } from "./retry-after.ts"
 
 export { toAnthropicMessages }
 
@@ -21,100 +20,35 @@ export const anthropicMessages: Dialect = {
   compaction: anthropicCompaction,
 }
 
-async function* streamAttempt(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
-  const acc = new MessagesAccumulator({ provider: req.model.provider, model: req.model.id })
-  const aborted = () => acc.fail({ message: "aborted", code: "aborted" }, false)
-
-  if (ctx.signal.aborted) {
-    yield aborted()
-    return
-  }
-  let res: Response
-  try {
-    const payload = requestBody(req, ctx.compat, ctx.endpoint.baseUrl)
-    Object.assign(payload, fastBody(req))
-    let headers = requestHeaders(
-      {
-        "content-type": "application/json",
-        "anthropic-version": ANTHROPIC_VERSION,
-        ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
-      },
-      ctx.endpoint.headers,
-      ctx.userAgent,
-    )
-    // Each feature adds its beta to the provider's existing list, regardless of header case.
-    if (carriesCompaction(payload.messages)) headers = withBeta(headers, COMPACT_BETA)
-    if (payload.speed === "fast") headers = withBeta(headers, FAST_MODE_BETA)
-    const init = {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal: ctx.signal,
-    }
-    const thinking = payload.thinking as { type: string; display?: "summarized" | "omitted" } | undefined
-    const official =
-      URL.canParse(ctx.endpoint.baseUrl) && new URL(ctx.endpoint.baseUrl).hostname === "api.anthropic.com"
-    const thinkingDisplay =
-      thinking?.display ?? (official || thinking?.type === "disabled" ? undefined : "raw")
-    if (ctx.signal.aborted) {
-      yield aborted()
-      return
-    }
-    yield { type: "request.start", ...(thinkingDisplay ? { thinkingDisplay } : {}) }
-    res = await ctx.fetch(messagesUrl(ctx.endpoint.baseUrl), init)
-  } catch (e) {
-    if (ctx.signal.aborted) yield aborted()
-    else yield acc.fail({ message: `request failed: ${(e as Error).message}` }, true)
-    return
-  }
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "")
-    yield withRetryAfter(httpError(acc, res.status, detail), res.headers)
-    return
-  }
-  if (!res.body) {
-    yield acc.fail({ message: `HTTP ${res.status} with an empty body`, status: res.status }, true)
-    return
-  }
-
-  const body = res.body
-  try {
-    if (!(res.headers.get("content-type") ?? "").includes("text/event-stream")) {
-      yield* readPlain(res, acc)
-      return
-    }
-    yield { type: "start" }
-    let parsed = 0
-    for await (const sse of parseSSE(body, ctx.signal)) {
-      let ev: any
-      try {
-        ev = JSON.parse(sse.data)
-      } catch {
-        continue
-      }
-      parsed++
-      for (const out of acc.apply(ev)) {
-        yield out
-        if (out.type === "error") return
-      }
-      if (ev?.type === "message_stop") break
-    }
-    if (parsed === 0) {
-      yield acc.fail({ message: "the event stream ended without any events" }, true)
-      return
-    }
-    if (!acc.finished) {
-      yield acc.fail({ message: "the event stream ended before the message was complete" }, true)
-      return
-    }
-    yield acc.end()
-  } catch (e) {
-    if (ctx.signal.aborted) yield aborted()
-    else yield acc.fail({ message: `stream failed: ${(e as Error).message}` }, true)
-  } finally {
-    // Covers consumers that stop before the body is read to the end.
-    await body.cancel().catch(() => {})
-  }
+function streamAttempt(req: ModelRequest, ctx: DialectContext): AsyncGenerator<StreamEvent> {
+  const payload = requestBody(req, ctx.compat, ctx.endpoint.baseUrl)
+  Object.assign(payload, fastBody(req))
+  const thinking = payload.thinking as { type: string; display?: "summarized" | "omitted" } | undefined
+  const official =
+    URL.canParse(ctx.endpoint.baseUrl) && new URL(ctx.endpoint.baseUrl).hostname === "api.anthropic.com"
+  const thinkingDisplay = thinking?.display ?? (official || thinking?.type === "disabled" ? undefined : "raw")
+  return postStream({
+    ctx,
+    acc: new MessagesAccumulator({ provider: req.model.provider, model: req.model.id }),
+    url: messagesUrl(ctx.endpoint.baseUrl),
+    headers: {
+      "anthropic-version": ANTHROPIC_VERSION,
+      ...(ctx.endpoint.apiKey ? { "x-api-key": ctx.endpoint.apiKey } : {}),
+    },
+    transformHeaders: (headers) => {
+      // Each feature adds its beta to the provider's existing list, regardless of header case.
+      let next = headers
+      if (carriesCompaction(payload.messages)) next = withBeta(next, COMPACT_BETA)
+      if (payload.speed === "fast") next = withBeta(next, FAST_MODE_BETA)
+      return next
+    },
+    body: payload,
+    thinkingDisplay,
+    readSSE,
+    readPlain,
+    errorOf: anthropicError,
+    retryableStatus: isRetryableStatus,
+  })
 }
 
 /** `{baseUrl}/v1/messages`, tolerating a base URL that already ends in /v1. */
@@ -123,34 +57,43 @@ export function messagesUrl(baseUrl: string): string {
   return /\/v1$/.test(base) ? `${base}/messages` : `${base}/v1/messages`
 }
 
-function httpError(acc: MessagesAccumulator, status: number, detail: string): StreamEvent {
-  let json: unknown
-  try {
-    json = JSON.parse(detail)
-  } catch {}
-  const parsed =
-    json && typeof json === "object" && "error" in json ? anthropicError(json, status) : undefined
-  const message = `HTTP ${status}: ${parsed ? parsed.error.message : detail.slice(0, 500)}`
-  return acc.fail(
-    { ...parsed?.error, message, status },
-    isRetryableStatus(status) || (parsed ? parsed.retryable : isRetryableBodyError({ message, status })),
-  )
+async function* readSSE(
+  body: ReadableStream<Uint8Array>,
+  acc: MessagesAccumulator,
+  signal: AbortSignal,
+): AsyncGenerator<StreamEvent> {
+  yield { type: "start" }
+  let parsed = 0
+  for await (const sse of parseSSE(body, signal)) {
+    const ev = parseJSON(sse.data)
+    if (!ev) continue
+    parsed++
+    for (const out of acc.apply(ev)) {
+      yield out
+      if (out.type === "error") return
+    }
+    if (ev?.type === "message_stop") break
+  }
+  if (parsed === 0) {
+    yield acc.fail({ message: "the event stream ended without any events" }, true)
+    return
+  }
+  if (!acc.finished) {
+    yield acc.fail({ message: "the event stream ended before the message was complete" }, true)
+    return
+  }
+  yield acc.end()
 }
 
 /** A 200 response that is not an event stream: an error body, a whole message, or junk. */
-async function* readPlain(res: Response, acc: MessagesAccumulator): AsyncGenerator<StreamEvent> {
-  const text = await res.text()
-  let json: any
-  try {
-    json = JSON.parse(text)
-  } catch {}
+async function* readPlain(text: string, type: string, acc: MessagesAccumulator): AsyncGenerator<StreamEvent> {
+  const json = parseJSON(text)
   if (json?.type === "error" || json?.error) {
     const { error, retryable } = anthropicError(json)
     yield acc.fail(error, retryable)
     return
   }
   if (json?.type !== "message" || !Array.isArray(json.content)) {
-    const type = res.headers.get("content-type") || "no content-type"
     const message = `expected an event stream, got ${type}: ${text.slice(0, 500)}`
     yield acc.fail({ message }, isRetryableBodyError({ message }))
     return
