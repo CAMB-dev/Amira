@@ -105,7 +105,7 @@ export class DockedView {
       if (this.viewer.focused) this.viewer.handleInput(local)
       else {
         const handled = this.viewer.handleDockInput(local)
-        if (handled && e.button === "left" && e.action === "release") {
+        if (handled && this.viewer.ready && e.button === "left" && e.action === "release") {
           // Inputs and reading widgets can take pointer focus without changing initial Tab routing.
           this.pointerFocused = true
           this.viewer.focused = true

@@ -216,3 +216,84 @@ test("focused identified text keeps scrolling local instead of using the first a
     viewer.dispose()
   }
 })
+
+test("clicking a close button inside a docked declarative view closes cleanly without crashing", async () => {
+  let closed = 0
+  let submitted = ""
+  const s = await setup([], {
+    rows: 24,
+    cols: 80,
+    settings: { mode: "fullscreen", margin: 2, marginRows: 1 },
+    extensions: [
+      (api) => {
+        api.registerView({
+          kind: "dock-actions",
+          title: () => "Actions",
+          ui: () => ({
+            type: "column",
+            children: [
+              { size: "fill", node: { type: "text", lines: [{ kind: "text", text: "DOCK-BODY" }] } },
+              {
+                size: 1,
+                node: {
+                  type: "row",
+                  gap: 1,
+                  children: [
+                    { size: "fill", node: { type: "input", id: "reply", placeholder: "Reply here" } },
+                    { size: 9, node: { type: "button", id: "clear", label: "Clear" } },
+                  ],
+                },
+              },
+            ],
+          }),
+          onEvent(event, _data, control) {
+            if (event.type === "submit" && event.id === "reply") submitted = event.value
+            if (event.type === "activate" && event.id === "clear") {
+              closed++
+              control.close()
+            }
+          },
+        })
+        api.registerCommand({
+          name: "dock-actions",
+          description: "open interactive dock",
+          echo: false,
+          run: (_args, ctx) => {
+            ctx.openView?.({ kind: "dock-actions", placement: "dock", maxHeight: 8 })
+          },
+        })
+      },
+    ],
+  })
+  try {
+    s.terminal.send("/dock-actions\r")
+    await waitFor(() => s.live().includes("[Clear]"), "dock with Clear button")
+
+    // Tab enters the dock and focuses the first widget (the reply input) directly.
+    s.terminal.send("\t")
+    await Bun.sleep(40)
+    s.terminal.send("ping\r")
+    await waitFor(() => submitted === "ping", "inline dock input submit")
+
+    // Clicking outside the dock (on the main composer row below) returns focus to the main composer.
+    const clearRow = s.screen.lines.findIndex((line) => line.includes("[Clear]"))
+    expect(clearRow).toBeGreaterThanOrEqual(0)
+    const outsideY = Math.min(24, clearRow + 3)
+    s.terminal.send(`\x1b[<0;6;${outsideY}M\x1b[<0;6;${outsideY}m`)
+    await Bun.sleep(40)
+    s.terminal.send("main-draft")
+    await waitFor(() => s.live().includes("main-draft"), "clicking outside dock restores composer focus")
+
+    // Clicking [Clear] closes the dock synchronously without throwing on null this.dock.
+    const row = s.screen.lines.findIndex((line) => line.includes("[Clear]"))
+    const col = s.screen.lines[row]!.indexOf("[Clear]")
+    expect(row).toBeGreaterThanOrEqual(0)
+    expect(col).toBeGreaterThanOrEqual(0)
+    s.terminal.send(`\x1b[<0;${col + 2};${row + 1}M\x1b[<0;${col + 2};${row + 1}m`)
+    await waitFor(() => closed === 1 && !s.live().includes("DOCK-BODY"), "dock closed via Clear button")
+  } finally {
+    s.terminal.send("\x03\x03\x03")
+    await s.exited
+    await s.agent.dispose()
+  }
+})

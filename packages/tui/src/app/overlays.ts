@@ -423,6 +423,7 @@ export class OverlayManager {
     }
     if (e.type === "mouse" && e.action === "press" && e.button === "left") {
       if (this.dock.focusable && this.dock.contains(e)) this.focusView(this.dock.viewer, true)
+      else if (this.dock.viewer.focused) this.focusView(this.dock.viewer, false)
     }
     if (this.dock.focusable && e.type !== "mouse" && this.handleViewInput(this.dock.viewer, e)) return true
     // Cancel a search before applying the input's ordinary dock-close action.
@@ -431,9 +432,11 @@ export class OverlayManager {
       this.closeDock()
       return true
     }
-    const focused = this.dock.viewer.focused
-    const handled = this.dock.handleInput(e)
-    if (this.dock.viewer.focused !== focused) this.focusView(this.dock.viewer, this.dock.viewer.focused)
+    const dock = this.dock
+    const focused = dock.viewer.focused
+    const handled = dock.handleInput(e)
+    if (this.dock === dock && dock.viewer.focused !== focused)
+      this.focusView(dock.viewer, dock.viewer.focused)
     return handled
   }
 
