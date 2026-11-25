@@ -10,7 +10,6 @@ import type { UiRequests, UiResponseAck } from "@amira/host"
 import {
   bold,
   type Component,
-  colourSwatch,
   type HitRect,
   HitRegions,
   type ImageStore,
@@ -22,11 +21,16 @@ import {
   matchesKey,
   type RenderContext,
   Spinner,
-  type Theme,
   truncateToWidth,
   visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
+import {
+  frameSettingsPage,
+  renderSettingsRow,
+  type SettingsMouseAction,
+  type SettingsTarget,
+} from "./extension-settings-render.ts"
 import { styledExtensionStatusBadge } from "./extension-status.ts"
 import { glyphs, viewEllipsis } from "./glyphs.ts"
 import { imageFallback, nodeRows } from "./markdown-nodes.ts"
@@ -81,22 +85,6 @@ export interface ExtensionSettingsViewOptions {
   images?: () => ImageStore | undefined
   /** The same current Markdown theme context used by the transcript's real renderers. */
   previewTheme?: () => ExtensionSettingsPreviewContext["theme"]
-}
-
-type SettingsMouseAction =
-  | { kind: "field"; index: number; key?: "left" | "right" | "space"; column?: number }
-  | { kind: "key"; key: "enter" | "escape" }
-  | { kind: "scope"; scope: "user" | "project" }
-
-interface SettingsTarget {
-  id: string
-  rect: HitRect
-  action: SettingsMouseAction
-}
-
-interface SettingsRow {
-  lines: string[]
-  targets: SettingsTarget[]
 }
 
 /** A compact settings editor: draft preview above editable rows, footer always visible. */
@@ -328,6 +316,7 @@ export class ExtensionSettingsView implements Component {
     const action = hit && this.#mouseActions.get(hit.id)
     if (!hit || !action) return true
     if (action.kind === "key") return this.handleInput(key(action.key))
+    if (action.kind === "reset") return this.handleInput(key("r", { ctrl: true }))
     if (action.kind === "scope") {
       if (this.#choosingScope && this.#scope !== action.scope) this.handleInput(key("right"))
       return true
@@ -337,6 +326,11 @@ export class ExtensionSettingsView implements Component {
       this.#focus = action.index
       this.#numberInput = undefined
       this.#error = undefined
+    }
+    if (action.value !== undefined) {
+      const field = this.#backend.request.fields[action.index]!
+      this.#changed(field.key, action.value)
+      return true
     }
     if (action.key) return this.handleInput(key(action.key))
     if (action.column !== undefined) {
@@ -398,8 +392,11 @@ export class ExtensionSettingsView implements Component {
     this.#fieldArea = undefined
     this.#refreshIntervalMs = undefined
     if (this.#closed) return []
-    const room = Math.max(1, width)
-    const height = Math.max(1, ctx.rows)
+    const framed = width >= 30 && ctx.rows >= 8
+    const insetX = framed ? 2 : 0
+    const insetY = framed ? 1 : 0
+    const room = Math.max(1, width - insetX * 2)
+    const height = Math.max(1, ctx.rows - insetY * 2)
     const { theme } = ctx
     const ascii = /^[\x20-\x7e]+$/.test(glyphs.pointer)
     const spin = Spinner.forGlyphs(spinnerFrameAt(Date.now()), ctx.glyphs ?? glyphs)
@@ -420,6 +417,47 @@ export class ExtensionSettingsView implements Component {
         : `${ascii ? "up/down" : "↑↓"} focus · ${editHint} · enter save · esc discard · ctrl+r reset`
     const hints: string[] = []
     const footerTargets: SettingsTarget[] = []
+    const showButtons = framed && !this.#saving && !this.#confirmDiscard && height >= 12
+    const footerPrefix: string[] = []
+    if (showButtons) {
+      footerPrefix.push(theme.border(glyphs.rule.repeat(room)))
+      const btns: { label: string; action: SettingsMouseAction; primary?: boolean }[] = this.#choosingScope
+        ? [
+            { label: "Confirm save", action: { kind: "key", key: "enter" }, primary: true },
+            { label: "Back", action: { kind: "key", key: "escape" } },
+          ]
+        : [
+            {
+              label: this.#isDirty() ? "Save changes" : "Save",
+              action: { kind: "key", key: "enter" },
+              primary: true,
+            },
+            { label: "Reset field", action: { kind: "reset" } },
+            { label: this.#isDirty() ? "Discard" : "Close", action: { kind: "key", key: "escape" } },
+          ]
+      let btnRow = ""
+      for (const btn of btns) {
+        const raw = `[ ${btn.label} ]`
+        const x = visibleWidth(btnRow)
+        if (x + visibleWidth(raw) > room) break
+        footerTargets.push({
+          id: `btn:${btn.label}`,
+          rect: { x, y: footerPrefix.length, width: visibleWidth(raw), height: 1 },
+          action: btn.action,
+        })
+        const styled =
+          btn.primary && (this.#isDirty() || this.#choosingScope)
+            ? ctx.color
+              ? inverse(bold(theme.accent(raw)))
+              : bold(theme.accent(raw))
+            : btn.primary
+              ? bold(theme.accent(raw))
+              : theme.fg2(raw)
+        btnRow += `${styled}  `
+      }
+      footerPrefix.push(btnRow.trimEnd())
+    }
+    const hintOffset = footerPrefix.length
     for (const hint of footerText.split(" · ")) {
       const last = hints.at(-1)
       const separator = ` ${glyphs.separator} `
@@ -429,7 +467,7 @@ export class ExtensionSettingsView implements Component {
         if (action)
           footerTargets.push({
             id: `footer:${action}:${y}`,
-            rect: { x, y, width: visibleWidth(text), height: 1 },
+            rect: { x, y: hintOffset + y, width: visibleWidth(text), height: 1 },
             action: { kind: "key", key: action },
           })
       }
@@ -443,47 +481,79 @@ export class ExtensionSettingsView implements Component {
         }
       }
     }
-    const footer = hints.map(theme.muted)
+    const footer = [...footerPrefix, ...hints.map(theme.muted)]
     const status = this.#backend.request.extensionStatus
     const badge = status ? styledExtensionStatusBadge(status, theme) : ""
+    const dirtyTag = this.#isDirty() ? ` ${theme.accent(`${glyphs.separator} unsaved`)}` : ""
     const title = truncateToWidth(
-      `${bold(theme.accent(this.#backend.request.title))}${badge ? ` ${badge}` : ""}`,
+      `${bold(theme.accent(this.#backend.request.title))}${badge ? ` ${badge}` : ""}${dirtyTag}`,
       room,
       viewEllipsis(),
     )
+    const headerRows = framed ? 0 : 1
     // Short terminals keep the action keys and a focused control before optional preview/description.
-    const footerRows = footer.slice(0, Math.max(1, Math.min(footer.length, height - 2)))
-    const bodyBudget = Math.max(0, height - 1 - footerRows.length)
+    const footerRows = footer.slice(0, Math.max(1, Math.min(footer.length, height - headerRows - 1)))
+    const bodyBudget = Math.max(0, height - headerRows - footerRows.length)
     const fields = this.#backend.request.fields
-    const fieldRows = fields.map((field, index) => this.#row(field, index, room, theme, ascii))
+    const fieldRows = fields.map((field, index) =>
+      renderSettingsRow(
+        field,
+        index,
+        index === this.#focus,
+        this.#values,
+        this.#input,
+        this.#numberInput,
+        room,
+        theme,
+        ascii,
+        ctx.color,
+      ),
+    )
     const focusedRows = fieldRows[this.#focus]?.lines ?? []
     const minControlRows = Math.min(bodyBudget, focusedRows.length || 1)
     const previewBudget = Math.max(0, Math.min(Math.floor(height * 0.35), bodyBudget - minControlRows - 1))
-    const preview = this.#previewRows(room, previewBudget, ctx)
+    const preview = this.#previewRows(room, previewBudget, ctx, insetX, insetY + headerRows)
     const reserved = preview.length + (preview.length ? 1 : 0)
     let body: string[] = []
-    const bodyTop = 1 + reserved
+    const bodyTop = headerRows + reserved
     const bodyBottom = height - footerRows.length
     const addBodyTarget = (target: SettingsTarget, offset = 0) => {
       const y = bodyTop + offset + target.rect.y
       const targetHeight = Math.min(target.rect.height, bodyBottom - y)
       const targetWidth = Math.min(target.rect.width, room - target.rect.x)
-      if (targetHeight > 0 && targetWidth > 0)
-        this.#addTarget({ ...target, rect: { ...target.rect, y, width: targetWidth, height: targetHeight } })
+      if (targetHeight > 0 && targetWidth > 0) {
+        const action =
+          target.action.kind === "field" && target.action.column !== undefined
+            ? { ...target.action, column: target.action.column + insetX }
+            : target.action
+        this.#addTarget({
+          ...target,
+          action,
+          rect: { x: insetX + target.rect.x, y: insetY + y, width: targetWidth, height: targetHeight },
+        })
+      }
     }
     if (this.#choosingScope || this.#saving) {
-      body = wrapText("save settings to", room).map(theme.muted)
-      body.push(
-        truncateToWidth(
-          `${this.#scope === "user" ? inverse(theme.accent("[ user ]")) : theme.muted("  user  ")}  ${this.#scope === "project" ? inverse(theme.accent("[ project ]")) : theme.muted("  project  ")}`,
-          room,
-          viewEllipsis(),
-        ),
-      )
+      body = wrapText("Save settings to:", room).map(theme.muted)
+      const userRaw = "[ user ]"
+      const projectRaw = "[ project ]"
+      const userStyled =
+        this.#scope === "user"
+          ? ctx.color
+            ? inverse(bold(theme.accent(userRaw)))
+            : bold(theme.accent(userRaw))
+          : theme.muted(userRaw)
+      const projectStyled =
+        this.#scope === "project"
+          ? ctx.color
+            ? inverse(bold(theme.accent(projectRaw)))
+            : bold(theme.accent(projectRaw))
+          : theme.muted(projectRaw)
+      body.push(truncateToWidth(`${userStyled}  ${projectStyled}`, room, viewEllipsis()))
       if (!this.#saving) {
         for (const [scope, x, targetWidth] of [
-          ["user", 0, 8],
-          ["project", 10, 11],
+          ["user", 0, visibleWidth(userRaw)],
+          ["project", visibleWidth(userRaw) + 2, visibleWidth(projectRaw)],
         ] as const) {
           // Do not turn a truncation marker into a scope button.
           const visible = visibleWidth(body.at(-1)!)
@@ -509,14 +579,31 @@ export class ExtensionSettingsView implements Component {
         )
       }
       if (this.#confirmDiscard) {
+        const discardRaw = "[ Discard ]"
+        const keepRaw = "[ Keep editing ]"
         body = [
           truncateToWidth(
             `${theme.warning(glyphs.warning)} ${bold(theme.text("Discard unsaved settings?"))}`,
             room,
             viewEllipsis(),
           ),
+          truncateToWidth(
+            `${bold(theme.warning(discardRaw))}  ${bold(theme.accent(keepRaw))}`,
+            room,
+            viewEllipsis(),
+          ),
           theme.muted(truncateToWidth("y discard  ·  n / esc keep editing", room, viewEllipsis())),
         ]
+        addBodyTarget({
+          id: "discard:y",
+          rect: { x: 0, y: 1, width: visibleWidth(discardRaw), height: 1 },
+          action: { kind: "key", key: "y" },
+        })
+        addBodyTarget({
+          id: "discard:n",
+          rect: { x: visibleWidth(discardRaw) + 2, y: 1, width: visibleWidth(keepRaw), height: 1 },
+          action: { kind: "key", key: "n" },
+        })
       } else {
         const waiting = this.#opts.waiting?.() ?? []
         const reserveWaiting = waiting.length ? 1 : 0
@@ -536,7 +623,8 @@ export class ExtensionSettingsView implements Component {
           for (const target of row.targets) addBodyTarget(target, offset)
           offset += row.lines.length
         }
-        if (body.length) this.#fieldArea = { x: 0, y: bodyTop, width: room, height: body.length }
+        if (body.length)
+          this.#fieldArea = { x: insetX, y: insetY + bodyTop, width: room, height: body.length }
         if ((start > 0 || end < fieldRows.length) && body.length < scrollBudget) {
           body.push(
             theme.muted(
@@ -561,97 +649,18 @@ export class ExtensionSettingsView implements Component {
     if (!this.#saving) {
       for (const target of footerTargets)
         if (target.rect.y < footerRows.length)
-          this.#addTarget({ ...target, rect: { ...target.rect, y: bodyBottom + target.rect.y } })
+          this.#addTarget({
+            ...target,
+            rect: { ...target.rect, x: insetX + target.rect.x, y: insetY + bodyBottom + target.rect.y },
+          })
     }
-    const lines = [title, ...preview, ...(preview.length ? [""] : []), ...body]
-    while (lines.length < height - footerRows.length) lines.push("")
-    return [...lines.slice(0, height - footerRows.length), ...footerRows].slice(0, height)
+    const contentLines = [...(framed ? [] : [title]), ...preview, ...(preview.length ? [""] : []), ...body]
+    while (contentLines.length < height - footerRows.length) contentLines.push("")
+    const innerRows = [...contentLines.slice(0, height - footerRows.length), ...footerRows].slice(0, height)
+    return framed ? frameSettingsPage(title, innerRows, width, room, ctx) : innerRows
   }
 
-  #row(
-    field: ExtensionSettingField,
-    index: number,
-    width: number,
-    theme: Theme,
-    ascii: boolean,
-  ): SettingsRow {
-    const focused = index === this.#focus
-    const value = this.#values[field.key] ?? field.default
-    const changed = value !== field.default ? " *" : ""
-    const label = `${focused ? glyphs.pointer : " "} ${field.label}${changed}`
-    const labelStyle = focused ? theme.accent : theme.text
-    const controlStyle = focused ? (text: string) => inverse(theme.accent(text)) : theme.fg2
-    const stepper = (button: string, disabled = false) =>
-      focused && !disabled ? theme.accent(button) : theme.muted(button)
-    let control: string
-    switch (field.type) {
-      case "number": {
-        const display =
-          focused && this.#numberInput
-            ? this.#numberInput.render(Math.max(4, Math.min(16, width - 8)), theme, { focused: true })
-            : String(value)
-        control = `${stepper("-", field.min !== undefined && Number(value) <= field.min)} ${controlStyle(display)} ${stepper("+", field.max !== undefined && Number(value) >= field.max)}`
-        break
-      }
-      case "choice": {
-        const option = field.options.find((o) => (typeof o === "string" ? o : o.value) === value)
-        const shown = typeof option === "string" ? option : (option?.label ?? String(value))
-        control = `${stepper(ascii ? "<" : "‹")} ${controlStyle(shown)} ${stepper(ascii ? ">" : "›")}`
-        break
-      }
-      case "toggle":
-        control = controlStyle(value ? "on" : "off")
-        break
-      default: {
-        const input = this.#input.get(field.key)!
-        const labelWidth = visibleWidth(label) + 2
-        const inputWidth = width - labelWidth >= 12 ? width - labelWidth - 2 : width - 4
-        const text = input.render(Math.max(1, inputWidth), theme, {
-          focused,
-          placeholder: field.type === "text" ? field.placeholder : "#rrggbb",
-        })
-        control = controlStyle(`[ ${text} ]`)
-        if (field.type === "colour" && /^#[\da-f]{6}$/i.test(String(value))) {
-          const swatch = colourSwatch(String(value), ascii ? "##" : "██")
-          control = `${swatch} ${control}`
-        }
-      }
-    }
-    const inline = visibleWidth(label) + 2 + visibleWidth(control) <= width
-    const lines = inline
-      ? [truncateToWidth(`${labelStyle(label)}  ${control}`, width, viewEllipsis())]
-      : [
-          truncateToWidth(labelStyle(label), width, viewEllipsis()),
-          truncateToWidth(`  ${control}`, width, viewEllipsis()),
-        ]
-    const x = inline ? visibleWidth(label) + 2 : 2
-    const y = inline ? 0 : 1
-    const targets: SettingsTarget[] = [
-      {
-        id: `field:${index}`,
-        rect: { x: 0, y: 0, width, height: lines.length },
-        action: { kind: "field", index, ...(field.type === "toggle" ? { key: "space" } : {}) },
-      },
-    ]
-    const controlWidth = visibleWidth(control)
-    const limit = x + controlWidth <= width ? width : Math.max(0, width - visibleWidth(viewEllipsis()))
-    const add = (id: string, column: number, size: number, action: SettingsMouseAction) => {
-      const shown = Math.min(size, limit - column)
-      if (shown > 0)
-        targets.push({ id: `${id}:${index}`, rect: { x: column, y, width: shown, height: 1 }, action })
-    }
-    if (field.type === "number" || field.type === "choice") {
-      add("left", x, 1, { kind: "field", index, key: "left" })
-      add("right", x + controlWidth - 1, 1, { kind: "field", index, key: "right" })
-    } else if (field.type === "text" || field.type === "colour") {
-      const swatch = field.type === "colour" && /^#[\da-f]{6}$/i.test(String(value)) ? 3 : 0
-      const column = x + swatch + 2
-      add("input", x + swatch, controlWidth - swatch, { kind: "field", index, column })
-    }
-    return { lines, targets }
-  }
-
-  #previewRows(width: number, budget: number, ctx: RenderContext): string[] {
+  #previewRows(width: number, budget: number, ctx: RenderContext, colOffset = 0, rowOffset = 1): string[] {
     if (!this.#backend.preview && !this.#backend.evaluate) return []
     if (budget < 1) {
       this.#controller?.abort()
@@ -751,8 +760,8 @@ export class ExtensionSettingsView implements Component {
     ctx.place?.({
       key: `extension-settings:${this.#backend.request.requestId}`,
       image,
-      row: 1,
-      col: 0,
+      row: rowOffset,
+      col: colOffset,
       from: 0,
       to: image.rows,
     })

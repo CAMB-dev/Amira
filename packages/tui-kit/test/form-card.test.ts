@@ -64,7 +64,7 @@ const focus = (form: Form, id: string) => {
 
 describe("opt-in form card", () => {
   for (const [width, rows, expectedWidth] of [
-    [120, 36, 88],
+    [120, 36, 108],
     [80, 24, 72],
     [61, 21, 53],
   ] as const) {
@@ -103,7 +103,7 @@ describe("opt-in form card", () => {
       })
       const checkBorders = () => {
         const lines = view(width, rows)
-        const cardWidth = Math.min(width - 8, 88)
+        const cardWidth = Math.min(width - 8, 108)
         const left = Math.floor((width - cardWidth) / 2)
         const top = lines.findIndex((line) => line[left] === "╭")
         const bottom = lines.findIndex((line) => line[left] === "╰")
@@ -150,13 +150,13 @@ describe("opt-in form card", () => {
           theme: { ...plain.theme, muted: (s) => `\x1b[90m${s}\x1b[39m` },
         })
         .map(clean)
-      const left = Math.floor((width - Math.min(width - 8, 88)) / 2)
+      const left = Math.floor((width - Math.min(width - 8, 108)) / 2)
       const top = lines.findIndex((line) => line[left] === "╭")
       const bottom = lines.findIndex((line) => line[left] === "╰")
       for (const line of lines.slice(top + 1, bottom)) {
         expect(line.slice(left).startsWith("│")).toBe(true)
         expect(line.endsWith("│")).toBe(true)
-        expect(visibleWidth(line) - left).toBe(Math.min(width - 8, 88))
+        expect(visibleWidth(line) - left).toBe(Math.min(width - 8, 108))
       }
       const button = target(lines, "[ Save ]")
       expect(bottom - button.y).toBe(2)
@@ -351,5 +351,41 @@ describe("opt-in form card", () => {
     click(form, hit.x + 2, hit.y)
     expect(form.confirmingCancel).toBe(false)
     expect(form.values.name).toBe("unsaved")
+  })
+
+  test("renders short ungrouped selects and checkboxes as one-click pill buttons in card layout", () => {
+    const { form, view } = make({
+      fields: [
+        {
+          id: "keySource",
+          type: "select",
+          label: "Key source",
+          options: [
+            { value: "auth", label: "auth.json" },
+            { value: "env", label: "Env var" },
+            { value: "none", label: "No key" },
+          ],
+        },
+        { id: "httpConsent", type: "checkbox", label: "Allow HTTP" },
+      ],
+      values: { keySource: "auth", httpConsent: false },
+    })
+    let lines = view(120, 30)
+    expect(lines.join("\n")).toContain("[ auth.json ] [ Env var ] [ No key ]")
+    expect(lines.join("\n")).toContain("[ On ] [ Off ]")
+
+    const envPill = target(lines, "[ Env var ]")
+    click(form, envPill.x + 2, envPill.y)
+    expect(form.values.keySource).toBe("env")
+
+    lines = view(120, 30)
+    const onPill = target(lines, "[ On ]")
+    click(form, onPill.x + 2, onPill.y)
+    expect(form.values.httpConsent).toBe(true)
+
+    lines = view(120, 30)
+    const offPill = target(lines, "[ Off ]")
+    click(form, offPill.x + 2, offPill.y)
+    expect(form.values.httpConsent).toBe(false)
   })
 })

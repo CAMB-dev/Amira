@@ -39,6 +39,7 @@ export {
   LineInput,
   type LineInputOptions,
 } from "./components/form.ts"
+export { formCardWidth } from "./components/form-card.ts"
 export {
   imageNodes,
   type MarkdownImages,

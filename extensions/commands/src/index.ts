@@ -7,6 +7,7 @@ import { helpCommand } from "./help-command.ts"
 import { modelCommand } from "./model-command.ts"
 import { permissionsCommand } from "./permissions-command.ts"
 import { providerCommand } from "./provider-command.ts"
+import { providerView } from "./provider-view.ts"
 import { quitCommand } from "./quit-command.ts"
 import { reloadCommand } from "./reload-command.ts"
 import { registerRewindCommands } from "./rewind-command.ts"
@@ -59,6 +60,7 @@ export default defineExtension((api: ExtensionAPI) => {
   add(shellCommand())
   add(permissionsCommand())
   add(toolsCommand())
+  api.registerView(providerView())
   add(providerCommand())
   add(costCommand())
   add(contextCommand())

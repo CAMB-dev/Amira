@@ -80,7 +80,7 @@ export interface BottomAreaDeps {
   suggestion?: () => string | undefined
   keys: Keybindings
   reaches: (spec: KeySpec) => boolean
-  enterDoes: WhileWorking
+  enterDoes: WhileWorking | (() => WhileWorking)
   spinner: Spinner
   search: HistorySearch
   popups: CommandPopup[]
@@ -88,7 +88,9 @@ export interface BottomAreaDeps {
 }
 
 export function createBottomArea(deps: BottomAreaDeps): BottomArea {
-  const { editor, keys, reaches, enterDoes, spinner, search, popups, filePicker } = deps
+  const { editor, keys, reaches, spinner, search, popups, filePicker } = deps
+  const currentEnterDoes = (): WhileWorking =>
+    typeof deps.enterDoes === "function" ? deps.enterDoes() : deps.enterDoes
   /** The list shown below the input box, if any, with its key hint. */
   const inputList = ():
     | { lines: (width: number, ctx: RenderContext, maxRows: number) => string[]; hint: () => HintItems }
@@ -183,7 +185,9 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   }
   const workingPlaceholder = () => {
     if (!deps.activity().working || deps.conversationFocused?.() || search.active) return undefined
-    return enterDoes === "steer" ? `Steer turn${viewEllipsis()}` : `Queue next message${viewEllipsis()}`
+    return currentEnterDoes() === "steer"
+      ? `Steer turn${viewEllipsis()}`
+      : `Queue next message${viewEllipsis()}`
   }
   const inputBox = new InputBox(editor, statusItems, deps.suggestion, workingPlaceholder)
   /** Lists supply their own two-cell gutter; the frame adds two more before the text. */
@@ -546,8 +550,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       item(keys.label("tool-output"), "detail", 5),
       item(keys.label("help"), "keys", 5),
       !editor.isEmpty && item(newlineKey, "newline", 1),
-      (working || cancellable) && item(keys.label("submit"), working ? enterDoes : "send", 4),
-      working && item(queueKey, otherWay(enterDoes), 3),
+      (working || cancellable) && item(keys.label("submit"), working ? currentEnterDoes() : "send", 4),
+      working && item(queueKey, otherWay(currentEnterDoes()), 3),
       working && deps.canRewind() && item(interruptKey && `${interruptKey} ${interruptKey}`, "rewind", 2),
       panelsCollapsed && panelsShown && item(keys.label("panels.toggle"), "unfold panels", 4),
     ]

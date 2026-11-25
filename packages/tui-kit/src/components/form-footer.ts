@@ -101,7 +101,7 @@ export function renderFormFooter(
   for (const [focus, label] of buttons) {
     const focused = state.focus === focus
     const mark = focused ? theme.accent(pointer(ctx)) : " "
-    const text = formButton(label, focused, ctx)
+    const text = formButton(label, focused, ctx, focus === SUBMIT)
     if (
       state.actions.length &&
       row &&

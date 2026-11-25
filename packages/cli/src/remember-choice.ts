@@ -21,6 +21,7 @@ export function rememberingControl(
     variant: NonNullable<TuiSettings["themeVariant"]>,
     shimmer?: ShimmerEffect,
   ) => void
+  rememberTuiSettings: (patch: Partial<TuiSettings>) => void
   flush: () => Promise<void>
 } {
   const warn = (a: Agent, error: string) =>
@@ -52,6 +53,7 @@ export function rememberingControl(
       shimmer: [ShimmerEffect?]
     },
     fastMode?: boolean,
+    tuiPatch?: Partial<TuiSettings>,
   ) => {
     const a = agent()
     if (a.parentSessionId || a.depth > 0) return
@@ -67,25 +69,31 @@ export function rememberingControl(
         updateSettingsFile(
           file,
           (settings) => {
-            if (theme === undefined) return { ...settings, ...choice }
+            if (theme === undefined && tuiPatch === undefined) return { ...settings, ...choice }
             const tui = settings.tui
             if (tui !== undefined && (typeof tui !== "object" || tui === null || Array.isArray(tui)))
               throw new Error("tui must be an object")
-            const next: Record<string, unknown> = {
-              ...tui,
-              theme: theme.name,
-              themeVariant: theme.variant,
+            const next: Record<string, unknown> = { ...tui }
+            if (theme !== undefined) {
+              next.theme = theme.name
+              next.themeVariant = theme.variant
+              // An omitted third argument is a direct name selection, not a shimmer reset.
+              if (theme.shimmer.length) {
+                const effect = theme.shimmer[0]
+                const normalized = normalizeShimmer(effect)
+                if (!normalized || !Object.keys(normalized).length) delete next.shimmer
+                else if (typeof effect === "string") next.shimmer = effect
+                // Objects merge across settings layers, so persist every chosen preset knob.
+                else if (normalized.preset)
+                  next.shimmer = { ...normalized, ...resolveShimmer(undefined, normalized) }
+                else next.shimmer = normalized
+              }
             }
-            // An omitted third argument is a direct name selection, not a shimmer reset.
-            if (theme.shimmer.length) {
-              const effect = theme.shimmer[0]
-              const normalized = normalizeShimmer(effect)
-              if (!normalized || !Object.keys(normalized).length) delete next.shimmer
-              else if (typeof effect === "string") next.shimmer = effect
-              // Objects merge across settings layers, so persist every chosen preset knob.
-              else if (normalized.preset)
-                next.shimmer = { ...normalized, ...resolveShimmer(undefined, normalized) }
-              else next.shimmer = normalized
+            if (tuiPatch !== undefined) {
+              for (const [key, value] of Object.entries(tuiPatch)) {
+                if (value === undefined) delete next[key]
+                else next[key] = value
+              }
             }
             return { ...settings, tui: next }
           },
@@ -112,6 +120,7 @@ export function rememberingControl(
   }
   return {
     rememberTheme: (name, variant, ...shimmer) => save({ name, variant, shimmer }),
+    rememberTuiSettings: (patch) => save(undefined, undefined, patch),
     flush: () => pending,
     control: {
       ...control,

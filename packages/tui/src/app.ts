@@ -34,6 +34,7 @@ import { activePointerHint, pointerGeometry, routePointer } from "./app/pointer.
 import { interruptedText, quitWarning, runningJobCount } from "./app/quit.ts"
 import { createServerRows, turnFailureNotice } from "./app/server-rows.ts"
 import { showAgentSession } from "./app/session-display.ts"
+import { settingsCommand } from "./app/settings.ts"
 import { createActivityShimmer } from "./app/shimmer-clock.ts"
 import type { InteractiveOptions } from "./app/startup.ts"
 import {
@@ -87,7 +88,7 @@ async function runFullscreen(
   // Wiring and collaborators: terminal setup and the UI's shared services.
   let { agent } = opts
   const presenters = opts.toolRenderers
-  const settings = opts.settings ?? {}
+  const settings = { ...(opts.settings ?? {}) }
   const imageSetting = settings.images ?? DEFAULT_TUI_IMAGES
   const { capabilities, leftoverInput } = await (opts.setup ?? setupTerminalInput)(terminal, env, {
     images: imageSetting !== "off",
@@ -117,7 +118,7 @@ async function runFullscreen(
   const showNote = hint.show
   const keys = opts.keybindings ?? new Keybindings(defaultKeys(detectEnv(env)))
   /** What Enter does with a message while a turn runs; the queue key does the other. */
-  const enterDoes: WhileWorking =
+  const enterDoes = (): WhileWorking =>
     (settings.submitWhileWorking ?? DEFAULT_TUI_SUBMIT_WHILE_WORKING) === "queue" ? "queue" : "steer"
   const termStatus = createTerminalStatus(terminal, settings, env)
   const suggestion = createPromptInput({
@@ -659,6 +660,7 @@ async function runFullscreen(
     offSwitch?.()
     offCommand?.()
     offThemeCommand?.()
+    offSettingsCommand?.()
     hint.dispose()
     outbox.dispose()
     composer.dispose()
@@ -722,7 +724,7 @@ async function runFullscreen(
       // Paste or prompt history handled the input.
     } else if (keys.is(e, "queue")) {
       // Alt+Enter or Ctrl+Q: the other of what Enter does while a turn runs.
-      submission.submitDraft(otherWay(enterDoes))
+      submission.submitDraft(otherWay(enterDoes()))
     } else if (keys.is(e, "submit.steer")) {
       submission.submitDraft("steer")
     } else if (keys.is(e, "submit.queue")) {
@@ -789,6 +791,18 @@ async function runFullscreen(
   const offCommand = opts.registerCommand?.(detailCommand(() => detail, setDetail))
   const offThemeCommand = opts.registerCommand?.(
     themes.command({ overlays, keys, requestRender: () => view.requestRender() }),
+  )
+  const offSettingsCommand = opts.registerCommand?.(
+    settingsCommand({
+      settings,
+      overlays,
+      themes,
+      termStatus,
+      viewport: () => ({ columns: terminal.columns, rows: terminal.rows }),
+      saveTuiSettings: opts.saveTuiSettings,
+      requestRender: () => view.requestRender(),
+      redraw: () => view.redraw(),
+    }),
   )
   let unbindTerminal: (() => void) | undefined
   const reader = new InputReader(terminal, onInput, suggestion.readerOptions)

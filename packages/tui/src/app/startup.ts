@@ -66,6 +66,8 @@ export interface InteractiveOptions {
    * the override. Preview and cancellation never call this.
    */
   saveTheme?: (name: string, variant: ThemeVariant, shimmer?: ShimmerEffect) => void | Promise<void>
+  /** Persists applied TUI settings changes (margin, clock, alerts, etc.). Preview/cancel never call this. */
+  saveTuiSettings?: (patch: Partial<TuiSettings>) => void | Promise<void>
   /** Delivers reloaded theme, appearance and shimmer settings to the running UI. */
   subscribeThemeSettings?: (listener: (settings: TuiSettings | undefined) => void) => () => void
   /**

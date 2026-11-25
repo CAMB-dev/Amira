@@ -70,6 +70,25 @@ export class TerminalStatus implements TerminalApi {
     this.terminal.enableMode(focusReporting)
   }
 
+  /** Updates alert/title/progress options live (e.g. from /settings). */
+  updateOptions(opts: TerminalStatusOptions): void {
+    this.#opts.notify = opts.notify ?? DEFAULT_TUI_NOTIFY
+    this.#opts.title = opts.title ?? DEFAULT_TUI_TITLE
+    this.#opts.progress = (opts.progress ?? DEFAULT_TUI_PROGRESS) && progressSupported(this.#env)
+    this.#opts.bell = opts.bell ?? DEFAULT_TUI_BELL
+    if (!this.#opts.progress && this.#progressRestore) {
+      this.terminal.disableMode(this.#progressRestore)
+      this.#progressRestore = undefined
+      this.#progress = undefined
+      this.#shownProgress = "none"
+    }
+    if (!this.#opts.title && this.#titleRestore) {
+      this.terminal.disableMode(this.#titleRestore)
+      this.#titleRestore = undefined
+      this.#title = this.#shownTitle = undefined
+    }
+  }
+
   setTitle(title: string): void {
     if (!this.#started || !this.#opts.title) return
     // biome-ignore lint/suspicious/noControlCharactersInRegex: sanitize terminal title input

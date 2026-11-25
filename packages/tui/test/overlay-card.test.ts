@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { FormValues, TuiSettings } from "@amira/api"
 import { EventBus } from "@amira/core"
 import { UiRequests } from "@amira/host"
-import { CURSOR_MARKER, FakeTerminal, Spinner } from "@amira/tui-kit"
+import { CURSOR_MARKER, FakeTerminal, formCardWidth, Spinner } from "@amira/tui-kit"
 import { plain } from "../../tui-kit/test/context.ts"
 import { VirtualScreen } from "../../tui-kit/test/screen.ts"
 import { OverlayManager } from "../src/app/overlays.ts"
@@ -64,7 +64,7 @@ function setup({
     overlay: {
       render: (width, ctx) => {
         const output = Array<string>(ctx.rows).fill("")
-        const cardWidth = Math.min(width - 8, 88)
+        const cardWidth = formCardWidth(width)
         const left = Math.floor((width - cardWidth) / 2)
         output[cardRow] = " ".repeat(left) + "card".padEnd(cardWidth, ".")
         return output
@@ -116,7 +116,7 @@ test("card preserves the last transcript frame above, below and on both sides, w
     view.openOverlay()
     view.renderOverlay()
     const expected = [...before]
-    expected[10] = `${before[10]!.slice(0, 6)}${"card".padEnd(88, ".")}${before[10]!.slice(94)}`
+    expected[10] = `${before[10]!.slice(0, 4)}${"card".padEnd(92, ".")}${before[10]!.slice(96)}`
     expect(screen.lines).toEqual(expected)
     expect(screen.cursorVisible).toBe(false)
     expect(before[9]).toContain("transcript")
@@ -131,7 +131,7 @@ test("card preserves the last transcript frame above, below and on both sides, w
     view.renderOverlay()
     expect(screen.lines[10]).toBe(before[10])
     expect(screen.lines[11]).toBe(
-      `${before[11]!.slice(0, 6)}${"card".padEnd(88, ".")}${before[11]!.slice(94)}`,
+      `${before[11]!.slice(0, 4)}${"card".padEnd(92, ".")}${before[11]!.slice(96)}`,
     )
     view.closeOverlay()
     expect(screen.lines.join("\n")).toContain("arrived while covered")
@@ -227,12 +227,12 @@ for (const [columns, rows] of [
 }
 
 test("card cell boundaries blank partial wide graphemes instead of shifting the card or suffix", () => {
-  const { view, screen, moveCard } = setup({ header: `abcde界${"m".repeat(86)}界TAIL` })
+  const { view, screen, moveCard } = setup({ header: `abc界${"m".repeat(90)}界TAI` })
   try {
     moveCard(0)
     view.openOverlay()
     view.renderOverlay()
-    expect(screen.lines[0]).toBe(`abcde ${"card".padEnd(88, ".")} TAIL`)
+    expect(screen.lines[0]).toBe(`abc ${"card".padEnd(92, ".")} TAI`)
   } finally {
     view.stop()
   }

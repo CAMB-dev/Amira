@@ -312,6 +312,15 @@ async function run(argv: string[]): Promise<number> {
         }
       },
       saveTheme: (name, variant, ...shimmer) => commands.rememberTheme(name, variant, ...shimmer),
+      saveTuiSettings: (patch) => {
+        commands.rememberTuiSettings(patch)
+        const next: TuiSettings = { ...config.settings.tui }
+        for (const [key, value] of Object.entries(patch)) {
+          if (value === undefined) delete next[key as keyof TuiSettings]
+          else Object.assign(next, { [key]: value })
+        }
+        config.settings.tui = next
+      },
       toolRenderers: host.renderers,
       views: host.views,
       imageProviders: host.images,

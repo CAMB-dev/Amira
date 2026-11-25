@@ -133,21 +133,20 @@ function click(view: ExtensionSettingsView, target: { x: number; y: number }): v
   view.handleInput(mouse(target.x, target.y, "release"))
 }
 
-test("mouse steppers and choice arrows use keyboard actions, focus their field, and clamp", () => {
+test("mouse steppers and choice pills use keyboard actions, focus their field, and clamp", () => {
   const p = page()
-  click(p.view, cell(p.rows(), "- 16 +", 5))
+  click(p.view, cell(p.rows(), "[ + ]", 2))
   expect(p.view.values.size).toBe(18)
-  click(p.view, cell(p.rows(), "- 18 +"))
+  click(p.view, cell(p.rows(), "[ - ]", 2))
   expect(p.view.values.size).toBe(16)
-  const choice = cell(p.rows(), "plain")
-  click(p.view, { x: choice.x - 2, y: choice.y })
+  click(p.view, cell(p.rows(), "[ Bold labels ]", 2))
   expect(p.view.values.style).toBe("bold")
   expect(p.plain()).toContain(`${glyphs.pointer} Style *`)
-  click(p.view, cell(p.rows(), "Bold labels", "Bold labels".length + 1))
+  click(p.view, cell(p.rows(), "[ plain ]", 2))
   expect(p.view.values.style).toBe("plain")
   click(p.view, cell(p.rows(), "Font size"))
   p.view.handleInput({ type: "paste", text: "999" })
-  click(p.view, cell(p.rows(), "- 32 +", 5))
+  click(p.view, cell(p.rows(), "[ + ]", 2))
   expect(p.view.values.size).toBe(32)
   expect(p.saved).toEqual([])
 })
@@ -231,16 +230,16 @@ test("mouse footer validates, selects save scope, saves only on Enter action, an
 test("mouse targets follow wrapped rows and exclude controls cropped out of short frames", () => {
   const p = page()
   const ctx = { ...p.ctx, rows: 9 }
-  click(p.view, cell(p.rows(12, ctx), "- 16 +", 5))
+  click(p.view, cell(p.rows(20, ctx), "[ + ]", 2))
   expect(p.view.values.size).toBe(18)
   p.view.handleInput(key("down"))
-  const rows = p.rows(12, ctx)
+  const rows = p.rows(20, ctx)
   expect(rows.map(stripAnsi).join("\n")).not.toContain("Font size")
-  click(p.view, { x: 7, y: 1 })
+  click(p.view, { x: 14, y: 2 })
   expect(p.view.values.size).toBe(18)
   const tiny = { ...p.ctx, rows: 1 }
-  p.rows(12, tiny)
-  click(p.view, { x: 7, y: 1 })
+  p.rows(20, tiny)
+  click(p.view, { x: 14, y: 2 })
   expect(p.view.values.size).toBe(18)
 })
 
@@ -304,10 +303,10 @@ test("mouse wheel keeps three-key field navigation only over the visible field l
 test("number steppers have visible ANSI focus, clamp typed numbers, and reset only the focused draft field", () => {
   const p = page()
   const row = p.rows().find((line) => stripAnsi(line).includes("Font size"))!
-  expect(stripAnsi(row)).toContain(`${glyphs.pointer} Font size  - 16 +`)
+  expect(stripAnsi(row)).toContain(`${glyphs.pointer} Font size  [ - ] [ 16 ] [ + ]`)
   expect(row).toContain("\x1b[7m")
-  expect(row).toContain(defaultTheme.accent("-"))
-  expect(row).toContain(defaultTheme.accent("+"))
+  expect(row).toContain("[ - ]")
+  expect(row).toContain("[ + ]")
   p.view.handleInput(key("right"))
   expect(p.view.values.size).toBe(18)
   expect(p.plain()).toContain("Font size *")
@@ -316,7 +315,7 @@ test("number steppers have visible ANSI focus, clamp typed numbers, and reset on
   expect(p.view.values.size).toBe(18)
   p.view.handleInput({ type: "paste", text: "999" })
   expect(p.view.values.size).toBe(32)
-  expect(p.rows().find((line) => stripAnsi(line).includes("Font size"))).toContain(defaultTheme.muted("+"))
+  expect(p.rows().find((line) => stripAnsi(line).includes("Font size"))).toContain(defaultTheme.dim("[ + ]"))
   p.view.handleInput(key("r", { ctrl: true }))
   expect(p.view.values).toEqual(defaults)
   p.view.handleInput(textKey("1"))
@@ -377,7 +376,7 @@ test("choices cycle, toggles use space, text honours pattern/maxLength, and colo
   p.view.handleInput(key("down"))
   p.view.handleInput(key("space"))
   expect(p.view.values.enabled).toBe(false)
-  expect(p.plain()).toContain("Show labels *  off")
+  expect(p.plain()).toContain("Show labels *  [ On ] [ Off ]")
   p.view.handleInput(key("down"))
   p.view.handleInput(key("u", { ctrl: true }))
   p.view.handleInput({ type: "paste", text: "0123456789" })
@@ -400,7 +399,7 @@ test("Enter chooses user/project inline using provenance; a second Enter saves, 
   const p = page()
   p.view.handleInput(key("right"))
   p.view.handleInput(key("enter"))
-  expect(p.plain()).toContain("save settings to")
+  expect(p.plain()).toContain("Save settings to:")
   expect(p.rows().join("\n")).toContain("[ project ]")
   expect(p.saved).toEqual([])
   p.view.handleInput(key("left"))
@@ -413,7 +412,7 @@ test("Enter chooses user/project inline using provenance; a second Enter saves, 
   discarded.view.handleInput(key("enter"))
   // Esc from scope selection returns to the fields instead of losing edits.
   discarded.view.handleInput(key("escape"))
-  expect(discarded.plain()).not.toContain("save settings to")
+  expect(discarded.plain()).not.toContain("Save settings to:")
   expect(discarded.closed()).toBe(0)
   // Esc from dirty fields asks before discarding; y confirms discard.
   discarded.view.handleInput(key("escape"))
@@ -455,7 +454,7 @@ test("async previews discard superseded generations, abort on resize/close, and 
   p.rows()
   await tick()
   expect(pending[0]?.ctx).toMatchObject({
-    width: 60,
+    width: 56,
     images: false,
     maxImageRows: 0,
     theme: { dark: false, foreground: "#112233" },
@@ -502,7 +501,7 @@ test("image previews use ImageStore screen placement, redraw after opening/encod
   await tick()
   const rendered = p.plain(60, ctx)
   expect(placements).toHaveLength(1)
-  expect(placements[0]).toMatchObject({ row: 1, col: 0, from: 0, to: 3 })
+  expect(placements[0]).toMatchObject({ row: 1, col: 2, from: 0, to: 3 })
   expect(placements[0]?.image.ready).toBe(true)
   expect(rendered).not.toContain("diagram fallback")
   expect(provider.opened).toEqual(["diagram-40x60.png"])
@@ -525,13 +524,13 @@ test("narrow ASCII layouts keep focused controls, wrapped muted descriptions and
     expect(rows.join("\n")).toContain(defaultTheme.muted("of labels in the"))
     const plain = rows.map(stripAnsi).join("\n")
     expect(plain).toContain("> Font size")
-    expect(plain).toContain("- 16 +")
+    expect(plain).toContain("[ - ] [ 16 ] [ + ]")
     expect(plain).toContain("up/down focus")
     expect(plain).toContain("enter save")
     expect(plain).toContain("esc discard")
     expect(plain).toContain("ctrl+r reset")
     p.view.handleInput(key("down"))
-    expect(p.plain(24, ctx)).toContain("< plain >")
+    expect(p.plain(24, ctx)).toContain("[ < ] [ plain ] [ > ]")
   } finally {
     setGlyphs()
   }
@@ -594,13 +593,14 @@ test.each(["experimental", "wip", "deprecated"] as const)(
       const p = page()
       p.backend.request.extensionStatus = { status }
       const title = p.rows()[0]!
-      expect(stripAnsi(title)).toBe(`Diagram settings [${status}]`)
+      expect(stripAnsi(title)).toContain(`Diagram settings [${status}]`)
       const style = status === "experimental" ? defaultTheme.muted : defaultTheme.warning
       expect(title).toContain(style(`[${status}]`))
       expect(p.plain()).not.toContain("warning:")
       expect(p.rows(16).every((row) => visibleWidth(row) <= 16)).toBe(true)
       p.backend.request.extensionStatus = {}
-      expect(stripAnsi(p.rows()[0]!)).toBe("Diagram settings")
+      expect(stripAnsi(p.rows()[0]!)).toContain("Diagram settings")
+      expect(stripAnsi(p.rows()[0]!)).not.toContain(`[${status}]`)
     } finally {
       setGlyphs()
     }

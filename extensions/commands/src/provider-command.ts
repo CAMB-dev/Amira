@@ -13,6 +13,7 @@ import {
 import { table } from "./format.ts"
 import { pickModel } from "./model-command.ts"
 import { ProviderConnectionTests } from "./provider-tests.ts"
+import { ADD_PROVIDER_KEY, type ProviderHubAction, type ProviderHubData } from "./provider-view.ts"
 import { pickThinking } from "./thinking-command.ts"
 
 const USAGE = "usage: /provider [add [<vendor|protocol>] | edit <id> | remove <id> | key <id>]"
@@ -71,6 +72,10 @@ export function providerCommand(): CommandDefinition {
       if (rest.length || !Object.hasOwn(SUBCOMMANDS, sub)) throw new Error(USAGE)
       const tracked = () => tests.wrap(ctx.session.info().id, admin(ctx))
       if (sub === "add") {
+        if (!id && ctx.frontend === "tui" && ctx.openView) {
+          await manageWithHub(ctx, tests, ADD_PROVIDER_KEY)
+          return
+        }
         const saved = await add(ctx, id, tracked())
         if (saved && ctx.frontend === "tui") await manage(ctx, tests, saved)
         return
@@ -120,6 +125,10 @@ async function manage(
   tests: ProviderConnectionTests,
   highlight?: string,
 ): Promise<void> {
+  if (ctx.openView) {
+    await manageWithHub(ctx, tests, highlight)
+    return
+  }
   const sessionId = ctx.session.info().id
   const a = tests.wrap(sessionId, admin(ctx))
   const providers = ctx.session.providers()
@@ -163,22 +172,7 @@ async function manage(
     },
   )
   if (action === "Use a model from it") {
-    const models = ctx.session.models().filter((model) => model.startsWith(`${id}/`))
-    if (!models.length) {
-      const provider = ctx.session.providers().find((p) => p.id === id)
-      const draft = a.draft(id)
-      if (draft?.models.length && provider && !provider.hasKey) {
-        ctx.print(`No API key available for ${id}; set one with /provider key ${id}.`, "warning")
-      } else {
-        ctx.print(`No models configured; add one with /provider edit ${id}.`)
-      }
-      return
-    }
-    const model = await pickModel(ctx, `Model from ${id}`, models)
-    if (!model) return
-    ctx.session.setModel(model)
-    ctx.print(`Model: ${modelLabel(ctx.session.info().model)}`)
-    if (ctx.session.info().supportsThinking) await pickThinking(ctx)
+    await useProviderModel(ctx, id, a)
     return
   }
   if (action === "Edit") {
@@ -189,6 +183,102 @@ async function manage(
   if (action === "Set key") return setKey(ctx, id, a)
   if (action === "Remove") return remove(ctx, id, a)
   if (action === "Test connection") return testConnection(ctx, id, a)
+}
+
+/** Interactive split-pane GUI provider hub; loops cleanly back after add/edit/key/test/remove. */
+async function manageWithHub(
+  ctx: CommandContext,
+  tests: ProviderConnectionTests,
+  initialHighlight?: string,
+): Promise<void> {
+  let highlight = initialHighlight
+  while (!ctx.signal.aborted) {
+    const sessionId = ctx.session.info().id
+    const a = tests.wrap(sessionId, admin(ctx))
+    const action = await openProviderHub(ctx, {
+      sessionId,
+      highlight,
+      session: ctx.session,
+      admin: a,
+      tests,
+      onAction: () => {},
+    })
+    if (!action || action.kind === "close" || ctx.signal.aborted) return
+    if (action.kind === "add") {
+      const saved = await add(ctx, action.choice, a)
+      if (saved) highlight = saved
+      else highlight = ADD_PROVIDER_KEY
+      continue
+    }
+    highlight = action.id
+    if (action.kind === "use") {
+      const switched = await useProviderModel(ctx, action.id, a)
+      if (switched) return
+      continue
+    }
+    if (action.kind === "edit") {
+      const saved = await edit(ctx, action.id, a)
+      if (saved) highlight = saved
+      continue
+    }
+    if (action.kind === "key") {
+      await setKey(ctx, action.id, a)
+      continue
+    }
+    if (action.kind === "test") {
+      await testConnection(ctx, action.id, a)
+      continue
+    }
+    if (action.kind === "remove") {
+      try {
+        await remove(ctx, action.id, a)
+        highlight = undefined
+      } catch (error) {
+        ctx.print(error instanceof Error ? error.message : String(error), "error")
+      }
+    }
+  }
+}
+
+function openProviderHub(ctx: CommandContext, data: ProviderHubData): Promise<ProviderHubAction | undefined> {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (action: ProviderHubAction | undefined) => {
+      if (settled) return
+      settled = true
+      ctx.signal.removeEventListener("abort", onAbort)
+      resolve(action)
+    }
+    const onAbort = () => done(undefined)
+    if (ctx.signal.aborted) return done(undefined)
+    ctx.signal.addEventListener("abort", onAbort, { once: true })
+    const opened = ctx.openView?.({
+      kind: "providers",
+      data: { ...data, onAction: done },
+      ...(data.highlight ? { state: { selected: { "providers.list": data.highlight } } } : {}),
+    })
+    if (!opened) done(undefined)
+  })
+}
+
+async function useProviderModel(ctx: CommandContext, id: string, a: ProviderAdmin): Promise<boolean> {
+  const models = ctx.session.models().filter((model) => model.startsWith(`${id}/`))
+  if (!models.length) {
+    const provider = ctx.session.providers().find((p) => p.id === id)
+    const draft = a.draft(id)
+    if (draft?.models.length && provider && !provider.hasKey) {
+      ctx.print(`No API key available for ${id}; set one with /provider key ${id}.`, "warning")
+    } else {
+      ctx.print(`No models configured; add one with /provider edit ${id}.`)
+    }
+    return false
+  }
+  const model = await pickModel(ctx, `Model from ${id}`, models)
+  if (!model) return false
+  ctx.session.setModel(model)
+  ctx.print(`Model: ${modelLabel(ctx.session.info().model)}`)
+  if (ctx.session.info().supportsThinking) await pickThinking(ctx)
+  return true
 }
 
 async function testConnection(ctx: CommandContext, id: string, a: ProviderAdmin) {

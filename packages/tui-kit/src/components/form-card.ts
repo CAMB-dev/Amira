@@ -3,6 +3,11 @@ import { chromeGlyphs, defaultGlyphs } from "../glyphs.ts"
 import { bold } from "../style.ts"
 import { truncateToWidth, visibleWidth } from "../width.ts"
 
+/** Shared card width so Form and fullscreen backdrop dimming align identically. */
+export function formCardWidth(width: number): number {
+  return Math.min(width - 8, 108)
+}
+
 /** Draws the card frame in terminal coordinates; scrolling and focus stay with the form. */
 export function drawFormCard(
   width: number,
@@ -16,7 +21,7 @@ export function drawFormCard(
   const { theme } = ctx
   const glyphs = { ...defaultGlyphs, ...ctx.glyphs }
   const chrome = chromeGlyphs(ctx.glyphs)
-  const cardWidth = Math.min(width - 8, 88)
+  const cardWidth = formCardWidth(width)
   const inner = cardWidth - 2
   const left = Math.floor((width - cardWidth) / 2)
   const edge = (a: string, b: string, text = "") => {

@@ -62,6 +62,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
     variant: NonNullable<TuiSettings["themeVariant"]>,
     shimmer?: ShimmerEffect,
   ): void
+  rememberTuiSettings(patch: Partial<TuiSettings>): void
   flushChoices(): Promise<void>
 } {
   const { session, cwd } = opts
@@ -253,6 +254,7 @@ export function createCommandHost(opts: ControlOptions): CommandHost & {
       variant: NonNullable<TuiSettings["themeVariant"]>,
       ...shimmer: [ShimmerEffect?]
     ) => choices?.rememberTheme(name, variant, ...shimmer),
+    rememberTuiSettings: (patch: Partial<TuiSettings>) => choices?.rememberTuiSettings(patch),
     flushChoices: () => choices?.flush() ?? Promise.resolve(),
   })
 }

@@ -21,7 +21,7 @@ interface SubmissionDeps {
   outbox: Pick<Outbox, "prepare" | "dispatch"> & Partial<Pick<Outbox, "commandSend">>
   view: Pick<TranscriptView, "notice" | "commandEcho" | "requestRender">
   composerView?: () => SubmissionDeps["view"]
-  enterDoes: WhileWorking
+  enterDoes: WhileWorking | (() => WhileWorking)
   notice?: string
   focusedSubmit?: (text: string, parts: EditorPart[], display?: string) => boolean
   context: Parameters<CommandHost["runSkill"]>[1]
@@ -29,7 +29,9 @@ interface SubmissionDeps {
 
 /** Validates drafts before accepting them; every send key uses the same routing and history. */
 export function createSubmission(deps: SubmissionDeps) {
-  const { editor, history, commands, composer, commandRunner, outbox, view, enterDoes } = deps
+  const { editor, history, commands, composer, commandRunner, outbox, view } = deps
+  const currentEnterDoes = (): WhileWorking =>
+    typeof deps.enterDoes === "function" ? deps.enterDoes() : deps.enterDoes
 
   /** Whether no provider is configured: from the session when it says, else from the CLI's notice. */
   function noProviders(): boolean {
@@ -64,7 +66,7 @@ export function createSubmission(deps: SubmissionDeps) {
    * content as typed, folded pastes apart, for the prompt history; `display` shows the pastes
    * as their placeholders in the transcript.
    */
-  function submit(text: string, parts: EditorPart[] = [text], display?: string, how = enterDoes) {
+  function submit(text: string, parts: EditorPart[] = [text], display?: string, how = currentEnterDoes()) {
     const trimmed = text.trim()
     const hasImages = parts.some((p) => typeof p !== "string" && "image" in p)
     if (!composer.clipboardPending && deps.focusedSubmit?.(text, parts, display)) {

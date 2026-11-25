@@ -1,5 +1,11 @@
 // Owns runtime theme selection, registry reloads and the interactive preview picker.
-import type { CommandContext, CommandDefinition, ShimmerEffect, ThemeDefinition } from "@amira/api"
+import type {
+  CommandContext,
+  CommandDefinition,
+  ShimmerEffect,
+  ThemeDefinition,
+  TuiSettings,
+} from "@amira/api"
 import { resolveShimmer, SHIMMER_PRESETS } from "@amira/host"
 import {
   backgroundFromEnv,
@@ -43,6 +49,7 @@ export class RuntimeThemes {
   private cancelPicker: (() => void) | undefined
   private registryVersion = 0
   private shimmer: ShimmerEffect | undefined
+  private colorDepth: TuiSettings["colorDepth"]
   private isPreviewing = false
 
   constructor(
@@ -51,6 +58,7 @@ export class RuntimeThemes {
     private readonly capabilities: Capabilities,
   ) {
     this.shimmer = opts.settings?.shimmer
+    this.colorDepth = opts.settings?.colorDepth
     this.selection = this.build(opts.settings?.theme ?? "auto", opts.settings?.themeVariant ?? "auto")
     if (opts.theme) {
       this.selection.theme = opts.theme
@@ -82,8 +90,16 @@ export class RuntimeThemes {
       reloadClockSetting(settings?.clock)
       this.cancelPicker?.()
       this.shimmer = settings?.shimmer
+      this.colorDepth = settings?.colorDepth
       this.select(settings?.theme ?? "auto", settings?.themeVariant ?? "auto")
     })
+  }
+
+  /** Previews or applies a color depth override immediately while keeping the active theme. */
+  setColorDepth(depth: TuiSettings["colorDepth"]): void {
+    if (this.colorDepth === depth) return
+    this.colorDepth = depth
+    this.select(this.selection.name, this.selection.themeVariant)
   }
 
   private build(name: string, themeVariant: ThemeVariant): Selection {
@@ -92,7 +108,6 @@ export class RuntimeThemes {
       name = "amira"
     }
     const definition = this.opts.themes?.get(name)
-    const setting = this.opts.settings
     const variant =
       themeVariant === "dark" || themeVariant === "light"
         ? themeVariant
@@ -107,7 +122,7 @@ export class RuntimeThemes {
       definition,
       themeVariant,
       shimmerColors: shimmer.colors && ("dark" in shimmer.colors ? shimmer.colors[variant] : shimmer.colors),
-      colorDepth: setting?.colorDepth,
+      colorDepth: this.colorDepth,
       env: this.env,
       capabilities: this.capabilities,
       color: isColorEnabled(),

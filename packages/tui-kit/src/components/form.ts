@@ -4,7 +4,7 @@ import { type InputEvent, isSubmitKey, key, type MouseInput, matchesKey } from "
 import { bold } from "../style.ts"
 import { truncateToWidth, visibleWidth, wrapText } from "../width.ts"
 import { bulkField, bulkId, renderFormBody, sectionId, summaryId } from "./form-body.ts"
-import { drawFormCard } from "./form-card.ts"
+import { drawFormCard, formCardWidth } from "./form-card.ts"
 import type { FormFieldState as FieldState } from "./form-field.ts"
 import { CANCEL, PREVIEW, renderFormFooter, SUBMIT } from "./form-footer.ts"
 import { type FormHit, FormMouse } from "./form-mouse.ts"
@@ -415,7 +415,12 @@ export class Form implements Component {
     const f = this.field(target.focus)
     if (target.kind === "input") f?.input?.placeCursor(click.x)
     else if (target.kind === "editor") f?.editor?.placeCursor(click.x, click.y)
-    else if (target.kind === "option" && f) {
+    else if (target.kind === "pill" && f) {
+      f.value = f.def.type === "checkbox" ? target.value === "true" : (target.value ?? f.value)
+      f.open = false
+      this.touched.add(f.def.id)
+      this.refreshErrors()
+    } else if (target.kind === "option" && f) {
       f.highlight = target.index ?? 0
       // Use the same selection/toggle path as the keyboard (including validation).
       this.handleInput(key(f.def.type === "select" ? "enter" : "space"))
@@ -538,7 +543,7 @@ export class Form implements Component {
     values: Record<string, FormInputValue>,
     preview: string[],
   ): string[] {
-    const cardWidth = Math.min(width - 8, 88)
+    const cardWidth = formCardWidth(width)
     const inner = cardWidth - 2
     const footerHits: FormHit[] = []
     const footer = this.footer(inner, ctx, footerHits, 2)

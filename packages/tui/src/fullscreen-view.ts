@@ -3,6 +3,7 @@ import {
   CURSOR_MARKER,
   closeStyles,
   FullScreenRenderer,
+  formCardWidth,
   isColorEnabled,
   modes,
   ProcessTerminal,
@@ -263,7 +264,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       }
     }
     const rows = host.overlay.render(width, ctx)
-    const cardWidth = Math.min(width - 8, 88)
+    const cardWidth = formCardWidth(width)
     const left = Math.floor((width - cardWidth) / 2)
     const right = left + cardWidth
     const behindRows = frozenBackdrop()

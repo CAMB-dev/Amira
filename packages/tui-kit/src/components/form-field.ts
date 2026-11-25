@@ -39,7 +39,7 @@ const separator = (ctx: RenderContext) => ctx.glyphs?.separator ?? defaultGlyphs
 export interface FormFieldHit extends HitRect {
   /** An inline action owns this target rather than the surrounding field. */
   focus?: string
-  kind: "focus" | "activate" | "input" | "list" | "option" | "bulk"
+  kind: "focus" | "activate" | "input" | "list" | "option" | "bulk" | "pill"
   index?: number
   value?: string
 }
@@ -173,6 +173,31 @@ export function renderFormField(
     }
     case "select": {
       const chosen = f.options.find((o) => o.value === f.value)
+      const usePills =
+        card && !f.open && f.options.length >= 2 && f.options.length <= 4 && f.options.every((o) => !o.group)
+      const pillLabels = usePills ? f.options.map((o) => ({ value: o.value, label: o.label ?? o.value })) : []
+      const pillsWidth = usePills
+        ? pillLabels.reduce((sum, o, idx) => sum + visibleWidth(`[ ${o.label} ]`) + (idx ? 1 : 0), 0)
+        : Infinity
+      if (usePills && pillsWidth <= contentRoom) {
+        const rendered = pillLabels.map((opt) => {
+          const raw = `[ ${opt.label} ]`
+          const active = opt.value === f.value
+          if (active) return focused && ctx.color ? inverse(bold(theme.accent(raw))) : bold(theme.accent(raw))
+          return focused ? theme.fg2(raw) : theme.muted(raw)
+        })
+        first(`${edge ? " " : ""}${rendered.join(" ")}`)
+        let cursor = (stacked ? column : visibleWidth(label) + 1) + (edge ? 1 : 0)
+        const hitY = stacked ? 1 : 0
+        for (let idx = 0; idx < pillLabels.length; idx++) {
+          const opt = pillLabels[idx]!
+          const size = visibleWidth(`[ ${opt.label} ]`)
+          onHit?.({ kind: "pill", index: idx, value: opt.value, x: cursor, y: hitY, width: size, height: 1 })
+          cursor += size + 1
+        }
+        if (chosen?.description) hint(chosen.description)
+        break
+      }
       const text = chosen ? (chosen.label ?? chosen.value) : String(f.value || "(none)")
       const arrow = f.open ? chrome.selectOpen : chrome.disclosureOpen
       const available = Math.max(0, contentRoom - visibleWidth(arrow) - 1)
@@ -256,7 +281,24 @@ export function renderFormField(
       break
     }
     case "checkbox":
-      first(`${f.value ? "[x]" : "[ ]"}`)
+      if (card && contentRoom >= 14) {
+        const on = f.value === true
+        const stylePill = (raw: string, active: boolean) =>
+          active
+            ? focused && ctx.color
+              ? inverse(bold(theme.accent(raw)))
+              : bold(theme.accent(raw))
+            : focused
+              ? theme.fg2(raw)
+              : theme.muted(raw)
+        first(`${edge ? " " : ""}${stylePill("[ On ]", on)} ${stylePill("[ Off ]", !on)}`)
+        const baseX = (stacked ? column : visibleWidth(label) + 1) + (edge ? 1 : 0)
+        const hitY = stacked ? 1 : 0
+        onHit?.({ kind: "pill", value: "true", x: baseX, y: hitY, width: 6, height: 1 })
+        onHit?.({ kind: "pill", value: "false", x: baseX + 7, y: hitY, width: 7, height: 1 })
+      } else {
+        first(`${f.value ? "[x]" : "[ ]"}`)
+      }
       break
     case "action": {
       const action = f.action ?? { running: false }
@@ -296,9 +338,10 @@ export function formActionStopHint(field: FormFieldView, focused: boolean, escLa
     : `Focus ${field.buttonLabel ?? field.label}, then ${escLabel} to stop`
 }
 
-export function formButton(label: string, focused: boolean, ctx: RenderContext): string {
+export function formButton(label: string, focused: boolean, ctx: RenderContext, primary = false): string {
   const text = `[ ${label} ]`
-  return focused ? ctx.theme.accent(ctx.color ? inverse(text) : text) : text
+  if (focused) return ctx.theme.accent(ctx.color ? inverse(bold(text)) : text)
+  return primary && ctx.color ? bold(ctx.theme.accent(text)) : text
 }
 
 export function formToneStyle(theme: Theme, tone: FormStatusTone | undefined) {
