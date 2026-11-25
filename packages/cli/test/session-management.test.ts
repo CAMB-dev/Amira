@@ -484,13 +484,16 @@ test("switch disposes the old agent tree before the replacement is active", asyn
 })
 
 test("/rename without an argument clears the manual name and restores the automatic title", async () => {
-  const { host, store } = await setup([{ text: "answer" }])
+  const { host, session, store } = await setup([{ text: "answer" }])
   await host.control.send("question")
   store.rename("Automatic", "auto")
   host.control.rename!("Manual")
   expect(host.control.info().title).toBe("Manual")
 
-  const result = await host.run("/rename", { frontend: "tui" })
+  const pending = host.run("/rename", { frontend: "tui" })
+  await waitFor(() => session.host.ui.pending.length === 1)
+  session.host.ui.respond(session.host.ui.pending[0]!.requestId, "")
+  const result = await pending
   expect(result.output).toEqual(["Cleared the manual session name."])
   expect(host.control.info().title).toBe("Automatic")
   expect(SessionStore.open(store.file).title).toBe("Automatic")

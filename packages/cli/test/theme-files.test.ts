@@ -177,11 +177,11 @@ test("the six built-ins separate reference colors from accent without changing s
   const colors = {
     amber: [
       ["#e9a23b", "#7aa2f7", "#7aa2f7", "#7aa2f7", "#7aa2f7"],
-      ["#b86e0a", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
+      ["#945400", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
     ],
     burnt: [
       ["#e5792f", "#7aa2f7", "#7aa2f7", "#7aa2f7", "#7aa2f7"],
-      ["#b8510f", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
+      ["#a6460b", "#285f9e", "#285f9e", "#285f9e", "#285f9e"],
     ],
     lavender: [
       ["#a99cf0", "#7aa2f7", "#7aa2f7", "#7aa2f7", "#7aa2f7"],

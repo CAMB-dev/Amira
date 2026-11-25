@@ -423,7 +423,6 @@ export class OverlayManager {
     }
     if (e.type === "mouse" && e.action === "press" && e.button === "left") {
       if (this.dock.focusable && this.dock.contains(e)) this.focusView(this.dock.viewer, true)
-      else if (this.dock.viewer.focused) this.focusView(this.dock.viewer, false)
     }
     if (this.dock.focusable && e.type !== "mouse" && this.handleViewInput(this.dock.viewer, e)) return true
     // Cancel a search before applying the input's ordinary dock-close action.

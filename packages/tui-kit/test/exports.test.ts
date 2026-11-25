@@ -88,6 +88,7 @@ test("the public theme exports are part of the stable package surface", async ()
     "fg256",
     "fitImage",
     "focusReporting",
+    "formCardWidth",
     "graphemes",
     "gray",
     "green",

@@ -275,14 +275,9 @@ test("clicking a close button inside a docked declarative view closes cleanly wi
     s.terminal.send("ping\r")
     await waitFor(() => submitted === "ping", "inline dock input submit")
 
-    // Clicking outside the dock (on the main composer row below) returns focus to the main composer.
-    const clearRow = s.screen.lines.findIndex((line) => line.includes("[Clear]"))
-    expect(clearRow).toBeGreaterThanOrEqual(0)
-    const outsideY = Math.min(24, clearRow + 3)
-    s.terminal.send(`\x1b[<0;6;${outsideY}M\x1b[<0;6;${outsideY}m`)
-    await Bun.sleep(40)
-    s.terminal.send("main-draft")
-    await waitFor(() => s.live().includes("main-draft"), "clicking outside dock restores composer focus")
+    // Tab returns focus to the main composer.
+    s.terminal.send("\tmain-draft")
+    await waitFor(() => s.live().includes("main-draft"), "Tab returns focus to main composer")
 
     // Clicking [Clear] closes the dock synchronously without throwing on null this.dock.
     const row = s.screen.lines.findIndex((line) => line.includes("[Clear]"))
