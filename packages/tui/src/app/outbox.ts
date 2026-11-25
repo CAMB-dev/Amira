@@ -2,6 +2,7 @@
 import type { SendOptions, UserMessage } from "@amira/api"
 import { type Agent, AgentBusyError, newTurnId } from "@amira/core"
 import {
+  bold,
   type Editor,
   type EditorPart,
   type Spinner,
@@ -698,6 +699,8 @@ export function renderPendingRows(
   const hits: PendingRowHit[] = []
   const room = contentRoom(width)
   const ascii = asciiGlyphs()
+  const colored = theme.accent("a") !== "a"
+  const emphasize = (text: string) => (colored ? bold(theme.accent(text)) : theme.accent(text))
   const editRaw = `[ ${ascii ? "^" : "↑"} ]`
   const steerRaw = "[ steer ]"
   const dropRaw = `[ ${ascii ? "x" : "×"} ]`
@@ -712,7 +715,7 @@ export function renderPendingRows(
               ? [
                   {
                     raw: steerRaw,
-                    styled: theme.accent(steerRaw),
+                    styled: emphasize(steerRaw),
                     action: { kind: "promote" as const, index: item.queueIndex },
                   },
                 ]
@@ -724,6 +727,11 @@ export function renderPendingRows(
             },
           ]
         : []
+    const badgeHead = `${item.label} ${glyphs.user} `
+    const paint = (line: string, r: number) =>
+      r === 0 && line.startsWith(badgeHead)
+        ? `${item.label === "steering" ? emphasize(item.label) : theme.accent(item.label)} ${theme.dim(glyphs.user)} ${theme.fg2(line.slice(badgeHead.length))}`
+        : theme.fg2(line)
     const controlsRawWidth = controls.reduce((sum, c, i) => sum + visibleWidth(c.raw) + (i ? 1 : 0), 0)
     const showControls = controls.length > 0 && room >= controlsRawWidth + 16
     const firstRowRoom = showControls ? room - controlsRawWidth - 2 : room
@@ -764,17 +772,17 @@ export function renderPendingRows(
             action: { kind: "edit", index: item.queueIndex },
           })
         }
-        out.push(`${CONTENT_INSET}${theme.muted(text)}${" ".repeat(gap)}${styledControls}`)
+        out.push(`${CONTENT_INSET}${paint(text, r)}${" ".repeat(gap)}${styledControls}`)
       } else if (r === 0 && item.label === "steering") {
         const tag = ` ${glyphs.separator} next step`
         const base = shown[r]!
         const line =
           visibleWidth(base) + visibleWidth(tag) <= room
-            ? `${CONTENT_INSET}${theme.muted(base)}${theme.dim(tag)}`
-            : `${CONTENT_INSET}${theme.muted(base)}`
+            ? `${CONTENT_INSET}${paint(base, r)}${theme.dim(tag)}`
+            : `${CONTENT_INSET}${paint(base, r)}`
         out.push(truncateToWidth(line, width, viewEllipsis()))
       } else {
-        out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(shown[r]!)}`, width, viewEllipsis()))
+        out.push(truncateToWidth(`${CONTENT_INSET}${paint(shown[r]!, r)}`, width, viewEllipsis()))
       }
     }
   }

@@ -3,7 +3,14 @@ import { homedir } from "node:os"
 import type { AnyEvent, CommandDefinition, ShimmerEffect, TerminalApi, TuiSettings } from "@amira/api"
 import type { Agent } from "@amira/core"
 import type { CommandHost, PanelRegistry, StatusRegistry, ThemeRegistry, UiRequests } from "@amira/host"
-import type { InputEvent, SetupResult, Terminal, Theme, ThemeVariant } from "@amira/tui-kit"
+import {
+  bold,
+  type InputEvent,
+  type SetupResult,
+  type Terminal,
+  type Theme,
+  type ThemeVariant,
+} from "@amira/tui-kit"
 import { applyClockSetting } from "../clock.ts"
 import type { ViewSource } from "../extension-view.ts"
 import type { FileSource } from "../file-index.ts"
@@ -105,13 +112,21 @@ export function startupDirections(
   commands: boolean,
 ) {
   const helpKey = keys.label("help")
-  const starts = [
-    commands && "/help commands",
-    "@ files",
-    commands && "$ skills",
-    helpKey && `${helpKey} keys`,
-  ].filter(Boolean)
-  view.banner((theme) => theme.muted(starts.join(` ${glyphs.separator} `)))
+  const items: [string, string][] = [
+    ...(commands ? ([["/help", "commands"]] as [string, string][]) : []),
+    ["@", "files"],
+    ...(commands ? ([["$", "skills"]] as [string, string][]) : []),
+    ...(helpKey ? ([[helpKey, "keys"]] as [string, string][]) : []),
+  ]
+  view.banner((theme) => {
+    const colored = theme.fg2("a") !== "a"
+    return items
+      .map(
+        ([trigger, desc]) =>
+          `${colored ? bold(theme.fg2(trigger)) : theme.fg2(trigger)} ${theme.muted(desc)}`,
+      )
+      .join(theme.dim(` ${glyphs.separator} `))
+  })
 }
 
 /** Applies clock formatting preference for the duration of the interactive session. */

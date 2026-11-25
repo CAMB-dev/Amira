@@ -224,6 +224,16 @@ async function runFullscreen(
           : "Enter while busy: steer (injects before next model step)",
       )
     },
+    onCycleMode: () => {
+      if (focus.conversation) return
+      const mode = agent.permissions.cycleMode()
+      agent.bus.emit("ui.render", {}, { sessionId: agent.sessionId })
+      showNote(`Permission mode: ${mode} — ${MODE_SUMMARY[mode]}`)
+    },
+    onOpenModel: () => {
+      if (focus.conversation || !commands) return
+      void commandRunner.run("/model")
+    },
     conversationFocused: () => !!focus.conversation,
     themePreview: () => themes.previewing,
     activityVisible: (visible, ctx) => shimmerClock.visibility(visible, ctx),

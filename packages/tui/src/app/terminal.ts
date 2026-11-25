@@ -7,7 +7,7 @@ import {
   modelLabel,
   type TuiSettings,
 } from "@amira/api"
-import { ProcessTerminal, type Terminal, type Theme, visibleWidth } from "@amira/tui-kit"
+import { bold, ProcessTerminal, type Terminal, type Theme, visibleWidth } from "@amira/tui-kit"
 import { glyphs, viewEllipsis } from "../glyphs.ts"
 import { TerminalStatus } from "../terminal-status.ts"
 
@@ -39,10 +39,12 @@ export function interactiveBanner(
   cwd: string,
   width = Number.POSITIVE_INFINITY,
 ): string {
-  const head = `Amira ${glyphs.separator} ${modelLabel({ provider: model.provider, model: model.id })}`
-  const brand = `${theme.accent("Amira")} ${theme.muted(head.slice("Amira ".length))}`
+  const modelText = modelLabel({ provider: model.provider, model: model.id })
+  const head = `Amira ${glyphs.separator} ${modelText}`
+  const amira = theme.accent("Amira")
+  const brand = `${amira !== "Amira" ? bold(amira) : amira}${theme.dim(` ${glyphs.separator} `)}${theme.fg2(modelText)}`
   if (visibleWidth(`${head} ${glyphs.separator} ${cwd}`) <= width)
-    return `${brand}${theme.muted(` ${glyphs.separator} `)}${theme.path(cwd)}`
+    return `${brand}${theme.dim(` ${glyphs.separator} `)}${theme.path(cwd)}`
   return `${brand}\n${theme.path(clipMiddle(cwd, Math.max(1, width), viewEllipsis()))}`
 }
 

@@ -12,7 +12,6 @@ import {
   type Theme,
   translateMouse,
   truncateToWidth,
-  visibleWidth,
 } from "@amira/tui-kit"
 import type { CommandPopup } from "../command-popup.ts"
 import type { Dialog } from "../dialog.ts"
@@ -24,7 +23,13 @@ import type { HistorySearch } from "../history-search.ts"
 import { InputBox } from "../input-box.ts"
 import { type Keybindings, type KeySpec, keyLabel } from "../keybindings.ts"
 import { badgeSymbol, spinnerFrameAt, statusBadge } from "../status-badge.ts"
-import { permissionModeTone, type StatusEntry, statusLine } from "../status-bar.ts"
+import {
+  permissionModeTone,
+  type StatusEntry,
+  type StatusItemHit,
+  statusLine,
+  statusLineLayout,
+} from "../status-bar.ts"
 import { type TranscriptView, View } from "../view.ts"
 import { visibleAnimation } from "../view-animation.ts"
 import { renderViewLines } from "../view-lines.ts"
@@ -91,6 +96,8 @@ export interface BottomAreaDeps {
   onConversationTab?: (target: unknown) => boolean
   onQueuedAction?: (action: PendingRowAction) => boolean
   onToggleEnterMode?: () => void
+  onCycleMode?: () => void
+  onOpenModel?: () => void
   conversationFocused?: () => boolean
   editor: Editor
   suggestion?: () => string | undefined
@@ -258,7 +265,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let pendingScreenHits: PendingRowHit[] = []
   let conversationBarHits: { x: number; width: number; target: unknown }[] = []
   let hasConversationBar = false
-  let enterModeHit: { x: number; y: number; width: number } | undefined
+  let statusBarHits: (StatusItemHit & { y: number })[] = []
   let pointerTop = 0
   let pointerWidth = 0
   let pointerVisible = false
@@ -573,18 +580,15 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
         pendingScreenHits.push({ ...hit, y: visibleTop + (restIdx - prefixSliceStart) })
       }
     }
-    if (
-      budget > 0 &&
-      !dialog &&
-      deps.activity().working &&
-      !deps.conversationFocused?.() &&
-      width >= 8 &&
-      inputBox.maxRows >= 2
-    ) {
-      const modeText = `[ Enter: ${currentEnterDoes()} ]`
-      enterModeHit = { x: 2, y: pointerTop + composerRows - 1, width: visibleWidth(modeText) }
-    } else {
-      enterModeHit = undefined
+    statusBarHits = []
+    if (budget > 0 && !dialog && !deps.conversationFocused?.() && width >= 8 && inputBox.maxRows >= 2) {
+      const statusY = pointerTop + composerRows - 1
+      const { hits } = statusLineLayout(statusItems(), width, ctx)
+      for (const hit of hits) {
+        if (hit.id === "enter-mode" || hit.id === "mode" || hit.id === "model") {
+          statusBarHits.push({ ...hit, y: statusY })
+        }
+      }
     }
     deps.activityVisible?.(budget > 0 && activityRows.some((row) => visible.includes(row)), ctx)
     deps.commandVisible?.(
@@ -688,16 +692,23 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
           )
           if (hit) return deps.onQueuedAction(hit.action)
         }
-        // 3. Clickable [ Enter: steer ] / [ Enter: queue ] mode toggle pill on status bar.
-        if (
-          enterModeHit &&
-          deps.onToggleEnterMode &&
-          event.y === enterModeHit.y &&
-          event.x >= enterModeHit.x &&
-          event.x < enterModeHit.x + enterModeHit.width
-        ) {
-          deps.onToggleEnterMode()
-          return true
+        // 3. Clickable composer status bar items ([ Enter: steer/queue ], permission mode, model picker).
+        const statusHit = statusBarHits.find(
+          (h) => event.y === h.y && event.x >= h.x && event.x < h.x + h.width,
+        )
+        if (statusHit) {
+          if (statusHit.id === "enter-mode" && deps.onToggleEnterMode) {
+            deps.onToggleEnterMode()
+            return true
+          }
+          if (statusHit.id === "mode" && deps.onCycleMode) {
+            deps.onCycleMode()
+            return true
+          }
+          if (statusHit.id === "model" && deps.onOpenModel) {
+            deps.onOpenModel()
+            return true
+          }
         }
       }
       const dialog = deps.dialogs()[0]

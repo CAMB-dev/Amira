@@ -139,16 +139,53 @@ export function statusBorder(items: readonly StatusEntry[], width: number, ctx: 
   )
 }
 
+export interface StatusItemHit {
+  id: string
+  x: number
+  width: number
+}
+
+/**
+ * The status as a line of its own plus exact hit spans for each fitted item, where no input box
+ * is there to carry it (or under the framed input box). Empty without items.
+ */
+export function statusLineLayout(
+  items: readonly StatusEntry[],
+  width: number,
+  ctx: RenderContext,
+): { lines: string[]; hits: StatusItemHit[] } {
+  const fits = (l: number, r: number) => l + r + (l && r ? 2 : 0) <= width - 2
+  const { left, right } = fitItems(items, fits, () => width - 2)
+  if (!left.length && !right.length) return { lines: [], hits: [] }
+  const sepW = visibleWidth(separator())
+  const hits: StatusItemHit[] = []
+  let cursor = 2
+  for (let i = 0; i < left.length; i++) {
+    if (i > 0) cursor += sepW
+    const w = visibleWidth(left[i]!.text)
+    hits.push({ id: left[i]!.id, x: cursor, width: w })
+    cursor += w
+  }
+  if (!right.length) return { lines: [`  ${join(left, ctx.theme)}`], hits }
+  const gap = width - 2 - sideWidth(left) - sideWidth(right)
+  let rightCursor = 2 + sideWidth(left) + Math.max(0, gap)
+  for (let i = 0; i < right.length; i++) {
+    if (i > 0) rightCursor += sepW
+    const w = visibleWidth(right[i]!.text)
+    hits.push({ id: right[i]!.id, x: rightCursor, width: w })
+    rightCursor += w
+  }
+  return {
+    lines: [`  ${join(left, ctx.theme)}${" ".repeat(Math.max(0, gap))}${join(right, ctx.theme)}`],
+    hits,
+  }
+}
+
 /**
  * The status as a line of its own, where no input box is there to carry it (a dialog has the
  * input's place): left items from the left edge, right items against the right edge. Empty
  * without items.
  */
 export function statusLine(items: readonly StatusEntry[], width: number, ctx: RenderContext): string[] {
-  const fits = (l: number, r: number) => l + r + (l && r ? 2 : 0) <= width - 2
-  const { left, right } = fitItems(items, fits, () => width - 2)
-  if (!left.length && !right.length) return []
-  if (!right.length) return [`  ${join(left, ctx.theme)}`]
-  const gap = width - 2 - sideWidth(left) - sideWidth(right)
-  return [`  ${join(left, ctx.theme)}${" ".repeat(Math.max(0, gap))}${join(right, ctx.theme)}`]
+  return statusLineLayout(items, width, ctx).lines
 }

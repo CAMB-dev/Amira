@@ -132,4 +132,26 @@ describe("continuous conversation UX", () => {
       await closeImageApp(s)
     }
   })
+
+  test("clicking status bar permission mode cycles it, and clicking the scroll-down bar jumps to bottom", async () => {
+    const longReply = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of output`).join("\n")
+    const app = await setup([{ text: longReply }], { cols: 100, rows: 24 })
+    try {
+      // 1. Click permission mode ("auto") on the composer status bar -> cycles to "edits".
+      await waitFor(() => app.live().includes("auto"), "status bar shows mode")
+      clickText(app, "auto")
+      await waitFor(() => app.live().includes("edits"), "clicked mode cycled to edits")
+
+      // 2. Produce long output, scroll up, then click "rows below" to jump straight back to bottom.
+      app.terminal.send("Fill screen\r")
+      await app.idle()
+      await waitFor(() => app.live().includes("Line 40 of output"), "bottom visible")
+      app.terminal.send("\x1b[5~") // PgUp
+      await waitFor(() => app.live().includes("rows below"), "scrolled up shows rows below")
+      clickText(app, "rows below")
+      await waitFor(() => !app.live().includes("rows below"), "clicking rows below jumped to bottom")
+    } finally {
+      await closeImageApp(app)
+    }
+  })
 })

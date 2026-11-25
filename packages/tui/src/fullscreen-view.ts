@@ -1,5 +1,6 @@
 import type { Message, ToolDetailLevel, ToolResult } from "@amira/api"
 import {
+  bold,
   CURSOR_MARKER,
   closeStyles,
   FullScreenRenderer,
@@ -227,8 +228,13 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       ? ""
       : truncateToWidth(
           pane.unseen
-            ? theme.accent(`  ${glyphs.arrowDown} new output ${glyphs.separator} ${rowsBelow}${endHint()}`)
-            : theme.muted(`  ${glyphs.arrowDown} ${rowsBelow}${endHint()}`),
+            ? (ctx.color
+                ? bold(theme.accent(`  ${glyphs.arrowDown} new output`))
+                : theme.accent(`  ${glyphs.arrowDown} new output`)) +
+                theme.dim(` ${glyphs.separator} `) +
+                theme.fg2(rowsBelow) +
+                theme.muted(endHint())
+            : theme.accent(`  ${glyphs.arrowDown} `) + theme.fg2(rowsBelow) + theme.muted(endHint()),
           width,
           viewEllipsis(),
         )

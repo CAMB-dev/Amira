@@ -118,6 +118,14 @@ export function createMouse(deps: MouseDeps) {
         requestRender()
         return true
       }
+      // Clicking the "↓ N rows below" bar under the transcript jumps straight to the latest output.
+      if (!pane.following && e.y === paneRows()) {
+        armed = false
+        lastPress = undefined
+        pane.follow()
+        requestRender()
+        return true
+      }
       const now = Date.now()
       const again = near(lastPress) && now - lastPress!.at <= MULTI_CLICK_MS
       const count = again ? (lastPress!.count % 3) + 1 : 1
