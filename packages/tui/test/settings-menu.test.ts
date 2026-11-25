@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { TuiSettings } from "@amira/api"
+import type { ShimmerEffect, TuiSettings } from "@amira/api"
 import {
   defaultTheme,
   key,
@@ -35,15 +35,16 @@ function click(dialog: SettingsMenuDialog, rows: string[], text: string, offset 
   dialog.handleInput(mouse(pt.x, pt.y, "release"))
 }
 
-describe("SettingsMenuDialog", () => {
-  test("clicks category tabs, margin preset pills, steppers, toggles, reset and save", () => {
-    const previews: number[] = []
+describe("SettingsMenuDialog (hierarchical menu)", () => {
+  test("drills from Home into Layout, Theme & Appearance, Behavior and Alerts, previews live and saves", () => {
+    const previews: { margin: number; theme: string; view: string }[] = []
     let savedPatch: Partial<TuiSettings> | undefined
     let cancelled = 0
     const dialog = new SettingsMenuDialog({
       initial: { margin: 1, marginRows: 0 },
+      themeNames: ["amira", "amber", "burnt", "lavender", "mono", "ascii", "terminal"],
       viewport: () => ({ columns: 120, rows: 36 }),
-      onPreview: (draft) => previews.push(draft.margin),
+      onPreview: (draft, view) => previews.push({ margin: draft.margin, theme: draft.theme, view }),
       onSave: (patch) => {
         savedPatch = patch
       },
@@ -52,60 +53,90 @@ describe("SettingsMenuDialog", () => {
       },
     })
 
+    // Level 0: Home shows all 4 hierarchical categories with live summaries.
     let rows = dialog.render(100, ctx)
-    expect(rows.map(stripAnsi).join("\n")).toContain("118×36 (margin 1, rows 0)")
-    expect(rows.map(stripAnsi).join("\n")).toContain("[ Layout ]")
-    expect(rows.map(stripAnsi).join("\n")).toContain("[ Interface ]")
-    expect(rows.map(stripAnsi).join("\n")).toContain("[ Alerts ]")
+    let text = rows.map(stripAnsi).join("\n")
+    expect(dialog.activeView).toBe("home")
+    expect(text).toContain("Layout & Display")
+    expect(text).toContain("Theme & Appearance")
+    expect(text).toContain("Behavior & Input")
+    expect(text).toContain("Alerts & Terminal")
+    expect(text).toContain("118×36 (margin 1, rows 0)")
 
-    // Click side margin preset [ 4 ]
+    // Drill into Layout & Display by clicking the category row.
+    click(dialog, rows, "Layout & Display")
+    expect(dialog.activeView).toBe("layout")
+    rows = dialog.render(100, ctx)
     click(dialog, rows, "[ 4 ]")
     expect(dialog.draft.margin).toBe(4)
-    expect(previews.at(-1)).toBe(4)
+    expect(previews.at(-1)).toMatchObject({ margin: 4, view: "layout" })
     rows = dialog.render(100, ctx)
-    expect(rows.map(stripAnsi).join("\n")).toContain("112×36 (margin 4, rows 0)")
-    expect(rows.map(stripAnsi).join("\n")).toContain("unsaved")
-
-    // Click [ + ] stepper to reach custom margin 5 (dynamically displayed as a highlighted pill)
     click(dialog, rows, "[ + ]")
     expect(dialog.draft.margin).toBe(5)
-    rows = dialog.render(100, ctx)
-    expect(rows.map(stripAnsi).join("\n")).toContain("[ 5 ]")
 
-    // Switch to Interface tab by mouse click
-    click(dialog, rows, "[ Interface ]")
-    expect(dialog.activeTab).toBe("interface")
+    // Click breadcrumb [ ← Settings ] to go back to Home; Layout shows * dirty marker & updated summary.
     rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ 24h ]")
+    click(dialog, rows, "[ ← Settings ]")
+    expect(dialog.activeView).toBe("home")
+    rows = dialog.render(100, ctx)
+    text = rows.map(stripAnsi).join("\n")
+    expect(text).toContain("Layout & Display*")
+    expect(text).toContain("margin 5")
+
+    // Drill into Theme & Appearance (theme, appearance, colorDepth, shimmer, images live here!).
+    click(dialog, rows, "Theme & Appearance")
+    expect(dialog.activeView).toBe("appearance")
+    rows = dialog.render(100, ctx)
+    click(dialog, rows, "[ lavender ]")
+    rows = dialog.render(100, ctx)
+    click(dialog, rows, "[ light ]")
+    rows = dialog.render(100, ctx)
+    click(dialog, rows, "[ 256 ]")
+    rows = dialog.render(100, ctx)
+    click(dialog, rows, "[ › ]")
+    rows = dialog.render(100, ctx)
+    click(dialog, rows, "[ › ]")
+    expect(dialog.draft.theme).toBe("lavender")
+    expect(dialog.draft.themeVariant).toBe("light")
+    expect(dialog.draft.colorDepth).toBe("256")
+    expect(dialog.draft.shimmer).toBe("soft")
+
+    // Jump via quick section pill to Behavior, then Alerts.
+    rows = dialog.render(100, ctx)
+    click(dialog, rows, "[ Behavior ]")
+    expect(dialog.activeView).toBe("behavior")
+    rows = dialog.render(100, ctx)
     click(dialog, rows, "[ queue ]")
-    expect(dialog.draft.clock).toBe("24h")
-    expect(dialog.draft.submitWhileWorking).toBe("queue")
+    click(dialog, rows, "[ 24h ]")
 
-    // Switch to Alerts tab and click [ Off ] on Terminal bell
     rows = dialog.render(100, ctx)
     click(dialog, rows, "[ Alerts ]")
-    expect(dialog.activeTab).toBe("alerts")
+    expect(dialog.activeView).toBe("alerts")
     rows = dialog.render(100, ctx)
     click(dialog, rows, "[ Off ]")
-    expect(dialog.draft.bell).toBe(false)
 
-    // Save changes by clicking [ Save changes ]
+    // Save changes directly from sub-page.
     rows = dialog.render(100, ctx)
     click(dialog, rows, "[ Save changes ]")
     expect(cancelled).toBe(0)
     expect(savedPatch).toEqual({
       margin: 5,
-      clock: "24h",
+      theme: "lavender",
+      themeVariant: "light",
+      colorDepth: "256",
+      shimmer: "soft",
       submitWhileWorking: "queue",
+      clock: "24h",
       bell: false,
     })
   })
 
-  test("cancel and Esc discard changes without calling save", () => {
+  test("Esc pops from sub-page back to Home, and Esc at Home cancels and restores without saving", () => {
     let saved = 0
     let cancelled = 0
     const dialog = new SettingsMenuDialog({
       initial: { margin: 2 },
+      initialSection: "layout",
       onPreview: () => {},
       onSave: () => {
         saved++
@@ -117,22 +148,34 @@ describe("SettingsMenuDialog", () => {
     const rows = dialog.render(100, ctx)
     click(dialog, rows, "[ 6 ]")
     expect(dialog.draft.margin).toBe(6)
+    expect(dialog.activeView).toBe("layout")
+
+    // First Esc pops back to Settings Home (does not cancel yet).
+    dialog.handleInput(key("escape"))
+    expect(dialog.activeView).toBe("home")
+    expect(cancelled).toBe(0)
+
+    // Second Esc at Home cancels and restores.
     dialog.handleInput(key("escape"))
     expect(saved).toBe(0)
     expect(cancelled).toBe(1)
   })
 })
 
-test("/settings previews live screen margins on click, restores on Esc, and persists on Save", async () => {
-  const saved: Partial<TuiSettings>[] = []
+test("/settings previews live margin & theme changes, restores on Esc, and persists both on Save", async () => {
+  const savedSettings: Partial<TuiSettings>[] = []
+  const savedThemes: { name: string; variant: string; shimmer?: ShimmerEffect }[] = []
   const app = await setup([], {
     commands: [],
     tuiCommands: true,
     cols: 110,
     rows: 34,
-    settings: { margin: 1, marginRows: 0 },
+    settings: { margin: 1, marginRows: 0, theme: "dark", colorDepth: "truecolor" },
+    saveTheme: (name, variant, shimmer) => {
+      savedThemes.push({ name, variant, shimmer })
+    },
     saveTuiSettings: (patch) => {
-      saved.push(patch)
+      savedSettings.push(patch)
     },
   })
   const clickText = (text: string) => {
@@ -147,29 +190,38 @@ test("/settings previews live screen margins on click, restores on Esc, and pers
     return line!.indexOf("╭")
   }
   try {
+    // 1. Open /settings Home -> click Layout & Display -> preview margin 6 -> Esc back to Home -> Esc restore.
     app.terminal.send("/settings\r")
-    await waitFor(() => app.live().includes("Side margin"), "settings menu opened")
+    await waitFor(() => app.live().includes("Layout & Display"), "settings home opened")
     expect(topBorderIndent()).toBe(1)
 
-    // Clicking [ 6 ] live-previews margin=6 on the actual screen immediately!
+    clickText("Layout & Display")
+    await waitFor(() => app.live().includes("Side margin"), "drilled into layout")
     clickText("[ 6 ]")
     await waitFor(() => topBorderIndent() === 6, "live margin=6 preview")
-    expect(saved).toEqual([])
+    expect(savedSettings).toEqual([])
 
-    // Esc restores margin=1 without saving.
+    // Esc returns to Home, second Esc cancels & restores margin=1.
     app.terminal.send("\x1b")
-    await waitFor(() => !app.live().includes("Side margin"), "settings menu closed")
-    expect(saved).toEqual([])
+    await waitFor(() => app.live().includes("Theme & Appearance"), "back at settings home")
+    app.terminal.send("\x1b")
+    await waitFor(() => !app.live().includes("Layout & Display"), "settings closed")
+    expect(savedSettings).toEqual([])
+    expect(savedThemes).toEqual([])
 
-    // Reopen, click [ 4 ], then click [ Save changes ] to persist!
-    app.terminal.send("/settings\r")
-    await waitFor(() => app.live().includes("Side margin"), "settings menu reopened")
+    // 2. Direct jump `/settings theme`, switch appearance to light + margin to 4, and save!
+    app.terminal.send("/settings theme\r")
+    await waitFor(() => app.live().includes("Color depth"), "opened Theme & Appearance directly")
     expect(topBorderIndent()).toBe(1)
+    clickText("[ light ]")
+    clickText("[ Layout ]")
+    await waitFor(() => app.live().includes("Side margin"), "switched to Layout")
     clickText("[ 4 ]")
     await waitFor(() => topBorderIndent() === 4, "live margin=4 preview")
     clickText("[ Save changes ]")
-    await waitFor(() => saved.length === 1, "settings saved")
-    expect(saved[0]).toEqual({ margin: 4 })
+    await waitFor(() => savedThemes.length === 1 && savedSettings.length === 1, "both theme and layout saved")
+    expect(savedThemes[0]).toEqual({ name: "amira", variant: "light", shimmer: undefined })
+    expect(savedSettings[0]).toEqual({ margin: 4 })
   } finally {
     app.terminal.send("\x03\x03")
     await app.exited

@@ -78,6 +78,29 @@ export class RuntimeThemes {
     return this.isPreviewing
   }
 
+  get shimmerOverride(): ShimmerEffect | undefined {
+    return this.shimmer
+  }
+
+  /** All selectable theme names in picker order (built-ins, custom themes, terminal). */
+  listThemeNames(): string[] {
+    return this.entries().map((entry) => entry.name)
+  }
+
+  /** Applies theme, variant, shimmer and color depth together (used by /settings live preview & restore). */
+  applyAppearance(next: {
+    theme: string
+    themeVariant: ThemeVariant
+    shimmer: ShimmerEffect | undefined
+    colorDepth: TuiSettings["colorDepth"]
+    previewing?: boolean
+  }): void {
+    this.isPreviewing = next.previewing ?? false
+    this.shimmer = next.shimmer
+    this.colorDepth = next.colorDepth
+    this.select(next.theme, next.themeVariant)
+  }
+
   /** Connect after the editor, renderers and overlays exist; reloads preserve the selected name. */
   connect(changed: (selection: Selection) => void): void {
     this.changed = changed

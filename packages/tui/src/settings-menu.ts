@@ -1,18 +1,4 @@
-import {
-  DEFAULT_SHELL_OUTPUT_LINES,
-  DEFAULT_TUI_BELL,
-  DEFAULT_TUI_CLOCK,
-  DEFAULT_TUI_COLOR_DEPTH,
-  DEFAULT_TUI_IMAGES,
-  DEFAULT_TUI_MARGIN,
-  DEFAULT_TUI_MARGIN_ROWS,
-  DEFAULT_TUI_NOTIFY,
-  DEFAULT_TUI_PROGRESS,
-  DEFAULT_TUI_SUBMIT_WHILE_WORKING,
-  DEFAULT_TUI_TITLE,
-  DEFAULT_TUI_TOKEN_SPEED,
-  type TuiSettings,
-} from "@amira/api"
+import type { ShimmerEffect, TuiSettings } from "@amira/api"
 import {
   bold,
   type HitRect,
@@ -30,238 +16,38 @@ import { dialogFrame } from "./dialog-frame.ts"
 import { asciiGlyphs, glyphs, viewEllipsis } from "./glyphs.ts"
 import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { contentGeometry } from "./margins.ts"
+import {
+  defaultEditableSettings,
+  diffEditableSettings,
+  type EditableTuiKey,
+  type EditableTuiSettings,
+  type NumberField,
+  resolveEditableSettings,
+  SETTINGS_FIELDS,
+  SETTINGS_SECTIONS,
+  type SettingsField,
+  type SettingsSectionId,
+} from "./settings-schema.ts"
 
-export type SettingsTabId = "layout" | "interface" | "alerts"
-
-export type EditableTuiKey =
-  | "margin"
-  | "marginRows"
-  | "shellOutputLines"
-  | "clock"
-  | "submitWhileWorking"
-  | "colorDepth"
-  | "images"
-  | "tokenSpeed"
-  | "bell"
-  | "notify"
-  | "title"
-  | "progress"
-
-export type EditableTuiSettings = Pick<TuiSettings, EditableTuiKey>
-
-interface NumberField {
-  kind: "number"
-  key: "margin" | "marginRows" | "shellOutputLines"
-  tab: SettingsTabId
-  label: string
-  description: string
-  min: number
-  max: number
-  defaultValue: number
-  presets: readonly number[]
-  liveSuffix?: (draft: EditableTuiSettings, viewport: { columns: number; rows: number }) => string
-}
-
-interface ChoiceField<K extends EditableTuiKey = EditableTuiKey> {
-  kind: "choice"
-  key: K
-  tab: SettingsTabId
-  label: string
-  description: string
-  defaultValue: NonNullable<TuiSettings[K]>
-  options: readonly { value: NonNullable<TuiSettings[K]>; label: string }[]
-}
-
-interface ToggleField {
-  kind: "toggle"
-  key: "tokenSpeed" | "bell" | "title" | "progress"
-  tab: SettingsTabId
-  label: string
-  description: string
-  defaultValue: boolean
-}
-
-type SettingsField = NumberField | ChoiceField | ToggleField
-
-export const SETTINGS_TABS: readonly { id: SettingsTabId; label: string }[] = [
-  { id: "layout", label: "Layout" },
-  { id: "interface", label: "Interface" },
-  { id: "alerts", label: "Alerts" },
-]
-
-export const SETTINGS_FIELDS: readonly SettingsField[] = [
-  {
-    kind: "number",
-    key: "margin",
-    tab: "layout",
-    label: "Side margin",
-    description: "Left/right outer margin in cells (0–12). Previews live; shrinks on narrow terminals.",
-    min: 0,
-    max: 12,
-    defaultValue: DEFAULT_TUI_MARGIN,
-    presets: [0, 1, 2, 3, 4, 6, 8],
-    liveSuffix: (draft, vp) => `${contentGeometry(vp.columns, vp.rows, draft).width} cols`,
-  },
-  {
-    kind: "number",
-    key: "marginRows",
-    tab: "layout",
-    label: "Top/bottom rows",
-    description: "Outer top/bottom padding in rows (0–2). Dropped automatically below 24 rows.",
-    min: 0,
-    max: 2,
-    defaultValue: DEFAULT_TUI_MARGIN_ROWS,
-    presets: [0, 1, 2],
-    liveSuffix: (draft, vp) => `${contentGeometry(vp.columns, vp.rows, draft).height} rows`,
-  },
-  {
-    kind: "number",
-    key: "shellOutputLines",
-    tab: "layout",
-    label: "Shell preview",
-    description: "Tail lines shown under succeeded shell calls in summary detail mode (0–20).",
-    min: 0,
-    max: 20,
-    defaultValue: DEFAULT_SHELL_OUTPUT_LINES,
-    presets: [0, 3, 6, 10],
-  },
-  {
-    kind: "choice",
-    key: "clock",
-    tab: "interface",
-    label: "Clock format",
-    description: "Timestamp hour cycle: auto follows your system locale, or force 12h / 24h.",
-    defaultValue: DEFAULT_TUI_CLOCK,
-    options: [
-      { value: "auto", label: "auto" },
-      { value: "12h", label: "12h" },
-      { value: "24h", label: "24h" },
-    ],
-  },
-  {
-    kind: "choice",
-    key: "submitWhileWorking",
-    tab: "interface",
-    label: "Enter while busy",
-    description: "Steer sends into the running turn; queue holds your message until the turn finishes.",
-    defaultValue: DEFAULT_TUI_SUBMIT_WHILE_WORKING,
-    options: [
-      { value: "steer", label: "steer" },
-      { value: "queue", label: "queue" },
-    ],
-  },
-  {
-    kind: "choice",
-    key: "colorDepth",
-    tab: "interface",
-    label: "Color depth",
-    description: "Terminal color palette depth; auto detects capabilities from your terminal.",
-    defaultValue: DEFAULT_TUI_COLOR_DEPTH,
-    options: [
-      { value: "auto", label: "auto" },
-      { value: "truecolor", label: "truecolor" },
-      { value: "256", label: "256" },
-      { value: "16", label: "16" },
-    ],
-  },
-  {
-    kind: "choice",
-    key: "images",
-    tab: "interface",
-    label: "Inline images",
-    description: "Render inline images in replies when supported by the terminal.",
-    defaultValue: DEFAULT_TUI_IMAGES,
-    options: [
-      { value: "auto", label: "auto" },
-      { value: "on", label: "on" },
-      { value: "off", label: "off" },
-    ],
-  },
-  {
-    kind: "toggle",
-    key: "tokenSpeed",
-    tab: "interface",
-    label: "Token speed",
-    description: "Show live generation speed (tok/s) and thinking duration in the status strip.",
-    defaultValue: DEFAULT_TUI_TOKEN_SPEED,
-  },
-  {
-    kind: "toggle",
-    key: "bell",
-    tab: "alerts",
-    label: "Terminal bell",
-    description: "Ring the terminal bell once when a turn finishes in the background or waits on you.",
-    defaultValue: DEFAULT_TUI_BELL,
-  },
-  {
-    kind: "choice",
-    key: "notify",
-    tab: "alerts",
-    label: "Desktop notify",
-    description: "Send terminal desktop notifications (Ghostty, Kitty, WezTerm, iTerm2).",
-    defaultValue: DEFAULT_TUI_NOTIFY,
-    options: [
-      { value: "auto", label: "auto" },
-      { value: "off", label: "off" },
-    ],
-  },
-  {
-    kind: "toggle",
-    key: "title",
-    tab: "alerts",
-    label: "Window title",
-    description: "Update the terminal tab/window title with session status markers (●, ✓, ◆).",
-    defaultValue: DEFAULT_TUI_TITLE,
-  },
-  {
-    kind: "toggle",
-    key: "progress",
-    tab: "alerts",
-    label: "Taskbar progress",
-    description: "Show running/waiting progress on supported terminal tabs and taskbars (OSC 9;4).",
-    defaultValue: DEFAULT_TUI_PROGRESS,
-  },
-]
-
-export function resolveEditableSettings(source: TuiSettings): Required<EditableTuiSettings> {
-  return {
-    margin: source.margin ?? DEFAULT_TUI_MARGIN,
-    marginRows: source.marginRows ?? DEFAULT_TUI_MARGIN_ROWS,
-    shellOutputLines: source.shellOutputLines ?? DEFAULT_SHELL_OUTPUT_LINES,
-    clock: source.clock ?? DEFAULT_TUI_CLOCK,
-    submitWhileWorking: source.submitWhileWorking ?? DEFAULT_TUI_SUBMIT_WHILE_WORKING,
-    colorDepth: source.colorDepth ?? DEFAULT_TUI_COLOR_DEPTH,
-    images: source.images ?? DEFAULT_TUI_IMAGES,
-    tokenSpeed: source.tokenSpeed ?? DEFAULT_TUI_TOKEN_SPEED,
-    bell: source.bell ?? DEFAULT_TUI_BELL,
-    notify: source.notify ?? DEFAULT_TUI_NOTIFY,
-    title: source.title ?? DEFAULT_TUI_TITLE,
-    progress: source.progress ?? DEFAULT_TUI_PROGRESS,
-  }
-}
-
-export function diffEditableSettings(
-  initial: Required<EditableTuiSettings>,
-  draft: Required<EditableTuiSettings>,
-): Partial<TuiSettings> {
-  const patch: Partial<TuiSettings> = {}
-  for (const field of SETTINGS_FIELDS) {
-    const k = field.key
-    if (draft[k] !== initial[k]) Object.assign(patch, { [k]: draft[k] })
-  }
-  return patch
-}
-
-export function defaultEditableSettings(): Required<EditableTuiSettings> {
-  return resolveEditableSettings({})
-}
+export {
+  defaultEditableSettings,
+  diffEditableSettings,
+  type EditableTuiKey,
+  type EditableTuiSettings,
+  resolveEditableSettings,
+  SETTINGS_FIELDS,
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+  shimmerEffectFromChoice,
+} from "./settings-schema.ts"
 
 type MouseAction =
-  | { kind: "tab"; tab: SettingsTabId }
+  | { kind: "open-section"; section: SettingsSectionId }
+  | { kind: "home" }
   | { kind: "focus"; index: number }
   | { kind: "set"; index: number; key: EditableTuiKey; value: EditableTuiSettings[EditableTuiKey] }
   | { kind: "step"; index: number; key: "margin" | "marginRows" | "shellOutputLines"; delta: -1 | 1 }
-  | { kind: "action"; action: "save" | "reset-tab" | "defaults" | "cancel" }
+  | { kind: "action"; action: "save" | "reset-section" | "defaults" | "cancel" }
 
 interface TargetSpec {
   id: string
@@ -273,22 +59,33 @@ interface TargetSpec {
 
 export interface SettingsMenuOptions {
   initial: TuiSettings
+  runtimeTheme?: {
+    name: string
+    themeVariant: NonNullable<TuiSettings["themeVariant"]>
+    shimmer?: ShimmerEffect
+  }
+  themeNames?: readonly string[]
+  initialSection?: SettingsSectionId
   keys?: Keybindings
   viewport?: () => { columns: number; rows: number }
-  onPreview: (draft: Required<EditableTuiSettings>) => void
-  onSave: (patch: Partial<TuiSettings>, draft: Required<EditableTuiSettings>) => void
+  onPreview: (draft: EditableTuiSettings, section: SettingsSectionId | "home") => void
+  onSave: (patch: Partial<TuiSettings>, draft: EditableTuiSettings) => void
   onCancel: () => void
 }
 
 /**
- * Clickable GUI-button settings menu hosted in the bottom dialog slot so the real
- * transcript, header and outer margins stay live and visible behind it while editing.
+ * Hierarchical two-level clickable GUI settings menu hosted in the bottom dialog slot so the
+ * real transcript, theme palette, shimmer and outer margins stay live and visible above it.
  */
 export class SettingsMenuDialog extends Dialog {
-  readonly #initial: Required<EditableTuiSettings>
-  #draft: Required<EditableTuiSettings>
-  #tab: SettingsTabId = "layout"
-  #focus = 0
+  readonly #initial: EditableTuiSettings
+  readonly #originalShimmer: ShimmerEffect | undefined
+  readonly #themeNames: readonly string[]
+  #draft: EditableTuiSettings
+  /** "home" shows the top-level category menu; a section id drills into that sub-page. */
+  #view: "home" | SettingsSectionId
+  #homeFocus = 0
+  #fieldFocus = 0
   #closed = false
   #hits = new HitRegions()
   #actions = new Map<string, MouseAction>()
@@ -301,20 +98,27 @@ export class SettingsMenuDialog extends Dialog {
       opts.keys ?? defaultKeybindings(),
     )
     this.#opts = opts
-    this.#initial = resolveEditableSettings(opts.initial)
+    this.#themeNames = opts.themeNames ?? []
+    this.#originalShimmer = opts.runtimeTheme ? opts.runtimeTheme.shimmer : opts.initial.shimmer
+    this.#initial = resolveEditableSettings(opts.initial, opts.runtimeTheme)
     this.#draft = { ...this.#initial }
+    this.#view = opts.initialSection ?? "home"
+    if (opts.initialSection) {
+      const idx = SETTINGS_SECTIONS.findIndex((s) => s.id === opts.initialSection)
+      if (idx >= 0) this.#homeFocus = idx
+    }
   }
 
-  get draft(): Required<EditableTuiSettings> {
+  get draft(): EditableTuiSettings {
     return { ...this.#draft }
   }
 
-  get activeTab(): SettingsTabId {
-    return this.#tab
+  get activeView(): "home" | SettingsSectionId {
+    return this.#view
   }
 
   get dirty(): boolean {
-    return Object.keys(diffEditableSettings(this.#initial, this.#draft)).length > 0
+    return Object.keys(diffEditableSettings(this.#initial, this.#draft, this.#originalShimmer)).length > 0
   }
 
   override close(): void {
@@ -324,14 +128,32 @@ export class SettingsMenuDialog extends Dialog {
     super.close()
   }
 
-  #tabFields(): SettingsField[] {
-    return SETTINGS_FIELDS.filter((f) => f.tab === this.#tab)
+  #sectionFields(section: SettingsSectionId): SettingsField[] {
+    return SETTINGS_FIELDS.filter((f) => f.section === section)
   }
 
-  #setValue<K extends EditableTuiKey>(key: K, value: Required<EditableTuiSettings>[K]): void {
+  #sectionDirty(section: SettingsSectionId): boolean {
+    return this.#sectionFields(section).some((f) => this.#draft[f.key] !== this.#initial[f.key])
+  }
+
+  #openSection(section: SettingsSectionId): void {
+    const idx = SETTINGS_SECTIONS.findIndex((s) => s.id === section)
+    if (idx >= 0) this.#homeFocus = idx
+    this.#view = section
+    this.#fieldFocus = 0
+    this.#opts.onPreview(this.draft, this.#view)
+  }
+
+  #goHome(): void {
+    if (this.#view === "home") return
+    this.#view = "home"
+    this.#opts.onPreview(this.draft, "home")
+  }
+
+  #setValue<K extends EditableTuiKey>(key: K, value: EditableTuiSettings[K]): void {
     if (this.#draft[key] === value) return
     this.#draft = { ...this.#draft, [key]: value }
-    this.#opts.onPreview(this.draft)
+    this.#opts.onPreview(this.draft, this.#view)
   }
 
   #stepNumber(field: NumberField, delta: -1 | 1): void {
@@ -339,24 +161,37 @@ export class SettingsMenuDialog extends Dialog {
     this.#setValue(field.key, next)
   }
 
+  #optionsOf(field: Extract<SettingsField, { kind: "choice" }>) {
+    const base = typeof field.options === "function" ? field.options(this.#themeNames) : field.options
+    const current = this.#draft[field.key]
+    if (base.some((o) => o.value === current)) return base
+    return [...base, { value: current, label: String(current) }]
+  }
+
   #adjustFocused(delta: -1 | 1): void {
-    const field = this.#tabFields()[this.#focus]
+    if (this.#view === "home") return
+    const field = this.#sectionFields(this.#view)[this.#fieldFocus]
     if (!field) return
     if (field.kind === "number") {
       this.#stepNumber(field, delta)
     } else if (field.kind === "toggle") {
       this.#setValue(field.key, !this.#draft[field.key])
     } else {
-      const idx = field.options.findIndex((o) => o.value === this.#draft[field.key])
-      const next = field.options[(idx + delta + field.options.length) % field.options.length]!
+      const options = this.#optionsOf(field)
+      const idx = Math.max(
+        0,
+        options.findIndex((o) => o.value === this.#draft[field.key]),
+      )
+      const next = options[(idx + delta + options.length) % options.length]!
       this.#setValue(field.key, next.value)
     }
   }
 
-  #resetTab(): void {
+  #resetSection(): void {
+    if (this.#view === "home") return
     const next = { ...this.#draft }
     let changed = false
-    for (const field of this.#tabFields()) {
+    for (const field of this.#sectionFields(this.#view)) {
       if (next[field.key] !== field.defaultValue) {
         Object.assign(next, { [field.key]: field.defaultValue })
         changed = true
@@ -364,14 +199,14 @@ export class SettingsMenuDialog extends Dialog {
     }
     if (!changed) return
     this.#draft = next
-    this.#opts.onPreview(this.draft)
+    this.#opts.onPreview(this.draft, this.#view)
   }
 
   #resetAll(): void {
     const defaults = defaultEditableSettings()
-    if (Object.keys(diffEditableSettings(this.#draft, defaults)).length === 0) return
+    if (Object.keys(diffEditableSettings(this.#draft, defaults, this.#originalShimmer)).length === 0) return
     this.#draft = defaults
-    this.#opts.onPreview(this.draft)
+    this.#opts.onPreview(this.draft, this.#view)
   }
 
   #commit(): void {
@@ -379,7 +214,7 @@ export class SettingsMenuDialog extends Dialog {
     this.#closed = true
     this.#hits.reset()
     this.#actions.clear()
-    this.#opts.onSave(diffEditableSettings(this.#initial, this.#draft), this.draft)
+    this.#opts.onSave(diffEditableSettings(this.#initial, this.#draft, this.#originalShimmer), this.draft)
   }
 
   #abort(): void {
@@ -393,19 +228,17 @@ export class SettingsMenuDialog extends Dialog {
   override handleInput(event: InputEvent): boolean {
     if (this.#closed) return false
     if (event.type === "mouse") return this.#handleMouse(event)
-    if (matchesKey(event, "escape") || matchesKey(event, "c", { ctrl: true })) {
+    if (matchesKey(event, "c", { ctrl: true })) {
       this.#abort()
       return true
     }
-    if (matchesKey(event, "enter") || matchesKey(event, "s", { ctrl: true })) {
+    if (matchesKey(event, "s", { ctrl: true })) {
       this.#commit()
       return true
     }
-    if (matchesKey(event, "tab")) {
-      const step = matchesKey(event, "tab", { shift: true }) ? -1 : 1
-      const i = SETTINGS_TABS.findIndex((t) => t.id === this.#tab)
-      this.#tab = SETTINGS_TABS[(i + step + SETTINGS_TABS.length) % SETTINGS_TABS.length]!.id
-      this.#focus = 0
+    if (matchesKey(event, "escape")) {
+      if (this.#view !== "home") this.#goHome()
+      else this.#abort()
       return true
     }
     if (
@@ -413,45 +246,59 @@ export class SettingsMenuDialog extends Dialog {
       !event.ctrl &&
       !event.alt &&
       event.text &&
-      ["1", "2", "3"].includes(event.text)
+      ["1", "2", "3", "4"].includes(event.text)
     ) {
-      const next = SETTINGS_TABS[Number(event.text) - 1]
-      if (next) {
-        this.#tab = next.id
-        this.#focus = 0
+      const next = SETTINGS_SECTIONS[Number(event.text) - 1]
+      if (next) this.#openSection(next.id)
+      return true
+    }
+    if (this.#view === "home") {
+      if (matchesKey(event, "up") || matchesKey(event, "k")) {
+        this.#homeFocus = (this.#homeFocus - 1 + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length
+      } else if (matchesKey(event, "down") || matchesKey(event, "j") || matchesKey(event, "tab")) {
+        const step = matchesKey(event, "tab", { shift: true }) ? -1 : 1
+        this.#homeFocus = (this.#homeFocus + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length
+      } else if (matchesKey(event, "enter") || matchesKey(event, "right") || matchesKey(event, "space")) {
+        this.#openSection(SETTINGS_SECTIONS[this.#homeFocus]!.id)
       }
       return true
     }
-    const fields = this.#tabFields()
+
+    // Sub-page navigation
+    if (matchesKey(event, "backspace")) {
+      this.#goHome()
+      return true
+    }
+    if (matchesKey(event, "enter")) {
+      this.#commit()
+      return true
+    }
+    if (matchesKey(event, "tab")) {
+      const step = matchesKey(event, "tab", { shift: true }) ? -1 : 1
+      const i = SETTINGS_SECTIONS.findIndex((s) => s.id === this.#view)
+      this.#openSection(
+        SETTINGS_SECTIONS[(i + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length]!.id,
+      )
+      return true
+    }
+    const fields = this.#sectionFields(this.#view)
     if (matchesKey(event, "up") || matchesKey(event, "k")) {
-      this.#focus = (this.#focus - 1 + fields.length) % fields.length
-      return true
-    }
-    if (matchesKey(event, "down") || matchesKey(event, "j")) {
-      this.#focus = (this.#focus + 1) % fields.length
-      return true
-    }
-    if (matchesKey(event, "left") || matchesKey(event, "h") || matchesKey(event, "-")) {
+      this.#fieldFocus = (this.#fieldFocus - 1 + fields.length) % fields.length
+    } else if (matchesKey(event, "down") || matchesKey(event, "j")) {
+      this.#fieldFocus = (this.#fieldFocus + 1) % fields.length
+    } else if (matchesKey(event, "left") || matchesKey(event, "h") || matchesKey(event, "-")) {
       this.#adjustFocused(-1)
-      return true
-    }
-    if (
+    } else if (
       matchesKey(event, "right") ||
       matchesKey(event, "l") ||
       matchesKey(event, "+") ||
-      matchesKey(event, "=")
+      matchesKey(event, "=") ||
+      matchesKey(event, "space")
     ) {
       this.#adjustFocused(1)
-      return true
-    }
-    if (matchesKey(event, "space")) {
-      this.#adjustFocused(1)
-      return true
-    }
-    if (matchesKey(event, "r") || matchesKey(event, "r", { ctrl: true })) {
-      const field = fields[this.#focus]
+    } else if (matchesKey(event, "r") || matchesKey(event, "r", { ctrl: true })) {
+      const field = fields[this.#fieldFocus]
       if (field) this.#setValue(field.key, field.defaultValue)
-      return true
     }
     return true
   }
@@ -459,8 +306,13 @@ export class SettingsMenuDialog extends Dialog {
   #handleMouse(event: MouseInput): boolean {
     if (event.action === "wheel") {
       if (event.button === "up" || event.button === "down") {
-        const fields = this.#tabFields()
-        this.#focus = (this.#focus + (event.button === "down" ? 1 : -1) + fields.length) % fields.length
+        const step = event.button === "down" ? 1 : -1
+        if (this.#view === "home") {
+          this.#homeFocus = (this.#homeFocus + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length
+        } else {
+          const fields = this.#sectionFields(this.#view)
+          this.#fieldFocus = (this.#fieldFocus + step + fields.length) % fields.length
+        }
         return true
       }
       return false
@@ -469,29 +321,35 @@ export class SettingsMenuDialog extends Dialog {
     const action = hit && this.#actions.get(hit.id)
     if (!hit || !action) return true
     switch (action.kind) {
-      case "tab":
-        this.#tab = action.tab
-        this.#focus = 0
+      case "open-section":
+        this.#openSection(action.section)
+        return true
+      case "home":
+        this.#goHome()
         return true
       case "focus": {
-        this.#focus = action.index
-        const field = this.#tabFields()[action.index]
-        if (field?.kind === "toggle") this.#setValue(field.key, !this.#draft[field.key])
+        this.#fieldFocus = action.index
+        if (this.#view !== "home") {
+          const field = this.#sectionFields(this.#view)[action.index]
+          if (field?.kind === "toggle") this.#setValue(field.key, !this.#draft[field.key])
+        }
         return true
       }
       case "set":
-        this.#focus = action.index
+        this.#fieldFocus = action.index
         this.#setValue(action.key, action.value as never)
         return true
       case "step": {
-        this.#focus = action.index
-        const field = this.#tabFields()[action.index]
-        if (field?.kind === "number") this.#stepNumber(field, action.delta)
+        this.#fieldFocus = action.index
+        if (this.#view !== "home") {
+          const field = this.#sectionFields(this.#view)[action.index]
+          if (field?.kind === "number") this.#stepNumber(field, action.delta)
+        }
         return true
       }
       case "action":
         if (action.action === "save") this.#commit()
-        else if (action.action === "reset-tab") this.#resetTab()
+        else if (action.action === "reset-section") this.#resetSection()
         else if (action.action === "defaults") this.#resetAll()
         else this.#abort()
         return true
@@ -506,51 +364,207 @@ export class SettingsMenuDialog extends Dialog {
     const compact = width < 6 || this.maxRows < 4
     const inner = compact ? Math.max(1, width) : Math.max(1, width - 4)
     const vp = this.#opts.viewport?.() ?? { columns: width, rows: ctx.rows }
-    const geom = contentGeometry(vp.columns, vp.rows, this.#draft)
+    const geom = contentGeometry(vp.columns, vp.rows, {
+      margin: this.#draft.margin,
+      marginRows: this.#draft.marginRows,
+    })
     const sep = ` ${glyphs.separator} `
     const dims = `${geom.width}×${geom.height} (margin ${this.#draft.margin}, rows ${this.#draft.marginRows})`
     const dirtyTag = this.dirty ? ` ${theme.accent(`${glyphs.separator} unsaved`)}` : ""
-    const title = `${bold(theme.text("Settings"))} ${theme.muted(`${glyphs.separator} ${dims}`)}${dirtyTag}`
+    const sectionMeta = this.#view === "home" ? undefined : SETTINGS_SECTIONS.find((s) => s.id === this.#view)
+    const titleHead = sectionMeta
+      ? `${bold(theme.text("Settings"))} ${theme.muted(glyphs.pointer)} ${bold(theme.accent(sectionMeta.label))}`
+      : bold(theme.text("Settings"))
+    const title = `${titleHead} ${theme.muted(`${glyphs.separator} ${dims}`)}${dirtyTag}`
 
     const body: string[] = []
     const targets: TargetSpec[] = []
     const addTarget = (target: TargetSpec) => targets.push(target)
+    const ascii = asciiGlyphs()
 
-    // Row 0: Clickable category tabs
-    let tabLine = ""
-    for (const tab of SETTINGS_TABS) {
-      const active = tab.id === this.#tab
-      const raw = `[ ${tab.label} ]`
+    if (this.#view === "home") {
+      this.#renderHome(body, inner, ctx, addTarget, ascii)
+    } else {
+      this.#renderSection(this.#view, body, inner, vp, ctx, addTarget, ascii)
+    }
+
+    // Action button bar
+    body.push(theme.border(glyphs.rule.repeat(inner)))
+    const actionButtons: {
+      id: "save" | "reset-section" | "defaults" | "cancel" | "home"
+      label: string
+      primary?: boolean
+    }[] =
+      this.#view === "home"
+        ? [
+            { id: "save", label: this.dirty ? "Save changes" : "Save", primary: true },
+            { id: "defaults", label: "Defaults" },
+            { id: "cancel", label: this.dirty ? "Cancel (restore)" : "Close" },
+          ]
+        : [
+            { id: "home", label: `${ascii ? "<-" : "←"} Back` },
+            { id: "save", label: this.dirty ? "Save changes" : "Save", primary: true },
+            { id: "reset-section", label: "Reset section" },
+            { id: "cancel", label: this.dirty ? "Cancel (restore)" : "Close" },
+          ]
+    let actionRow = "  "
+    const actionY = body.length
+    for (const btn of actionButtons) {
+      const raw = `[ ${btn.label} ]`
+      const styled =
+        btn.primary && this.dirty
+          ? ctx.color
+            ? inverse(bold(theme.accent(raw)))
+            : bold(theme.accent(raw))
+          : btn.primary
+            ? bold(theme.accent(raw))
+            : theme.fg2(raw)
+      const x = visibleWidth(actionRow)
+      if (x + visibleWidth(raw) <= inner) {
+        addTarget({
+          id: `action:${btn.id}`,
+          x,
+          y: actionY,
+          width: visibleWidth(raw),
+          action: btn.id === "home" ? { kind: "home" } : { kind: "action", action: btn.id },
+        })
+        actionRow += `${styled}  `
+      }
+    }
+    body.push(actionRow.trimEnd())
+
+    const arrows = ascii ? "up/down" : "↑↓"
+    const lr = ascii ? "left/right" : "←→"
+    const hint =
+      this.#view === "home"
+        ? `click category${sep}1-4 jump${sep}${arrows} select${sep}enter open${sep}ctrl+s save${sep}esc restore`
+        : `click buttons${sep}backspace/esc back${sep}tab next group${sep}${arrows} field${sep}${lr} adjust${sep}enter save`
+    body.push(theme.muted(truncateToWidth(`  ${hint}`, inner, viewEllipsis())))
+
+    const rows = dialogFrame(title, body, width, ctx, theme.accent, this.maxRows)
+    const room = Math.max(0, this.maxRows - 2)
+    const start = Math.max(0, body.length + 1 - Math.max(1, this.maxRows))
+    for (const target of targets) {
+      const shown = compact
+        ? target.y + 1 - start
+        : body.length <= room || target.y < room - 1
+          ? target.y + 1
+          : target.y === body.length - 1
+            ? room
+            : -1
+      if (shown < 0 || shown >= rows.length) continue
+      const left = compact ? 0 : 2
+      const right = compact ? width : width - 2
+      const x = left + target.x
+      const end = Math.min(right, x + target.width)
+      if (end <= x) continue
+      const rect: HitRect = { x, y: shown, width: end - x, height: 1 }
+      this.#hits.add(target.id, rect)
+      this.#actions.set(target.id, target.action)
+    }
+    return rows
+  }
+
+  #renderHome(
+    body: string[],
+    inner: number,
+    ctx: RenderContext,
+    addTarget: (target: TargetSpec) => void,
+    ascii: boolean,
+  ): void {
+    const { theme } = ctx
+    body.push(
+      theme.muted(truncateToWidth("  Choose a category (changes preview live):", inner, viewEllipsis())),
+    )
+    body.push(theme.border(glyphs.rule.repeat(inner)))
+
+    const labelCol = Math.min(24, Math.max(18, ...SETTINGS_SECTIONS.map((s) => visibleWidth(s.label) + 7)))
+    const chevron = ascii ? ">" : "›"
+    for (let i = 0; i < SETTINGS_SECTIONS.length; i++) {
+      const sec = SETTINGS_SECTIONS[i]!
+      const focused = i === this.#homeFocus
+      const dirty = this.#sectionDirty(sec.id)
+      const mark = focused ? bold(theme.accent(glyphs.pointer)) : " "
+      const num = theme.muted(`${i + 1}.`)
+      const rawTitle = `${sec.label}${dirty ? "*" : ""}`
+      const titleStyled = focused ? bold(theme.accent(rawTitle)) : theme.text(rawTitle)
+      const prefix = `${mark} ${num} ${titleStyled}`
+      const pad = " ".repeat(Math.max(1, labelCol - visibleWidth(prefix)))
+      const summaryRoom = Math.max(0, inner - labelCol - 3)
+      const summaryText =
+        summaryRoom > 4 ? truncateToWidth(sec.summary(this.#draft), summaryRoom, viewEllipsis()) : ""
+      const summaryStyled = focused ? theme.fg2(summaryText) : theme.muted(summaryText)
+      const rowLeft = `${prefix}${pad}${summaryStyled}`
+      const rightPad = " ".repeat(Math.max(1, inner - visibleWidth(rowLeft) - 2))
+      const line = `${rowLeft}${rightPad}${focused ? bold(theme.accent(chevron)) : theme.muted(chevron)}`
+      addTarget({
+        id: `section:${sec.id}`,
+        x: 0,
+        y: body.length,
+        width: inner,
+        action: { kind: "open-section", section: sec.id },
+      })
+      body.push(truncateToWidth(line, inner, viewEllipsis()))
+    }
+
+    const activeSec = SETTINGS_SECTIONS[this.#homeFocus]
+    if (activeSec) {
+      body.push("")
+      body.push(theme.muted(truncateToWidth(`  ${activeSec.description}`, inner, viewEllipsis())))
+    }
+  }
+
+  #renderSection(
+    section: SettingsSectionId,
+    body: string[],
+    inner: number,
+    vp: { columns: number; rows: number },
+    ctx: RenderContext,
+    addTarget: (target: TargetSpec) => void,
+    ascii: boolean,
+  ): void {
+    const { theme } = ctx
+    // Breadcrumb & quick section switcher bar
+    const backRaw = `[ ${ascii ? "<-" : "←"} Settings ]`
+    let navLine = theme.fg2(backRaw)
+    const navY = body.length
+    addTarget({
+      id: "nav:home",
+      x: 0,
+      y: navY,
+      width: visibleWidth(backRaw),
+      action: { kind: "home" },
+    })
+    for (const sec of SETTINGS_SECTIONS) {
+      const active = sec.id === section
+      const short = sec.label.split(" ")[0]!
+      const raw = `[ ${short}${this.#sectionDirty(sec.id) ? "*" : ""} ]`
+      const x = visibleWidth(navLine) + 2
+      if (x + visibleWidth(raw) > inner) break
       const styled = active
         ? ctx.color
           ? inverse(bold(theme.accent(raw)))
           : bold(theme.accent(raw))
         : theme.muted(raw)
-      if (tabLine) tabLine += "  "
-      const x = visibleWidth(tabLine)
-      if (x + visibleWidth(raw) <= inner) {
-        addTarget({
-          id: `tab:${tab.id}`,
-          x,
-          y: body.length,
-          width: visibleWidth(raw),
-          action: { kind: "tab", tab: tab.id },
-        })
-      }
-      tabLine += styled
+      addTarget({
+        id: `nav:${sec.id}`,
+        x,
+        y: navY,
+        width: visibleWidth(raw),
+        action: { kind: "open-section", section: sec.id },
+      })
+      navLine += `  ${styled}`
     }
-    body.push(tabLine)
+    body.push(navLine)
     body.push(theme.border(glyphs.rule.repeat(inner)))
 
-    // Settings rows for active tab
-    const fields = this.#tabFields()
+    const fields = this.#sectionFields(section)
     const labelCol = Math.min(20, Math.max(12, ...fields.map((f) => visibleWidth(f.label) + 4)))
     const controlRoom = Math.max(12, inner - labelCol - 1)
-    const ascii = asciiGlyphs()
 
     for (let i = 0; i < fields.length; i++) {
       const field = fields[i]!
-      const focused = i === this.#focus
+      const focused = i === this.#fieldFocus
       const value = this.#draft[field.key]
       const modified = value !== field.defaultValue
       const mark = focused ? bold(theme.accent(glyphs.pointer)) : " "
@@ -605,11 +619,7 @@ export class SettingsMenuDialog extends Dialog {
               raw: "[ - ]",
               action: { kind: "step", index: i, key: field.key, delta: -1 },
             },
-            {
-              text: pill(String(current), true),
-              raw: `[ ${current} ]`,
-              action: { kind: "focus", index: i },
-            },
+            { text: pill(String(current), true), raw: `[ ${current} ]`, action: { kind: "focus", index: i } },
             {
               text: pill("+", false, current >= field.max),
               raw: "[ + ]",
@@ -633,32 +643,32 @@ export class SettingsMenuDialog extends Dialog {
           },
         )
       } else {
+        const options = this.#optionsOf(field)
         const current = String(value)
-        const allWidth = field.options.reduce((sum, o) => sum + `[ ${o.label} ]`.length + 1, 0)
+        const allWidth = options.reduce((sum, o) => sum + `[ ${o.label} ]`.length + 1, 0)
         if (allWidth <= controlRoom) {
-          for (const opt of field.options) {
+          for (const opt of options) {
             controls.push({
-              text: pill(opt.label, opt.value === current),
+              text: pill(opt.label, String(opt.value) === current),
               raw: `[ ${opt.label} ]`,
               action: { kind: "set", index: i, key: field.key, value: opt.value },
             })
           }
         } else {
-          const chosen = field.options.find((o) => o.value === current)?.label ?? current
-          const idx = field.options.findIndex((o) => o.value === current)
-          const prev = field.options[(idx - 1 + field.options.length) % field.options.length]!
-          const next = field.options[(idx + 1) % field.options.length]!
+          const idx = Math.max(
+            0,
+            options.findIndex((o) => String(o.value) === current),
+          )
+          const chosen = options[idx]?.label ?? current
+          const prev = options[(idx - 1 + options.length) % options.length]!
+          const next = options[(idx + 1) % options.length]!
           controls.push(
             {
               text: pill(ascii ? "<" : "‹", false),
               raw: `[ ${ascii ? "<" : "‹"} ]`,
               action: { kind: "set", index: i, key: field.key, value: prev.value },
             },
-            {
-              text: pill(chosen, true),
-              raw: `[ ${chosen} ]`,
-              action: { kind: "focus", index: i },
-            },
+            { text: pill(chosen, true), raw: `[ ${chosen} ]`, action: { kind: "focus", index: i } },
             {
               text: pill(ascii ? ">" : "›", false),
               raw: `[ ${ascii ? ">" : "›"} ]`,
@@ -671,8 +681,6 @@ export class SettingsMenuDialog extends Dialog {
       const controlsRawWidth = controls.reduce((s, c, idx) => s + visibleWidth(c.raw) + (idx ? 1 : 0), 0)
       const inline = labelCol + controlsRawWidth <= inner
       const rowY = body.length
-
-      // Label click focuses (or toggles) row
       addTarget({
         id: `row:${i}`,
         x: 0,
@@ -690,13 +698,7 @@ export class SettingsMenuDialog extends Dialog {
         const x = baseX + visibleWidth(controlLine)
         const w = visibleWidth(item.raw)
         if (x + w <= inner) {
-          addTarget({
-            id: `ctrl:${i}:${c}`,
-            x,
-            y: controlY,
-            width: w,
-            action: item.action,
-          })
+          addTarget({ id: `ctrl:${i}:${c}`, x, y: controlY, width: w, action: item.action })
         }
         controlLine += item.text
       }
@@ -705,16 +707,14 @@ export class SettingsMenuDialog extends Dialog {
           ? controlLine + suffix
           : controlLine
 
-      if (inline) {
-        body.push(labelPart + controlWithSuffix)
-      } else {
+      if (inline) body.push(labelPart + controlWithSuffix)
+      else {
         body.push(labelPart.trimEnd())
         body.push(`  ${controlWithSuffix}`)
       }
     }
 
-    // Description of focused setting
-    const focusedField = fields[this.#focus]
+    const focusedField = fields[this.#fieldFocus]
     if (focusedField) {
       body.push("")
       const defaultNote = `Default: ${String(focusedField.defaultValue)}`
@@ -722,72 +722,5 @@ export class SettingsMenuDialog extends Dialog {
         theme.muted(truncateToWidth(`  ${focusedField.description} (${defaultNote})`, inner, viewEllipsis())),
       )
     }
-
-    // Action button bar
-    body.push(theme.border(glyphs.rule.repeat(inner)))
-    const actionButtons: {
-      id: "save" | "reset-tab" | "defaults" | "cancel"
-      label: string
-      primary?: boolean
-    }[] = [
-      { id: "save", label: this.dirty ? "Save changes" : "Save", primary: true },
-      { id: "reset-tab", label: "Reset tab" },
-      { id: "defaults", label: "Defaults" },
-      { id: "cancel", label: this.dirty ? "Cancel (restore)" : "Close" },
-    ]
-    let actionRow = "  "
-    const actionY = body.length
-    for (const btn of actionButtons) {
-      const raw = `[ ${btn.label} ]`
-      const styled =
-        btn.primary && this.dirty
-          ? ctx.color
-            ? inverse(bold(theme.accent(raw)))
-            : bold(theme.accent(raw))
-          : btn.primary
-            ? bold(theme.accent(raw))
-            : theme.fg2(raw)
-      const x = visibleWidth(actionRow)
-      if (x + visibleWidth(raw) <= inner) {
-        addTarget({
-          id: `action:${btn.id}`,
-          x,
-          y: actionY,
-          width: visibleWidth(raw),
-          action: { kind: "action", action: btn.id },
-        })
-        actionRow += `${styled}  `
-      }
-    }
-    body.push(actionRow.trimEnd())
-
-    // Keyboard hint footer (last line preserved by dialogFrame)
-    const arrows = ascii ? "up/down" : "↑↓"
-    const lr = ascii ? "left/right" : "←→"
-    const hint = `click buttons${sep}tab section${sep}${arrows} field${sep}${lr} adjust${sep}enter save${sep}esc restore`
-    body.push(theme.muted(truncateToWidth(`  ${hint}`, inner, viewEllipsis())))
-
-    const rows = dialogFrame(title, body, width, ctx, theme.accent, this.maxRows)
-    const room = Math.max(0, this.maxRows - 2)
-    const start = Math.max(0, body.length + 1 - Math.max(1, this.maxRows))
-    for (const target of targets) {
-      const shown = compact
-        ? target.y + 1 - start
-        : body.length <= room || target.y < room - 1
-          ? target.y + 1
-          : target.y === body.length - 1
-            ? room
-            : -1
-      if (shown < 0 || shown >= rows.length) continue
-      const left = compact ? 0 : 2
-      const right = compact ? width : width - 2
-      const x = left + target.x
-      const end = Math.min(right, x + target.width)
-      if (end <= x) continue
-      const rect: HitRect = { x, y: shown, width: end - x, height: 1 }
-      this.#hits.add(target.id, rect)
-      this.#actions.set(target.id, target.action)
-    }
-    return rows
   }
 }

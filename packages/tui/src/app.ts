@@ -799,6 +799,7 @@ async function runFullscreen(
       themes,
       termStatus,
       viewport: () => ({ columns: terminal.columns, rows: terminal.rows }),
+      saveTheme: opts.saveTheme,
       saveTuiSettings: opts.saveTuiSettings,
       requestRender: () => view.requestRender(),
       redraw: () => view.redraw(),
