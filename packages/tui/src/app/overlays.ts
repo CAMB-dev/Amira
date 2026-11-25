@@ -789,11 +789,11 @@ export class OverlayManager {
         if (e.action === "press" && e.button === "left") this.focusView(viewer, true)
         // Wheel scrolling over the view need not steal focus from a draft.
         viewer.handleInput(e)
-        this.deps.view().requestOverlayRender()
+        if (this.hasFullscreen) this.deps.view().requestOverlayRender()
         return true
       }
       const handled = this.handleViewInput(viewer, e)
-      this.deps.view().requestOverlayRender()
+      if (this.hasFullscreen) this.deps.view().requestOverlayRender()
       return handled
     }
     if (this.form) this.form.handleInput(e)
