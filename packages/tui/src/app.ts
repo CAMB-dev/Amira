@@ -707,6 +707,7 @@ async function runFullscreen(
     } finally {
       themes.dispose()
       unbindTerminal?.()
+      unbindOpenView?.()
       termStatus.stop()
       resolveExit(code)
     }
@@ -854,10 +855,12 @@ async function runFullscreen(
     }),
   )
   let unbindTerminal: (() => void) | undefined
+  let unbindOpenView: (() => void) | undefined
   const reader = new InputReader(terminal, onInput, suggestion.readerOptions)
   try {
     termStatus.start()
     unbindTerminal = opts.bindTerminal?.(termStatus)
+    unbindOpenView = opts.bindOpenView?.((v) => !quitting && overlays.openView(v))
     suggestion.attachLocal(opts.agent)
     opts.onReady?.()
     reader.start()

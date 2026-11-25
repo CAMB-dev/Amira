@@ -149,7 +149,13 @@ export interface EventMap {
    * model request for the user: one line, the next step, and the provider's text as detail
    * (`error` keeps the raw message).
    */
-  "turn.end": { reason: TurnEndReason; error?: string; steps: number; failure?: ModelErrorInfo }
+  "turn.end": {
+    reason: TurnEndReason
+    abortCause?: "user" | "budget" | "disposed" | "other"
+    error?: string
+    steps: number
+    failure?: ModelErrorInfo
+  }
   /**
    * A model request failed and is sent again in `delayMs` (D52): retry `attempt` of at most
    * `maxRetries`. `status` is the HTTP status, when there was one. The next model event (or
@@ -463,6 +469,24 @@ export interface InterceptorMap {
    * compaction. Failures pass, and the default summary is used.
    */
   "compact.before": { readonly messages: Message[]; readonly kept: Message[]; summary?: string }
+  /**
+   * Runs when the model finishes a reply with no tool calls, before the turn ends and while
+   * the session is still busy (so Esc aborts verification and print mode waits).
+   * `block` injects `reason` as a continuation message and keeps the turn running, up to a
+   * host-enforced cap on consecutive blocks. Failures pass so a broken hook never traps a turn.
+   */
+  "turn.beforeEnd": {
+    readonly lastMessage: AssistantMessage
+    readonly steps: number
+    /** True once a prior turn.beforeEnd block already continued this turn. */
+    readonly stopHookActive: boolean
+    /** Number of turn.beforeEnd blocks already applied in this turn. */
+    readonly stopBlockCount: number
+    /** Optional user-facing label shown in the transcript when blocking to continue. */
+    displayText?: string
+    /** Optional origin badge for the injected continuation message (defaults to "goal"). */
+    displayOrigin?: string
+  }
 }
 
 export interface InterceptorOptions {

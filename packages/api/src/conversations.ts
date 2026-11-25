@@ -20,6 +20,8 @@ export interface ConversationSpec {
   writeRoots?: string[]
   /** Defaults to research (same cwd, no shell); inherit keeps ceilings with normal child execution. */
   descendants?: "research" | "inherit"
+  /** In-memory only: never writes spec or transcript files to disk; released handles cannot be reopened. */
+  ephemeral?: boolean
 }
 
 /** Executable capabilities are rebound on every reopen, never serialized. */

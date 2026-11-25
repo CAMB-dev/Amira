@@ -16,6 +16,7 @@ import {
 } from "@amira/ai"
 import type { EventMap, SessionStatus } from "@amira/api"
 import { type CompactionOptions, contextTokens } from "../compaction.ts"
+import type { InterceptorRegistry } from "../interceptors.ts"
 import { resolveToolName } from "../tool-names.ts"
 import type { ToolRegistry } from "../tool-registry.ts"
 import type { Compactor } from "./compactor.ts"
@@ -79,7 +80,11 @@ interface TurnRunnerDeps {
   /** Live shared state: a child may exhaust the budget while this session runs tools. */
   budgetExceeded: () => boolean
   recordAttempt: (message: AssistantMessage) => void
+  sessionId: string
+  interceptors: InterceptorRegistry
 }
+
+const MAX_STOP_BLOCKS = 32
 
 type ModelReply =
   | { kind: "ok"; message: AssistantMessage }
@@ -129,6 +134,7 @@ export class TurnRunner {
       let overflowCompacted: boolean | undefined
       /** A request over the window first gets one aging round (A3), once a turn. */
       let overflowAged = false
+      let stopBlockCount = 0
       while (true) {
         if (abort.signal.aborted || this.#deps.budgetExceeded()) {
           result = { reason: "aborted", steps }
@@ -223,7 +229,41 @@ export class TurnRunner {
         turn.unanswered = false
         const calls = reply.message.content.filter((b): b is ToolCallBlock => b.type === "toolCall")
         if (calls.length === 0) {
-          result = { reason: this.#deps.budgetExceeded() ? "aborted" : "done", steps }
+          if (this.#deps.budgetExceeded() || abort.signal.aborted) {
+            result = { reason: "aborted", steps }
+            break
+          }
+          if (stopBlockCount < MAX_STOP_BLOCKS) {
+            const gate = await this.#deps.interceptors.run(
+              "turn.beforeEnd",
+              {
+                lastMessage: reply.message,
+                steps,
+                stopHookActive: stopBlockCount > 0,
+                stopBlockCount,
+              },
+              { sessionId: this.#deps.sessionId, signal: abort.signal },
+            )
+            if (abort.signal.aborted || this.#deps.budgetExceeded()) {
+              result = { reason: "aborted", steps }
+              break
+            }
+            if (gate.blocked && gate.reason.trim()) {
+              stopBlockCount++
+              const origin = gate.value.displayOrigin?.trim() || "goal"
+              const continuation = userMessage(
+                gate.reason,
+                gate.value.displayText
+                  ? { text: gate.value.displayText, origin }
+                  : { text: gate.reason.split("\n")[0]!.slice(0, 140), origin },
+              )
+              this.#deps.history.push(continuation)
+              this.#deps.emit(turn, "turn.steer", { message: continuation, state: "injected" })
+              turn.unanswered = true
+              continue
+            }
+          }
+          result = { reason: "done", steps }
           break
         }
         await this.#deps.execution.tools(() =>
@@ -278,9 +318,18 @@ export class TurnRunner {
         this.#deps.emit(turn, "turn.steer", { message, state: "promoted", nextTurnId })
         leftover.push(message)
       }
+      const abortCause =
+        result.reason === "aborted"
+          ? this.#deps.disposed()
+            ? "disposed"
+            : this.#deps.budgetExceeded()
+              ? "budget"
+              : "user"
+          : undefined
       if (result.reason === "error") this.#deps.setStatus(turn, "error", result.error)
       this.#deps.emit(turn, "turn.end", {
         reason: result.reason,
+        ...(abortCause ? { abortCause } : {}),
         steps,
         ...(result.error !== undefined ? { error: result.error } : {}),
         ...(result.failure ? { failure: result.failure } : {}),

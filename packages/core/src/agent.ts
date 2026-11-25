@@ -406,6 +406,8 @@ export class Agent {
         endTurn: () => this.#endTurn?.(),
         recordTreeUsage: (usage) => this.#recordUsage(usage),
         budgetExceeded: () => this.tree?.budgetExceeded !== undefined,
+        sessionId: this.sessionId,
+        interceptors: this.interceptors,
       })
     } catch (error) {
       this.#releaseSessionLease?.()

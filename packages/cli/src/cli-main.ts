@@ -300,6 +300,7 @@ async function run(argv: string[]): Promise<number> {
     const code = await runInteractive({
       terminal,
       bindTerminal: (terminal) => host.bindTerminal(terminal),
+      bindOpenView: (openView) => host.bindOpenView(openView),
       agent,
       status: host.status,
       panels: host.panels,

@@ -22,6 +22,7 @@ export const FAILURE_POLICY: Record<keyof InterceptorMap, FailurePolicy> = {
   "tool.call.after": "pass",
   "system.build": "pass",
   "compact.before": "pass",
+  "turn.beforeEnd": "pass",
 }
 
 /** `ask` holds the reasons of handlers that want the call approved (tool.call.before only). */

@@ -68,6 +68,7 @@ export function validateSpec(value: ConversationSpec, options?: { historical?: b
           "callableTools",
           "writeRoots",
           "descendants",
+          "ephemeral",
         ].includes(key),
     )
   )
@@ -98,6 +99,9 @@ export function validateSpec(value: ConversationSpec, options?: { historical?: b
   ) {
     throw new Error("invalid conversation spec descendants")
   }
+  if (value.ephemeral !== undefined && typeof value.ephemeral !== "boolean") {
+    throw new Error("invalid conversation spec ephemeral")
+  }
   return {
     key: value.key,
     name: value.name,
@@ -107,6 +111,7 @@ export function validateSpec(value: ConversationSpec, options?: { historical?: b
     callableTools: [...new Set(value.callableTools)].sort(),
     ...(value.writeRoots !== undefined ? { writeRoots: [...validateRoots(value.writeRoots)!] } : {}),
     descendants: value.descendants ?? "research",
+    ...(value.ephemeral ? { ephemeral: true } : {}),
   }
 }
 

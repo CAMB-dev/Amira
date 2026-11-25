@@ -16,6 +16,7 @@ import {
   type ExtensionSettingsTarget,
   type ExtensionStatusMetadata,
   type FileRestorationOwner,
+  type FrontendView,
   hostBackgroundJobs,
   installHostNet,
   installHostProcess,
@@ -177,6 +178,7 @@ export class ExtensionHost {
   #cleanup = new ExtensionCleanup((source, message) => void this.#fail(source, message))
   #session: SessionControl | undefined
   #terminal: TerminalApi | undefined
+  #openView: ((view: FrontendView) => boolean) | undefined
   readonly status: StatusRegistry
   readonly panels: PanelRegistry
   readonly renderers: ToolRendererRegistry
@@ -316,6 +318,14 @@ export class ExtensionHost {
     this.#terminal = terminal
     return () => {
       if (this.#terminal === terminal) this.#terminal = undefined
+    }
+  }
+
+  /** Binds proactive view opening from extensions outside slash commands. */
+  bindOpenView(openView: (view: FrontendView) => boolean): () => void {
+    this.#openView = openView
+    return () => {
+      if (this.#openView === openView) this.#openView = undefined
     }
   }
 
@@ -636,6 +646,9 @@ export class ExtensionHost {
       backgroundJobs,
       ...(conversations ? { conversations } : {}),
       terminal,
+      openView: (view) => !lifetime.aborted && (this.#openView?.(this.views.own(view, lifetime)) ?? false),
+      signal: lifetime,
+      serviceNames: () => this.services.names,
       reportError: (error) => void this.#fail(source, error),
       notify: (text, level = "info", options) => {
         const safeLevel = NOTICE_LEVELS.includes(level) ? level : "info"

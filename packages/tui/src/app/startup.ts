@@ -1,6 +1,13 @@
 // Owns interactive options, shared UI constants and startup helpers.
 import { homedir } from "node:os"
-import type { AnyEvent, CommandDefinition, ShimmerEffect, TerminalApi, TuiSettings } from "@amira/api"
+import type {
+  AnyEvent,
+  CommandDefinition,
+  FrontendView,
+  ShimmerEffect,
+  TerminalApi,
+  TuiSettings,
+} from "@amira/api"
 import type { Agent } from "@amira/core"
 import type { CommandHost, PanelRegistry, StatusRegistry, ThemeRegistry, UiRequests } from "@amira/host"
 import {
@@ -58,6 +65,8 @@ export interface InteractiveOptions {
   onReady?: () => void
   /** Binds terminal effects before session.start; the returned function detaches on quit. */
   bindTerminal?: (terminal: TerminalApi) => () => void
+  /** Binds proactive view opening from extensions outside commands; detaches on quit. */
+  bindOpenView?: (openView: (view: FrontendView) => boolean) => () => void
   terminal?: Terminal
   /** Terminal setup; injectable for tests. Defaults to probing the real terminal. */
   setup?: (

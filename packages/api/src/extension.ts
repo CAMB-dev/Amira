@@ -1,6 +1,12 @@
 import type { AssistantMessage, Message, Usage } from "@amira/ai"
 import type { BackgroundJobExtension } from "./background-jobs.ts"
-import type { CommandDefinition, InputHandler, PrintOptions, SessionControl } from "./commands.ts"
+import type {
+  CommandDefinition,
+  FrontendView,
+  InputHandler,
+  PrintOptions,
+  SessionControl,
+} from "./commands.ts"
 import type { OwnedConversations } from "./conversations.ts"
 import type {
   AnyEvent,
@@ -127,6 +133,12 @@ export interface ExtensionAPI {
    */
   registerView(view: ViewDefinition): () => void
   /**
+   * Opens a registered view proactively (outside a slash command), e.g. a dock for an incoming
+   * peer notification or goal status. Returns false when no interactive frontend is attached.
+   * Views opened this way are owned by this extension and close automatically when it unloads.
+   */
+  openView?(view: FrontendView): boolean
+  /**
    * Experimental: adds a live panel, lines kept above the activity line such as a todo list
    * (see PanelDefinition). Replacing an existing id requires `override: true`; a taken id is
    * reported as extension.error and skipped.
@@ -163,6 +175,13 @@ export interface ExtensionAPI {
     name: K,
     listener: (service: ServiceOf<K> | undefined) => void,
   ): () => void
+  /**
+   * Aborted when this extension unloads, reloads, or exits. Safe to pass directly into
+   * runCommand, complete, ui requests, or timers.
+   */
+  readonly signal?: AbortSignal
+  /** Names of services currently offered via provideService. */
+  serviceNames?(): readonly string[]
   /** Asks frontends to redraw, e.g. after a status item's or a panel's state changed. */
   requestRender(): void
   /** The merged settings (D35) and explicit source layers, e.g. for mcpServers trust checks. */

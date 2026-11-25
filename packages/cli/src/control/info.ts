@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { isNoModel, userMessage } from "@amira/ai"
 import { type AssistantMessage, type SessionControl, USER_STOP_REASON } from "@amira/api"
-import { listSubagents, readTrace, subagentMessages } from "@amira/host"
+import { conversationUsage, forkHistory, listSubagents, readTrace, subagentMessages } from "@amira/host"
 import { withProviderHint } from "../provider-command.ts"
 import type { ControlContext } from "./context.ts"
 
@@ -10,6 +10,8 @@ type InfoControl = Pick<
   | "info"
   | "trace"
   | "messages"
+  | "forkMessages"
+  | "usage"
   | "contextHas"
   | "replies"
   | "compactions"
@@ -77,6 +79,8 @@ export function createInfoControl(ctx: ControlContext): InfoControl {
       return ctx.trace ? ctx.trace.read(file) : readTrace(file)
     },
     messages: () => ctx.agent().messages,
+    forkMessages: () => Object.freeze(structuredClone(forkHistory(ctx.agent().projectedMessages()))),
+    usage: () => conversationUsage(ctx.agent(), ctx.session.tree),
     contextHas: (text) => ctx.agent().contextHas(text),
     replies: () => {
       const a = ctx.agent()

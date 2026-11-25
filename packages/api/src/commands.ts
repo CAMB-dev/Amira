@@ -8,7 +8,7 @@ import type {
   ReasoningEffort,
   Usage,
 } from "@amira/ai"
-import type { OwnedConversation } from "./conversations.ts"
+import type { ConversationUsageSnapshot, OwnedConversation } from "./conversations.ts"
 import type { CompactionUsage } from "./events.ts"
 import type { ExtensionAdmin } from "./extensions-admin.ts"
 import type { FileRewindPlan, RewindOptions } from "./file-rewind.ts"
@@ -423,6 +423,13 @@ export interface SessionControl {
   trace(sessionId?: string): Promise<TraceRecord[]>
   /** The conversation the model sees. */
   messages(): readonly Message[]
+  /**
+   * Deeply frozen, context-projected snapshot valid for side calls even mid-turn
+   * (unanswered tool calls stripped; safe for btw/pair live-fork).
+   */
+  forkMessages?(): readonly Message[]
+  /** Frozen cumulative usage snapshot across this session and its descendants. */
+  usage?(): ConversationUsageSnapshot
   /** Whether this text is in the context the model sees now: not compacted or aged away. */
   contextHas?(text: string): boolean
   /** Every model reply of this session, including ones a compaction has since replaced. */

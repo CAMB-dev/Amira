@@ -92,6 +92,7 @@ export class OwnedConversationManager {
       openOrCreate: async (input, runtime) => {
         check()
         const spec = validateSpec(input)
+        if (spec.ephemeral) return this.#openEphemeral(owner, spec, runtime)
         const id = ownedId(owner, spec.key)
         const file = path.join(ownedDirectory(this.#home, owner), `${id}.spec.json`)
         if (existsSync(file) || existsSync(file.replace(/\.spec\.json$/, ".jsonl"))) {
@@ -120,6 +121,9 @@ export class OwnedConversationManager {
       },
       read: async (ref) => {
         check()
+        const memId = "id" in ref ? ref.id : ownedId(owner, ref.key)
+        const memActive = this.#handles.get(`ephemeral:${owner}:${memId}`)?.handle
+        if (memActive && !memActive.isReleased()) return memActive.snapshot()
         const saved = readOwnedRef(this.#home, owner, ref)
         if (!saved) return undefined
         const lifecycle = readOwnedLifecycle(this.#home, saved)
@@ -322,6 +326,75 @@ export class OwnedConversationManager {
     }
   }
 
+  #openEphemeral(owner: string, spec: ConversationSpec, runtime: ConversationRuntime): OwnedConversation {
+    const id = ownedId(owner, spec.key)
+    const memKey = `ephemeral:${owner}:${id}`
+    const existing = this.#handles.get(memKey)
+    if (existing) {
+      if (existing.handle.isReleased())
+        throw new Error("owned conversation is in use while its owner is unloading")
+      return existing.handle
+    }
+    const main = this.#opts.agent()
+    const resolvedSpec = { ...spec, model: spec.model ?? `${main.model.provider}/${main.model.id}` }
+    const model = this.#opts.ai.model(resolvedSpec.model)
+    const saved: SavedConversation = {
+      v: 2,
+      owner,
+      id,
+      spec: resolvedSpec,
+      runtimeTools: (runtime.extraTools ?? []).map((tool) => tool.name),
+    }
+    validateRuntime(saved, runtime)
+    const tree = new AgentTree({
+      ai: this.#opts.ai,
+      shared: this.#opts.tree as AgentTree,
+      restricted: spec.descendants !== "inherit",
+      sections: () => [],
+    })
+    routeTreeToHuman(tree)
+    const agent = new Agent({
+      ai: this.#opts.ai,
+      model,
+      cwd: spec.cwd,
+      writeRoots: spec.writeRoots,
+      systemPrompt: spec.systemPrompt,
+      sessionId: id,
+      ownedConversation: owner,
+      bus: new EventBus(),
+      interceptors: main.interceptors,
+      approve: (request, signal) => approveWithHost(main, request, signal),
+      tools: ToolRegistry.view(this.#opts.tools, () => true, runtime.extraTools),
+      callableTools: new Set(spec.callableTools.filter((name) => main.callableTools?.has(name) ?? true)),
+      providerSettings: main.providerSettings,
+      permissions: main.permissions,
+      compaction: main.compaction,
+      context: main.context,
+      tree,
+      thinking: main.thinking.for(model),
+      fastMode: main.fastMode && hasFastMode(model),
+      fileRewindSettings: main.fileRewindSettings,
+      backgroundJobs: main.backgroundJobsHost,
+      maxParallelTools: main.maxParallelTools,
+      onIdleNotice: () => {},
+      noticeRetryMs: [],
+      ask: (request, signal) => directAsk(runtime, request.questions, request.sessionId, signal),
+    })
+    const handle = new Handle(
+      spec,
+      agent,
+      () => {
+        if (this.#handles.get(memKey)?.handle === handle) this.#handles.delete(memKey)
+      },
+      "idle",
+      this.#opts.canExecute ?? (() => true),
+      this.#opts.ai,
+    )
+    this.#handles.set(memKey, { owner, handle })
+    agent.start("startup")
+    return handle
+  }
+
   async releaseOwner(owner: string): Promise<void> {
     const scope = this.#owners.get(owner)
     if (scope) {
@@ -513,7 +586,7 @@ class Handle implements OwnedConversation {
     }
     this.events = new ConversationEvents(agent.bus)
     this.#trace = new TraceRecorder(agent.bus)
-    this.#trace.register(agent.sessionId, agent.session!.file)
+    if (agent.session) this.#trace.register(agent.sessionId, agent.session.file)
     this.#agent = agent
     this.#onRelease = onRelease
   }
@@ -563,7 +636,7 @@ class Handle implements OwnedConversation {
     await this.#agent.dispose()
     await this.#running?.catch(() => {})
     await scopeAdmission(this.#agent.tree!).drain()
-    await drainOwnedBackgroundJobs(this.#agent.session!.file, this.id)
+    if (this.#agent.session) await drainOwnedBackgroundJobs(this.#agent.session.file, this.id)
     this.events.close()
     await this.#agent.bus.flush()
     await this.#trace.close()
@@ -579,11 +652,10 @@ class Handle implements OwnedConversation {
 
   history(): readonly Message[] {
     this.#check()
-    return freeze(
-      structuredClone(
-        this.#agent.session!.branch().flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
-      ),
-    )
+    const messages = this.#agent.session
+      ? this.#agent.session.branch().flatMap((entry) => (entry.type === "message" ? [entry.message] : []))
+      : this.#agent.messages
+    return freeze(structuredClone(messages))
   }
 
   usage(): ReturnType<OwnedConversation["usage"]> {

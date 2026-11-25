@@ -215,6 +215,7 @@ export async function setup(steps: MockStep[], o: SetupOptions = {}) {
   const exited = runInteractive({
     ...(o.requests ? { requests: o.requests } : {}),
     bindTerminal: (terminal) => host.bindTerminal(terminal),
+    bindOpenView: (openView) => host.bindOpenView(openView),
     agent,
     status: host.status,
     theme: o.theme,
