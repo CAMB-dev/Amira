@@ -205,37 +205,35 @@ async function manageWithHub(
     })
     if (!action || action.kind === "close" || ctx.signal.aborted) return
     if (action.kind === "add") {
-      const saved = await add(ctx, action.choice, a)
-      if (saved) highlight = saved
-      else highlight = ADD_PROVIDER_KEY
+      try {
+        const saved = await add(ctx, action.choice, a)
+        highlight = saved ?? ADD_PROVIDER_KEY
+      } catch (error) {
+        if (ctx.signal.aborted) return
+        ctx.print(error instanceof Error ? error.message : String(error), "error")
+        highlight = ADD_PROVIDER_KEY
+      }
       continue
     }
     highlight = action.id
-    if (action.kind === "use") {
-      const switched = await useProviderModel(ctx, action.id, a)
-      if (switched) return
-      continue
-    }
-    if (action.kind === "edit") {
-      const saved = await edit(ctx, action.id, a)
-      if (saved) highlight = saved
-      continue
-    }
-    if (action.kind === "key") {
-      await setKey(ctx, action.id, a)
-      continue
-    }
-    if (action.kind === "test") {
-      await testConnection(ctx, action.id, a)
-      continue
-    }
-    if (action.kind === "remove") {
-      try {
+    try {
+      if (action.kind === "use") {
+        const switched = await useProviderModel(ctx, action.id, a)
+        if (switched) return
+      } else if (action.kind === "edit") {
+        const saved = await edit(ctx, action.id, a)
+        if (saved) highlight = saved
+      } else if (action.kind === "key") {
+        await setKey(ctx, action.id, a)
+      } else if (action.kind === "test") {
+        await testConnection(ctx, action.id, a)
+      } else if (action.kind === "remove") {
         await remove(ctx, action.id, a)
         highlight = undefined
-      } catch (error) {
-        ctx.print(error instanceof Error ? error.message : String(error), "error")
       }
+    } catch (error) {
+      if (ctx.signal.aborted) return
+      ctx.print(error instanceof Error ? error.message : String(error), "error")
     }
   }
 }
@@ -243,21 +241,33 @@ async function manageWithHub(
 function openProviderHub(ctx: CommandContext, data: ProviderHubData): Promise<ProviderHubAction | undefined> {
   return new Promise((resolve) => {
     let settled = false
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
     const done = (action: ProviderHubAction | undefined) => {
       if (settled) return
       settled = true
+      if (retryTimer) clearTimeout(retryTimer)
       ctx.signal.removeEventListener("abort", onAbort)
       resolve(action)
     }
     const onAbort = () => done(undefined)
     if (ctx.signal.aborted) return done(undefined)
     ctx.signal.addEventListener("abort", onAbort, { once: true })
-    const opened = ctx.openView?.({
-      kind: "providers",
-      data: { ...data, onAction: done },
-      ...(data.highlight ? { state: { selected: { "providers.list": data.highlight } } } : {}),
-    })
-    if (!opened) done(undefined)
+    const tryOpen = (attemptsLeft: number) => {
+      if (settled || ctx.signal.aborted) return
+      const opened = ctx.openView?.({
+        kind: "providers",
+        data: { ...data, onAction: done },
+        state: {
+          focused: "providers.list",
+          ...(data.highlight ? { selected: { "providers.list": data.highlight } } : {}),
+        },
+      })
+      if (opened) return
+      // A just-closed FormView clears overlays.form on its settlement microtask; retry briefly before giving up.
+      if (attemptsLeft > 0) retryTimer = setTimeout(() => tryOpen(attemptsLeft - 1), 10)
+      else done(undefined)
+    }
+    tryOpen(5)
   })
 }
 

@@ -41,6 +41,7 @@ const LIST_ID = "providers.list"
 const VENDOR_FILTER_ID = "providers.vendorFilter"
 const VENDOR_LIST_ID = "providers.vendors"
 const BTN_ADD = "providers.add"
+const BTN_ADD_SELECTED_VENDOR = "providers.add.vendor"
 const BTN_CUSTOM = "providers.add.custom"
 const BTN_USE = "providers.use"
 const BTN_EDIT = "providers.edit"
@@ -105,7 +106,11 @@ function formatTokens(n: number | undefined): string {
   return String(n)
 }
 
-function buildAddStudio(data: ProviderHubData, filterQuery: string): UiNode {
+function buildAddStudio(
+  data: ProviderHubData,
+  filterQuery: string,
+  selectedVendorId: string | undefined,
+): UiNode {
   const dialects = new Set(data.admin.dialects())
   const availableProtocols = PROTOCOL_BUTTONS.filter((p) => dialects.has(p.id))
   const vendors = data.vendors ?? data.admin.cachedVendors?.() ?? []
@@ -123,6 +128,7 @@ function buildAddStudio(data: ProviderHubData, filterQuery: string): UiNode {
     row: [seg(v.name, "text"), seg(` (${v.id})`, "muted")],
     aside: [seg(v.dialect ?? "pick protocol", v.dialect ? "muted" : "warning")],
   }))
+  const pickedVendor = filteredVendors.find((v) => v.id === selectedVendorId) ?? filteredVendors[0]
 
   const buttonRow = (items: readonly { id: string; label: string }[], prefix: string): UiNode => ({
     type: "row",
@@ -159,6 +165,30 @@ function buildAddStudio(data: ProviderHubData, filterQuery: string): UiNode {
           ],
         }
 
+  const filterChildren: { node: UiNode; size?: number }[] = [
+    {
+      node: {
+        type: "input",
+        id: VENDOR_FILTER_ID,
+        activate: "/",
+        placeholder: "Filter vendors (e.g. kimi, qwen, ollama, together)…",
+      },
+    },
+  ]
+  if (pickedVendor) {
+    const label = `Add ${pickedVendor.id}`
+    filterChildren.push({
+      size: Math.min(24, Math.max(12, label.length + 5)),
+      node: {
+        type: "button",
+        id: BTN_ADD_SELECTED_VENDOR,
+        key: pickedVendor.id,
+        label,
+        tone: "accent",
+      },
+    })
+  }
+
   return {
     type: "box",
     title: "Add provider",
@@ -176,7 +206,7 @@ function buildAddStudio(data: ProviderHubData, filterQuery: string): UiNode {
             lines: [
               {
                 kind: "muted",
-                text: "Click a popular vendor, custom protocol, or search the catalog below to configure a new provider.",
+                text: "Pick a vendor, protocol, or filter the catalog below to add a provider.",
               },
             ],
           },
@@ -211,10 +241,9 @@ function buildAddStudio(data: ProviderHubData, filterQuery: string): UiNode {
         {
           size: 1,
           node: {
-            type: "input",
-            id: VENDOR_FILTER_ID,
-            activate: "/",
-            placeholder: "Filter vendors (e.g. kimi, qwen, ollama, together)…",
+            type: "row",
+            gap: 1,
+            children: filterChildren,
           },
         },
         { node: catalogBlock },
@@ -223,10 +252,15 @@ function buildAddStudio(data: ProviderHubData, filterQuery: string): UiNode {
   }
 }
 
-function buildDetailCard(data: ProviderHubData, selectedKey: string, filterQuery: string): UiNode {
+function buildDetailCard(
+  data: ProviderHubData,
+  selectedKey: string,
+  filterQuery: string,
+  selectedVendorId: string | undefined,
+): UiNode {
   const providers = data.session.providers()
   if (selectedKey === ADD_PROVIDER_KEY || !providers.length) {
-    return buildAddStudio(data, filterQuery)
+    return buildAddStudio(data, filterQuery, selectedVendorId)
   }
   const provider = providers.find((p) => p.id === selectedKey) ?? providers[0]!
 
@@ -353,9 +387,11 @@ function buildListCard(data: ProviderHubData): UiNode {
 
 /** Unified split-pane GUI provider hub: browse/manage configured providers AND add new ones in one page. */
 export function providerView(): ViewDefinition<ProviderHubData> {
+  // Always deliver the chosen action BEFORE control.close(), because close() synchronously triggers
+  // onClose() -> onAction({ kind: "close" }); settling the real action first prevents close from winning.
   const dispatch = (data: ProviderHubData, control: UiControl, action: ProviderHubAction) => {
-    control.close()
     data.onAction(action)
+    control.close()
   }
 
   return {
@@ -397,6 +433,7 @@ export function providerView(): ViewDefinition<ProviderHubData> {
         (providers.some((p) => p.id === current.provider) ? current.provider : providers[0]?.id) ??
         ADD_PROVIDER_KEY
       const filterQuery = ctx.state.inputValues[VENDOR_FILTER_ID] ?? ""
+      const selectedVendorId = ctx.state.selected[VENDOR_LIST_ID]
 
       const toolbarChildren: { node: UiNode; size?: number }[] = [
         {
@@ -411,7 +448,7 @@ export function providerView(): ViewDefinition<ProviderHubData> {
           },
         },
         {
-          size: 20,
+          size: 18,
           node: {
             type: "button",
             id: BTN_ADD,
@@ -419,7 +456,7 @@ export function providerView(): ViewDefinition<ProviderHubData> {
             tone: selectedKey === ADD_PROVIDER_KEY ? "normal" : "accent",
           },
         },
-        { size: 11, node: { type: "button", id: BTN_CLOSE, label: "Close" } },
+        { size: 9, node: { type: "button", id: BTN_CLOSE, label: "Close" } },
       ]
 
       const body: UiNode =
@@ -429,7 +466,7 @@ export function providerView(): ViewDefinition<ProviderHubData> {
               gap: 1,
               children: [
                 { size: "30%", min: 22, node: buildListCard(data) },
-                { node: buildDetailCard(data, selectedKey, filterQuery) },
+                { node: buildDetailCard(data, selectedKey, filterQuery, selectedVendorId) },
               ],
             }
           : {
@@ -437,7 +474,7 @@ export function providerView(): ViewDefinition<ProviderHubData> {
               gap: 1,
               children: [
                 { size: Math.min(8, Math.max(4, providers.length + 3)), node: buildListCard(data) },
-                { node: buildDetailCard(data, selectedKey, filterQuery) },
+                { node: buildDetailCard(data, selectedKey, filterQuery, selectedVendorId) },
               ],
             }
 
@@ -481,7 +518,8 @@ export function providerView(): ViewDefinition<ProviderHubData> {
         if (
           event.id.startsWith("vendor:") ||
           event.id.startsWith("protocol:") ||
-          event.id === VENDOR_LIST_ID
+          event.id === VENDOR_LIST_ID ||
+          event.id === BTN_ADD_SELECTED_VENDOR
         ) {
           return dispatch(data, control, { kind: "add", choice: event.key })
         }
