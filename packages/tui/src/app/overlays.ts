@@ -8,6 +8,8 @@ import {
 } from "@amira/api"
 import { createUiFormBackend, type UiRequests, type UiResponseAck } from "@amira/host"
 import {
+  type Component,
+  formCardWidth,
   type ImageStore,
   type InputEvent,
   type MouseInput,
@@ -32,10 +34,19 @@ import { type FormBackend, type FormRequest, FormView } from "../form-view.ts"
 import { KeyReference } from "../key-reference.ts"
 import type { Keybindings, KeySpec } from "../keybindings.ts"
 import type { PresenterSource } from "../tool-view.ts"
-import type { TranscriptView } from "../view.ts"
+import type { OverlayCardSpec, TranscriptView } from "../view.ts"
 import type { CommandRunner } from "./command-runner.ts"
 import { DockedView } from "./dock.ts"
 import { overlayKeys } from "./startup.ts"
+
+/** A TUI-owned full-screen overlay (e.g. /settings) hosted in the viewer slot. */
+export interface LocalOverlay extends Component {
+  handleInput(e: InputEvent): boolean
+  readonly pointer?: boolean
+  readonly refreshIntervalMs?: number
+  overlayCardSpec?(width: number, ctx: Pick<RenderContext, "rows">): OverlayCardSpec | undefined
+  dispose?(): void
+}
 
 /** Cached request lifecycle plus acknowledged mutations; no host callbacks reach remote editors. */
 export interface OverlayRequestBackend {
@@ -82,8 +93,8 @@ export interface OverlayManagerDeps {
 export class OverlayManager {
   /** Open extension dialogs; the first one has the keyboard. */
   readonly dialogs: Dialog[] = []
-  /** An extension's full-screen view, open over the conversation. */
-  private viewer: ExtensionViewer | KeyReference | undefined
+  /** An extension's full-screen view, key reference, or TUI-owned full-screen overlay. */
+  private viewer: ExtensionViewer | KeyReference | LocalOverlay | undefined
   dock: DockedView | undefined
   private inputTop = 0
   private inputBottom = 0
@@ -191,9 +202,21 @@ export class OverlayManager {
     )
   }
 
+  /** Card geometry when the active overlay floats centered over the dimmed conversation. */
+  overlayCardSpec(width: number, ctx: Pick<RenderContext, "rows">): OverlayCardSpec | undefined {
+    if (width < 60 || ctx.rows < 20) return undefined
+    if (this.form instanceof FormView && this.form.form.cardLayout) {
+      return { width: formCardWidth(width), live: false }
+    }
+    if (this.viewer && "overlayCardSpec" in this.viewer) {
+      return this.viewer.overlayCardSpec?.(width, ctx)
+    }
+    return undefined
+  }
+
   /** Uses terminal geometry, matching Form's fallback without transcript margins or chrome. */
   overlayCard(width: number, ctx: Pick<RenderContext, "rows">): boolean {
-    return this.form instanceof FormView && this.form.form.cardLayout && width >= 60 && ctx.rows >= 20
+    return this.overlayCardSpec(width, ctx) !== undefined
   }
 
   render(width: number, ctx: RenderContext): string[] {
@@ -433,7 +456,9 @@ export class OverlayManager {
               ? this.form.refreshIntervalMs
               : this.viewer instanceof ExtensionViewer
                 ? this.viewer.refreshIntervalMs
-                : undefined,
+                : this.viewer && "refreshIntervalMs" in this.viewer
+                  ? this.viewer.refreshIntervalMs
+                  : undefined,
           ]
         : [
             this.dock?.visible ? this.dock.viewer.refreshIntervalMs : undefined,
@@ -504,6 +529,7 @@ export class OverlayManager {
       // Remove only visible ownership. Closing a request would discard its editing state.
       if (form || viewer) this.deps.view().closeOverlay()
       if (viewer instanceof ExtensionViewer) this.disposeViewer(viewer)
+      else if (viewer && "dispose" in viewer) viewer.dispose?.()
       this.closeDock()
       this.deps.inputFocused(true)
       this.waitingChanged("visibility")
@@ -524,17 +550,28 @@ export class OverlayManager {
     this.deps.view().renderOverlay()
   }
 
+  /** Opens a TUI-owned full-screen overlay (e.g. /settings); returns an idempotent closer. */
+  openLocalOverlay(overlay: LocalOverlay): () => void {
+    this.showOverlay(overlay)
+    this.deps.view().renderOverlay()
+    return () => {
+      if (this.viewer === overlay) this.closeView()
+    }
+  }
+
   /** Puts `next` over the conversation, in place of the viewer open there if any. */
-  private showOverlay(next: ExtensionViewer | KeyReference) {
+  private showOverlay(next: ExtensionViewer | KeyReference | LocalOverlay) {
     const previous = this.viewer
     this.viewer = next
     this.deps.inputFocused(false)
     if (previous instanceof ExtensionViewer) this.disposeViewer(previous)
+    else if (previous && "dispose" in previous) previous.dispose?.()
     if (this.viewer !== next) return
     if (next instanceof ExtensionViewer) next.mount()
     if (this.viewer !== next) return
     this.dock?.hide()
-    this.deps.view().openOverlay(next instanceof ExtensionViewer)
+    const pointer = next instanceof ExtensionViewer || ("pointer" in next && next.pointer === true)
+    this.deps.view().openOverlay(pointer)
     this.syncAnimation()
     this.waitingChanged("visibility")
   }
@@ -547,6 +584,7 @@ export class OverlayManager {
     this.syncAnimation()
     this.deps.view().closeOverlay()
     if (previous instanceof ExtensionViewer) this.disposeViewer(previous)
+    else if ("dispose" in previous) previous.dispose?.()
     this.openNextForm()
     this.waitingChanged("visibility")
   }
@@ -610,7 +648,10 @@ export class OverlayManager {
   onEvent(e: AnyEvent) {
     if (this.dock && !this.hasFullscreen) this.deps.view().requestRender()
     // An extension's view may show anything: it is drawn again at each event (at most once a frame).
-    if (this.viewer instanceof ExtensionViewer || this.viewer?.handleEvent())
+    if (
+      this.viewer instanceof ExtensionViewer ||
+      (this.viewer instanceof KeyReference && this.viewer.handleEvent())
+    )
       this.deps.view().requestOverlayRender()
     if (this.form && (e.type === "ui.request" || e.type === "ui.resolved"))
       this.deps.view().requestOverlayRender()
@@ -753,8 +794,9 @@ export class OverlayManager {
       return handled
     }
     if (this.form) this.form.handleInput(e)
+    else if (this.viewer && "pointer" in this.viewer && this.viewer.pointer) this.viewer.handleInput(e)
     else for (const k of overlayKeys(e, false)) this.viewer?.handleInput(k)
-    this.deps.view().requestOverlayRender()
+    if (this.hasFullscreen) this.deps.view().requestOverlayRender()
     return true
   }
 

@@ -68,6 +68,14 @@ export interface CallRef {
   args: Record<string, unknown>
 }
 
+/** Geometry and backdrop mode for a centered floating overlay card over the conversation. */
+export interface OverlayCardSpec {
+  /** Width of the centered card in terminal cells. */
+  width: number
+  /** Re-render the dimmed conversation backdrop on every frame (for live layout/theme preview). */
+  live?: boolean
+}
+
 /** What the controller shares with the view that draws the conversation. */
 export interface ViewHost {
   terminal: Terminal
@@ -105,6 +113,8 @@ export interface ViewHost {
   overlay: Component
   /** Opts into terminal-sized overlay geometry, leaving the last margined transcript frame behind a card. */
   overlayCard?(width: number, ctx: RenderContext): boolean
+  /** Richer floating-card geometry and live-backdrop control (defaults to `overlayCard` when omitted). */
+  overlayCardSpec?(width: number, ctx: RenderContext): OverlayCardSpec | undefined
   /** A foreground ask dialog already presents the running ask_user call. */
   askDialogVisible?(): boolean
   /** Whether the input box is empty. */

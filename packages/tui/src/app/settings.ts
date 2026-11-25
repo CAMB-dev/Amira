@@ -1,4 +1,4 @@
-// Owns the interactive hierarchical /settings GUI command, live preview state, and rollback/persistence.
+// Owns the fullscreen tabbed /settings GUI command, live preview state, and rollback/persistence.
 import type { CommandContext, CommandDefinition, ShimmerEffect, TuiSettings } from "@amira/api"
 import type { ThemeVariant } from "@amira/tui-kit"
 import { reloadClockSetting } from "../clock.ts"
@@ -6,10 +6,11 @@ import {
   defaultEditableSettings,
   diffEditableSettings,
   type EditableTuiSettings,
+  type FloatingPreviewKind,
   resolveEditableSettings,
   SETTINGS_FIELDS,
-  SettingsMenuDialog,
   type SettingsSectionId,
+  SettingsView,
   shimmerEffectFromChoice,
 } from "../settings-menu.ts"
 import type { TerminalStatus } from "../terminal-status.ts"
@@ -103,18 +104,19 @@ function summarizePatch(patch: Partial<TuiSettings>): string {
   return `Settings saved — ${parts.join(", ")}`
 }
 
-/** Built-in /settings command: hierarchical clickable GUI menu with live preview, plus quick subcommands. */
+/** Built-in /settings command: fullscreen tabbed GUI with live Layout & Theme previews, plus quick subcommands. */
 export function settingsCommand(deps: SettingsCommandDeps): CommandDefinition {
   return {
     name: "settings",
-    description: "Open hierarchical GUI settings menu with live preview (layout, theme, behavior, alerts)",
+    description: "Open fullscreen tabbed settings with live Layout & Theme previews",
     args: {
-      hint: "[layout | theme | behavior | alerts | margin <0-12> | marginRows <0-2> | reset]",
+      hint: "[layout | theme | behavior | alerts | preview | margin <0-12> | marginRows <0-2> | reset]",
       complete: () => [
-        { value: "layout", description: "open Layout & Display settings" },
-        { value: "theme", description: "open Theme & Appearance settings" },
-        { value: "behavior", description: "open Behavior & Input settings" },
-        { value: "alerts", description: "open Alerts & Terminal settings" },
+        { value: "layout", description: "open Layout & Display tab" },
+        { value: "theme", description: "open Theme & Appearance tab" },
+        { value: "behavior", description: "open Behavior & Input tab" },
+        { value: "alerts", description: "open Alerts & Terminal tab" },
+        { value: "preview", description: "open translucent live Layout preview over chat" },
         { value: "margin", description: "set side margin in cells (0–12)" },
         { value: "marginRows", description: "set top/bottom margin in rows (0–2)" },
         { value: "reset", description: "reset TUI settings to defaults" },
@@ -126,8 +128,11 @@ export function settingsCommand(deps: SettingsCommandDeps): CommandDefinition {
         return
       }
       const parts = rawArgs.trim().split(/\s+/).filter(Boolean)
-      const directSection = parts.length === 1 ? SECTION_ALIASES[parts[0]!.toLowerCase()] : undefined
-      if (parts.length > 0 && !directSection) {
+      const first = parts[0]?.toLowerCase()
+      const directPreview: FloatingPreviewKind | undefined =
+        parts.length === 1 && first === "preview" ? "layout" : undefined
+      const directSection = parts.length === 1 && first ? SECTION_ALIASES[first] : undefined
+      if (parts.length > 0 && !directSection && !directPreview) {
         await runDirect(parts, ctx, deps)
         return
       }
@@ -135,7 +140,7 @@ export function settingsCommand(deps: SettingsCommandDeps): CommandDefinition {
         ctx.print("Close the current dialog or view before opening settings.", "warning")
         return
       }
-      await openSettingsMenu(ctx, deps, directSection)
+      await openSettingsView(ctx, deps, directSection, directPreview)
     },
   }
 }
@@ -205,15 +210,16 @@ async function runDirect(parts: string[], ctx: CommandContext, deps: SettingsCom
     return
   }
   ctx.print(
-    "Usage: /settings [layout | theme | behavior | alerts | margin <0-12> | marginRows <0-2> | reset]",
+    "Usage: /settings [layout | theme | behavior | alerts | preview | margin <0-12> | marginRows <0-2> | reset]",
     "warning",
   )
 }
 
-function openSettingsMenu(
+function openSettingsView(
   ctx: CommandContext,
   deps: SettingsCommandDeps,
   initialSection?: SettingsSectionId,
+  initialPreview?: FloatingPreviewKind,
 ): Promise<void> {
   const snapshot = { ...deps.settings }
   const runtimeTheme = {
@@ -244,14 +250,21 @@ function openSettingsMenu(
       restore()
       resolve()
     }
-    const dialog = new SettingsMenuDialog({
+    const view = new SettingsView({
       initial: snapshot,
       runtimeTheme,
       themeNames: deps.themes.listThemeNames(),
       initialSection,
+      initialPreview,
       viewport: deps.viewport,
-      onPreview: (draft, view) => {
-        applyEditableToLive(deps.settings, draft, runtimeTheme.shimmer, view === "appearance", deps)
+      onPreview: (draft, mode) => {
+        applyEditableToLive(
+          deps.settings,
+          draft,
+          runtimeTheme.shimmer,
+          mode.tab === "appearance" || mode.floating === "appearance",
+          deps,
+        )
       },
       onSave: (patch, draft) => {
         if (finished) return
@@ -269,9 +282,6 @@ function openSettingsMenu(
     })
     if (ctx.signal.aborted) return cancel()
     ctx.signal.addEventListener("abort", cancel, { once: true })
-    if (initialSection === "appearance") {
-      applyEditableToLive(deps.settings, initial, runtimeTheme.shimmer, true, deps)
-    }
-    close = deps.overlays.openLocalDialog(dialog)
+    close = deps.overlays.openLocalOverlay(view)
   })
 }

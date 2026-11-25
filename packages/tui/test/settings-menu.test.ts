@@ -8,7 +8,7 @@ import {
   stripAnsi,
   visibleWidth,
 } from "@amira/tui-kit"
-import { SettingsMenuDialog } from "../src/settings-menu.ts"
+import { SettingsView } from "../src/settings-menu.ts"
 import { setup, waitFor } from "./app-harness.ts"
 
 const ctx: RenderContext = { theme: defaultTheme, color: true, rows: 36 }
@@ -22,29 +22,34 @@ function mouse(
   return { type: "mouse", x, y, action, button, ctrl: false, alt: false, shift: false }
 }
 
-function findCell(rows: string[], text: string, offset = 2): { x: number; y: number } {
-  const y = rows.findIndex((row) => stripAnsi(row).includes(text))
+function findCell(rows: string[], text: string, offset = 2, rowMatch?: string): { x: number; y: number } {
+  const y = rows.findIndex((row) => {
+    const plain = stripAnsi(row)
+    return plain.includes(text) && (!rowMatch || plain.includes(rowMatch))
+  })
   if (y === -1) throw new Error(`Target not found: ${text}\n${rows.map(stripAnsi).join("\n")}`)
   const plain = stripAnsi(rows[y]!)
   return { x: visibleWidth(plain.slice(0, plain.indexOf(text))) + offset, y }
 }
 
-function click(dialog: SettingsMenuDialog, rows: string[], text: string, offset = 2): void {
-  const pt = findCell(rows, text, offset)
-  dialog.handleInput(mouse(pt.x, pt.y, "press"))
-  dialog.handleInput(mouse(pt.x, pt.y, "release"))
+function click(view: SettingsView, rows: string[], text: string, offset = 2, rowMatch?: string): void {
+  const pt = findCell(rows, text, offset, rowMatch)
+  view.handleInput(mouse(pt.x, pt.y, "press"))
+  view.handleInput(mouse(pt.x, pt.y, "release"))
 }
 
-describe("SettingsMenuDialog (hierarchical menu)", () => {
-  test("drills from Home into Layout, Theme & Appearance, Behavior and Alerts, previews live and saves", () => {
-    const previews: { margin: number; theme: string; view: string }[] = []
+describe("SettingsView (fullscreen top-tab studio + translucent floating preview)", () => {
+  test("renders fullscreen top tabs with inline Layout & Theme previews and saves edits across tabs", () => {
+    const previews: { margin: number; theme: string; tab: string; floating?: string }[] = []
     let savedPatch: Partial<TuiSettings> | undefined
     let cancelled = 0
-    const dialog = new SettingsMenuDialog({
+    const view = new SettingsView({
       initial: { margin: 1, marginRows: 0 },
       themeNames: ["amira", "amber", "burnt", "lavender", "mono", "ascii", "terminal"],
       viewport: () => ({ columns: 120, rows: 36 }),
-      onPreview: (draft, view) => previews.push({ margin: draft.margin, theme: draft.theme, view }),
+      now: () => 500,
+      onPreview: (draft, mode) =>
+        previews.push({ margin: draft.margin, theme: draft.theme, tab: mode.tab, floating: mode.floating }),
       onSave: (patch) => {
         savedPatch = patch
       },
@@ -53,116 +58,125 @@ describe("SettingsMenuDialog (hierarchical menu)", () => {
       },
     })
 
-    // Level 0: Home shows all 4 hierarchical categories with live summaries.
-    let rows = dialog.render(100, ctx)
+    // Fullscreen starts on Layout tab with top tab bar and inline Layout Preview mini-map.
+    let rows = view.render(118, ctx)
+    expect(rows).toHaveLength(36)
+    expect(view.activeTab).toBe("layout")
+    expect(view.overlayCardSpec(120, ctx)).toBeUndefined()
     let text = rows.map(stripAnsi).join("\n")
-    expect(dialog.activeView).toBe("home")
-    expect(text).toContain("Layout & Display")
-    expect(text).toContain("Theme & Appearance")
-    expect(text).toContain("Behavior & Input")
-    expect(text).toContain("Alerts & Terminal")
-    expect(text).toContain("118×36 (margin 1, rows 0)")
+    expect(text).toContain("[ Layout ]")
+    expect(text).toContain("[ Theme ]")
+    expect(text).toContain("[ Behavior ]")
+    expect(text).toContain("[ Alerts ]")
+    expect(text).toContain("Layout Preview")
+    expect(text).toContain("Live preview on chat")
+    expect(text).toContain("Conversation 118×36")
 
-    // Drill into Layout & Display by clicking the category row.
-    click(dialog, rows, "Layout & Display")
-    expect(dialog.activeView).toBe("layout")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ 4 ]")
-    expect(dialog.draft.margin).toBe(4)
-    expect(previews.at(-1)).toMatchObject({ margin: 4, view: "layout" })
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ + ]")
-    expect(dialog.draft.margin).toBe(5)
+    // Adjust margin directly on Layout tab.
+    click(view, rows, "[ 4 ]")
+    expect(view.draft.margin).toBe(4)
+    expect(previews.at(-1)).toMatchObject({ margin: 4, tab: "layout", floating: undefined })
 
-    // Click breadcrumb [ ← Settings ] to go back to Home; Layout shows * dirty marker & updated summary.
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ ← Settings ]")
-    expect(dialog.activeView).toBe("home")
-    rows = dialog.render(100, ctx)
+    // Switch to Theme tab via top tab bar; shows inline live Theme & Shimmer preview + animation cadence.
+    rows = view.render(118, ctx)
+    click(view, rows, "[ Theme ]")
+    expect(view.activeTab).toBe("appearance")
+    expect(view.refreshIntervalMs).toBeGreaterThan(0)
+    rows = view.render(118, ctx)
     text = rows.map(stripAnsi).join("\n")
-    expect(text).toContain("Layout & Display*")
-    expect(text).toContain("margin 5")
+    expect(text).toContain("Theme Preview")
+    expect(text).toContain("Thinking · live theme & shimmer preview")
+    click(view, rows, "[ lavender ]")
+    rows = view.render(118, ctx)
+    click(view, rows, "[ light ]")
+    rows = view.render(118, ctx)
+    click(view, rows, "[ 256 ]")
 
-    // Drill into Theme & Appearance (theme, appearance, colorDepth, shimmer, images live here!).
-    click(dialog, rows, "Theme & Appearance")
-    expect(dialog.activeView).toBe("appearance")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ lavender ]")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ light ]")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ 256 ]")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ › ]")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ › ]")
-    expect(dialog.draft.theme).toBe("lavender")
-    expect(dialog.draft.themeVariant).toBe("light")
-    expect(dialog.draft.colorDepth).toBe("256")
-    expect(dialog.draft.shimmer).toBe("soft")
+    // Switch to Behavior & Alerts tabs via top tab bar.
+    rows = view.render(118, ctx)
+    click(view, rows, "[ Behavior ]")
+    expect(view.activeTab).toBe("behavior")
+    expect(view.refreshIntervalMs).toBeUndefined()
+    rows = view.render(118, ctx)
+    click(view, rows, "[ queue ]")
+    click(view, rows, "[ 24h ]")
 
-    // Jump via quick section pill to Behavior, then Alerts.
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ Behavior ]")
-    expect(dialog.activeView).toBe("behavior")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ queue ]")
-    click(dialog, rows, "[ 24h ]")
+    rows = view.render(118, ctx)
+    click(view, rows, "[ Alerts ]")
+    expect(view.activeTab).toBe("alerts")
+    rows = view.render(118, ctx)
+    click(view, rows, "[ Off ]")
 
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ Alerts ]")
-    expect(dialog.activeView).toBe("alerts")
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ Off ]")
-
-    // Save changes directly from sub-page.
-    rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ Save changes ]")
+    // Save changes persists all modified tabs.
+    rows = view.render(118, ctx)
+    click(view, rows, "[ Save changes ]")
     expect(cancelled).toBe(0)
     expect(savedPatch).toEqual({
-      margin: 5,
+      margin: 4,
       theme: "lavender",
       themeVariant: "light",
       colorDepth: "256",
-      shimmer: "soft",
       submitWhileWorking: "queue",
       clock: "24h",
       bell: false,
     })
   })
 
-  test("Esc pops from sub-page back to Home, and Esc at Home cancels and restores without saving", () => {
-    let saved = 0
-    let cancelled = 0
-    const dialog = new SettingsMenuDialog({
-      initial: { margin: 2 },
-      initialSection: "layout",
+  test("floating Layout preview enables live translucent card, reverts on Cancel, and keeps on OK", () => {
+    let savedPatch: Partial<TuiSettings> | undefined
+    const view = new SettingsView({
+      initial: { margin: 2, marginRows: 0 },
+      viewport: () => ({ columns: 120, rows: 36 }),
       onPreview: () => {},
-      onSave: () => {
-        saved++
+      onSave: (patch) => {
+        savedPatch = patch
       },
-      onCancel: () => {
-        cancelled++
-      },
+      onCancel: () => {},
     })
-    const rows = dialog.render(100, ctx)
-    click(dialog, rows, "[ 6 ]")
-    expect(dialog.draft.margin).toBe(6)
-    expect(dialog.activeView).toBe("layout")
 
-    // First Esc pops back to Settings Home (does not cancel yet).
-    dialog.handleInput(key("escape"))
-    expect(dialog.activeView).toBe("home")
-    expect(cancelled).toBe(0)
+    // Enter translucent floating Layout preview by clicking button.
+    let rows = view.render(118, ctx)
+    click(view, rows, "Live preview on chat")
+    expect(view.floatingPreview).toBe("layout")
+    expect(view.overlayCardSpec(120, ctx)).toEqual({ width: 72, live: true })
 
-    // Second Esc at Home cancels and restores.
-    dialog.handleInput(key("escape"))
-    expect(saved).toBe(0)
-    expect(cancelled).toBe(1)
+    // Floating card leaves empty rows above/below for the live dimmed conversation backdrop.
+    rows = view.render(120, ctx)
+    expect(rows[0]).toBe("")
+    expect(rows.at(-1)).toBe("")
+    const cardText = rows.map(stripAnsi).join("\n")
+    expect(cardText).toContain("Layout Preview")
+    expect(cardText).toContain("[ OK ]")
+    expect(cardText).toContain("[ Cancel ]")
+
+    // Adjust margin to 8, then click [ Cancel ] -> reverts to checkpoint (2) and returns to fullscreen.
+    click(view, rows, "[ 8 ]")
+    expect(view.draft.margin).toBe(8)
+    rows = view.render(120, ctx)
+    click(view, rows, "[ Cancel ]")
+    expect(view.floatingPreview).toBeUndefined()
+    expect(view.draft.margin).toBe(2)
+
+    // Re-enter via 'p' hotkey, adjust margin to 6 & rows to 1, click [ OK ] -> kept in fullscreen draft!
+    view.handleInput(key("p"))
+    expect(view.floatingPreview).toBe("layout")
+    rows = view.render(120, ctx)
+    click(view, rows, "[ 6 ]")
+    rows = view.render(120, ctx)
+    click(view, rows, "[ 1 ]", 2, "Top/bottom rows")
+    rows = view.render(120, ctx)
+    click(view, rows, "[ OK ]")
+    expect(view.floatingPreview).toBeUndefined()
+    expect(view.draft.margin).toBe(6)
+    expect(view.draft.marginRows).toBe(1)
+
+    rows = view.render(118, ctx)
+    click(view, rows, "[ Save changes ]")
+    expect(savedPatch).toEqual({ margin: 6, marginRows: 1 })
   })
 })
 
-test("/settings previews live margin & theme changes, restores on Esc, and persists both on Save", async () => {
+test("/settings fullscreen tabs + translucent centered Layout preview updates real dimmed chat live", async () => {
   const savedSettings: Partial<TuiSettings>[] = []
   const savedThemes: { name: string; variant: string; shimmer?: ShimmerEffect }[] = []
   const app = await setup([], {
@@ -184,46 +198,60 @@ test("/settings previews live margin & theme changes, restores on Esc, and persi
     const x = app.screen.lines[y]!.indexOf(text) + 2
     app.terminal.send(`\x1b[<0;${x + 1};${y + 1}M\x1b[<0;${x + 1};${y + 1}m`)
   }
-  const topBorderIndent = () => {
-    const line = app.screen.lines.find((l) => l.includes("╭─ Settings"))
-    expect(line).toBeDefined()
-    return line!.indexOf("╭")
+  const chatHeaderIndent = () => {
+    const headerRow = app.screen.lines[0]!
+    // Header text starts 2 cells in from the content edge (CONTENT_INSET), so margin = firstNonSpace - 2.
+    return headerRow.search(/\S/) - 2
   }
   try {
-    // 1. Open /settings Home -> click Layout & Display -> preview margin 6 -> Esc back to Home -> Esc restore.
+    // 1. Open fullscreen /settings: fills full screen with top tabs & inline preview.
     app.terminal.send("/settings\r")
-    await waitFor(() => app.live().includes("Layout & Display"), "settings home opened")
-    expect(topBorderIndent()).toBe(1)
+    await waitFor(
+      () => app.live().includes("[ Layout ]") && app.live().includes("Layout Preview"),
+      "fullscreen settings opened",
+    )
 
-    clickText("Layout & Display")
-    await waitFor(() => app.live().includes("Side margin"), "drilled into layout")
+    // 2. Click Live preview on chat -> centered floating card appears over the real dimmed conversation!
+    clickText("Live preview on chat")
+    await waitFor(
+      () =>
+        app.live().includes("[ OK ]") &&
+        app.live().includes("[ Cancel ]") &&
+        app.screen.lines[0]!.trim().length > 0,
+      "translucent floating layout preview opened over real chat",
+    )
+    expect(chatHeaderIndent()).toBe(1)
+
+    // 3. Click [ 6 ] in the centered floating card -> real background conversation header shifts to col 6 LIVE!
     clickText("[ 6 ]")
-    await waitFor(() => topBorderIndent() === 6, "live margin=6 preview")
-    expect(savedSettings).toEqual([])
+    await waitFor(() => chatHeaderIndent() === 6, "live background conversation shifted to margin=6")
 
-    // Esc returns to Home, second Esc cancels & restores margin=1.
-    app.terminal.send("\x1b")
-    await waitFor(() => app.live().includes("Theme & Appearance"), "back at settings home")
-    app.terminal.send("\x1b")
-    await waitFor(() => !app.live().includes("Layout & Display"), "settings closed")
-    expect(savedSettings).toEqual([])
-    expect(savedThemes).toEqual([])
+    // 4. Click [ Cancel ] in the floating card -> reverts margin to 1 (not dirty -> "[ Save ]") and returns to fullscreen Settings!
+    clickText("[ Cancel ]")
+    await waitFor(
+      () => app.live().includes("[ Layout ]") && app.live().includes("[ Save ]"),
+      "returned to fullscreen settings after Cancel",
+    )
 
-    // 2. Direct jump `/settings theme`, switch appearance to light + margin to 4, and save!
-    app.terminal.send("/settings theme\r")
-    await waitFor(() => app.live().includes("Color depth"), "opened Theme & Appearance directly")
-    expect(topBorderIndent()).toBe(1)
-    clickText("[ light ]")
-    clickText("[ Layout ]")
-    await waitFor(() => app.live().includes("Side margin"), "switched to Layout")
+    // 5. Re-open preview via 'p', click [ 4 ], click [ OK ] -> keeps margin=4!
+    app.terminal.send("p")
+    await waitFor(() => app.live().includes("[ OK ]"), "re-opened floating layout preview")
+    expect(chatHeaderIndent()).toBe(1)
     clickText("[ 4 ]")
-    await waitFor(() => topBorderIndent() === 4, "live margin=4 preview")
+    await waitFor(() => chatHeaderIndent() === 4, "live background shifted to margin=4")
+    clickText("[ OK ]")
+    await waitFor(() => app.live().includes("[ Save changes ]"), "returned to fullscreen settings after OK")
+
+    // 6. Switch to [ Theme ] tab, pick [ light ], and click [ Save changes ]!
+    clickText("[ Theme ]")
+    await waitFor(() => app.live().includes("Theme Preview"), "switched to Theme tab")
+    clickText("[ light ]")
     clickText("[ Save changes ]")
-    await waitFor(() => savedThemes.length === 1 && savedSettings.length === 1, "both theme and layout saved")
+    await waitFor(() => savedThemes.length === 1 && savedSettings.length === 1, "saved theme and layout")
     expect(savedThemes[0]).toEqual({ name: "amira", variant: "light", shimmer: undefined })
     expect(savedSettings[0]).toEqual({ margin: 4 })
   } finally {
-    app.terminal.send("\x03\x03")
+    app.terminal.send("\x03\x03\x03")
     await app.exited
   }
 })

@@ -1,6 +1,7 @@
 import type { ShimmerEffect, TuiSettings } from "@amira/api"
 import {
   bold,
+  chromeGlyphs,
   type HitRect,
   HitRegions,
   type InputEvent,
@@ -8,14 +9,24 @@ import {
   type MouseInput,
   matchesKey,
   type RenderContext,
+  Spinner,
+  themeToken,
   truncateToWidth,
   visibleWidth,
 } from "@amira/tui-kit"
-import { Dialog } from "./dialog.ts"
-import { dialogFrame } from "./dialog-frame.ts"
+import type { LocalOverlay } from "./app/overlays.ts"
+import { paintShimmer, SHIMMER_INTERVAL_MS } from "./app/shimmer.ts"
 import { asciiGlyphs, glyphs, viewEllipsis } from "./glyphs.ts"
-import { defaultKeybindings, type Keybindings } from "./keybindings.ts"
 import { contentGeometry } from "./margins.ts"
+import {
+  type FieldControlAction,
+  floatingPreviewCardWidth,
+  type PreviewHit,
+  renderFloatingPreviewCard,
+  renderLayoutPreviewStage,
+  renderSettingsFieldRows,
+  renderThemePreviewStage,
+} from "./settings-preview.ts"
 import {
   defaultEditableSettings,
   diffEditableSettings,
@@ -28,6 +39,7 @@ import {
   type SettingsField,
   type SettingsSectionId,
 } from "./settings-schema.ts"
+import type { OverlayCardSpec } from "./view.ts"
 
 export {
   defaultEditableSettings,
@@ -41,23 +53,22 @@ export {
   shimmerEffectFromChoice,
 } from "./settings-schema.ts"
 
-type MouseAction =
-  | { kind: "open-section"; section: SettingsSectionId }
-  | { kind: "home" }
-  | { kind: "focus"; index: number }
-  | { kind: "set"; index: number; key: EditableTuiKey; value: EditableTuiSettings[EditableTuiKey] }
-  | { kind: "step"; index: number; key: "margin" | "marginRows" | "shellOutputLines"; delta: -1 | 1 }
-  | { kind: "action"; action: "save" | "reset-section" | "defaults" | "cancel" }
+export type FloatingPreviewKind = "layout" | "appearance"
 
-interface TargetSpec {
-  id: string
-  x: number
-  y: number
-  width: number
-  action: MouseAction
+type MouseAction =
+  | FieldControlAction
+  | { kind: "tab"; section: SettingsSectionId }
+  | { kind: "open-preview"; preview: FloatingPreviewKind }
+  | { kind: "preview-ok" }
+  | { kind: "preview-cancel" }
+  | { kind: "action"; action: "save" | "reset-tab" | "defaults" | "cancel" }
+
+const FLOATING_KEYS: Record<FloatingPreviewKind, readonly EditableTuiKey[]> = {
+  layout: ["margin", "marginRows"],
+  appearance: ["theme", "themeVariant", "colorDepth", "shimmer"],
 }
 
-export interface SettingsMenuOptions {
+export interface SettingsViewOptions {
   initial: TuiSettings
   runtimeTheme?: {
     name: string
@@ -66,46 +77,71 @@ export interface SettingsMenuOptions {
   }
   themeNames?: readonly string[]
   initialSection?: SettingsSectionId
-  keys?: Keybindings
+  initialPreview?: FloatingPreviewKind
   viewport?: () => { columns: number; rows: number }
-  onPreview: (draft: EditableTuiSettings, section: SettingsSectionId | "home") => void
+  now?: () => number
+  onPreview: (
+    draft: EditableTuiSettings,
+    mode: { tab: SettingsSectionId; floating?: FloatingPreviewKind },
+  ) => void
   onSave: (patch: Partial<TuiSettings>, draft: EditableTuiSettings) => void
   onCancel: () => void
 }
 
+function padCell(text: string, width: number): string {
+  const cut = truncateToWidth(text, width, viewEllipsis())
+  return cut + " ".repeat(Math.max(0, width - visibleWidth(cut)))
+}
+
+function topBorder(left: string, right: string, width: number, ctx: RenderContext, ascii: boolean): string {
+  const { theme } = ctx
+  const tl = ascii ? "+" : "╭"
+  const tr = ascii ? "+" : "╮"
+  const h = ascii ? "-" : "─"
+  const inner = Math.max(0, width - 2)
+  const rightPart = right ? ` ${right} ` : ""
+  const rightW = visibleWidth(rightPart)
+  const leftRoom = Math.max(0, inner - rightW - 2)
+  const leftPart = ` ${truncateToWidth(left, leftRoom, viewEllipsis())} `
+  const fill = Math.max(0, inner - 1 - visibleWidth(leftPart) - rightW)
+  return (
+    theme.border(`${tl}${h}`) +
+    leftPart +
+    theme.border(h.repeat(fill)) +
+    (rightPart ? rightPart : "") +
+    theme.border(tr)
+  )
+}
+
 /**
- * Hierarchical two-level clickable GUI settings menu hosted in the bottom dialog slot so the
- * real transcript, theme palette, shimmer and outer margins stay live and visible above it.
+ * Fullscreen top-tab Settings view with inline Layout/Theme live previews and a translucent
+ * centered floating card mode (`[ OK ]` / `[ Cancel ]`) over the live dimmed conversation.
  */
-export class SettingsMenuDialog extends Dialog {
+export class SettingsView implements LocalOverlay {
+  readonly pointer = true
   readonly #initial: EditableTuiSettings
   readonly #originalShimmer: ShimmerEffect | undefined
   readonly #themeNames: readonly string[]
   #draft: EditableTuiSettings
-  /** "home" shows the top-level category menu; a section id drills into that sub-page. */
-  #view: "home" | SettingsSectionId
-  #homeFocus = 0
+  #tab: SettingsSectionId
+  #floatingPreview: FloatingPreviewKind | undefined
+  #previewCheckpoint: EditableTuiSettings | undefined
   #fieldFocus = 0
   #closed = false
   #hits = new HitRegions()
   #actions = new Map<string, MouseAction>()
-  #opts: SettingsMenuOptions
+  #opts: SettingsViewOptions
 
-  constructor(opts: SettingsMenuOptions) {
-    super(
-      { kind: "select", requestId: "tui-settings", title: "Settings", options: ["Save"] },
-      () => {},
-      opts.keys ?? defaultKeybindings(),
-    )
+  constructor(opts: SettingsViewOptions) {
     this.#opts = opts
     this.#themeNames = opts.themeNames ?? []
     this.#originalShimmer = opts.runtimeTheme ? opts.runtimeTheme.shimmer : opts.initial.shimmer
     this.#initial = resolveEditableSettings(opts.initial, opts.runtimeTheme)
     this.#draft = { ...this.#initial }
-    this.#view = opts.initialSection ?? "home"
-    if (opts.initialSection) {
-      const idx = SETTINGS_SECTIONS.findIndex((s) => s.id === opts.initialSection)
-      if (idx >= 0) this.#homeFocus = idx
+    this.#tab = opts.initialSection ?? opts.initialPreview ?? "layout"
+    if (opts.initialPreview) {
+      this.#floatingPreview = opts.initialPreview
+      this.#previewCheckpoint = { ...this.#draft }
     }
   }
 
@@ -113,47 +149,91 @@ export class SettingsMenuDialog extends Dialog {
     return { ...this.#draft }
   }
 
-  get activeView(): "home" | SettingsSectionId {
-    return this.#view
+  get activeTab(): SettingsSectionId {
+    return this.#tab
+  }
+
+  get floatingPreview(): FloatingPreviewKind | undefined {
+    return this.#floatingPreview
   }
 
   get dirty(): boolean {
     return Object.keys(diffEditableSettings(this.#initial, this.#draft, this.#originalShimmer)).length > 0
   }
 
-  override close(): void {
+  /** Animate live shimmer smoothly when on the Theme tab or Theme floating preview. */
+  get refreshIntervalMs(): number | undefined {
+    if (this.#closed) return undefined
+    if (this.#tab === "appearance" || this.#floatingPreview === "appearance") return SHIMMER_INTERVAL_MS
+    return undefined
+  }
+
+  /** Opt into the translucent centered floating card with live-updating dimmed conversation backdrop. */
+  overlayCardSpec(width: number, ctx: Pick<RenderContext, "rows">): OverlayCardSpec | undefined {
+    if (!this.#floatingPreview || width < 60 || ctx.rows < 20) return undefined
+    return { width: floatingPreviewCardWidth(width), live: true }
+  }
+
+  dispose(): void {
     this.#closed = true
     this.#hits.reset()
     this.#actions.clear()
-    super.close()
   }
 
-  #sectionFields(section: SettingsSectionId): SettingsField[] {
-    return SETTINGS_FIELDS.filter((f) => f.section === section)
+  #activeFields(): SettingsField[] {
+    if (this.#floatingPreview) {
+      const keys = FLOATING_KEYS[this.#floatingPreview]
+      return keys
+        .map((key) => SETTINGS_FIELDS.find((f) => f.key === key))
+        .filter((f): f is SettingsField => f !== undefined)
+    }
+    return SETTINGS_FIELDS.filter((f) => f.section === this.#tab)
   }
 
-  #sectionDirty(section: SettingsSectionId): boolean {
-    return this.#sectionFields(section).some((f) => this.#draft[f.key] !== this.#initial[f.key])
+  #tabDirty(section: SettingsSectionId): boolean {
+    return SETTINGS_FIELDS.some((f) => f.section === section && this.#draft[f.key] !== this.#initial[f.key])
   }
 
-  #openSection(section: SettingsSectionId): void {
-    const idx = SETTINGS_SECTIONS.findIndex((s) => s.id === section)
-    if (idx >= 0) this.#homeFocus = idx
-    this.#view = section
+  #emitPreview(): void {
+    this.#opts.onPreview(this.draft, { tab: this.#tab, floating: this.#floatingPreview })
+  }
+
+  #selectTab(section: SettingsSectionId): void {
+    if (this.#tab === section && !this.#floatingPreview) return
+    this.#tab = section
     this.#fieldFocus = 0
-    this.#opts.onPreview(this.draft, this.#view)
+    this.#emitPreview()
   }
 
-  #goHome(): void {
-    if (this.#view === "home") return
-    this.#view = "home"
-    this.#opts.onPreview(this.draft, "home")
+  #enterFloatingPreview(kind: FloatingPreviewKind): void {
+    this.#tab = kind
+    this.#floatingPreview = kind
+    this.#previewCheckpoint = { ...this.#draft }
+    this.#fieldFocus = 0
+    this.#emitPreview()
+  }
+
+  #confirmFloatingPreview(): void {
+    if (!this.#floatingPreview) return
+    this.#floatingPreview = undefined
+    this.#previewCheckpoint = undefined
+    this.#fieldFocus = 0
+    this.#emitPreview()
+  }
+
+  #cancelFloatingPreview(): void {
+    if (!this.#floatingPreview) return
+    if (this.#previewCheckpoint) this.#draft = { ...this.#previewCheckpoint }
+    this.#floatingPreview = undefined
+    this.#previewCheckpoint = undefined
+    this.#fieldFocus = 0
+    this.#emitPreview()
   }
 
   #setValue<K extends EditableTuiKey>(key: K, value: EditableTuiSettings[K]): void {
     if (this.#draft[key] === value) return
     this.#draft = { ...this.#draft, [key]: value }
-    this.#opts.onPreview(this.draft, this.#view)
+    this.#emitPreview()
   }
 
   #stepNumber(field: NumberField, delta: -1 | 1): void {
@@ -169,8 +249,7 @@ export class SettingsMenuDialog extends Dialog {
   }
 
   #adjustFocused(delta: -1 | 1): void {
-    if (this.#view === "home") return
-    const field = this.#sectionFields(this.#view)[this.#fieldFocus]
+    const field = this.#activeFields()[this.#fieldFocus]
     if (!field) return
     if (field.kind === "number") {
       this.#stepNumber(field, delta)
@@ -187,11 +266,10 @@ export class SettingsMenuDialog extends Dialog {
     }
   }
 
-  #resetSection(): void {
-    if (this.#view === "home") return
+  #resetTab(): void {
     const next = { ...this.#draft }
     let changed = false
-    for (const field of this.#sectionFields(this.#view)) {
+    for (const field of SETTINGS_FIELDS.filter((f) => f.section === this.#tab)) {
       if (next[field.key] !== field.defaultValue) {
         Object.assign(next, { [field.key]: field.defaultValue })
         changed = true
@@ -199,14 +277,14 @@ export class SettingsMenuDialog extends Dialog {
     }
     if (!changed) return
     this.#draft = next
-    this.#opts.onPreview(this.draft, this.#view)
+    this.#emitPreview()
   }
 
   #resetAll(): void {
     const defaults = defaultEditableSettings()
     if (Object.keys(diffEditableSettings(this.#draft, defaults, this.#originalShimmer)).length === 0) return
     this.#draft = defaults
-    this.#opts.onPreview(this.draft, this.#view)
+    this.#emitPreview()
   }
 
   #commit(): void {
@@ -225,20 +303,51 @@ export class SettingsMenuDialog extends Dialog {
     this.#opts.onCancel()
   }
 
-  override handleInput(event: InputEvent): boolean {
+  handleInput(event: InputEvent): boolean {
     if (this.#closed) return false
     if (event.type === "mouse") return this.#handleMouse(event)
     if (matchesKey(event, "c", { ctrl: true })) {
       this.#abort()
       return true
     }
-    if (matchesKey(event, "s", { ctrl: true })) {
-      this.#commit()
+
+    // Translucent floating preview modal keys: Enter = OK, Esc = Cancel (revert preview checkpoint).
+    if (this.#floatingPreview) {
+      if (matchesKey(event, "escape")) {
+        this.#cancelFloatingPreview()
+        return true
+      }
+      if (matchesKey(event, "enter")) {
+        this.#confirmFloatingPreview()
+        return true
+      }
+      const fields = this.#activeFields()
+      if (matchesKey(event, "up") || matchesKey(event, "k")) {
+        this.#fieldFocus = (this.#fieldFocus - 1 + fields.length) % fields.length
+      } else if (matchesKey(event, "down") || matchesKey(event, "j") || matchesKey(event, "tab")) {
+        const step = matchesKey(event, "tab", { shift: true }) ? -1 : 1
+        this.#fieldFocus = (this.#fieldFocus + step + fields.length) % fields.length
+      } else if (matchesKey(event, "left") || matchesKey(event, "h") || matchesKey(event, "-")) {
+        this.#adjustFocused(-1)
+      } else if (
+        matchesKey(event, "right") ||
+        matchesKey(event, "l") ||
+        matchesKey(event, "+") ||
+        matchesKey(event, "=") ||
+        matchesKey(event, "space")
+      ) {
+        this.#adjustFocused(1)
+      }
       return true
     }
+
+    // Fullscreen top-tab Settings keys
     if (matchesKey(event, "escape")) {
-      if (this.#view !== "home") this.#goHome()
-      else this.#abort()
+      this.#abort()
+      return true
+    }
+    if (matchesKey(event, "s", { ctrl: true }) || matchesKey(event, "enter")) {
+      this.#commit()
       return true
     }
     if (
@@ -249,39 +358,22 @@ export class SettingsMenuDialog extends Dialog {
       ["1", "2", "3", "4"].includes(event.text)
     ) {
       const next = SETTINGS_SECTIONS[Number(event.text) - 1]
-      if (next) this.#openSection(next.id)
-      return true
-    }
-    if (this.#view === "home") {
-      if (matchesKey(event, "up") || matchesKey(event, "k")) {
-        this.#homeFocus = (this.#homeFocus - 1 + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length
-      } else if (matchesKey(event, "down") || matchesKey(event, "j") || matchesKey(event, "tab")) {
-        const step = matchesKey(event, "tab", { shift: true }) ? -1 : 1
-        this.#homeFocus = (this.#homeFocus + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length
-      } else if (matchesKey(event, "enter") || matchesKey(event, "right") || matchesKey(event, "space")) {
-        this.#openSection(SETTINGS_SECTIONS[this.#homeFocus]!.id)
-      }
-      return true
-    }
-
-    // Sub-page navigation
-    if (matchesKey(event, "backspace")) {
-      this.#goHome()
-      return true
-    }
-    if (matchesKey(event, "enter")) {
-      this.#commit()
+      if (next) this.#selectTab(next.id)
       return true
     }
     if (matchesKey(event, "tab")) {
       const step = matchesKey(event, "tab", { shift: true }) ? -1 : 1
-      const i = SETTINGS_SECTIONS.findIndex((s) => s.id === this.#view)
-      this.#openSection(
-        SETTINGS_SECTIONS[(i + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length]!.id,
+      const idx = SETTINGS_SECTIONS.findIndex((s) => s.id === this.#tab)
+      this.#selectTab(
+        SETTINGS_SECTIONS[(idx + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length]!.id,
       )
       return true
     }
-    const fields = this.#sectionFields(this.#view)
+    if (matchesKey(event, "p") && (this.#tab === "layout" || this.#tab === "appearance")) {
+      this.#enterFloatingPreview(this.#tab)
+      return true
+    }
+    const fields = this.#activeFields()
     if (matchesKey(event, "up") || matchesKey(event, "k")) {
       this.#fieldFocus = (this.#fieldFocus - 1 + fields.length) % fields.length
     } else if (matchesKey(event, "down") || matchesKey(event, "j")) {
@@ -306,13 +398,9 @@ export class SettingsMenuDialog extends Dialog {
   #handleMouse(event: MouseInput): boolean {
     if (event.action === "wheel") {
       if (event.button === "up" || event.button === "down") {
+        const fields = this.#activeFields()
         const step = event.button === "down" ? 1 : -1
-        if (this.#view === "home") {
-          this.#homeFocus = (this.#homeFocus + step + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length
-        } else {
-          const fields = this.#sectionFields(this.#view)
-          this.#fieldFocus = (this.#fieldFocus + step + fields.length) % fields.length
-        }
+        this.#fieldFocus = (this.#fieldFocus + step + fields.length) % fields.length
         return true
       }
       return false
@@ -321,18 +409,22 @@ export class SettingsMenuDialog extends Dialog {
     const action = hit && this.#actions.get(hit.id)
     if (!hit || !action) return true
     switch (action.kind) {
-      case "open-section":
-        this.#openSection(action.section)
+      case "tab":
+        this.#selectTab(action.section)
         return true
-      case "home":
-        this.#goHome()
+      case "open-preview":
+        this.#enterFloatingPreview(action.preview)
+        return true
+      case "preview-ok":
+        this.#confirmFloatingPreview()
+        return true
+      case "preview-cancel":
+        this.#cancelFloatingPreview()
         return true
       case "focus": {
         this.#fieldFocus = action.index
-        if (this.#view !== "home") {
-          const field = this.#sectionFields(this.#view)[action.index]
-          if (field?.kind === "toggle") this.#setValue(field.key, !this.#draft[field.key])
-        }
+        const field = this.#activeFields()[action.index]
+        if (field?.kind === "toggle") this.#setValue(field.key, !this.#draft[field.key])
         return true
       }
       case "set":
@@ -341,74 +433,284 @@ export class SettingsMenuDialog extends Dialog {
         return true
       case "step": {
         this.#fieldFocus = action.index
-        if (this.#view !== "home") {
-          const field = this.#sectionFields(this.#view)[action.index]
-          if (field?.kind === "number") this.#stepNumber(field, action.delta)
-        }
+        const field = this.#activeFields()[action.index]
+        if (field?.kind === "number") this.#stepNumber(field, action.delta)
         return true
       }
       case "action":
         if (action.action === "save") this.#commit()
-        else if (action.action === "reset-section") this.#resetSection()
+        else if (action.action === "reset-tab") this.#resetTab()
         else if (action.action === "defaults") this.#resetAll()
         else this.#abort()
         return true
     }
   }
 
-  override render(width: number, ctx: RenderContext): string[] {
+  render(width: number, ctx: RenderContext): string[] {
     this.#hits.clear()
     this.#actions.clear()
     if (this.#closed) return []
-    const { theme } = ctx
-    const compact = width < 6 || this.maxRows < 4
-    const inner = compact ? Math.max(1, width) : Math.max(1, width - 4)
+    const ascii = asciiGlyphs()
     const vp = this.#opts.viewport?.() ?? { columns: width, rows: ctx.rows }
+    const nowMs = this.#opts.now?.() ?? Date.now()
+    if (this.#floatingPreview) {
+      return this.#renderFloating(width, vp, ctx, ascii, nowMs)
+    }
+    return this.#renderFullscreen(width, vp, ctx, ascii, nowMs)
+  }
+
+  #registerTargets(targets: PreviewHit<MouseAction>[], maxWidth: number, maxRows: number): void {
+    for (const target of targets) {
+      if (target.y < 0 || target.y >= maxRows) continue
+      const end = Math.min(maxWidth, target.x + target.width)
+      if (end <= target.x) continue
+      const rect: HitRect = { x: target.x, y: target.y, width: end - target.x, height: 1 }
+      this.#hits.add(target.id, rect)
+      this.#actions.set(target.id, target.action)
+    }
+  }
+
+  #renderFieldRows(
+    fields: readonly SettingsField[],
+    inner: number,
+    vp: { columns: number; rows: number },
+    ctx: RenderContext,
+    ascii: boolean,
+    startY: number,
+    addTarget: (target: PreviewHit<MouseAction>) => void,
+    options?: { allowWrap?: boolean },
+  ): string[] {
+    return renderSettingsFieldRows({
+      fields,
+      draft: this.#draft,
+      fieldFocus: this.#fieldFocus,
+      optionsOf: (field) => this.#optionsOf(field),
+      inner,
+      vp,
+      ctx,
+      ascii,
+      startY,
+      allowWrap: options?.allowWrap,
+      addTarget,
+    })
+  }
+
+  #renderFloating(
+    width: number,
+    vp: { columns: number; rows: number },
+    ctx: RenderContext,
+    ascii: boolean,
+    nowMs: number,
+  ): string[] {
+    const kind = this.#floatingPreview!
+    const { theme } = ctx
+    const floating = width >= 60 && ctx.rows >= 20
+    const cardWidth = floating ? floatingPreviewCardWidth(width) : width
+    const inner = Math.max(10, cardWidth - 4)
+    const fields = this.#activeFields()
+    const bodyLines: string[] = []
+    const bodyTargets: PreviewHit<MouseAction>[] = []
+    bodyLines.push(
+      ...this.#renderFieldRows(fields, inner, vp, ctx, ascii, 0, (hit) => bodyTargets.push(hit), {
+        allowWrap: true,
+      }),
+    )
+
+    bodyLines.push("")
+    if (kind === "layout") {
+      bodyLines.push(
+        theme.muted(
+          truncateToWidth("  Background conversation updates live as you adjust.", inner, viewEllipsis()),
+        ),
+      )
+    } else {
+      const frames = chromeGlyphs(ctx.glyphs).spinnerFrames
+      const spinChar = frames[Math.floor(nowMs / Spinner.INTERVAL_MS) % frames.length] ?? "*"
+      const shimmerStyle = themeToken(theme, "shimmer") ?? theme.accent
+      bodyLines.push(
+        truncateToWidth(
+          `  ${shimmerStyle(spinChar)} ${paintShimmer("Thinking · live theme & shimmer preview…", ctx, nowMs)}`,
+          inner,
+          viewEllipsis(),
+        ),
+      )
+    }
+
     const geom = contentGeometry(vp.columns, vp.rows, {
       margin: this.#draft.margin,
       marginRows: this.#draft.marginRows,
     })
+    const title =
+      kind === "layout"
+        ? `Layout Preview ${glyphs.separator} ${geom.width}×${geom.height} (margin ${this.#draft.margin}, rows ${this.#draft.marginRows})`
+        : `Theme Preview ${glyphs.separator} ${this.#draft.theme} (${this.#draft.themeVariant})`
+
+    const rendered = renderFloatingPreviewCard<MouseAction>({
+      title,
+      bodyLines,
+      bodyTargets,
+      width,
+      ctx,
+      ascii,
+      okAction: { kind: "preview-ok" },
+      cancelAction: { kind: "preview-cancel" },
+    })
+    this.#registerTargets(rendered.targets, width, ctx.rows)
+    return rendered.rows
+  }
+
+  #renderFullscreen(
+    width: number,
+    vp: { columns: number; rows: number },
+    ctx: RenderContext,
+    ascii: boolean,
+    nowMs: number,
+  ): string[] {
+    const { theme } = ctx
+    const inner = Math.max(12, width - 4)
+    const tl = ascii ? "+" : "╭"
+    const bl = ascii ? "+" : "╰"
+    const br = ascii ? "+" : "╯"
+    const h = ascii ? "-" : "─"
+    const v = ascii ? "|" : "│"
+    const ml = ascii ? "+" : "├"
+    const mr = ascii ? "+" : "┤"
     const sep = ` ${glyphs.separator} `
-    const dims = `${geom.width}×${geom.height} (margin ${this.#draft.margin}, rows ${this.#draft.marginRows})`
+    const row = (content: string) => `${theme.border(v)} ${padCell(content, inner)} ${theme.border(v)}`
+    const rule = theme.border(`${ml}${h.repeat(Math.max(0, width - 2))}${mr}`)
+
+    const geom = contentGeometry(vp.columns, vp.rows, {
+      margin: this.#draft.margin,
+      marginRows: this.#draft.marginRows,
+    })
+    const statusRight =
+      this.#tab === "appearance"
+        ? theme.muted(`${this.#draft.theme} (${this.#draft.themeVariant})${sep}${this.#draft.colorDepth}`)
+        : theme.muted(
+            `${geom.width}×${geom.height}${sep}margin ${this.#draft.margin}, rows ${this.#draft.marginRows}`,
+          )
     const dirtyTag = this.dirty ? ` ${theme.accent(`${glyphs.separator} unsaved`)}` : ""
-    const sectionMeta = this.#view === "home" ? undefined : SETTINGS_SECTIONS.find((s) => s.id === this.#view)
-    const titleHead = sectionMeta
-      ? `${bold(theme.text("Settings"))} ${theme.muted(glyphs.pointer)} ${bold(theme.accent(sectionMeta.label))}`
-      : bold(theme.text("Settings"))
-    const title = `${titleHead} ${theme.muted(`${glyphs.separator} ${dims}`)}${dirtyTag}`
+    const topLine = topBorder(bold(theme.text("Settings")) + dirtyTag, statusRight, width, ctx, ascii)
 
-    const body: string[] = []
-    const targets: TargetSpec[] = []
-    const addTarget = (target: TargetSpec) => targets.push(target)
-    const ascii = asciiGlyphs()
+    const allTargets: PreviewHit<MouseAction>[] = []
+    // Top Tab Bar (row index 1)
+    let tabLine = " "
+    const tabY = 1
+    for (const sec of SETTINGS_SECTIONS) {
+      const active = sec.id === this.#tab
+      const short = sec.label.split(" ")[0]!
+      const raw = `[ ${short}${this.#tabDirty(sec.id) ? "*" : ""} ]`
+      const styled = active
+        ? ctx.color
+          ? inverse(bold(theme.accent(raw)))
+          : bold(theme.accent(raw))
+        : theme.fg2(raw)
+      const x = visibleWidth(tabLine)
+      if (x + visibleWidth(raw) <= inner) {
+        allTargets.push({
+          id: `tab:${sec.id}`,
+          x: 2 + x,
+          y: tabY,
+          width: visibleWidth(raw),
+          action: { kind: "tab", section: sec.id },
+        })
+        tabLine += `${styled}  `
+      }
+    }
+    const tabHint = theme.muted("1-4 / Tab switch")
+    const tabGap = inner - visibleWidth(tabLine) - visibleWidth(tabHint)
+    if (tabGap >= 2) tabLine += " ".repeat(tabGap) + tabHint
 
-    if (this.#view === "home") {
-      this.#renderHome(body, inner, ctx, addTarget, ascii)
+    // Content area starts at y = 3 (0: topBorder, 1: tabBar, 2: rule)
+    const bodyStartY = 3
+    const bodyLines: string[] = []
+    const bodyTargets: PreviewHit<MouseAction>[] = []
+    const compact = ctx.rows < 26
+    if (!compact) bodyLines.push("")
+
+    if (this.#tab === "layout") {
+      bodyLines.push(
+        ...renderLayoutPreviewStage<MouseAction>({
+          draft: this.#draft,
+          viewport: vp,
+          width: inner,
+          compact,
+          ctx,
+          ascii,
+          startY: bodyLines.length,
+          openAction: { kind: "open-preview", preview: "layout" },
+          addTarget: (hit) => bodyTargets.push(hit),
+        }),
+      )
+      bodyLines.push("")
+    } else if (this.#tab === "appearance") {
+      bodyLines.push(
+        ...renderThemePreviewStage<MouseAction>({
+          draft: this.#draft,
+          width: inner,
+          compact,
+          ctx,
+          ascii,
+          nowMs,
+          startY: bodyLines.length,
+          openAction: { kind: "open-preview", preview: "appearance" },
+          addTarget: (hit) => bodyTargets.push(hit),
+        }),
+      )
+      bodyLines.push("")
     } else {
-      this.#renderSection(this.#view, body, inner, vp, ctx, addTarget, ascii)
+      const meta = SETTINGS_SECTIONS.find((s) => s.id === this.#tab)
+      if (meta) {
+        bodyLines.push(bold(theme.fg2(meta.label)))
+        bodyLines.push(theme.muted(truncateToWidth(meta.description, inner, viewEllipsis())))
+        bodyLines.push("")
+      }
     }
 
-    // Action button bar
-    body.push(theme.border(glyphs.rule.repeat(inner)))
+    const fields = this.#activeFields()
+    bodyLines.push(
+      ...this.#renderFieldRows(fields, inner, vp, ctx, ascii, bodyLines.length, (hit) =>
+        bodyTargets.push(hit),
+      ),
+    )
+
+    const focusedField = fields[this.#fieldFocus]
+    if (focusedField) {
+      bodyLines.push("")
+      bodyLines.push(
+        theme.muted(
+          truncateToWidth(
+            `  ${focusedField.description} (Default: ${String(focusedField.defaultValue)})`,
+            inner,
+            viewEllipsis(),
+          ),
+        ),
+      )
+    }
+
+    // Footer: rule + action buttons + hint + bottom border (4 rows)
+    const footerRows = 4
+    const bodyRoom = Math.max(1, ctx.rows - bodyStartY - footerRows)
+    const visibleBody = bodyLines.slice(0, bodyRoom)
+    for (const hit of bodyTargets) {
+      if (hit.y >= 0 && hit.y < visibleBody.length) {
+        allTargets.push({ ...hit, x: 2 + hit.x, y: bodyStartY + hit.y })
+      }
+    }
+    while (visibleBody.length < bodyRoom) visibleBody.push("")
+
+    const actionY = bodyStartY + bodyRoom + 1
     const actionButtons: {
-      id: "save" | "reset-section" | "defaults" | "cancel" | "home"
+      id: "save" | "reset-tab" | "defaults" | "cancel"
       label: string
       primary?: boolean
-    }[] =
-      this.#view === "home"
-        ? [
-            { id: "save", label: this.dirty ? "Save changes" : "Save", primary: true },
-            { id: "defaults", label: "Defaults" },
-            { id: "cancel", label: this.dirty ? "Cancel (restore)" : "Close" },
-          ]
-        : [
-            { id: "home", label: `${ascii ? "<-" : "←"} Back` },
-            { id: "save", label: this.dirty ? "Save changes" : "Save", primary: true },
-            { id: "reset-section", label: "Reset section" },
-            { id: "cancel", label: this.dirty ? "Cancel (restore)" : "Close" },
-          ]
-    let actionRow = "  "
-    const actionY = body.length
+    }[] = [
+      { id: "save", label: this.dirty ? "Save changes" : "Save", primary: true },
+      { id: "reset-tab", label: "Reset tab" },
+      { id: "defaults", label: "Defaults" },
+      { id: "cancel", label: this.dirty ? "Cancel (restore)" : "Close" },
+    ]
+    let actionRow = " "
     for (const btn of actionButtons) {
       const raw = `[ ${btn.label} ]`
       const styled =
@@ -421,306 +723,37 @@ export class SettingsMenuDialog extends Dialog {
             : theme.fg2(raw)
       const x = visibleWidth(actionRow)
       if (x + visibleWidth(raw) <= inner) {
-        addTarget({
+        allTargets.push({
           id: `action:${btn.id}`,
-          x,
+          x: 2 + x,
           y: actionY,
           width: visibleWidth(raw),
-          action: btn.id === "home" ? { kind: "home" } : { kind: "action", action: btn.id },
+          action: { kind: "action", action: btn.id },
         })
         actionRow += `${styled}  `
       }
     }
-    body.push(actionRow.trimEnd())
 
     const arrows = ascii ? "up/down" : "↑↓"
     const lr = ascii ? "left/right" : "←→"
-    const hint =
-      this.#view === "home"
-        ? `click category${sep}1-4 jump${sep}${arrows} select${sep}enter open${sep}ctrl+s save${sep}esc restore`
-        : `click buttons${sep}backspace/esc back${sep}tab next group${sep}${arrows} field${sep}${lr} adjust${sep}enter save`
-    body.push(theme.muted(truncateToWidth(`  ${hint}`, inner, viewEllipsis())))
+    const previewHint =
+      this.#tab === "layout" || this.#tab === "appearance" ? `p live preview on chat${sep}` : ""
+    const hintText = ` click tabs/buttons${sep}${previewHint}${arrows} field${sep}${lr} adjust${sep}enter save${sep}esc cancel`
+    const bottomLine = theme.border(`${bl}${h.repeat(Math.max(0, width - 2))}${br}`)
+    void tl
 
-    const rows = dialogFrame(title, body, width, ctx, theme.accent, this.maxRows)
-    const room = Math.max(0, this.maxRows - 2)
-    const start = Math.max(0, body.length + 1 - Math.max(1, this.maxRows))
-    for (const target of targets) {
-      const shown = compact
-        ? target.y + 1 - start
-        : body.length <= room || target.y < room - 1
-          ? target.y + 1
-          : target.y === body.length - 1
-            ? room
-            : -1
-      if (shown < 0 || shown >= rows.length) continue
-      const left = compact ? 0 : 2
-      const right = compact ? width : width - 2
-      const x = left + target.x
-      const end = Math.min(right, x + target.width)
-      if (end <= x) continue
-      const rect: HitRect = { x, y: shown, width: end - x, height: 1 }
-      this.#hits.add(target.id, rect)
-      this.#actions.set(target.id, target.action)
-    }
-    return rows
-  }
+    const frame = [
+      topLine,
+      row(tabLine),
+      rule,
+      ...visibleBody.map(row),
+      rule,
+      row(actionRow.trimEnd()),
+      row(theme.muted(truncateToWidth(hintText, inner, viewEllipsis()))),
+      bottomLine,
+    ].slice(0, ctx.rows)
 
-  #renderHome(
-    body: string[],
-    inner: number,
-    ctx: RenderContext,
-    addTarget: (target: TargetSpec) => void,
-    ascii: boolean,
-  ): void {
-    const { theme } = ctx
-    body.push(
-      theme.muted(truncateToWidth("  Choose a category (changes preview live):", inner, viewEllipsis())),
-    )
-    body.push(theme.border(glyphs.rule.repeat(inner)))
-
-    const labelCol = Math.min(24, Math.max(18, ...SETTINGS_SECTIONS.map((s) => visibleWidth(s.label) + 7)))
-    const chevron = ascii ? ">" : "›"
-    for (let i = 0; i < SETTINGS_SECTIONS.length; i++) {
-      const sec = SETTINGS_SECTIONS[i]!
-      const focused = i === this.#homeFocus
-      const dirty = this.#sectionDirty(sec.id)
-      const mark = focused ? bold(theme.accent(glyphs.pointer)) : " "
-      const num = theme.muted(`${i + 1}.`)
-      const rawTitle = `${sec.label}${dirty ? "*" : ""}`
-      const titleStyled = focused ? bold(theme.accent(rawTitle)) : theme.text(rawTitle)
-      const prefix = `${mark} ${num} ${titleStyled}`
-      const pad = " ".repeat(Math.max(1, labelCol - visibleWidth(prefix)))
-      const summaryRoom = Math.max(0, inner - labelCol - 3)
-      const summaryText =
-        summaryRoom > 4 ? truncateToWidth(sec.summary(this.#draft), summaryRoom, viewEllipsis()) : ""
-      const summaryStyled = focused ? theme.fg2(summaryText) : theme.muted(summaryText)
-      const rowLeft = `${prefix}${pad}${summaryStyled}`
-      const rightPad = " ".repeat(Math.max(1, inner - visibleWidth(rowLeft) - 2))
-      const line = `${rowLeft}${rightPad}${focused ? bold(theme.accent(chevron)) : theme.muted(chevron)}`
-      addTarget({
-        id: `section:${sec.id}`,
-        x: 0,
-        y: body.length,
-        width: inner,
-        action: { kind: "open-section", section: sec.id },
-      })
-      body.push(truncateToWidth(line, inner, viewEllipsis()))
-    }
-
-    const activeSec = SETTINGS_SECTIONS[this.#homeFocus]
-    if (activeSec) {
-      body.push("")
-      body.push(theme.muted(truncateToWidth(`  ${activeSec.description}`, inner, viewEllipsis())))
-    }
-  }
-
-  #renderSection(
-    section: SettingsSectionId,
-    body: string[],
-    inner: number,
-    vp: { columns: number; rows: number },
-    ctx: RenderContext,
-    addTarget: (target: TargetSpec) => void,
-    ascii: boolean,
-  ): void {
-    const { theme } = ctx
-    // Breadcrumb & quick section switcher bar
-    const backRaw = `[ ${ascii ? "<-" : "←"} Settings ]`
-    let navLine = theme.fg2(backRaw)
-    const navY = body.length
-    addTarget({
-      id: "nav:home",
-      x: 0,
-      y: navY,
-      width: visibleWidth(backRaw),
-      action: { kind: "home" },
-    })
-    for (const sec of SETTINGS_SECTIONS) {
-      const active = sec.id === section
-      const short = sec.label.split(" ")[0]!
-      const raw = `[ ${short}${this.#sectionDirty(sec.id) ? "*" : ""} ]`
-      const x = visibleWidth(navLine) + 2
-      if (x + visibleWidth(raw) > inner) break
-      const styled = active
-        ? ctx.color
-          ? inverse(bold(theme.accent(raw)))
-          : bold(theme.accent(raw))
-        : theme.muted(raw)
-      addTarget({
-        id: `nav:${sec.id}`,
-        x,
-        y: navY,
-        width: visibleWidth(raw),
-        action: { kind: "open-section", section: sec.id },
-      })
-      navLine += `  ${styled}`
-    }
-    body.push(navLine)
-    body.push(theme.border(glyphs.rule.repeat(inner)))
-
-    const fields = this.#sectionFields(section)
-    const labelCol = Math.min(20, Math.max(12, ...fields.map((f) => visibleWidth(f.label) + 4)))
-    const controlRoom = Math.max(12, inner - labelCol - 1)
-
-    for (let i = 0; i < fields.length; i++) {
-      const field = fields[i]!
-      const focused = i === this.#fieldFocus
-      const value = this.#draft[field.key]
-      const modified = value !== field.defaultValue
-      const mark = focused ? bold(theme.accent(glyphs.pointer)) : " "
-      const rawLabel = `${field.label}${modified ? "*" : ""}`
-      const pad = " ".repeat(Math.max(1, labelCol - 2 - visibleWidth(rawLabel)))
-      const labelPart = `${mark} ${focused ? bold(theme.accent(rawLabel)) : theme.text(rawLabel)}${pad}`
-
-      const pill = (text: string, active: boolean, disabled = false): string => {
-        const raw = `[ ${text} ]`
-        if (disabled) return theme.dim(raw)
-        if (active) {
-          return focused && ctx.color ? inverse(bold(theme.accent(raw))) : bold(theme.accent(raw))
-        }
-        return focused ? theme.fg2(raw) : theme.muted(raw)
-      }
-
-      const controls: { text: string; raw: string; action: MouseAction }[] = []
-      let suffix = ""
-      if (field.kind === "number") {
-        const current = value as number
-        const presets = field.presets.includes(current)
-          ? field.presets
-          : [...field.presets, current].sort((a, b) => a - b)
-        const needStepper = field.max - field.min > 2
-        const fullWidth = (needStepper ? 12 : 0) + presets.reduce((sum, n) => sum + `[ ${n} ]`.length + 1, 0)
-        if (fullWidth <= controlRoom) {
-          if (needStepper) {
-            controls.push({
-              text: pill("-", false, current <= field.min),
-              raw: "[ - ]",
-              action: { kind: "step", index: i, key: field.key, delta: -1 },
-            })
-          }
-          for (const preset of presets) {
-            controls.push({
-              text: pill(String(preset), preset === current),
-              raw: `[ ${preset} ]`,
-              action: { kind: "set", index: i, key: field.key, value: preset },
-            })
-          }
-          if (needStepper) {
-            controls.push({
-              text: pill("+", false, current >= field.max),
-              raw: "[ + ]",
-              action: { kind: "step", index: i, key: field.key, delta: 1 },
-            })
-          }
-        } else {
-          controls.push(
-            {
-              text: pill("-", false, current <= field.min),
-              raw: "[ - ]",
-              action: { kind: "step", index: i, key: field.key, delta: -1 },
-            },
-            { text: pill(String(current), true), raw: `[ ${current} ]`, action: { kind: "focus", index: i } },
-            {
-              text: pill("+", false, current >= field.max),
-              raw: "[ + ]",
-              action: { kind: "step", index: i, key: field.key, delta: 1 },
-            },
-          )
-        }
-        if (field.liveSuffix) suffix = ` ${theme.muted(field.liveSuffix(this.#draft, vp))}`
-      } else if (field.kind === "toggle") {
-        const on = value === true
-        controls.push(
-          {
-            text: pill("On", on),
-            raw: "[ On ]",
-            action: { kind: "set", index: i, key: field.key, value: true },
-          },
-          {
-            text: pill("Off", !on),
-            raw: "[ Off ]",
-            action: { kind: "set", index: i, key: field.key, value: false },
-          },
-        )
-      } else {
-        const options = this.#optionsOf(field)
-        const current = String(value)
-        const allWidth = options.reduce((sum, o) => sum + `[ ${o.label} ]`.length + 1, 0)
-        if (allWidth <= controlRoom) {
-          for (const opt of options) {
-            controls.push({
-              text: pill(opt.label, String(opt.value) === current),
-              raw: `[ ${opt.label} ]`,
-              action: { kind: "set", index: i, key: field.key, value: opt.value },
-            })
-          }
-        } else {
-          const idx = Math.max(
-            0,
-            options.findIndex((o) => String(o.value) === current),
-          )
-          const chosen = options[idx]?.label ?? current
-          const prev = options[(idx - 1 + options.length) % options.length]!
-          const next = options[(idx + 1) % options.length]!
-          controls.push(
-            {
-              text: pill(ascii ? "<" : "‹", false),
-              raw: `[ ${ascii ? "<" : "‹"} ]`,
-              action: { kind: "set", index: i, key: field.key, value: prev.value },
-            },
-            { text: pill(chosen, true), raw: `[ ${chosen} ]`, action: { kind: "focus", index: i } },
-            {
-              text: pill(ascii ? ">" : "›", false),
-              raw: `[ ${ascii ? ">" : "›"} ]`,
-              action: { kind: "set", index: i, key: field.key, value: next.value },
-            },
-          )
-        }
-      }
-
-      const controlsRawWidth = controls.reduce((s, c, idx) => s + visibleWidth(c.raw) + (idx ? 1 : 0), 0)
-      const inline = labelCol + controlsRawWidth <= inner
-      const rowY = body.length
-      addTarget({
-        id: `row:${i}`,
-        x: 0,
-        y: rowY,
-        width: Math.min(inner, labelCol),
-        action: { kind: "focus", index: i },
-      })
-
-      let controlLine = ""
-      const baseX = inline ? visibleWidth(labelPart) : 2
-      const controlY = inline ? rowY : rowY + 1
-      for (let c = 0; c < controls.length; c++) {
-        const item = controls[c]!
-        if (c > 0) controlLine += " "
-        const x = baseX + visibleWidth(controlLine)
-        const w = visibleWidth(item.raw)
-        if (x + w <= inner) {
-          addTarget({ id: `ctrl:${i}:${c}`, x, y: controlY, width: w, action: item.action })
-        }
-        controlLine += item.text
-      }
-      const controlWithSuffix =
-        suffix && baseX + visibleWidth(controlLine) + visibleWidth(suffix) <= inner
-          ? controlLine + suffix
-          : controlLine
-
-      if (inline) body.push(labelPart + controlWithSuffix)
-      else {
-        body.push(labelPart.trimEnd())
-        body.push(`  ${controlWithSuffix}`)
-      }
-    }
-
-    const focusedField = fields[this.#fieldFocus]
-    if (focusedField) {
-      body.push("")
-      const defaultNote = `Default: ${String(focusedField.defaultValue)}`
-      body.push(
-        theme.muted(truncateToWidth(`  ${focusedField.description} (${defaultNote})`, inner, viewEllipsis())),
-      )
-    }
+    this.#registerTargets(allTargets, width, frame.length)
+    return frame
   }
 }

@@ -253,8 +253,11 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       freeze(frame, width, ctx.rows)
       return frame
     }
-    if (!host.overlayCard?.(width, ctx) || width < 60 || ctx.rows < 20) return margined.render(width, ctx)
-    if (backdropSize !== `${width}x${ctx.rows}`) {
+    const spec =
+      host.overlayCardSpec?.(width, ctx) ??
+      (host.overlayCard?.(width, ctx) ? { width: formCardWidth(width), live: false } : undefined)
+    if (!spec || width < 60 || ctx.rows < 20) return margined.render(width, ctx)
+    if (spec.live || backdropSize !== `${width}x${ctx.rows}`) {
       // The transcript as it would be drawn uncovered, at this size.
       overlay = false
       try {
@@ -264,7 +267,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       }
     }
     const rows = host.overlay.render(width, ctx)
-    const cardWidth = formCardWidth(width)
+    const cardWidth = Math.max(20, Math.min(width - 4, spec.width))
     const left = Math.floor((width - cardWidth) / 2)
     const right = left + cardWidth
     const behindRows = frozenBackdrop()
@@ -272,7 +275,7 @@ export function createFullscreenView(host: ViewHost): TranscriptView {
       const behind = behindRows[i] ?? ""
       const row = rows[i]
       if (!row) return theme.dim(backdropSlice(behind, 0, width))
-      // Form indents nonempty card rows with spaces; its interior is already padded to cardWidth.
+      // Card indents nonempty rows with `left` spaces; its interior is already padded to cardWidth.
       return (
         theme.dim(backdropSlice(behind, 0, left)) +
         row.slice(left) +

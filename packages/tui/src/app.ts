@@ -295,6 +295,7 @@ async function runFullscreen(
     header,
     overlay: new View((width, ctx) => overlays.render(width, ctx)),
     overlayCard: (width, ctx) => overlays.overlayCard(width, ctx),
+    overlayCardSpec: (width, ctx) => overlays.overlayCardSpec(width, ctx),
     askDialogVisible: () => overlays.askDialogVisible,
     editorEmpty: () => editor.isEmpty,
     showNote,
