@@ -6,16 +6,37 @@ import {
   conversationTurnId,
   sendConversation,
 } from "@amira/host/internal"
-import type { Editor, EditorPart } from "@amira/tui-kit"
-import { truncateToWidth } from "@amira/tui-kit"
+import {
+  bold,
+  type Editor,
+  type EditorPart,
+  inverse,
+  type RenderContext,
+  truncateToWidth,
+  visibleWidth,
+} from "@amira/tui-kit"
 import { restoreEditorState } from "../../../tui-kit/src/internal/editor-state.ts"
-import { chromeText, viewEllipsis } from "../glyphs.ts"
+import { asciiGlyphs, chromeText, glyphs, viewEllipsis } from "../glyphs.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import { PromptHistory } from "../prompt-history.ts"
+import { badgeSymbol, spinnerFrameAt } from "../status-badge.ts"
 import type { TranscriptView } from "../view.ts"
 import { createTurnActivity } from "./activity.ts"
 import { createConversationEvents } from "./conversation-events.ts"
-import { draftMessage, messageParts } from "./outbox.ts"
+import { draftMessage, messageParts, type Outgoing } from "./outbox.ts"
+
+export type ConversationTabTarget = "main" | OwnedConversation
+
+export interface ConversationBarHit {
+  x: number
+  width: number
+  target: ConversationTabTarget
+}
+
+export interface ConversationBarRender {
+  line: string
+  hits: ConversationBarHit[]
+}
 
 type Entry = {
   conversation: OwnedConversation
@@ -24,6 +45,7 @@ type Entry = {
   activity: ReturnType<typeof createTurnActivity>
   history: PromptHistory
   draft: EditorPart[]
+  queued: Outgoing[]
   iterator: AsyncIterator<AnyEvent>
   disposed: boolean
   send?: { turnId: string; reconciled: boolean }
@@ -70,6 +92,7 @@ export class ConversationFocus {
     { sessionId: string; data: EventMap["ui.request"]; cancelApproval?: () => void }
   >()
   private current: Entry | undefined
+  private lastEntry: Entry | undefined
   private mainDraft: EditorPart[] = []
   private pendingCommand: { entry: Entry; version: number; parts: EditorPart[] } | undefined
   private transitioning = false
@@ -148,6 +171,158 @@ export class ConversationFocus {
     return this.current?.activity
   }
 
+  get queued(): readonly Outgoing[] {
+    return this.current?.queued ?? []
+  }
+
+  get activeCount(): number {
+    let count = 0
+    for (const entry of this.entries.values()) if (!entry.disposed) count++
+    return count
+  }
+
+  private pendingFor(conversationId: string): number {
+    return [...this.requests.values()].filter((r) => this.rootSession(r.sessionId) === conversationId).length
+  }
+
+  private entryWorking(entry: Entry): boolean {
+    if (entry.sending) return true
+    try {
+      return entry.conversation.status().busy
+    } catch {
+      return false
+    }
+  }
+
+  private putBackTo(entry: Entry, items: Outgoing[]) {
+    if (!items.length) return
+    const parts: EditorPart[] = []
+    for (const q of items) {
+      if (parts.length) parts.push("\n\n")
+      parts.push(...(q.parts ?? [q.text]))
+    }
+    if (this.current === entry) {
+      if (!this.deps.editor.isEmpty) parts.push("\n\n", ...this.deps.editor.getParts())
+      this.deps.editor.setParts(parts)
+    } else {
+      if (!this.empty(entry.draft)) parts.push("\n\n", ...entry.draft)
+      entry.draft = parts
+    }
+  }
+
+  popQueuedToEditor(index?: number): boolean {
+    const entry = this.current
+    if (!entry?.queued.length) return false
+    const at = index === undefined ? entry.queued.length - 1 : index
+    if (at < 0 || at >= entry.queued.length) return false
+    const [item] = entry.queued.splice(at, 1)
+    if (!item) return false
+    this.putBackTo(entry, [item])
+    entry.view.requestRender()
+    return true
+  }
+
+  removeQueued(index: number): boolean {
+    const entry = this.current
+    if (!entry || index < 0 || index >= entry.queued.length) return false
+    entry.queued.splice(index, 1)
+    entry.view.requestRender()
+    return true
+  }
+
+  selectTab(target: ConversationTabTarget): boolean {
+    if (target === "main") return this.unfocus()
+    return this.focus(target)
+  }
+
+  refocusLast(): boolean {
+    if (this.current) return false
+    const candidate =
+      this.lastEntry && !this.lastEntry.disposed && this.entries.has(this.lastEntry.conversation)
+        ? this.lastEntry
+        : [...this.entries.values()].find((entry) => !entry.disposed)
+    return candidate ? this.focus(candidate.conversation) : false
+  }
+
+  /** Clickable conversation switcher bar above the composer (shown when focused or when live owned conversations exist). */
+  renderBar(width: number, ctx: RenderContext): ConversationBarRender | undefined {
+    const { theme } = ctx
+    const key = this.deps.returnKey?.() ?? "F6"
+    const sep = ` ${glyphs.separator} `
+    const frame = spinnerFrameAt(Date.now())
+    if (this.current) {
+      const status = `main ${this.deps.mainWorking() ? "working" : "idle"}`
+      const pending = this.pendingMain
+        ? `${sep}${this.pendingMain} pending${sep}${key} to answer`
+        : `${sep}${key} main`
+      const tailRaw = chromeText(`${status}${pending}`)
+      const tailStyled = this.pendingMain ? bold(theme.warning(tailRaw)) : theme.fg2(tailRaw)
+      const activeName = this.current.conversation.name.replace(/\p{Cc}/gu, " ")
+      const others = [...this.entries.values()].filter((e) => !e.disposed && e !== this.current)
+      const tailW = visibleWidth(tailRaw)
+      const nameRoom = Math.max(8, width - tailW - visibleWidth(sep))
+      const cutName = chromeText(truncateToWidth(activeName, nameRoom, viewEllipsis("…")))
+      const hits: ConversationBarHit[] = []
+      let line = bold(theme.accent(cutName))
+      let cursor = visibleWidth(cutName)
+
+      // Append other live conversations as clickable pills when horizontal space permits.
+      for (const other of others) {
+        const label = other.conversation.name.replace(/\p{Cc}/gu, " ")
+        const wait = this.pendingFor(other.conversation.id)
+        const icon = this.entryWorking(other)
+          ? badgeSymbol("working", frame)
+          : wait > 0
+            ? glyphs.warning
+            : asciiGlyphs()
+              ? "*"
+              : glyphs.info
+        const raw = `[ ${icon} ${truncateToWidth(label, 18, viewEllipsis("…"))}${wait ? ` (${wait})` : ""} ]`
+        const w = visibleWidth(raw)
+        if (cursor + 2 + w + visibleWidth(sep) + tailW > width) break
+        line += `  ${wait ? theme.warning(raw) : theme.muted(raw)}`
+        hits.push({ x: cursor + 2, width: w, target: other.conversation })
+        cursor += 2 + w
+      }
+
+      const tailX = cursor + visibleWidth(sep)
+      line += theme.muted(sep) + tailStyled
+      hits.push({ x: tailX, width: Math.max(1, Math.min(tailW, width - tailX)), target: "main" })
+      return { line: truncateToWidth(line, width, viewEllipsis("…")), hits }
+    }
+
+    const live = [...this.entries.values()].filter((e) => !e.disposed)
+    if (!live.length) return undefined
+    const hits: ConversationBarHit[] = []
+    const mainRaw = "[ main ]"
+    let line = ctx.color ? inverse(bold(theme.accent(mainRaw))) : bold(theme.accent(mainRaw))
+    let cursor = visibleWidth(mainRaw)
+    for (const entry of live) {
+      const label = entry.conversation.name.replace(/\p{Cc}/gu, " ")
+      const working = this.entryWorking(entry)
+      const wait = this.pendingFor(entry.conversation.id)
+      const qCount = entry.queued.length
+      const icon = working
+        ? badgeSymbol("working", frame)
+        : wait > 0
+          ? glyphs.warning
+          : asciiGlyphs()
+            ? "*"
+            : glyphs.info
+      const badge = wait > 0 ? ` ${wait} waiting` : qCount > 0 ? ` ${qCount}q` : ""
+      const raw = `[ ${icon} ${truncateToWidth(label, 22, viewEllipsis("…"))}${badge} ]`
+      const w = visibleWidth(raw)
+      if (cursor + 2 + w > width) break
+      const styled = wait > 0 ? bold(theme.warning(raw)) : working ? theme.accent(raw) : theme.fg2(raw)
+      line += `  ${styled}`
+      hits.push({ x: cursor + 2, width: w, target: entry.conversation })
+      cursor += 2 + w
+    }
+    const hint = `  ${key} switch`
+    if (cursor + visibleWidth(hint) <= width) line += theme.muted(hint)
+    return { line: truncateToWidth(line, width, viewEllipsis("…")), hits }
+  }
+
   private rootSession(sessionId: string): string {
     if (sessionId === "host" || sessionId === this.deps.mainId()) return this.deps.mainId()
     for (const entry of this.entries.values()) {
@@ -224,6 +399,7 @@ export class ConversationFocus {
           activity,
           view,
           draft: [],
+          queued: [],
           disposed: false,
         }
       } catch {
@@ -238,6 +414,7 @@ export class ConversationFocus {
     if (this.disposed) return false
     ;(this.current?.view ?? this.deps.mainView).setVisible(false)
     this.current = entry
+    this.lastEntry = entry
     this.pendingCommand = undefined
     this.deps.activate(entry)
     this.restoreDraft(entry.draft)
@@ -277,6 +454,7 @@ export class ConversationFocus {
     outgoing.view.setVisible(false)
     if (pending && !this.mainDraft.length) outgoing.draft = []
     this.current = undefined
+    this.lastEntry = outgoing
     this.deps.activate(undefined)
     const draft = this.mainDraft.length ? this.mainDraft : (pending?.parts ?? [])
     this.pendingCommand = undefined
@@ -321,13 +499,6 @@ export class ConversationFocus {
     if (!entry) return false
     if (text.trimStart().startsWith("/") || text.trimStart().startsWith("$"))
       return this.guardCommand(text, parts)
-    if (this.busy) {
-      this.deps.editor.setParts(parts)
-      this.deps.showNote(
-        "This conversation is working. Wait for it to finish or interrupt it before sending.",
-      )
-      return true
-    }
     if (this.current !== entry) return true
     if (!text.trim() && !parts.some((p) => typeof p !== "string" && "image" in p)) return true
     if (imageBytes(parts) > MAX_IMAGE_BYTES) {
@@ -337,10 +508,20 @@ export class ConversationFocus {
       )
       return true
     }
-    const message = draftMessage(text.trim(), display, parts)
+    const message: Outgoing = { ...draftMessage(text.trim(), display, parts), parts }
     entry.history.add(parts)
     this.deps.editor.clear()
     this.deps.resetComposer()
+    if (this.busy) {
+      entry.queued.push(message)
+      entry.view.requestRender()
+      return true
+    }
+    this.dispatchEntryMessage(entry, message, parts)
+    return true
+  }
+
+  private dispatchEntryMessage(entry: Entry, message: Outgoing, parts: EditorPart[]) {
     const body = message.content
       ? message.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("")
       : message.text
@@ -368,9 +549,45 @@ export class ConversationFocus {
         if (entry.send !== receipt) return
         entry.send = undefined
         entry.sending = false
-        if (!entry.disposed) entry.view.requestRender()
+        if (!entry.disposed) {
+          this.drainQueued(entry)
+          entry.view.requestRender()
+        }
       })
-    return true
+  }
+
+  private drainQueued(entry: Entry) {
+    if (entry.disposed || entry.sending || !entry.queued.length) return
+    try {
+      if (entry.conversation.status().busy) return
+    } catch {
+      return
+    }
+    const batch = entry.queued.splice(0, entry.queued.length)
+    if (!batch.length) return
+    const text = batch.map((q) => q.text).join("\n\n")
+    const shown = batch.map((q) => q.display ?? q.text)
+    const display = batch.some((q) => q.display) ? shown.join("\n\n") : undefined
+    const parts = batch.flatMap<EditorPart>((q, i) => [...(i ? ["\n\n"] : []), ...(q.parts ?? [q.text])])
+    const merged: Outgoing = {
+      ...draftMessage(text, display, parts),
+      parts,
+    }
+    if (batch.some((q) => q.content)) {
+      merged.content = batch.flatMap((q, i) => [
+        ...(i ? [{ type: "text" as const, text: "\n\n" }] : []),
+        ...(q.content ?? [{ type: "text" as const, text: q.text }]),
+      ])
+      if (imageBytes(parts) > MAX_IMAGE_BYTES) {
+        this.putBackTo(entry, batch)
+        entry.view.notice(
+          "warning",
+          "Images in the combined message exceed 5 MB. Send the attachments separately.",
+        )
+        return
+      }
+    }
+    this.dispatchEntryMessage(entry, merged, parts)
   }
 
   /** Local requests capture turn ownership synchronously, before queued delivery or focus changes. */
@@ -440,6 +657,7 @@ export class ConversationFocus {
   interrupt() {
     const entry = this.current
     if (!entry) return
+    if (entry.queued.length) this.putBackTo(entry, entry.queued.splice(0, entry.queued.length))
     const turnId = conversationTurnId(entry.conversation) ?? entry.turnId
     if (turnId) this.stopEntry(entry, turnId)
     else {
@@ -522,6 +740,7 @@ export class ConversationFocus {
               entry.send = undefined
               entry.sending = false
             }
+            if (event.data.reason === "done") queueMicrotask(() => this.drainQueued(entry))
           }
         }
         if (this.onUiEvent(event)) continue
@@ -545,10 +764,13 @@ export class ConversationFocus {
       entry.view.notice("error", String(error))
     } finally {
       if (this.current === entry) this.unfocus()
+      if (this.lastEntry === entry) this.lastEntry = undefined
+      entry.queued.length = 0
       this.released.add(entry.conversation)
       this.entries.delete(entry.conversation)
       entry.disposed = true
       entry.view.stop()
+      if (!this.current) this.deps.mainView.requestRender()
     }
   }
 

@@ -7,10 +7,11 @@ import {
   type Spinner,
   type Theme,
   truncateToWidth,
+  visibleWidth,
   wrapText,
 } from "@amira/tui-kit"
 import { userLines, userText } from "../format.ts"
-import { glyphs, viewEllipsis } from "../glyphs.ts"
+import { asciiGlyphs, glyphs, viewEllipsis } from "../glyphs.ts"
 import { CONTENT_INSET, contentRoom } from "../grid.ts"
 import { imageBytes, MAX_IMAGE_BYTES } from "../image-input.ts"
 import type { TranscriptView } from "../view.ts"
@@ -91,6 +92,12 @@ export interface Outbox {
   steer(message: UserMessage, state: NoticeSteerState, duringTurn?: boolean, display?: boolean): boolean
   /** Returns waiting messages to the editor when following another session. */
   reset(): void
+  /** Pulls a queued message (default: latest) back into the editor for editing. */
+  popQueuedToEditor(index?: number): boolean
+  /** Drops a queued message without interrupting the running turn. */
+  removeQueued(index: number): boolean
+  /** Promotes a queued message into an immediate steer (or sends if now idle). */
+  promoteQueuedToSteer(index: number): boolean
   interrupt(turnId?: string): void
   pressInterrupt(): void
   dispose(): void
@@ -572,6 +579,52 @@ export function createOutbox(deps: OutboxDeps): Outbox {
       lastInterruptAt = 0
       deps.changed?.()
     },
+    popQueuedToEditor(index) {
+      if (!queued.length) return false
+      const at = index === undefined ? queued.length - 1 : index
+      if (at < 0 || at >= queued.length) return false
+      const [item] = queued.splice(at, 1)
+      if (!item) return false
+      putBack([item])
+      deps.changed?.()
+      view.requestRender()
+      return true
+    },
+    removeQueued(index) {
+      if (index < 0 || index >= queued.length) return false
+      queued.splice(index, 1)
+      deps.changed?.()
+      view.requestRender()
+      return true
+    },
+    promoteQueuedToSteer(index) {
+      if (index < 0 || index >= queued.length) return false
+      const [item] = queued.splice(index, 1)
+      if (!item) return false
+      deps.changed?.()
+      if (activity.working) {
+        const active = deps.agent()
+        if (!active.busy) {
+          send(item)
+        } else {
+          steered.push(item)
+          const sentIn = generation
+          try {
+            active.steer(toPrompt(item))
+          } catch (error) {
+            const idx = steered.indexOf(item)
+            if (idx !== -1) steered.splice(idx, 1)
+            if (!recoverRejected(item)) putBack([item])
+            if (sentIn === generation)
+              view.notice("error", error instanceof Error ? error.message : String(error))
+          }
+        }
+      } else {
+        send(item)
+      }
+      view.requestRender()
+      return true
+    },
     interrupt,
     /**
      * The interrupt key (Esc). Once: stops the turn (sending what waits, see interrupt). Twice in
@@ -618,6 +671,121 @@ const PENDING_SHOWN = 3
 /** Rows each of them takes at most. */
 const PENDING_ROWS = 2
 
+export interface PendingRowAction {
+  kind: "edit" | "promote" | "remove"
+  index: number
+}
+
+export interface PendingRowHit {
+  x: number
+  y: number
+  width: number
+  action: PendingRowAction
+}
+
+/**
+ * Interactive pending message strip above the input box: preserves `steering › …` and `queued › …`
+ * labels, adds a subtle `· next step` cue on steering rows, and appends clickable `[ ↑ ]` / `[ steer ]`
+ * / `[ × ]` controls on queued rows when width allows.
+ */
+export function renderPendingRows(
+  items: readonly { label: "steering" | "queued"; text: string; queueIndex?: number }[],
+  width: number,
+  theme: Theme,
+  options: { canPromote?: boolean } = {},
+): { rows: string[]; hits: PendingRowHit[] } {
+  const out: string[] = []
+  const hits: PendingRowHit[] = []
+  const room = contentRoom(width)
+  const ascii = asciiGlyphs()
+  const editRaw = `[ ${ascii ? "^" : "↑"} ]`
+  const steerRaw = "[ steer ]"
+  const dropRaw = `[ ${ascii ? "x" : "×"} ]`
+  for (const item of items.slice(0, PENDING_SHOWN)) {
+    const flat = item.text.replace(/\s+/g, " ").trim()
+    const prefix = `${item.label} ${glyphs.user} ${flat}`
+    const controls: { raw: string; styled: string; action: PendingRowAction }[] =
+      item.label === "queued" && item.queueIndex !== undefined
+        ? [
+            { raw: editRaw, styled: theme.fg2(editRaw), action: { kind: "edit", index: item.queueIndex } },
+            ...(options.canPromote
+              ? [
+                  {
+                    raw: steerRaw,
+                    styled: theme.accent(steerRaw),
+                    action: { kind: "promote" as const, index: item.queueIndex },
+                  },
+                ]
+              : []),
+            {
+              raw: dropRaw,
+              styled: theme.muted(dropRaw),
+              action: { kind: "remove", index: item.queueIndex },
+            },
+          ]
+        : []
+    const controlsRawWidth = controls.reduce((sum, c, i) => sum + visibleWidth(c.raw) + (i ? 1 : 0), 0)
+    const showControls = controls.length > 0 && room >= controlsRawWidth + 16
+    const firstRowRoom = showControls ? room - controlsRawWidth - 2 : room
+    const rows = wrapText(prefix, Math.max(12, firstRowRoom))
+    const shown = rows.slice(0, PENDING_ROWS)
+    if (rows.length > PENDING_ROWS) {
+      const last = shown.length - 1
+      shown[last] = truncateToWidth(
+        `${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`,
+        last === 0 ? firstRowRoom : room,
+        viewEllipsis(),
+      )
+    }
+    for (let r = 0; r < shown.length; r++) {
+      const rowY = out.length
+      if (r === 0 && showControls) {
+        const text = truncateToWidth(shown[r]!, firstRowRoom, viewEllipsis())
+        const gap = Math.max(1, room - visibleWidth(text) - controlsRawWidth)
+        let cursorX = CONTENT_INSET.length + visibleWidth(text) + gap
+        let styledControls = ""
+        for (let c = 0; c < controls.length; c++) {
+          const ctrl = controls[c]!
+          if (c > 0) {
+            styledControls += " "
+            cursorX += 1
+          }
+          const w = visibleWidth(ctrl.raw)
+          hits.push({ x: cursorX, y: rowY, width: w, action: ctrl.action })
+          styledControls += ctrl.styled
+          cursorX += w
+        }
+        // Clicking the queued text itself also pulls it back into the editor.
+        if (item.queueIndex !== undefined) {
+          hits.push({
+            x: CONTENT_INSET.length,
+            y: rowY,
+            width: visibleWidth(text),
+            action: { kind: "edit", index: item.queueIndex },
+          })
+        }
+        out.push(`${CONTENT_INSET}${theme.muted(text)}${" ".repeat(gap)}${styledControls}`)
+      } else if (r === 0 && item.label === "steering") {
+        const tag = ` ${glyphs.separator} next step`
+        const base = shown[r]!
+        const line =
+          visibleWidth(base) + visibleWidth(tag) <= room
+            ? `${CONTENT_INSET}${theme.muted(base)}${theme.dim(tag)}`
+            : `${CONTENT_INSET}${theme.muted(base)}`
+        out.push(truncateToWidth(line, width, viewEllipsis()))
+      } else {
+        out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(shown[r]!)}`, width, viewEllipsis()))
+      }
+    }
+  }
+  const more = items.length - PENDING_SHOWN
+  if (more > 0)
+    out.push(
+      truncateToWidth(`${CONTENT_INSET}${theme.muted(`+${more} more waiting`)}`, width, viewEllipsis()),
+    )
+  return { rows: out, hits }
+}
+
 /**
  * The rows of messages waiting above the input box: "steering › …" and "queued › …", each on
  * at most two rows hanging on the content column (cut with "…"), at most three of them, then how
@@ -629,29 +797,14 @@ export function pendingMessageRows(
   width: number,
   theme: Theme,
 ): string[] {
-  const out: string[] = []
-  const room = contentRoom(width)
-  for (const { label, text } of items.slice(0, PENDING_SHOWN)) {
-    const flat = text.replace(/\s+/g, " ").trim()
-    const rows = wrapText(`${label} ${glyphs.user} ${flat}`, room)
-    const shown = rows.slice(0, PENDING_ROWS)
-    if (rows.length > PENDING_ROWS) {
-      const last = shown.length - 1
-      shown[last] = truncateToWidth(
-        `${shown[last]} ${rows.slice(PENDING_ROWS).join(" ")}`,
-        room,
-        viewEllipsis(),
-      )
-    }
-    for (const row of shown)
-      out.push(truncateToWidth(`${CONTENT_INSET}${theme.muted(row)}`, width, viewEllipsis()))
-  }
-  const more = items.length - PENDING_SHOWN
-  if (more > 0)
-    out.push(
-      truncateToWidth(`${CONTENT_INSET}${theme.muted(`+${more} more waiting`)}`, width, viewEllipsis()),
-    )
-  return out
+  return renderPendingRows(
+    items.map((item) => ({
+      label: item.label === "steering" ? "steering" : "queued",
+      text: item.text,
+    })),
+    width,
+    theme,
+  ).rows
 }
 
 /**

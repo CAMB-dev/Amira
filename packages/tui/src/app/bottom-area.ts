@@ -12,6 +12,7 @@ import {
   type Theme,
   translateMouse,
   truncateToWidth,
+  visibleWidth,
 } from "@amira/tui-kit"
 import type { CommandPopup } from "../command-popup.ts"
 import type { Dialog } from "../dialog.ts"
@@ -30,7 +31,15 @@ import { renderViewLines } from "../view-lines.ts"
 import type { TurnActivity } from "./activity.ts"
 import type { CommandRunner } from "./command-runner.ts"
 import type { DockedView } from "./dock.ts"
-import { type NoticeStrip, type Outgoing, otherWay, pendingMessageRows, type WhileWorking } from "./outbox.ts"
+import {
+  type NoticeStrip,
+  type Outgoing,
+  otherWay,
+  type PendingRowAction,
+  type PendingRowHit,
+  renderPendingRows,
+  type WhileWorking,
+} from "./outbox.ts"
 
 /** The items of a hint line, most useful ones with the highest priority. */
 type HintItems = Parameters<typeof fitHint>[0]
@@ -75,6 +84,13 @@ export interface BottomAreaDeps {
   renderDock?: (width: number, ctx: RenderContext, available: number) => string[]
   focusHint?: (theme: Theme, width: number) => string | undefined
   conversationIndicator?: (width: number) => string | undefined
+  conversationBar?: (
+    width: number,
+    ctx: RenderContext,
+  ) => { line: string; hits: { x: number; width: number; target: unknown }[] } | undefined
+  onConversationTab?: (target: unknown) => boolean
+  onQueuedAction?: (action: PendingRowAction) => boolean
+  onToggleEnterMode?: () => void
   conversationFocused?: () => boolean
   editor: Editor
   suggestion?: () => string | undefined
@@ -155,7 +171,20 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     const mode = agent.permissions.mode
     const fastRequested = agent.fastMode
     const fastApplied = agent.fastModeApplied
+    const working = deps.activity().working
+    const enterMode = currentEnterDoes()
     return [
+      ...(working
+        ? [
+            {
+              id: "enter-mode",
+              align: "left" as const,
+              tone: enterMode === "steer" ? ("accent" as const) : ("muted" as const),
+              priority: 90,
+              text: `[ Enter: ${enterMode} ]`,
+            },
+          ]
+        : []),
       ...items.filter((i) => i.id !== "model").map(statusText),
       {
         id: "model",
@@ -184,7 +213,8 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     ]
   }
   const workingPlaceholder = () => {
-    if (!deps.activity().working || deps.conversationFocused?.() || search.active) return undefined
+    if (!deps.activity().working || search.active) return undefined
+    if (deps.conversationFocused?.()) return `Queue next message${viewEllipsis()}`
     return currentEnterDoes() === "steer"
       ? `Steer turn${viewEllipsis()}`
       : `Queue next message${viewEllipsis()}`
@@ -222,6 +252,13 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   let showHint = true
   let bottomBudget = Number.POSITIVE_INFINITY
   let interactiveStart = 0
+  let pendingStart = 0
+  let pendingNoticeCount = 0
+  let pendingRawHits: PendingRowHit[] = []
+  let pendingScreenHits: PendingRowHit[] = []
+  let conversationBarHits: { x: number; width: number; target: unknown }[] = []
+  let hasConversationBar = false
+  let enterModeHit: { x: number; y: number; width: number } | undefined
   let pointerTop = 0
   let pointerWidth = 0
   let pointerVisible = false
@@ -283,28 +320,31 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
   const inputRegion = new View((width, ctx) => {
     const allDialogs = deps.dialogs()
     const dialog = allDialogs[0]
+    const bar = deps.conversationBar?.(width, ctx)
+    const fallbackIndicator = bar ? undefined : deps.conversationIndicator?.(width)
+    const headerRow = bar ? bar.line : fallbackIndicator ? ctx.theme.accent(fallbackIndicator) : undefined
+    hasConversationBar = headerRow !== undefined
+    conversationBarHits = bar?.hits ?? []
     if (!dialog) {
       inputBox.accentFocus = deps.focusHint?.(ctx.theme, width) !== undefined
-      const indicator = deps.conversationIndicator?.(width)
       // While Ctrl+R search is active, keep the terminal cursor in HistorySearch instead of the preview box.
       const prevFocused = editor.focused
       if (search.active && prevFocused) editor.focused = false
       const boxRows = inputBox.render(width, ctx)
       if (search.active && prevFocused) editor.focused = true
-      const rows = [...(indicator ? [ctx.theme.accent(indicator)] : []), ...boxRows]
+      const rows = [...(headerRow !== undefined ? [headerRow] : []), ...boxRows]
       composerRows = rows.length
       return rows
     }
     dialog.queueRemaining = Math.max(0, allDialogs.length - 1)
     const lines = dialog.render(width, ctx)
-    dialogInset = deps.conversationIndicator?.(width) ? 1 : 0
+    dialogInset = headerRow !== undefined ? 1 : 0
     dialogRows = lines.length
     // Status is optional: leave three rows for title, selection and footer first.
-    const indicator = deps.conversationIndicator?.(width)
     const note = deps.hintNote()
     const pointerHint = note && Date.now() < note.until && note.text.startsWith("Clicks go to Amira here:")
     return [
-      ...(indicator ? [ctx.theme.accent(indicator)] : []),
+      ...(headerRow !== undefined ? [headerRow] : []),
       ...lines,
       ...(bottomBudget > 3
         ? pointerHint
@@ -312,6 +352,28 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
           : statusLine(statusItems(), width, ctx)
         : []),
     ]
+  })
+  const pendingView = new View((width, ctx) => {
+    const notices = deps
+      .noticeStrip()
+      .render(ctx.theme)
+      .map((l) => truncateToWidth(l, width, viewEllipsis()))
+    pendingNoticeCount = notices.length
+    const rendered = renderPendingRows(
+      [
+        ...deps.steering().map((text) => ({ label: "steering" as const, text })),
+        ...deps.queued().map((q, queueIndex) => ({
+          label: "queued" as const,
+          text: q.display ?? q.text,
+          queueIndex,
+        })),
+      ],
+      width,
+      ctx.theme,
+      { canPromote: !deps.conversationFocused?.() && deps.activity().working },
+    )
+    pendingRawHits = rendered.hits
+    return [...notices, ...rendered.rows]
   })
   const bottom = [
     // Live panels (e.g. a todo list): extensions supply the lines, for the session shown now.
@@ -331,20 +393,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       panelRows = panelsShown ? lines.length + gap.length : 0
       return panelsShown ? [...lines, ...gap] : []
     }),
-    new View((width, ctx) => [
-      ...deps
-        .noticeStrip()
-        .render(ctx.theme)
-        .map((l) => truncateToWidth(l, width, viewEllipsis())),
-      ...pendingMessageRows(
-        [
-          ...deps.steering().map((text) => ({ label: "steering", text })),
-          ...deps.queued().map((q) => ({ label: "queued", text: q.display ?? q.text })),
-        ],
-        width,
-        ctx.theme,
-      ),
-    ]),
+    pendingView,
     // The activity line: a summary of the turn (what it does now, how long it has run, the
     // tokens and live rate), lit by a travelling highlight. It shows for
     // the whole turn; running tools are counted here and named on their own rows. How to
@@ -441,6 +490,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
       let total = 0
       const rows = bottom.flatMap((c) => {
         const lines = c.render(width, ctx)
+        if (c === pendingView) pendingStart = total
         if (c === inputRegion) interactiveStart = total
         total += lines.length
         if (passedDock) afterDock += lines.length
@@ -503,16 +553,39 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     // editor/options/hints by tail slicing the whole bottom area; strictly obey budget.
     const essential = rest.slice(interactiveStart)
     const prefixRoom = Math.max(0, budget - essential.length)
+    const prefixSliceStart = Math.max(0, interactiveStart - prefixRoom)
     const visible =
       budget > 0
         ? essential.length > budget
           ? essential.slice(0, budget)
-          : [...rest.slice(Math.max(0, interactiveStart - prefixRoom), interactiveStart), ...essential]
+          : [...rest.slice(prefixSliceStart, interactiveStart), ...essential]
         : []
     pointerTop = ctx.rows - (rest.length - interactiveStart)
     pointerWidth = width
     pointerVisible = budget > 0
     listInset = inputBox.framed(width) ? 2 : 0
+    pendingScreenHits = []
+    if (budget > 0 && essential.length <= budget) {
+      const visibleTop = ctx.rows - visible.length
+      for (const hit of pendingRawHits) {
+        const restIdx = pendingStart + pendingNoticeCount + hit.y
+        if (restIdx < prefixSliceStart || restIdx >= interactiveStart) continue
+        pendingScreenHits.push({ ...hit, y: visibleTop + (restIdx - prefixSliceStart) })
+      }
+    }
+    if (
+      budget > 0 &&
+      !dialog &&
+      deps.activity().working &&
+      !deps.conversationFocused?.() &&
+      width >= 8 &&
+      inputBox.maxRows >= 2
+    ) {
+      const modeText = `[ Enter: ${currentEnterDoes()} ]`
+      enterModeHit = { x: 2, y: pointerTop + composerRows - 1, width: visibleWidth(modeText) }
+    } else {
+      enterModeHit = undefined
+    }
     deps.activityVisible?.(budget > 0 && activityRows.some((row) => visible.includes(row)), ctx)
     deps.commandVisible?.(
       budget > 0 &&
@@ -602,6 +675,31 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
     layout: layoutBottom,
     handlePointer(event, completion) {
       if (!pointerVisible) return false
+      if (event.action === "press" && event.button === "left") {
+        // 1. Clickable conversation switcher bar (above composer / dialog).
+        if (hasConversationBar && event.y === pointerTop && deps.onConversationTab) {
+          const hit = conversationBarHits.find((h) => event.x >= h.x && event.x < h.x + h.width)
+          if (hit) return deps.onConversationTab(hit.target)
+        }
+        // 2. Clickable queued message controls ([ ↑ ], [ steer ], [ × ], or queued text).
+        if (deps.onQueuedAction && pendingScreenHits.length) {
+          const hit = pendingScreenHits.find(
+            (h) => event.y === h.y && event.x >= h.x && event.x < h.x + h.width,
+          )
+          if (hit) return deps.onQueuedAction(hit.action)
+        }
+        // 3. Clickable [ Enter: steer ] / [ Enter: queue ] mode toggle pill on status bar.
+        if (
+          enterModeHit &&
+          deps.onToggleEnterMode &&
+          event.y === enterModeHit.y &&
+          event.x >= enterModeHit.x &&
+          event.x < enterModeHit.x + enterModeHit.width
+        ) {
+          deps.onToggleEnterMode()
+          return true
+        }
+      }
       const dialog = deps.dialogs()[0]
       if (dialog) {
         const top = pointerTop + dialogInset
@@ -623,7 +721,7 @@ export function createBottomArea(deps: BottomAreaDeps): BottomArea {
           event.y < pointerTop + composerRows
         ) {
           const framed = inputBox.framed(pointerWidth)
-          const indicatorRows = deps.conversationIndicator?.(pointerWidth) ? 1 : 0
+          const indicatorRows = hasConversationBar ? 1 : 0
           const textTop = pointerTop + indicatorRows + (framed ? 1 : 0)
           const textLeft = framed ? 2 : 0
           const row = event.y - textTop

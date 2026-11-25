@@ -203,6 +203,27 @@ async function runFullscreen(
     agent: () => agent,
     activity: () => focus.activity ?? activity,
     conversationIndicator: (width) => focus.indicator(width),
+    conversationBar: (width, ctx) => focus.renderBar(width, ctx),
+    onConversationTab: (target) => focus.selectTab(target as Parameters<typeof focus.selectTab>[0]),
+    onQueuedAction: (action) => {
+      if (focus.conversation) {
+        return action.kind === "remove"
+          ? focus.removeQueued(action.index)
+          : focus.popQueuedToEditor(action.index)
+      }
+      if (action.kind === "edit") return outbox.popQueuedToEditor(action.index)
+      if (action.kind === "promote") return outbox.promoteQueuedToSteer(action.index)
+      return outbox.removeQueued(action.index)
+    },
+    onToggleEnterMode: () => {
+      const next = otherWay(enterDoes())
+      settings.submitWhileWorking = next
+      showNote(
+        next === "queue"
+          ? "Enter while busy: queue (sends after current turn finishes)"
+          : "Enter while busy: steer (injects before next model step)",
+      )
+    },
     conversationFocused: () => !!focus.conversation,
     themePreview: () => themes.previewing,
     activityVisible: (visible, ctx) => shimmerClock.visibility(visible, ctx),
@@ -215,7 +236,7 @@ async function runFullscreen(
     renderDock: (width, ctx, available) => overlays.renderDock(width, ctx, available),
     focusHint: (theme, width) => overlays.focusHint(theme, width),
     steering: () => (focus.conversation ? [] : outbox.steering),
-    queued: () => (focus.conversation ? [] : outbox.queued),
+    queued: () => (focus.conversation ? focus.queued : outbox.queued),
     hintNote: hint.current,
     commandActivity: () => commandRunner,
     canRewind: () => rewind.canRewind(),
@@ -694,6 +715,16 @@ async function runFullscreen(
     }
     if (overlays.handleInput(e)) return shimmerClock.sync()
     if (e.type !== "mouse" && overlays.handleDockInput(e)) return redraw()
+    if (
+      !focus.conversation &&
+      !overlays.hasFullscreen &&
+      !overlays.dock &&
+      !overlays.dialogs.length &&
+      keys.is(e, "view.focus") &&
+      focus.refocusLast()
+    ) {
+      return redraw()
+    }
     // Fullscreen extension views keep pending dialogs behind their visible composer.
     const dialog = overlays.hasFullscreen ? undefined : overlays.dialogs[0]
     if (!dialog && e.type !== "mouse") composer.prepareInput(e)
@@ -721,6 +752,12 @@ async function runFullscreen(
       // The popup or file picker took one of its keys (popup.*).
     } else if (!viewFirst && view.handleInput(e)) {
       // The view took one of its keys (scrolling, find, selecting, copying).
+    } else if (
+      keys.is(e, "history.prev") &&
+      editor.isEmpty &&
+      (focus.conversation ? focus.popQueuedToEditor() : outbox.popQueuedToEditor())
+    ) {
+      // Empty-editor Up recalls the latest queued message back into the input for editing.
     } else if (composer.handleInput(e)) {
       // Paste or prompt history handled the input.
     } else if (keys.is(e, "queue")) {
