@@ -20,7 +20,7 @@ done
 case "$channel" in stable|next) ;; *) echo 'Channel must be stable or next' >&2; exit 1 ;; esac
 valid_version() {
   [ "$1" = "$(printf '%s' "$1" | LC_ALL=C tr -d '\001-\037\177')" ] &&
-    printf '%s\n' "$1" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$'
+    printf '%s\n' "$1" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*)|-nightly\.[0-9]{8}(\.[1-9][0-9]*)?)?$'
 }
 if [ -n "$version" ]; then
   valid_version "$version" || { echo 'Invalid version' >&2; exit 1; }

@@ -83,32 +83,117 @@ export function manifestUrl(channel: UpdateChannel): string {
     : "https://raw.githubusercontent.com/CAMB-dev/Amira/update-channels/next/manifest.json"
 }
 
+export function versionManifestUrl(version: string): string {
+  const normalized = version.replace(/^v/, "")
+  if (!parseVersion(normalized)) throw new Error(`Invalid release version: ${version}`)
+  return `${releaseBase}/download/v${normalized}/manifest.json`
+}
+
+export interface DownloadOptions {
+  retries?: number
+  retryDelayMs?: number
+  onProgress?: (loaded: number, total?: number) => void
+}
+
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("Aborted"))
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal?.reason ?? new Error("Aborted"))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B"
+  if (bytes < 1024) return `${Math.round(bytes)} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export async function downloadBytes(
   url: string,
   maximum: number,
   fetcher: typeof fetch = fetch,
   signal?: AbortSignal,
+  options: DownloadOptions = {},
 ): Promise<Uint8Array> {
-  const timeout = AbortSignal.timeout(120_000)
-  const response = await fetcher(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
-  if (!response.ok) throw new Error(`Release download failed (${response.status})`)
-  if (Number(response.headers.get("content-length")) > maximum)
-    throw new Error("Release download exceeds expected size")
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error("Release download has no body")
-  const chunks: Uint8Array[] = []
-  let length = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      length += value.length
-      if (length > maximum) throw new Error("Release download exceeds expected size")
-      chunks.push(value)
+  const retries = options.retries ?? 2
+  const baseDelayMs = options.retryDelayMs ?? 400
+  let lastError: unknown
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (signal?.aborted) throw signal.reason ?? new Error("Aborted")
+    const timeout = AbortSignal.timeout(120_000)
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
+    let retryable = false
+    try {
+      const response = await fetcher(url, {
+        signal: combined,
+        headers: { "user-agent": "amira-updater" },
+      })
+      if (!response.ok) {
+        retryable = RETRYABLE_STATUS.has(response.status)
+        const suffix = response.status === 404 ? ": release asset not found on GitHub" : ""
+        throw new Error(`Release download failed (${response.status})${suffix}`)
+      }
+      const rawTotal = Number(response.headers.get("content-length"))
+      const total = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : undefined
+      if (total !== undefined && total > maximum) throw new Error("Release download exceeds expected size")
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error("Release download has no body")
+      const chunks: Uint8Array[] = []
+      let length = 0
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          length += value.length
+          if (length > maximum) throw new Error("Release download exceeds expected size")
+          chunks.push(value)
+          options.onProgress?.(length, total)
+        }
+      } finally {
+        await reader.cancel().catch(() => {})
+        reader.releaseLock()
+      }
+      return Buffer.concat(chunks, length)
+    } catch (error) {
+      lastError = error
+      const callerAborted = Boolean(signal?.aborted)
+      const isNetworkOrTimeout =
+        !callerAborted &&
+        (retryable ||
+          error instanceof TypeError ||
+          (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")))
+      if (!isNetworkOrTimeout || attempt >= retries) throw error
+      await sleepAbortable(baseDelayMs * 2 ** attempt, signal)
     }
-  } finally {
-    await reader.cancel().catch(() => {})
-    reader.releaseLock()
   }
-  return Buffer.concat(chunks, length)
+  throw lastError
+}
+
+/** Read-only signed manifest check usable even on non-self-managed installs (e.g. TUI /update status). */
+export async function fetchVerifiedManifest(
+  url: string,
+  pem: string,
+  options: { fetcher?: typeof fetch; signal?: AbortSignal; retries?: number; retryDelayMs?: number } = {},
+): Promise<ReleaseManifest> {
+  const downloadOpts: DownloadOptions = {
+    ...(options.retries !== undefined ? { retries: options.retries } : {}),
+    ...(options.retryDelayMs !== undefined ? { retryDelayMs: options.retryDelayMs } : {}),
+  }
+  const [bytes, signature] = await Promise.all([
+    downloadBytes(url, 1024 * 1024, options.fetcher, options.signal, downloadOpts),
+    downloadBytes(`${url}.sig`, 1024, options.fetcher, options.signal, downloadOpts),
+  ])
+  return verifyReleaseManifest(bytes, Buffer.from(signature).toString("utf8"), pem)
 }

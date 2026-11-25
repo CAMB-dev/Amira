@@ -22,6 +22,7 @@ import { createSession } from "./session.ts"
 import { runSessionsCommand } from "./sessions-command.ts"
 import { createSignalLifecycle } from "./signal-lifecycle.ts"
 import { askProjectTrust, planPackages } from "./trust.ts"
+import { createTuiUpdateCommand } from "./tui-update-command.ts"
 import { printUpdateNotice, startBackgroundUpdate } from "./update-background.ts"
 import { runUpdateCommand } from "./update-command.ts"
 import { versionLine } from "./version.ts"
@@ -218,6 +219,7 @@ async function run(argv: string[]): Promise<number> {
     onSubscriberError,
   })
   const { agent, host, startupEvents, catalogRefresh, ai, modelNotice } = session
+  host.commands.register(createTuiUpdateCommand({ settings: () => config.settings }), "builtin:cli")
   const notice = [updates?.notice, modelNotice].filter(Boolean).join(" ")
   agentRef = agent
   const stopConsoleTrace = consoleCodePage.onChange(({ kind, codePage }) => {

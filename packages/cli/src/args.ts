@@ -100,7 +100,7 @@ after a turn with their results fails; ctrl+c stops waiting. Sub-agents still ru
 at exit are stopped and given up to 5 s to wrap up.
 
 Commands:
-  amira update [--check] [--channel stable|next]
+  amira update [--check] [--channel stable|next | --version <X.Y.Z>]
                                 Check for or install a single-file release update
   amira rollback               Switch to the previous kept single-file version
   amira sessions rm <id>        Delete a stored session and its sub-agent files

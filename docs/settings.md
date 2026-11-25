@@ -314,8 +314,8 @@ Settings for the `web_search` and `web_fetch` tools. Hide either tool with `tool
 | Key | Type | Default | Description | User file only |
 | --- | --- | --- | --- | --- |
 | `tui.mode` | `"fullscreen" \| "inline"` | `"fullscreen"` | Deprecated and ignored: the interactive TUI always runs fullscreen and prints the conversation to the normal screen on exit. For one release, `"inline"` and `--inline` are accepted with the notice: "inline mode was removed; running fullscreen. Use -p for plain output." `--fullscreen` is accepted as a no-op. |  |
-| `tui.margin` | `number` | `3` | Side margin in cells (integer 0–12). Narrow terminals shrink it to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for the edge-to-edge layout. |  |
-| `tui.marginRows` | `number` | `1` | Empty rows above the header and below the key-hint line (integer 0–2). Terminals shorter than 24 rows omit them. |  |
+| `tui.margin` | `number` | `1` | Side margin in cells (integer 0–12). Narrow terminals shrink it to keep at least 60 content columns when possible. Set this and `tui.marginRows` to `0` for the edge-to-edge layout. |  |
+| `tui.marginRows` | `number` | `0` | Empty rows above the header and below the key-hint line (integer 0–2). Terminals shorter than 24 rows omit them. |  |
 | `tui.theme` | `string` | `"auto"` | A theme name, or `"auto"` for Amira following the terminal background (dark if unknown). `"dark"` and `"light"` select Amira explicitly; `"terminal"` uses the terminal's own ANSI colors. `/theme` previews and saves a named theme. |  |
 | `tui.themeVariant` | `"auto" \| "dark" \| "light"` | `"auto"` | For named themes, `"auto"` follows the terminal background; `"dark"` or `"light"` forces that variant. A missing variant uses the default Amira palette. |  |
 | `tui.shimmer` | `ShimmerEffect` | theme’s effect, else `"soft"` | Activity-label animation: `off`, `soft`, `sharp`, `wide`, `bounce`, `pulse`, `wave` or `reveal`. An object overrides only its supplied knobs; see [Shimmer animation](themes.md#shimmer-animation) for ranges and colors. |  |

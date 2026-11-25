@@ -27,6 +27,7 @@ import {
   releaseBase,
   type UpdateChannel,
   verifyReleaseManifest,
+  versionManifestUrl,
 } from "./manifest.ts"
 import { releasePublicKey } from "./public-key.ts"
 import { withRetentionGate } from "./retention-gate.ts"
@@ -35,16 +36,25 @@ import { createVersionLease, type VersionLease } from "./version-leases.ts"
 
 export type { UpdateChannel } from "./manifest.ts"
 
+export interface UpdateProgress {
+  phase: "check" | "download" | "verify" | "install"
+  version?: string
+  loaded?: number
+  total?: number
+}
+
 export interface UpdaterOptions extends Partial<InstallOptions> {
   channel?: UpdateChannel
   publicKey?: string
   fetch?: typeof fetch
   /** URL overrides and process/file seams are internal test hooks, never read from the environment. */
   manifestUrl?: (channel: UpdateChannel) => string
+  versionManifestUrl?: (version: string) => string
   artifactUrl?: (manifest: ReleaseManifest, file: string) => string
   extract?: typeof extractExecutable
   probe?: typeof probeExecutable
   swap?: typeof swapExecutable
+  onProgress?: (progress: UpdateProgress) => void
 }
 
 function switched(value: string | undefined): boolean {
@@ -67,6 +77,7 @@ export function createUpdater(options: UpdaterOptions = {}) {
   // Install the exact signed release the caller evaluated (patch/minimum-version policy).
   // A moving channel must not silently change a patch check into a minor/major installation.
   const checkedReleases = new Map<UpdateChannel, ReleaseManifest>()
+  const checkedVersions = new Map<string, ReleaseManifest>()
   const networkAbort = new AbortController()
   let stopping = false
   let activation: Promise<void> | undefined
@@ -172,6 +183,7 @@ export function createUpdater(options: UpdaterOptions = {}) {
   }
 
   async function manifest(channel: UpdateChannel): Promise<ReleaseManifest> {
+    options.onProgress?.({ phase: "check" })
     const url = (options.manifestUrl ?? manifestUrl)(channel)
     const [bytes, signature] = await Promise.all([
       downloadBytes(url, 1024 * 1024, fetcher, networkAbort.signal),
@@ -185,11 +197,37 @@ export function createUpdater(options: UpdaterOptions = {}) {
     return result
   }
 
+  async function manifestForVersion(targetVersion: string): Promise<ReleaseManifest> {
+    const normalized = targetVersion.replace(/^v/, "")
+    if (!parseVersion(normalized)) throw new Error(`Invalid release version: ${targetVersion}`)
+    options.onProgress?.({ phase: "check", version: normalized })
+    const url = (options.versionManifestUrl ?? versionManifestUrl)(normalized)
+    const [bytes, signature] = await Promise.all([
+      downloadBytes(url, 1024 * 1024, fetcher, networkAbort.signal),
+      downloadBytes(`${url}.sig`, 1024, fetcher, networkAbort.signal),
+    ])
+    const result = verifyReleaseManifest(bytes, Buffer.from(signature).toString("utf8"), pem)
+    if (result.version !== normalized)
+      throw new Error(`Release manifest version (${result.version}) does not match requested ${normalized}`)
+    if (!result.artifacts.some((artifact) => artifact.target === config.target))
+      throw new Error("No release artifact matches this build target")
+    return result
+  }
+
   async function check(channel: UpdateChannel = selectedChannel) {
     await requireInstall(true)
     return locked(async () => {
       const release = await manifest(channel)
       checkedReleases.set(channel, release)
+      return { version: release.version, channel: release.channel }
+    })
+  }
+
+  async function checkVersion(targetVersion: string) {
+    await requireInstall(true)
+    return locked(async () => {
+      const release = await manifestForVersion(targetVersion)
+      checkedVersions.set(release.version, release)
       return { version: release.version, channel: release.channel }
     })
   }
@@ -220,6 +258,99 @@ export function createUpdater(options: UpdaterOptions = {}) {
     }
   }
 
+  async function installRelease(record: InstallRecord, release: ReleaseManifest): Promise<string> {
+    const artifact = release.artifacts.find((entry) => entry.target === config.target)!
+    const staging = await mkdtemp(path.join(paths.root, ".update-"))
+    try {
+      options.onProgress?.({ phase: "download", version: release.version, loaded: 0, total: artifact.size })
+      const bytes = await downloadBytes(
+        (options.artifactUrl ?? ((m, file) => `${releaseBase}/download/v${m.version}/${file}`))(
+          release,
+          artifact.file,
+        ),
+        artifact.size,
+        fetcher,
+        networkAbort.signal,
+        {
+          onProgress: (loaded, total) =>
+            options.onProgress?.({
+              phase: "download",
+              version: release.version,
+              loaded,
+              total: total ?? artifact.size,
+            }),
+        },
+      )
+      options.onProgress?.({ phase: "verify", version: release.version })
+      if (
+        bytes.length !== artifact.size ||
+        createHash("sha256").update(bytes).digest("hex") !== artifact.sha256
+      )
+        throw new Error("Release archive SHA-256 or size mismatch")
+      const archive = path.join(staging, artifact.file)
+      await writeFile(archive, bytes, { flag: "wx" })
+      const extracted = path.join(staging, "extracted")
+      await mkdir(extracted)
+      await (options.extract ?? extractExecutable)(archive, extracted, paths.executableName)
+      const executable = path.join(extracted, paths.executableName)
+      await assertExecutable(executable)
+      if ((await probe(executable)) !== release.version)
+        throw new Error("Release executable version does not match the manifest")
+      if (stopping) throw new Error("The updater is stopping")
+      options.onProgress?.({ phase: "install", version: release.version })
+      activation = withRetentionGate(paths.root, async () => {
+        if (stopping) throw new Error("The updater is stopping")
+        const destination = path.join(paths.root, "versions", release.version)
+        await mkdir(path.dirname(destination), { recursive: true })
+        // Reuse authenticated bytes left by an interrupted transaction, never overwrite a
+        // directory which another running process may still use.
+        const existing = await lstat(destination).catch((error) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+          throw error
+        })
+        if (existing) {
+          if (!existing.isDirectory() || existing.isSymbolicLink())
+            throw new Error("Existing version is not a regular directory")
+          const saved = path.join(destination, paths.executableName)
+          await assertExecutable(saved)
+          if (!(await readFile(saved)).equals(await readFile(executable)))
+            throw new Error(`Version ${release.version} differs; refusing to overwrite it`)
+        } else await rename(extracted, destination)
+        try {
+          await activate(record, {
+            ...record,
+            version: release.version,
+            channel: release.channel,
+            previousVersion: record.version,
+          })
+        } catch (error) {
+          // Keep recovery evidence when restoration failed and executable state is uncertain.
+          if (!existing && !(error instanceof AggregateError))
+            await rm(destination, { recursive: true, force: true }).catch(() => {})
+          throw error
+        }
+      })
+      try {
+        await activation
+      } finally {
+        activation = undefined
+      }
+      await cleanupInstall(
+        paths.root,
+        paths.bin,
+        {
+          ...record,
+          version: release.version,
+          previousVersion: record.version,
+        },
+        runningVersion ? [runningVersion] : [],
+      )
+      return release.version
+    } finally {
+      await rm(staging, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+
   async function update(channel: UpdateChannel = selectedChannel): Promise<string> {
     await requireInstall(true)
     return locked(async () => {
@@ -228,84 +359,19 @@ export function createUpdater(options: UpdaterOptions = {}) {
       checkedReleases.delete(channel)
       // A second session may already have installed the release while this process kept running.
       if (compareVersions(release.version, record.version) <= 0) return record.version
-      const artifact = release.artifacts.find((entry) => entry.target === config.target)!
-      const staging = await mkdtemp(path.join(paths.root, ".update-"))
-      try {
-        const bytes = await downloadBytes(
-          (options.artifactUrl ?? ((m, file) => `${releaseBase}/download/v${m.version}/${file}`))(
-            release,
-            artifact.file,
-          ),
-          artifact.size,
-          fetcher,
-          networkAbort.signal,
-        )
-        if (
-          bytes.length !== artifact.size ||
-          createHash("sha256").update(bytes).digest("hex") !== artifact.sha256
-        )
-          throw new Error("Release archive SHA-256 or size mismatch")
-        const archive = path.join(staging, artifact.file)
-        await writeFile(archive, bytes, { flag: "wx" })
-        const extracted = path.join(staging, "extracted")
-        await mkdir(extracted)
-        await (options.extract ?? extractExecutable)(archive, extracted, paths.executableName)
-        const executable = path.join(extracted, paths.executableName)
-        await assertExecutable(executable)
-        if ((await probe(executable)) !== release.version)
-          throw new Error("Release executable version does not match the manifest")
-        if (stopping) throw new Error("The updater is stopping")
-        activation = withRetentionGate(paths.root, async () => {
-          if (stopping) throw new Error("The updater is stopping")
-          const destination = path.join(paths.root, "versions", release.version)
-          await mkdir(path.dirname(destination), { recursive: true })
-          // Reuse authenticated bytes left by an interrupted transaction, never overwrite a
-          // directory which another running process may still use.
-          const existing = await lstat(destination).catch((error) => {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
-            throw error
-          })
-          if (existing) {
-            if (!existing.isDirectory() || existing.isSymbolicLink())
-              throw new Error("Existing version is not a regular directory")
-            const saved = path.join(destination, paths.executableName)
-            await assertExecutable(saved)
-            if (!(await readFile(saved)).equals(await readFile(executable)))
-              throw new Error(`Version ${release.version} differs; refusing to overwrite it`)
-          } else await rename(extracted, destination)
-          try {
-            await activate(record, {
-              ...record,
-              version: release.version,
-              channel,
-              previousVersion: record.version,
-            })
-          } catch (error) {
-            // Keep recovery evidence when restoration failed and executable state is uncertain.
-            if (!existing && !(error instanceof AggregateError))
-              await rm(destination, { recursive: true, force: true }).catch(() => {})
-            throw error
-          }
-        })
-        try {
-          await activation
-        } finally {
-          activation = undefined
-        }
-        await cleanupInstall(
-          paths.root,
-          paths.bin,
-          {
-            ...record,
-            version: release.version,
-            previousVersion: record.version,
-          },
-          runningVersion ? [runningVersion] : [],
-        )
-        return release.version
-      } finally {
-        await rm(staging, { recursive: true, force: true }).catch(() => {})
-      }
+      return installRelease(record, release)
+    })
+  }
+
+  async function updateVersion(targetVersion: string): Promise<string> {
+    await requireInstall(true)
+    return locked(async () => {
+      const record = await readInstall(config)
+      const normalized = targetVersion.replace(/^v/, "")
+      const release = checkedVersions.get(normalized) ?? (await manifestForVersion(normalized))
+      checkedVersions.delete(release.version)
+      if (release.version === record.version) return record.version
+      return installRelease(record, release)
     })
   }
 
@@ -352,5 +418,5 @@ export function createUpdater(options: UpdaterOptions = {}) {
     )
   }
 
-  return { disabledReason, check, update, rollback, cleanup, stop, pinVersion }
+  return { disabledReason, check, checkVersion, update, updateVersion, rollback, cleanup, stop, pinVersion }
 }

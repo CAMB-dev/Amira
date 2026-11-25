@@ -120,6 +120,9 @@ test("invalid update and rollback arguments are usage errors", async () => {
     ["update", "--wat"],
     ["update", "--check", "--check"],
     ["update", "--channel=next", "--channel", "stable"],
+    ["update", "--version"],
+    ["update", "--version", "not-a-version"],
+    ["update", "--version", "1.2.4", "--channel", "next"],
     ["rollback", "--check"],
   ]) {
     await expect(runUpdateCommand(argv, f.io, f.options)).rejects.toBeInstanceOf(UsageError)

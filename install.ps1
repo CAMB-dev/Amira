@@ -33,7 +33,7 @@ function Exit-RetentionGate($Gate, [string]$Root) {
 }
 $releases = 'https://github.com/CAMB-dev/Amira/releases'
 $publicKey = '' # AMIRA_RELEASE_PUBLIC_KEY
-$versionPattern = '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?\z'
+$versionPattern = '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*)|-nightly\.[0-9]{8}(\.[1-9][0-9]*)?)?\z'
 $Version = $Version -replace '^v', ''
 $Channel = $Channel.ToLowerInvariant()
 if ($Version -and $Version -cnotmatch $versionPattern) { throw 'Invalid version' }

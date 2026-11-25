@@ -16,6 +16,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "architecture:check": "bun scripts/architecture-check.ts",
+    "release": "bun scripts/release.ts",
     "check": "bun run architecture:check && bun run typecheck && bun run lint && bun run test"
   },
   "devDependencies": {

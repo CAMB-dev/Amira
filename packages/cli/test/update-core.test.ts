@@ -8,7 +8,12 @@ import { releaseKeySource } from "../../../scripts/set-release-key.ts"
 import { cleanupInstall, extractExecutable, probeExecutable, swapExecutable } from "../src/update/files.ts"
 import { createUpdater, type UpdaterOptions } from "../src/update/index.ts"
 import { installDisabledReason, readInstall } from "../src/update/install.ts"
-import { manifestUrl, verifyReleaseManifest } from "../src/update/manifest.ts"
+import {
+  downloadBytes,
+  manifestUrl,
+  verifyReleaseManifest,
+  versionManifestUrl,
+} from "../src/update/manifest.ts"
 import { compareVersions, isPatchUpdate, isReleaseVersion, parseVersion } from "../src/update/semver.ts"
 
 const cleanups: Array<() => Promise<void> | void> = []
@@ -510,4 +515,61 @@ test("key setter accepts only Ed25519 public SPKI PEMs and never private keys", 
     .publicKey.export({ type: "spki", format: "pem" })
     .toString()
   expect(() => releaseKeySource(rsa)).toThrow("Ed25519 public key")
+})
+
+test("downloadBytes retries transient 5xx responses, streams progress, and does not retry 404", async () => {
+  let attempts = 0
+  const progress: number[] = []
+  const body = new Uint8Array([1, 2, 3, 4, 5, 6])
+  const ok = await downloadBytes(
+    "https://example.test/archive",
+    1024,
+    (async () => {
+      attempts++
+      if (attempts < 3) return new Response("busy", { status: 503 })
+      return new Response(body, { status: 200, headers: { "content-length": String(body.length) } })
+    }) as unknown as typeof fetch,
+    undefined,
+    { retries: 2, retryDelayMs: 1, onProgress: (loaded) => progress.push(loaded) },
+  )
+  expect(attempts).toBe(3)
+  expect(Buffer.from(ok)).toEqual(Buffer.from(body))
+  expect(progress.at(-1)).toBe(body.length)
+
+  let notFoundAttempts = 0
+  await expect(
+    downloadBytes(
+      "https://example.test/missing",
+      1024,
+      (async () => {
+        notFoundAttempts++
+        return new Response("missing", { status: 404 })
+      }) as unknown as typeof fetch,
+      undefined,
+      { retries: 2, retryDelayMs: 1 },
+    ),
+  ).rejects.toThrow("404")
+  expect(notFoundAttempts).toBe(1)
+})
+
+test("checkVersion and updateVersion fetch and verify an explicit GitHub release tag", async () => {
+  const versionServer = await fixture()
+  const baseUrl = versionServer.options.manifestUrl!("stable")
+  const phases: string[] = []
+  const updater = createUpdater({
+    ...versionServer.options,
+    versionManifestUrl: () => baseUrl,
+    onProgress: (p) => phases.push(p.phase),
+  })
+  expect(versionManifestUrl("v1.2.4")).toBe(
+    "https://github.com/CAMB-dev/Amira/releases/download/v1.2.4/manifest.json",
+  )
+  expect(() => versionManifestUrl("../escape")).toThrow("Invalid release version")
+  expect(await updater.checkVersion("v1.2.4")).toEqual({ version: "1.2.4", channel: "stable" })
+  expect(await updater.updateVersion("1.2.4")).toBe("1.2.4")
+  expect(await readFile(versionServer.bin, "utf8")).toBe("1.2.4")
+  expect(phases).toContain("check")
+  expect(phases).toContain("download")
+  expect(phases).toContain("verify")
+  expect(phases).toContain("install")
 })

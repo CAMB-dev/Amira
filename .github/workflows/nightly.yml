@@ -129,6 +129,25 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.version }}
         run: bun run build:all --version "$VERSION" --channel next
+      - name: Generate and sign nightly update manifest when release key is configured
+        env:
+          SIGNING_KEY: ${{ secrets.AMIRA_RELEASE_ED25519_KEY }}
+        run: |
+          bun scripts/sign-manifest.ts generate
+          if [[ -n "$SIGNING_KEY" ]]; then
+            bun -e '
+              import { createPublicKey } from "node:crypto"
+              import { releasePublicKey } from "./packages/cli/src/update/public-key.ts"
+              const publicPem = key => createPublicKey(key).export({ type: "spki", format: "pem" }).toString()
+              if (releasePublicKey && publicPem(releasePublicKey) !== publicPem(process.env.SIGNING_KEY)) {
+                throw new Error("Release signing secret does not match the compiled release public key")
+              }
+            '
+            bun scripts/sign-manifest.ts sign --key-env SIGNING_KEY > "$RUNNER_TEMP/release-public.pem"
+            bun scripts/sign-manifest.ts verify --public-key "$RUNNER_TEMP/release-public.pem"
+          else
+            echo "::notice::AMIRA_RELEASE_ED25519_KEY is not set; skipping nightly manifest signature and next-channel advance."
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-archives
@@ -136,6 +155,8 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/manifest.json
+            dist/manifest.json.sig
           if-no-files-found: error
           compression-level: 0
           retention-days: 2
@@ -249,7 +270,10 @@ jobs:
           # gh refuses an existing release; uploads never use --clobber.
           gh release create "$TAG" --target "$SHA" --draft --prerelease --latest=false \
             --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
-          gh release upload "$TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS
+          assets=(dist/*.zip dist/*.tar.gz dist/SHA256SUMS)
+          if [[ -f dist/manifest.json ]]; then assets+=(dist/manifest.json); fi
+          if [[ -f dist/manifest.json.sig ]]; then assets+=(dist/manifest.json.sig); fi
+          gh release upload "$TAG" "${assets[@]}"
           # This is the only edit, while still a draft. Never edit a published release.
           gh release edit "$TAG" --draft=false
       - name: Keep the newest 14 nightly prereleases (never stable releases)
@@ -271,3 +295,36 @@ jobs:
               subprocess.run(["gh", "release", "delete", release["tag_name"],
                               "--yes", "--cleanup-tag"], check=True)
           PY
+
+  update-channel:
+    name: Publish signed next-channel pointer for nightly
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release-update-channel-next
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-archives
+          path: dist
+      - name: Atomically advance next channel metadata when signed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [[ -f dist/manifest.json && -f dist/manifest.json.sig ]]; then
+            bun scripts/publish-update-channel.ts publish --repo "$GH_REPO" --dist dist
+          else
+            echo "::notice::No signed manifest.json.sig found; skipping update-channels/next advance."
+          fi
