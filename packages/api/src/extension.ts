@@ -154,6 +154,15 @@ export interface ExtensionAPI {
    * it (now: look it up where it is used, not once at load).
    */
   useService<K extends ServiceName>(name: K): ServiceOf<K> | undefined
+  /**
+   * Experimental: subscribes to registration and removal of the service named `name`.
+   * Fires with the new service when provided, and with `undefined` when removed or its owner unloads.
+   * Unsubscribes automatically when this extension unloads.
+   */
+  onServiceChange<K extends ServiceName>(
+    name: K,
+    listener: (service: ServiceOf<K> | undefined) => void,
+  ): () => void
   /** Asks frontends to redraw, e.g. after a status item's or a panel's state changed. */
   requestRender(): void
   /** The merged settings (D35) and explicit source layers, e.g. for mcpServers trust checks. */

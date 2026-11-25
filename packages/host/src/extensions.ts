@@ -807,6 +807,16 @@ export class ExtensionHost {
       provideService: (name, service) =>
         this.#register(source, track, () => this.services.provide(name, service, source)),
       useService: (name) => this.services.get(name) as never,
+      onServiceChange: (name, listener) =>
+        this.#register(source, track, () =>
+          this.services.subscribe(name, (service) => {
+            try {
+              listener(service as never)
+            } catch (err) {
+              this.#fail(source, err instanceof Error ? err.message : String(err))
+            }
+          }),
+        ),
       requestRender: () => this.#requestRender(),
       runCommand: (argv, options) => runExtensionCommand(argv, options),
       openPipe: (argv, options) => openExtensionPipe(argv, options),

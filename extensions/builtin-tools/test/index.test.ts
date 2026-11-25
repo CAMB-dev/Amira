@@ -91,6 +91,7 @@ test(
       registerImageProvider: () => () => {},
       provideService: () => () => {},
       useService: () => undefined,
+      onServiceChange: () => () => {},
       requestRender: () => {},
       settings: {
         layers: () => [],

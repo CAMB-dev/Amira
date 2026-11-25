@@ -147,6 +147,8 @@ export interface ChildSession {
   readonly title: string
   readonly persistent: boolean
   readonly state: ChildState
+  /** True while execution of this child's working turn is held via `pause()`. */
+  readonly paused: boolean
   /** Turns it has started so far. */
   readonly turns: number
   /**
@@ -180,6 +182,13 @@ export interface ChildSession {
    * show it as done. Does nothing to other children, which end after their one turn anyway.
    */
   stop(reason?: string, opts?: { finished?: boolean }): void
+  /**
+   * Holds execution of a working child between steps while keeping its admission slot.
+   * Returns true if the child transitioned into the paused state; false if idle, ended, or already paused.
+   */
+  pause(): boolean
+  /** Resumes a paused child's turn. Returns true if it was paused and resumed. */
+  resume(): boolean
   /**
    * Sends a message to a persistent child: it joins the running turn before its next model
    * call, or starts the next turn of an idle child (once there is a place for it to run).

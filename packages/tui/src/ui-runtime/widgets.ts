@@ -255,8 +255,9 @@ export function paint(plan: Plan, host: WidgetHost, from = 0, height = plan.rect
   const focusColor = host.focused ? theme.accent : dim
   const marker = focused ? focusColor(`${glyphs.pointer} `) : "  "
   // The selected row reads like a host picker's: the accent cursor and bold accent text, its
-  // own coloured segments (status badges) kept; without the focus it dims.
-  const selection = (line: string) => (host.focused ? selectedRow(line, theme) : dim(stripColors(line)))
+  // own coloured segments (status badges) kept; when either the host or this widget lacks focus it dims.
+  const selection = (line: string) =>
+    host.focused && focused ? selectedRow(line, theme) : dim(stripColors(line))
   let out: string[] = []
   if (from > 0 && ["bar", "progress", "rule", "input", "button", "spacer"].includes(node.type))
     return Array<string>(h).fill(" ".repeat(w))

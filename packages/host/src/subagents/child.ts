@@ -156,6 +156,10 @@ export class Child implements ChildSession {
     return this.agent.expectedNotices + this.agent.waitingNotices
   }
 
+  get paused(): boolean {
+    return !this.ended && this.agent.execution.paused
+  }
+
   get events(): AsyncIterable<AnyEvent> {
     return this.tree.eventsOf(this)
   }

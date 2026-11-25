@@ -219,11 +219,30 @@ export const APPLY_PARTIAL = "Apply what fits (.rej files for the rest)"
 export const KEEP = "Keep in the worktree"
 export const DISCARD = "Discard"
 
+const mergeQueues = new Map<string, Promise<unknown>>()
+
+/** Serializes concurrent git apply/merge operations targeting the same repository root. */
+function withRootMergeLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  const key = projectKey(root)
+  const previous = mergeQueues.get(key) ?? Promise.resolve()
+  const run = previous.then(fn, fn)
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  mergeQueues.set(key, tail)
+  void tail.finally(() => {
+    if (mergeQueues.get(key) === tail) mergeQueues.delete(key)
+  })
+  return run
+}
+
 /**
  * Merges a finished child's worktree into the parent's working tree (D16, D38). A patch that
  * applies cleanly and stays under the threshold is applied at once; otherwise the diff goes to
  * `review`. Nobody answering keeps the worktree, so nothing is lost. The worktree is removed
- * once its changes are merged or discarded.
+ * once its changes are merged or discarded. Concurrent merges targeting the same repository root
+ * are serialized so parallel sub-agents never race on the working tree or git index.
  */
 export async function mergeWorktree(
   git: RunGit,
@@ -243,38 +262,40 @@ export async function mergeWorktree(
     return problem ? { cleanup: problem } : {}
   }
   if (!stat.files.length) return { outcome: "empty", stat, ...(await cleanup()) }
-  const apply = (extra: string[] = []) =>
-    git(["apply", "--binary", "--whitespace=nowarn", ...extra, wt.patch], wt.root)
-  const check = await apply(["--check"])
-  const conflict = check.ok ? undefined : check.output.trim() || "the patch does not apply"
-  if (!conflict && !overThreshold(stat, opts.threshold)) {
-    const done = await apply()
-    if (done.ok) return { outcome: "merged", stat, ...(await cleanup()) }
-  }
-  const whose = opts.who ? `The changes of ${opts.who}` : "Sub-agent changes"
-  const title = conflict
-    ? `${whose} conflict with the working tree (${formatStat(stat)})`
-    : `Merge ${opts.who ? `the changes of ${opts.who}` : "sub-agent changes"} (${formatStat(stat)})?`
-  const options = conflict ? [APPLY_PARTIAL, KEEP, DISCARD] : [MERGE, KEEP, DISCARD]
-  const choice = opts.review ? await opts.review(title, readPatch(wt.patch), options) : undefined
-  const result = (outcome: MergeOutcome, extra: Partial<MergeResult> = {}): MergeResult => ({
-    outcome,
-    stat,
-    ...(conflict ? { conflict } : {}),
-    ...extra,
+  return withRootMergeLock(wt.root, async () => {
+    const apply = (extra: string[] = []) =>
+      git(["apply", "--binary", "--whitespace=nowarn", ...extra, wt.patch], wt.root)
+    const check = await apply(["--check"])
+    const conflict = check.ok ? undefined : check.output.trim() || "the patch does not apply"
+    if (!conflict && !overThreshold(stat, opts.threshold)) {
+      const done = await apply()
+      if (done.ok) return { outcome: "merged", stat, ...(await cleanup()) }
+    }
+    const whose = opts.who ? `The changes of ${opts.who}` : "Sub-agent changes"
+    const title = conflict
+      ? `${whose} conflict with the working tree (${formatStat(stat)})`
+      : `Merge ${opts.who ? `the changes of ${opts.who}` : "sub-agent changes"} (${formatStat(stat)})?`
+    const options = conflict ? [APPLY_PARTIAL, KEEP, DISCARD] : [MERGE, KEEP, DISCARD]
+    const choice = opts.review ? await opts.review(title, readPatch(wt.patch), options) : undefined
+    const result = (outcome: MergeOutcome, extra: Partial<MergeResult> = {}): MergeResult => ({
+      outcome,
+      stat,
+      ...(conflict ? { conflict } : {}),
+      ...extra,
+    })
+    if (choice === DISCARD) return result("discarded", await cleanup())
+    if (choice === MERGE) {
+      const done = await apply()
+      if (done.ok) return result("merged", await cleanup())
+      return result("kept", { conflict: done.output.trim() })
+    }
+    if (choice === APPLY_PARTIAL) {
+      // The worktree stays, so the rejected hunks can still be looked up in context.
+      const done = await apply(["--reject"])
+      return result("partial", { rejected: rejectedFiles(done.output) })
+    }
+    return result("kept")
   })
-  if (choice === DISCARD) return result("discarded", await cleanup())
-  if (choice === MERGE) {
-    const done = await apply()
-    if (done.ok) return result("merged", await cleanup())
-    return result("kept", { conflict: done.output.trim() })
-  }
-  if (choice === APPLY_PARTIAL) {
-    // The worktree stays, so the rejected hunks can still be looked up in context.
-    const done = await apply(["--reject"])
-    return result("partial", { rejected: rejectedFiles(done.output) })
-  }
-  return result("kept")
 }
 
 /** Files named in `git apply --reject` output as having rejected hunks. */

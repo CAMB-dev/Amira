@@ -388,6 +388,7 @@ export class ImageProviderRegistry {
  */
 export class ServiceRegistry {
   #services = new Map<string, { service: unknown; source: string }>()
+  #listeners = new Map<string, Set<(service: unknown) => void>>()
 
   provide(name: string, service: unknown, source = "host"): () => void {
     if (typeof name !== "string" || !name.trim()) throw new Error("a service needs a name")
@@ -396,13 +397,43 @@ export class ServiceRegistry {
     if (taken) throw new Error(`service "${name}" is already offered by ${taken.source}`)
     const entry = { service, source }
     this.#services.set(name, entry)
+    this.#notify(name, service)
     return () => {
-      if (this.#services.get(name) === entry) this.#services.delete(name)
+      if (this.#services.get(name) === entry) {
+        this.#services.delete(name)
+        this.#notify(name, undefined)
+      }
     }
   }
 
   get(name: string): unknown {
     return this.#services.get(name)?.service
+  }
+
+  subscribe(name: string, listener: (service: unknown) => void): () => void {
+    if (typeof name !== "string" || !name.trim()) throw new Error("a service needs a name")
+    let set = this.#listeners.get(name)
+    if (!set) {
+      set = new Set()
+      this.#listeners.set(name, set)
+    }
+    set.add(listener)
+    return () => {
+      const current = this.#listeners.get(name)
+      if (!current) return
+      current.delete(listener)
+      if (current.size === 0) this.#listeners.delete(name)
+    }
+  }
+
+  #notify(name: string, service: unknown): void {
+    const listeners = this.#listeners.get(name)
+    if (!listeners?.size) return
+    for (const listener of [...listeners]) {
+      try {
+        listener(service)
+      } catch {}
+    }
   }
 
   get names(): string[] {

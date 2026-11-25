@@ -137,3 +137,55 @@ test("selectable reports visible identified rows and tabs, not text, inputs or d
   runtime.dispose()
   expect(runtime.selectable).toBe(false)
 })
+
+test("split-pane views highlight only the focused widget's selected row and dim inactive panes", () => {
+  const runtime = new UiRuntime(() => {})
+  const left: UiNode = {
+    type: "tree",
+    id: "left",
+    items: ["alpha", "beta"].map((key) => ({ key, row: [{ kind: "text", text: key }] })),
+  }
+  const right: UiNode = {
+    type: "tree",
+    id: "right",
+    items: ["one", "two"].map((key) => ({ key, row: [{ kind: "text", text: key }] })),
+  }
+  const split: UiNode = {
+    type: "row",
+    gap: 1,
+    children: [
+      { size: 20, node: left },
+      { size: 20, node: right },
+    ],
+  }
+  runtime.setState({ selected: { left: "alpha", right: "one" }, focused: "left" })
+  const first = runtime.render(
+    split,
+    41,
+    4,
+    defaultTheme,
+    (ls, w) => renderViewLines(ls, defaultTheme, w),
+    true,
+    true,
+  )
+  const leftSelected = "›   alpha".padEnd(20)
+  const rightSelected = "›   one".padEnd(20)
+  expect(first[0]).toContain(bold(defaultTheme.accent(leftSelected)))
+  expect(first[0]).toContain(defaultTheme.dim(rightSelected))
+  expect(first[0]).not.toContain(bold(defaultTheme.accent(rightSelected)))
+
+  // Switching widget focus flips the accent highlight to the right pane without losing left's selection.
+  runtime.focus("right")
+  const second = runtime.render(
+    split,
+    41,
+    4,
+    defaultTheme,
+    (ls, w) => renderViewLines(ls, defaultTheme, w),
+    true,
+    true,
+  )
+  expect(second[0]).toContain(defaultTheme.dim(leftSelected))
+  expect(second[0]).toContain(bold(defaultTheme.accent(rightSelected)))
+  expect(runtime.state.selected).toEqual({ left: "alpha", right: "one" })
+})
